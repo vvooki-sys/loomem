@@ -165,8 +165,8 @@ Full-text search index. Mirrors chunk content with additional indexed fields.
 Embeddings stored in RocksDB's embeddings column family.
 
 **Providers:**
-- **OpenAI** — `text-embedding-3-small` (1536 dimensions)
-- **Local** — tract ONNX runtime (pure Rust, no native dependencies)
+- **Local (default)** — `multilingual-e5-small` (384 dimensions) via the tract ONNX runtime (pure Rust, no native dependencies, runs offline)
+- **OpenAI** — `text-embedding-3-small` (1536 dimensions), opt-in via `embedding_provider = "openai"`
 
 **Embedding queue:** batch processing (50 items, 5s flush interval) to amortize API latency.
 

@@ -39,9 +39,9 @@ curl -X POST http://localhost:3030/v1/store \
 
 ### Local embeddings (no OpenAI dependency)
 
-Set `provider = "local"` in `config.toml` under `[llm]`. Uses tract ONNX runtime — pure Rust, no native dependencies.
+Set `embedding_provider = "local"` in `config.toml` under `[llm]` — this is the default on a fresh install. Uses the tract ONNX runtime — pure Rust, no native dependencies, and nothing leaves the machine.
 
-Note: consolidation, extraction, and dream features still require an OpenAI API key (they use `compression_model`).
+Note: consolidation, extraction, and dream use OpenAI completions (`gpt-4.1-mini`). Without an `OPENAI_API_KEY` those steps fall back to a built-in regex extractor; embeddings and search stay fully local either way.
 
 ---
 
@@ -256,8 +256,8 @@ Enable in config:
 ```toml
 [worker.backup]
 enabled = true
-interval_secs = 86400    # every 24 hours
-max_copies = 3            # keep last 3 backups
+interval_secs = 43200    # every 12 hours
+max_copies = 2            # keep last 2 backups
 ```
 
 Checkpoints are written to `{data_dir}/backups/checkpoint-<timestamp>/`. For an out-of-band backup, copy that directory (or snapshot the volume) while the server is running — checkpoints are consistent point-in-time copies. See [Backup and Restore](backup-and-restore.md) for details, including the extra requirements for encrypted instances.

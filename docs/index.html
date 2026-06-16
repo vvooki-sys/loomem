@@ -190,6 +190,7 @@ code,.mono{font-family:var(--lm-font-mono)}
 .hero .cta{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:30px}
 .hero .meta{display:flex;gap:26px;flex-wrap:wrap;font-size:13px;color:var(--lm-ink-500)}
 .hero .meta b{display:block;color:var(--lm-ink-900);font-weight:600;margin-bottom:2px}
+.hero-fine{margin-top:20px;font-size:12.5px;color:var(--lm-ink-400);max-width:56ch;line-height:1.5}
 .mark-svg{width:100%;max-width:300px;margin:0 auto;display:block;filter:drop-shadow(0 18px 40px rgba(15,105,184,.16))}
 .mark-anim g.ring-outer,.mark-anim g.ring-inner{transform-box:view-box;transform-origin:100px 100px}
 .mark-anim g.ring-outer{animation:lm-spin 34s linear infinite}
@@ -459,8 +460,9 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <div class="meta">
         <div><b>Yours to own</b>Local-first, your data</div>
         <div><b>Portable</b>Across every tool</div>
-        <div><b>Model-agnostic</b>Works with any LLM</div>
+        <div><b>Model-agnostic</b>Reads via any MCP client</div>
       </div>
+      <p class="hero-fine">Reading your context is model-agnostic — any MCP client works. Building it (extraction, consolidation) currently runs on OpenAI; embeddings are local, and local completions are on the roadmap.</p>
     </div>
     <div class="art">
       <svg class="mark-svg mark-anim" viewBox="0 0 200 200" fill="none">
@@ -515,7 +517,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     <div class="sec-head">
       <div class="sec-eyebrow">Field notes</div>
       <h2 class="sec">We don't ask people what they think of Loomem.<br>We ask the ones who work with it.</h2>
-      <p class="sec-lead">Notes from the models and agents that run on Loomem every day — in their own words (translated, lightly trimmed).</p>
+      <p class="sec-lead">Method: each model, connected to a live Loomem instance over MCP, was asked to describe what working with it is like. Quotes are translated and lightly trimmed — nothing else. Loomem has been daily-driven by its maintainer since early 2026; the candid notes below (rough edges included) are left in on purpose.</p>
     </div>
     <div class="quotes">
       <div class="quote">
@@ -559,7 +561,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <div class="pcard">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div>
         <h3>Find the right context</h3>
-        <p>BM25 (Tantivy) + vector embeddings + entity-graph signals, fused with reciprocal-rank fusion — the relevant context surfaces first.</p>
+        <p>BM25 (Tantivy) + vector embeddings + entity-graph signals, fused with a weighted hybrid score (vector 0.6 / BM25 0.4) — the relevant context surfaces first.</p>
       </div>
       <div class="pcard warm">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5l3 2"/></svg></div>
@@ -646,7 +648,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <div class="arch-layer core">
         <div class="arch-tag">loomem-core · the engine</div>
         <div class="arch-grid4">
-          <div><b>Hybrid retrieval</b><span>BM25 + vector + entity-graph signals, fused with reciprocal-rank fusion.</span></div>
+          <div><b>Hybrid retrieval</b><span>BM25 + vector + entity-graph signals, fused with a weighted hybrid score (vector 0.6 / BM25 0.4).</span></div>
           <div><b>Consolidation</b><span>Background workers merge, resolve contradictions, and decay stale context — "dreaming."</span></div>
           <div><b>Entity graph</b><span>People, projects, and tools linked with aliases and relations.</span></div>
           <div><b>Bitemporal + encryption</b><span>Ingestion vs event time, plus optional field-level AES-GCM.</span></div>
@@ -781,7 +783,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     <div class="sec-head">
       <div class="sec-eyebrow">Loomem T · for teams</div>
       <h2 class="sec">Loomem keeps your context.<br><em>Loomem&nbsp;T</em> keeps your team's.</h2>
-      <p class="sec-lead">Loomem T is the managed, multiplayer edition built on the very same engine — shared context, documents, teams, and single sign-on. One fabric, woven wide enough for an organization. No binary to babysit, no server to secure.</p>
+      <p class="sec-lead"><strong style="color:var(--lm-gold-300)">In development — join the pilot.</strong> Loomem T is the managed, multiplayer edition we're building on the same engine: shared context, documents, teams, and single sign-on, hosted and run for you. No binary to babysit, no server to secure.</p>
     </div>
     <div class="biz-cards">
       <div class="biz-card">
@@ -792,12 +794,12 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <div class="biz-card">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 6a3 3 0 0 1 0 6M21 20a6 6 0 0 0-4-5.7"/></svg></div>
         <h3>Shared &amp; project context</h3>
-        <p>Private, team-shared, and per-project streams side by side. Everyone draws from the same fabric — RBAC decides who sees which thread.</p>
+        <p>Private, team-shared, and per-project streams side by side. Everyone draws from the same shared context — RBAC decides who sees what.</p>
       </div>
       <div class="biz-card">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M8 13h8M8 17h6"/></svg></div>
         <h3>Documents, not just chat</h3>
-        <p>Ingest and search files and documents alongside conversations. The whole record — woven in, retrievable in a single query.</p>
+        <p>Ingest and search files and documents alongside conversations. The whole record in one place, retrievable in a single query.</p>
       </div>
       <div class="biz-card">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.2-8.2M17 6l2 2M15 8l1.5 1.5"/></svg></div>
@@ -874,7 +876,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
           </g></svg>
           Loomem
         </div>
-        <p class="foot-note">Your context, woven. The context layer that's yours — local-first, portable, and model-agnostic.</p>
+        <p class="foot-note">The context layer that's yours — open source, local-first, portable, and model-agnostic.</p>
       </div>
       <div class="foot-links">
         <div class="foot-col">

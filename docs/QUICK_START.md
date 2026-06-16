@@ -1,44 +1,38 @@
-# Loomem — Persistent Memory for Claude
+# Loomem — Quick start
 
-Loomem gives Claude memory that persists across conversations.
+Loomem gives your LLM agents memory that persists across conversations.
 Every fact, decision, or preference you share gets remembered.
 
-## Setup (2 minutes)
+## Setup (about 2 minutes, local)
 
-### 1. Run a Loomem server
+### 1. Install and start the server
 
-See the [Deployment Guide](deployment.md) for local, Docker, and cloud options. Set an API key:
+Install the prebuilt binaries (no sudo; they land in `~/.loomem`) and put `~/.loomem/bin` on your `PATH` — full steps in the [Installation guide](installation.md). Then start it:
 
 ```bash
-export LOOMEM_AUTH_TOKEN="your-secret-key"
-./target/release/loomem-server
+cd ~/.loomem && loomem-server
+# listens on http://localhost:3030 — auth is off by default for local use
 ```
 
-### 2. Add to Claude Desktop
+### 2. Connect Claude Code
 
-Open Claude Desktop → Settings → Developer → Edit Config
-
-Add to `claude_desktop_config.json`:
-```json
-{
-  "mcpServers": {
-    "loomem": {
-      "url": "https://your-server.example.com/mcp",
-      "headers": {
-        "Authorization": "Bearer YOUR_API_KEY_HERE"
-      }
-    }
-  }
-}
+```bash
+claude mcp add --transport http loomem http://localhost:3030/mcp
 ```
 
-### 3. Restart Claude Desktop
+### 3. Try it
 
-That's it. Claude now has persistent memory. Try:
-> "Remember that I prefer dark mode in all tools"
+In Claude, say:
+> "Remember that I prefer dark mode in all my tools."
 
 Then start a new conversation and ask:
 > "What do you know about my preferences?"
+
+The answer comes back from Loomem.
+
+## Connecting claude.ai or ChatGPT (remote)
+
+These connect to **remote** MCP servers over HTTPS, so this is a separate, longer step: expose your instance behind TLS, set `SERVER_ORIGIN`, then add the connector pointing at `https://your-domain/mcp` (OAuth dynamic client registration works out of the box). Full walkthrough — TLS, reverse proxy, auth — in the [Deployment guide](deployment.md).
 
 ## How it works
 - Claude automatically stores facts you share

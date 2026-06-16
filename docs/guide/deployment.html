@@ -86,7 +86,7 @@ a:hover{text-decoration:underline}
 </head>
 <body>
 <header class="topbar"><div class="wrap inner">
-<a class="brand" href="../"><svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
+<a class="brand" href="../"><svg viewBox="27 27 146 146" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
 <nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
 </div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html" class="active">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Project</div><article class="doc-content"><h1 id="deployment-guide">Deployment Guide</h1>
@@ -121,8 +121,8 @@ curl http://localhost:3030/health
   -d '{&quot;content&quot;: &quot;Hello, this is my first memory&quot;}'
 </code></pre>
 <h3 id="local-embeddings-no-openai-dependency">Local embeddings (no OpenAI dependency)</h3>
-<p>Set <code>provider = "local"</code> in <code>config.toml</code> under <code>[llm]</code>. Uses tract ONNX runtime — pure Rust, no native dependencies.</p>
-<p>Note: consolidation, extraction, and dream features still require an OpenAI API key (they use <code>compression_model</code>).</p>
+<p>Set <code>embedding_provider = "local"</code> in <code>config.toml</code> under <code>[llm]</code> — this is the default on a fresh install. Uses the tract ONNX runtime — pure Rust, no native dependencies, and nothing leaves the machine.</p>
+<p>Note: consolidation, extraction, and dream use OpenAI completions (<code>gpt-4.1-mini</code>). Without an <code>OPENAI_API_KEY</code> those steps fall back to a built-in regex extractor; embeddings and search stay fully local either way.</p>
 <hr />
 <h2 id="docker">Docker</h2>
 <h3 id="build">Build</h3>
@@ -299,8 +299,8 @@ restartPolicyMaxRetries = 3
 <p>Enable in config:</p>
 <pre><code class="language-toml">[worker.backup]
 enabled = true
-interval_secs = 86400    # every 24 hours
-max_copies = 3            # keep last 3 backups
+interval_secs = 43200    # every 12 hours
+max_copies = 2            # keep last 2 backups
 </code></pre>
 <p>Checkpoints are written to <code>{data_dir}/backups/checkpoint-&lt;timestamp&gt;/</code>. For an out-of-band backup, copy that directory (or snapshot the volume) while the server is running — checkpoints are consistent point-in-time copies. See <a href="backup-and-restore.html">Backup and Restore</a> for details, including the extra requirements for encrypted instances.</p>
 <h3 id="restore">Restore</h3>
@@ -334,4 +334,4 @@ max_copies = 3            # keep last 3 backups
 <li><strong>Never hardcode API keys in <code>config.toml</code></strong> — use <code>OPENAI_API_KEY</code> env var instead. The <code>api_key_env</code> field specifies which env var to read.</li>
 <li><code>config_snapshot.toml</code> files (created by eval runs) are gitignored to prevent accidental secret leaks.</li>
 <li>All dependencies use permissive licenses (MIT, Apache-2.0, BSD, ISC).</li>
-</ul></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/Deployment">Edit on GitHub</a></span></div></main></div></body></html>
+</ul></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/deployment.md">Edit on GitHub</a></span></div></main></div></body></html>

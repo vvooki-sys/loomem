@@ -556,7 +556,7 @@ Controls `generate-memory-md` endpoint output.
 | Variable | Purpose | Required |
 |----------|---------|----------|
 | `LOOMEM_AUTH_TOKEN` | API Bearer key (name configurable via `server.auth_token_env`) | No (auth disabled if unset — local passthrough mode) |
-| `OPENAI_API_KEY` | LLM API key (name configurable via `llm.api_key_env`) | Yes (unless `provider = "local"`) |
+| `OPENAI_API_KEY` | LLM API key (name configurable via `llm.api_key_env`) | Only for OpenAI completions (`provider = "openai"`) or OpenAI embeddings (`embedding_provider = "openai"`). With local embeddings (default) and no key, the LLM steps fall back to regex. |
 | `LOOMEM_CONFIG` | Config file path | No (default: `config.toml`) |
 | `PORT` | Override server port | No |
 | `SERVER_ORIGIN` | OAuth redirect base URL | No (for MCP Remote) |

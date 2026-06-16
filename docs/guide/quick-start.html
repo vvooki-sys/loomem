@@ -86,41 +86,33 @@ a:hover{text-decoration:underline}
 </head>
 <body>
 <header class="topbar"><div class="wrap inner">
-<a class="brand" href="../"><svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
+<a class="brand" href="../"><svg viewBox="27 27 146 146" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
 <nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
 </div></header>
-<div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html" class="active">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Docs</div><article class="doc-content"><h1 id="loomem-persistent-memory-for-claude">Loomem — Persistent Memory for Claude</h1>
-<p>Loomem gives Claude memory that persists across conversations.
+<div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html" class="active">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Docs</div><article class="doc-content"><h1 id="loomem-quick-start">Loomem — Quick start</h1>
+<p>Loomem gives your LLM agents memory that persists across conversations.
 Every fact, decision, or preference you share gets remembered.</p>
-<h2 id="setup-2-minutes">Setup (2 minutes)</h2>
-<h3 id="1-run-a-loomem-server">1. Run a Loomem server</h3>
-<p>See the <a href="deployment.html">Deployment Guide</a> for local, Docker, and cloud options. Set an API key:</p>
-<pre><code class="language-bash">export LOOMEM_AUTH_TOKEN=&quot;your-secret-key&quot;
-./target/release/loomem-server
+<h2 id="setup-about-2-minutes-local">Setup (about 2 minutes, local)</h2>
+<h3 id="1-install-and-start-the-server">1. Install and start the server</h3>
+<p>Install the prebuilt binaries (no sudo; they land in <code>~/.loomem</code>) and put <code>~/.loomem/bin</code> on your <code>PATH</code> — full steps in the <a href="installation.html">Installation guide</a>. Then start it:</p>
+<pre><code class="language-bash">cd ~/.loomem &amp;&amp; loomem-server
+# listens on http://localhost:3030 — auth is off by default for local use
 </code></pre>
-<h3 id="2-add-to-claude-desktop">2. Add to Claude Desktop</h3>
-<p>Open Claude Desktop → Settings → Developer → Edit Config</p>
-<p>Add to <code>claude_desktop_config.json</code>:</p>
-<pre><code class="language-json">{
-  &quot;mcpServers&quot;: {
-    &quot;loomem&quot;: {
-      &quot;url&quot;: &quot;https://your-server.example.com/mcp&quot;,
-      &quot;headers&quot;: {
-        &quot;Authorization&quot;: &quot;Bearer YOUR_API_KEY_HERE&quot;
-      }
-    }
-  }
-}
+<h3 id="2-connect-claude-code">2. Connect Claude Code</h3>
+<pre><code class="language-bash">claude mcp add --transport http loomem http://localhost:3030/mcp
 </code></pre>
-<h3 id="3-restart-claude-desktop">3. Restart Claude Desktop</h3>
-<p>That's it. Claude now has persistent memory. Try:</p>
+<h3 id="3-try-it">3. Try it</h3>
+<p>In Claude, say:</p>
 <blockquote>
-<p>"Remember that I prefer dark mode in all tools"</p>
+<p>"Remember that I prefer dark mode in all my tools."</p>
 </blockquote>
 <p>Then start a new conversation and ask:</p>
 <blockquote>
 <p>"What do you know about my preferences?"</p>
 </blockquote>
+<p>The answer comes back from Loomem.</p>
+<h2 id="connecting-claudeai-or-chatgpt-remote">Connecting claude.ai or ChatGPT (remote)</h2>
+<p>These connect to <strong>remote</strong> MCP servers over HTTPS, so this is a separate, longer step: expose your instance behind TLS, set <code>SERVER_ORIGIN</code>, then add the connector pointing at <code>https://your-domain/mcp</code> (OAuth dynamic client registration works out of the box). Full walkthrough — TLS, reverse proxy, auth — in the <a href="deployment.html">Deployment guide</a>.</p>
 <h2 id="how-it-works">How it works</h2>
 <ul>
 <li>Claude automatically stores facts you share</li>
@@ -134,4 +126,4 @@ no third party holds your data. See the <a href="security.html">Security overvie
 <ul>
 <li><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/user-guide.md">User Guide</a> — day-to-day usage</li>
 <li><a href="mcp-tools.html">MCP Tools Reference</a> — what Claude can do with memory</li>
-</ul></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/Quick start">Edit on GitHub</a></span></div></main></div></body></html>
+</ul></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/QUICK_START.md">Edit on GitHub</a></span></div></main></div></body></html>
