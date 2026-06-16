@@ -60,7 +60,21 @@ code,.mono{font-family:var(--lm-font-mono)}
 .topnav{display:flex;align-items:center;gap:26px}
 .topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
 .topnav a:hover{color:var(--lm-ink-900)}
-@media(max-width:760px){.topnav .hide-sm{display:none}}
+.navtoggle{display:none;width:46px;height:46px;align-items:center;justify-content:center;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:12px;cursor:pointer;color:var(--lm-ink-800);padding:0}
+.navtoggle svg{width:24px;height:24px}
+.mobilemenu{display:none}
+@media(max-width:760px){
+  .topnav .hide-sm{display:none}
+  .topbar .inner{height:68px}
+  .brand{font-size:24px}
+  .brand svg{width:42px;height:42px}
+  .navtoggle{display:inline-flex}
+  .mobilemenu{display:flex;flex-direction:column;position:fixed;left:0;right:0;top:69px;background:var(--lm-canvas);border-bottom:1px solid var(--lm-ink-200);box-shadow:var(--lm-shadow-lg);transform:translateY(-135%);transition:transform .3s var(--lm-ease);z-index:39;padding:8px clamp(20px,5vw,40px) 22px}
+  .mobilemenu.open{transform:translateY(0)}
+  .mobilemenu a{font-size:16px;font-weight:500;color:var(--lm-ink-800);padding:14px 2px;border-bottom:1px solid var(--lm-ink-100)}
+  .mobilemenu a:hover{color:var(--lm-ink-900)}
+  .mobilemenu a.cta{display:flex;width:100%;justify-content:center;color:#fff;border:none;margin-top:16px;padding:14px}
+}
 
 /* ---------- buttons ---------- */
 .btn{font-family:var(--lm-font-sans);font-size:15px;font-weight:600;border:none;cursor:pointer;
@@ -99,7 +113,7 @@ code,.mono{font-family:var(--lm-font-mono)}
 .mark-anim g.ring-inner{animation:lm-spin-rev 26s linear infinite}
 @keyframes lm-spin{to{transform:rotate(360deg)}}
 @keyframes lm-spin-rev{to{transform:rotate(-360deg)}}
-@media(max-width:860px){.hero-inner{grid-template-columns:1fr;gap:8px}.hero .art{order:-1;max-width:220px;margin:0 auto 8px}}
+@media(max-width:860px){.hero-inner{grid-template-columns:1fr;gap:4px;padding:clamp(28px,7vw,80px) 0}.hero .art{order:-1;max-width:150px;margin:0 auto 4px}.hero .meta{gap:18px}}
 
 /* ---------- section scaffolding ---------- */
 section{padding:clamp(64px,9vw,104px) 0}
@@ -310,8 +324,19 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <a class="hide-sm" href="#quickstart">Quickstart</a>
       <a class="hide-sm" href="#business">For teams</a>
       <a class="hide-sm" href="https://github.com/vvooki-sys/loomem">GitHub</a>
-      <a class="btn btn-weave btn-sm" href="#quickstart">Get started</a>
+      <a class="btn btn-weave btn-sm hide-sm" href="#quickstart">Get started</a>
+      <button class="navtoggle" id="navToggle" aria-label="Open menu" aria-expanded="false" aria-controls="mobileMenu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
     </nav>
+  </div>
+  <div class="mobilemenu" id="mobileMenu">
+    <a href="#features">What it does</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#quickstart">Quickstart</a>
+    <a href="#business">For teams</a>
+    <a href="https://github.com/vvooki-sys/loomem">GitHub</a>
+    <a class="btn btn-weave cta" href="#quickstart">Get started →</a>
   </div>
 </header>
 
@@ -743,6 +768,18 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     }, { threshold: 0.12 });
     document.querySelectorAll('section').forEach(function(s){ s.classList.add('reveal'); obs.observe(s); });
   }catch(e){}
+
+  // --- mobile menu toggle ---
+  var nt = document.getElementById('navToggle'), mm = document.getElementById('mobileMenu');
+  if (nt && mm) {
+    nt.addEventListener('click', function(){
+      var open = mm.classList.toggle('open');
+      nt.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    mm.querySelectorAll('a').forEach(function(a){
+      a.addEventListener('click', function(){ mm.classList.remove('open'); nt.setAttribute('aria-expanded','false'); });
+    });
+  }
 
   // --- a living context graph inside the hero ring ---
   var g = document.getElementById('ctxGraph');
