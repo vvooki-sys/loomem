@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please report security vulnerabilities privately to **security@loomem.com**.
+Please report security vulnerabilities privately to **security@loomem.ai**.
 
 Do not open public GitHub issues for security problems. We aim to acknowledge reports within 72 hours and to ship a fix or mitigation before any public disclosure.
 
