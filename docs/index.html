@@ -182,6 +182,30 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 .foot-bottom{margin-top:36px;padding-top:24px;border-top:1px solid var(--lm-ink-100);font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
 
 .foot-links{display:flex;gap:clamp(40px,8vw,90px);flex-wrap:wrap}
+
+/* ---------- business / engram ---------- */
+.biz{background:var(--lm-ink-900);color:var(--lm-ink-100);position:relative;overflow:hidden}
+.biz::before{content:"";position:absolute;top:0;left:0;right:0;height:4px;background:var(--lm-weave)}
+.biz .sec-eyebrow{color:var(--lm-gold-300)}
+.biz h2.sec{color:#fff}
+.biz h2.sec em{font-style:italic;background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.biz .sec-lead{color:var(--lm-ink-300)}
+.biz-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px;margin-bottom:40px}
+.biz-card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.10);border-radius:var(--lm-radius-lg);padding:26px;transition:all var(--lm-dur-base) var(--lm-ease)}
+.biz-card:hover{border-color:rgba(244,172,46,0.45);background:rgba(255,255,255,0.06);transform:translateY(-2px)}
+.biz-card .ic{width:44px;height:44px;border-radius:var(--lm-radius-md);background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center;margin-bottom:16px}
+.biz-card .ic svg{width:23px;height:23px;stroke:var(--lm-gold-300)}
+.biz-card h3{font-size:1.0625rem;font-weight:600;color:#fff;margin-bottom:7px}
+.biz-card p{font-size:14.5px;color:var(--lm-ink-300);line-height:1.6}
+.biz-card code{font-family:var(--lm-font-mono);font-size:0.9em;background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px;color:var(--lm-gold-200)}
+.biz-cta{display:flex;align-items:center;gap:22px;flex-wrap:wrap;padding:28px 32px;border-radius:var(--lm-radius-xl);
+  background:linear-gradient(120deg, rgba(238,153,19,0.16), rgba(22,132,220,0.16));border:1px solid rgba(255,255,255,0.12)}
+.biz-cta .txt{flex:1;min-width:240px}
+.biz-cta h4{font-family:var(--lm-font-display);font-size:1.4rem;font-weight:500;color:#fff;margin-bottom:5px;letter-spacing:-0.01em}
+.biz-cta p{font-size:14.5px;color:var(--lm-ink-300);line-height:1.55}
+.biz-cta p a{color:var(--lm-gold-200);font-weight:600}
+.btn-gold{background:var(--lm-accent);color:var(--lm-ink-900);box-shadow:var(--lm-shadow-gold)}
+.btn-gold:hover{background:var(--lm-gold-400);color:var(--lm-ink-900);transform:translateY(-1px)}
 </style>
 </head>
 <body>
@@ -200,7 +224,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <a class="hide-sm" href="#features">Features</a>
       <a class="hide-sm" href="#quickstart">Quickstart</a>
       <a class="hide-sm" href="#architecture">Architecture</a>
-      <a class="hide-sm" href="mailto:contact@loomem.ai">Contact</a>
+      <a class="hide-sm" href="#business">For teams</a>
       <a class="hide-sm" href="https://github.com/vvooki-sys/loomem">GitHub</a>
       <a class="btn btn-primary btn-sm" href="#quickstart">Get started</a>
     </nav>
@@ -433,6 +457,56 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <div class="crate"><code>loomem-server</code><span>HTTP / MCP server.</span></div>
       <div class="crate"><code>loomem-migrate</code><span>Offline DB maintenance.</span></div>
       <div class="crate"><code>loomem-cli</code><span>Command-line client.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ BUSINESS / ENGRAM ============ -->
+<section id="business" class="biz">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">Engram · for teams</div>
+      <h2 class="sec">Loomem remembers for you.<br><em>Engram</em> remembers for the whole team.</h2>
+      <p class="sec-lead">Engram is the managed, multiplayer edition built on the very same engine — hosted, shared, and ready for documents, teams, and single sign-on. The same fabric, woven wide enough for an organization. No binary to babysit, no server to secure.</p>
+    </div>
+    <div class="biz-cards">
+      <div class="biz-card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1 .4-8A6 6 0 0 1 19 9.5a3.5 3.5 0 0 1-.5 8.5H7Z"/></svg></div>
+        <h3>Hosted &amp; managed</h3>
+        <p>Runs in the cloud — backed up, monitored, and upgraded for you. Your team gets the memory; we keep the lights on.</p>
+      </div>
+      <div class="biz-card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 6a3 3 0 0 1 0 6M21 20a6 6 0 0 0-4-5.7"/></svg></div>
+        <h3>Shared &amp; project memory</h3>
+        <p>Private, team-shared, and per-project streams side by side. Everyone draws from the same fabric — RBAC decides who sees which thread.</p>
+      </div>
+      <div class="biz-card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M8 13h8M8 17h6"/></svg></div>
+        <h3>Documents, not just chat</h3>
+        <p>Ingest and search files and documents alongside conversations. The whole record — woven in, retrievable in a single query.</p>
+      </div>
+      <div class="biz-card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.2-8.2M17 6l2 2M15 8l1.5 1.5"/></svg></div>
+        <h3>Enterprise sign-in</h3>
+        <p>Microsoft Entra SSO and magic-link login. Your team signs in the way it already does — no new passwords to herd.</p>
+      </div>
+      <div class="biz-card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="7" cy="18" r="2" fill="currentColor"/></svg></div>
+        <h3>Admin &amp; governance</h3>
+        <p>A console for users, streams, and audit — see who remembered what, and when. Provisioning and oversight without the spreadsheets.</p>
+      </div>
+      <div class="biz-card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></div>
+        <h3>Consolidation at scale</h3>
+        <p>Background "dreaming" merges facts, resolves contradictions, and keeps bitemporal history across the whole organization's memory.</p>
+      </div>
+    </div>
+    <div class="biz-cta">
+      <div class="txt">
+        <h4>Bring Engram to your team</h4>
+        <p>Tell us about your stack and we'll map a rollout — pilots welcome. <a href="mailto:business@loomem.ai">business@loomem.ai</a></p>
+      </div>
+      <a class="btn btn-gold btn-lg" href="mailto:business@loomem.ai">Talk to us →</a>
     </div>
   </div>
 </section>
