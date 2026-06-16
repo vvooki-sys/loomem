@@ -1,0 +1,48 @@
+# robots.txt — loomem.ai
+# Cel: być widocznym i cytowanym przez AI search. Dopuszczamy wszystkie
+# boty cytujące ORAZ trenujące — mały OSS tool CHCE, żeby modele o nim wiedziały.
+
+# --- AI: live citation / search (pobierają stronę gdy user pyta) ---
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+# --- AI: training crawlers (świadomie dopuszczone) ---
+User-agent: GPTBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Google-CloudVertexBot
+Allow: /
+
+# --- Classic search ---
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+# --- Default ---
+User-agent: *
+Allow: /
+
+Sitemap: https://loomem.ai/sitemap.xml

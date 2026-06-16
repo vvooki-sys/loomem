@@ -16,7 +16,7 @@
 
 ---
 
-A persistent memory engine for AI agents. Single binary, local-first, MCP-native.
+Loomem is an open-source, self-hosted long-term memory engine for LLM agents, written in Rust and served over MCP. Single binary, local-first, model-agnostic.
 
 Loomem stores structured knowledge extracted from conversations, and serves it back to any MCP-capable client (Claude, Cursor, custom agents) through hybrid retrieval:
 
@@ -30,6 +30,20 @@ Loomem stores structured knowledge extracted from conversations, and serves it b
 Built in Rust on RocksDB + Tantivy. Single binary, no external services required.
 
 > **Status: early.** The engine has been in daily personal use for a while, but the public API and storage format may still change. Expect rough edges; issues and PRs are welcome.
+
+## How it compares
+
+An honest snapshot (June 2026) of Loomem next to other open-source memory layers for LLM agents. Verify before relying on it — the field moves fast.
+
+| | Loomem | mem0 | Zep | Letta | cognee |
+|---|---|---|---|---|---|
+| Open source | ✅ Apache-2.0 | ✅ + SaaS | ✅ (Graphiti) + SaaS | ✅ + SaaS | ✅ |
+| Self-hosted / local-first | ✅ | ✅ | ✅ | ✅ | ✅ |
+| External services required | ❌ one binary | vector DB | graph + DB | DB | vector + graph DB |
+| Language | Rust | Python | Python | Python | Python |
+| MCP-native | ✅ | ✅ | partial | partial | ✅ |
+| Bitemporal (event vs ingest time) | ✅ | ❌ | ✅ | ❌ | partial |
+| Offline embeddings (no API) | ✅ ONNX | ❌ | ❌ | ❌ | partial |
 
 ## Quickstart
 
@@ -196,6 +210,26 @@ Workspace crates: `loomem-core` (engine), `loomem-server` (HTTP/MCP server), `lo
 - [Deployment](docs/deployment.md)
 - [Security model](docs/SECURITY.md)
 - [Backup & restore](docs/backup-and-restore.md)
+
+## FAQ
+
+**What is Loomem?**
+An open-source, self-hosted long-term memory engine for LLM agents. Written in Rust, it runs as a single binary on RocksDB and Tantivy and is served over the Model Context Protocol (MCP). It stores facts, decisions, and preferences and serves them back to any model, so your context stays portable and local-first.
+
+**How is Loomem different from mem0, Zep, Letta, and cognee?**
+Loomem ships as a single Rust binary with no external services — most alternatives need a separate vector and/or graph database. It leads on context ownership and portability, runs fully self-hosted and local-first, supports offline embeddings via local ONNX models, and is MCP-native out of the box.
+
+**Is Loomem free and open source?**
+Yes — Apache-2.0, free to self-host. Source is in this repository.
+
+**Does Loomem require an internet connection or OpenAI?**
+No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching memories work fully offline. An OpenAI API key is optional and only enhances LLM-based consolidation, extraction, and contradiction detection; without it those steps fall back to regex.
+
+**Which LLM clients can connect?**
+Any MCP-capable client. Loomem speaks MCP over streamable HTTP and provides recipes for Claude, Claude Code, ChatGPT, and Cursor, plus OAuth dynamic client registration for remote connectors.
+
+**Why not just use ChatGPT or Claude built-in memory?**
+Built-in memory is locked to one vendor. Loomem keeps your context portable across every tool and model, self-hosted and owned by you, with a structured entity graph and bitemporal history a single product's memory doesn't give you.
 
 ## License
 

@@ -4,7 +4,90 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Loomem — Your context, woven</title>
-<meta name="description" content="Loomem is your context layer — multimodal, portable, and yours. Keep your context in one place you own, and bring it to any model or tool. Swap the LLM underneath; your context stays with you." />
+<link rel="canonical" href="https://loomem.ai/" />
+<meta name="description" content="Loomem is an open-source, self-hosted long-term memory engine for LLM agents — Rust, RocksDB + Tantivy, served over MCP. Local-first, portable, model-agnostic. Apache-2.0." />
+
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Loomem" />
+<meta property="og:url" content="https://loomem.ai/" />
+<meta property="og:title" content="Loomem — long-term memory for LLM agents, yours to own" />
+<meta property="og:description" content="Open-source, self-hosted memory engine for LLM agents. One Rust binary, served over MCP. Keep your context in one place you own and bring it to any model." />
+<meta property="og:image" content="https://loomem.ai/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Loomem — long-term memory for LLM agents" />
+<meta name="twitter:description" content="Open-source, self-hosted memory engine for LLM agents. One Rust binary, served over MCP. Own your context, swap the model." />
+<meta name="twitter:image" content="https://loomem.ai/og-image.png" />
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://loomem.ai/#software",
+      "name": "Loomem",
+      "applicationCategory": "DeveloperApplication",
+      "applicationSubCategory": "AI memory engine for LLM agents",
+      "operatingSystem": "macOS, Linux",
+      "description": "Loomem is an open-source, self-hosted long-term memory engine for LLM agents, written in Rust and exposed over the Model Context Protocol (MCP). Hybrid BM25 + vector + graph retrieval, bitemporal facts, and background consolidation in a single binary on RocksDB and Tantivy.",
+      "url": "https://loomem.ai/",
+      "downloadUrl": "https://github.com/vvooki-sys/loomem/releases/latest",
+      "codeRepository": "https://github.com/vvooki-sys/loomem",
+      "programmingLanguage": "Rust",
+      "license": "https://www.apache.org/licenses/LICENSE-2.0",
+      "softwareLicense": "Apache-2.0",
+      "softwareRequirements": "Runs as a single static binary; no external services. Optional OpenAI API key for LLM-based consolidation and extraction.",
+      "isAccessibleForFree": true,
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "author": { "@id": "https://loomem.ai/#org" }
+    },
+    {
+      "@type": "Organization",
+      "@id": "https://loomem.ai/#org",
+      "name": "Loomem",
+      "url": "https://loomem.ai/",
+      "logo": "https://loomem.ai/logo.png",
+      "sameAs": [ "https://github.com/vvooki-sys/loomem" ]
+    }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is Loomem?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Loomem is an open-source, self-hosted long-term memory engine for LLM agents. It is written in Rust, runs as a single binary on RocksDB and Tantivy, and is served over the Model Context Protocol (MCP). It stores facts, decisions, and preferences and serves them back to any model so your context stays portable and local-first." }
+    },
+    {
+      "@type": "Question",
+      "name": "How is Loomem different from mem0, Zep, Letta, and cognee?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Loomem ships as a single Rust binary with no external services — most alternatives require a separate vector database and/or graph database. It leads on context ownership and portability, runs fully self-hosted and local-first, supports offline embeddings via local ONNX models, and is MCP-native out of the box." }
+    },
+    {
+      "@type": "Question",
+      "name": "Is Loomem free and open source?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Yes. Loomem is licensed under Apache-2.0 and is free to self-host. The source is on GitHub at github.com/vvooki-sys/loomem." }
+    },
+    {
+      "@type": "Question",
+      "name": "Does Loomem require an internet connection or OpenAI?",
+      "acceptedAnswer": { "@type": "Answer", "text": "No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching memories work fully offline. An OpenAI API key is optional and only enhances LLM-based consolidation, extraction, and contradiction detection; without it those steps fall back to regex." }
+    },
+    {
+      "@type": "Question",
+      "name": "Which LLM clients can connect to Loomem?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Any MCP-capable client. Loomem speaks MCP over streamable HTTP and provides setup recipes for Claude, Claude Code, ChatGPT, and Cursor, plus OAuth dynamic client registration for remote connectors." }
+    }
+  ]
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -298,6 +381,27 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 .arch-arrow::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:2.5px;background:var(--lm-weave-vivid);transform:translateX(-50%);border-radius:2px;opacity:.6}
 .arch-arrow span{position:relative;background:var(--lm-surface);padding:2px 12px;font-family:var(--lm-font-mono);font-size:11px;color:var(--lm-ink-500);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-pill)}
 @media(max-width:680px){.arch-grid4,.arch-store{grid-template-columns:1fr}}
+
+/* ---------- comparison table ---------- */
+.cmp-wrap{overflow-x:auto;border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);box-shadow:var(--lm-shadow-sm)}
+.cmp{width:100%;border-collapse:collapse;font-size:14.5px;min-width:720px;background:var(--lm-surface)}
+.cmp th,.cmp td{padding:13px 16px;text-align:left;border-bottom:1px solid var(--lm-ink-100)}
+.cmp thead th{font-weight:600;color:var(--lm-ink-600);border-bottom:2px solid var(--lm-ink-200);font-size:14px}
+.cmp tbody th{font-weight:500;color:var(--lm-ink-700)}
+.cmp .col-lm{background:var(--lm-surface-warm)}
+.cmp thead .col-lm{color:var(--lm-gold-900);font-weight:700}
+.cmp td.col-lm{font-weight:600;color:var(--lm-ink-900)}
+.cmp tr:last-child td,.cmp tr:last-child th{border-bottom:none}
+.cmp-note{font-size:13px;color:var(--lm-ink-400);margin-top:14px;line-height:1.55}
+/* ---------- FAQ ---------- */
+.faq{max-width:760px}
+.faq details{border-bottom:1px solid var(--lm-ink-200)}
+.faq summary{cursor:pointer;list-style:none;padding:18px 0;font-family:var(--lm-font-display);font-size:1.15rem;font-weight:600;color:var(--lm-ink-900);display:flex;justify-content:space-between;align-items:center;gap:16px}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";font-family:var(--lm-font-sans);font-weight:400;color:var(--lm-gold-600);font-size:1.6rem;line-height:1}
+.faq details[open] summary::after{content:"\2013"}
+.faq p{font-size:15px;color:var(--lm-ink-600);line-height:1.62;padding:0 0 20px;margin:0;max-width:68ch}
+.faq p code{font-family:var(--lm-font-mono);font-size:.9em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1px 5px;border-radius:5px}
 </style>
 </head>
 <body>
@@ -347,7 +451,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     <div>
       <div class="eyebrow">Your context. <b>Yours to keep</b> — wherever you take it.</div>
       <h1>Your context,<br><em>woven.</em></h1>
-      <p class="lead">Loomem is the context layer that belongs to you. It holds your conversations, decisions, and documents in one place — multimodal and portable. Treat any LLM as a service you can swap; your context stays with you and travels between tools.</p>
+      <p class="lead">Loomem is your context layer — an open-source, self-hosted long-term memory engine for LLM agents, written in Rust and served over MCP. It keeps your conversations, decisions, and documents in one place that's yours, and brings them to any model you use. Swap the LLM underneath; your context stays with you.</p>
       <div class="cta">
         <a class="btn btn-weave btn-lg" href="#quickstart">Get started →</a>
         <a class="btn btn-secondary btn-lg" href="https://github.com/vvooki-sys/loomem/releases/latest">Download for macOS</a>
@@ -490,6 +594,32 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
         <p>The engine has been in daily personal use for a while, but the public API and storage format may still change. Expect rough edges — issues and PRs are welcome.</p>
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ============ HOW IT COMPARES ============ -->
+<section id="compare" class="alt-sunk">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">How it compares</div>
+      <h2 class="sec">One Rust binary, where others need a stack</h2>
+      <p class="sec-lead">An honest look at Loomem next to other open-source memory layers for LLM agents. The field moves fast — verify before you bet on it.</p>
+    </div>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr><th></th><th class="col-lm">Loomem</th><th>mem0</th><th>Zep</th><th>Letta</th><th>cognee</th></tr></thead>
+        <tbody>
+          <tr><th>Open source</th><td class="col-lm">Apache-2.0</td><td>✓ + SaaS</td><td>✓ (Graphiti) + SaaS</td><td>✓ + SaaS</td><td>✓</td></tr>
+          <tr><th>Self-hosted / local-first</th><td class="col-lm">✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+          <tr><th>External services required</th><td class="col-lm">None — one binary</td><td>vector DB</td><td>graph + DB</td><td>DB</td><td>vector + graph DB</td></tr>
+          <tr><th>Language</th><td class="col-lm">Rust</td><td>Python</td><td>Python</td><td>Python</td><td>Python</td></tr>
+          <tr><th>MCP-native</th><td class="col-lm">✓</td><td>✓</td><td>partial</td><td>partial</td><td>✓</td></tr>
+          <tr><th>Bitemporal (event vs ingest time)</th><td class="col-lm">✓</td><td>—</td><td>✓</td><td>—</td><td>partial</td></tr>
+          <tr><th>Offline embeddings (no API)</th><td class="col-lm">✓ ONNX</td><td>—</td><td>—</td><td>—</td><td>partial</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="cmp-note">Competitor columns reflect a June 2026 snapshot and may change — treat this as a starting point, not gospel. An honest table (Loomem's gaps included) beats a sales sheet.</p>
   </div>
 </section>
 
@@ -691,6 +821,24 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
         <p>Tell us about your stack and we'll map a rollout — pilots welcome. <a href="mailto:business@loomem.ai">business@loomem.ai</a></p>
       </div>
       <a class="btn btn-gold btn-lg" href="mailto:business@loomem.ai">Talk to us →</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FAQ ============ -->
+<section id="faq" class="alt">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">FAQ</div>
+      <h2 class="sec">Questions, answered</h2>
+    </div>
+    <div class="faq">
+      <details open><summary>What is Loomem?</summary><p>Loomem is an open-source, self-hosted long-term memory engine for LLM agents. It's written in Rust, runs as a single binary on RocksDB and Tantivy, and is served over the Model Context Protocol (MCP). It stores facts, decisions, and preferences and serves them back to any model, so your context stays portable and local-first.</p></details>
+      <details><summary>How is Loomem different from mem0, Zep, Letta, and cognee?</summary><p>Loomem ships as a single Rust binary with no external services — most alternatives need a separate vector database and/or graph database. It leads on context ownership and portability, runs fully self-hosted and local-first, supports offline embeddings via local ONNX models, and is MCP-native out of the box.</p></details>
+      <details><summary>Is Loomem free and open source?</summary><p>Yes. Loomem is licensed under Apache-2.0 and is free to self-host. The source is on <a href="https://github.com/vvooki-sys/loomem">GitHub</a>.</p></details>
+      <details><summary>Does Loomem require an internet connection or OpenAI?</summary><p>No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching memories work fully offline. An OpenAI API key is optional and only enhances LLM-based consolidation, extraction, and contradiction detection; without it those steps fall back to regex.</p></details>
+      <details><summary>Which LLM clients can connect to Loomem?</summary><p>Any MCP-capable client. Loomem speaks MCP over streamable HTTP and provides setup recipes for Claude, Claude Code, ChatGPT, and Cursor, plus OAuth dynamic client registration for remote connectors.</p></details>
+      <details><summary>Why not just use ChatGPT or Claude built-in memory?</summary><p>Built-in memory is locked to one vendor. Loomem keeps your context portable across every tool and model, self-hosted and owned by you — with a structured entity graph and bitemporal history that a single product's memory doesn't give you.</p></details>
     </div>
   </div>
 </section>
