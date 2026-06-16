@@ -261,6 +261,29 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 .pcard.warm .ic{background:linear-gradient(135deg,var(--lm-gold-100),var(--lm-surface-warm))}
 .quote .qm{background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .contrast .yes h4,.contrast .no h4{display:inline-block}
+
+/* ---------- architecture flow ---------- */
+.arch-flow{display:flex;flex-direction:column;align-items:stretch;margin-bottom:36px}
+.arch-layer{background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:20px 22px;box-shadow:var(--lm-shadow-sm)}
+.arch-layer .arch-tag{font-family:var(--lm-font-mono);font-size:12px;font-weight:600;color:var(--lm-ink-500);margin-bottom:12px}
+.arch-layer.server{border-color:#CBE6FB;background:linear-gradient(180deg,#fff,var(--lm-surface-cool))}
+.arch-layer.core{border-color:var(--lm-gold-200);background:linear-gradient(180deg,#fff,var(--lm-surface-warm))}
+.arch-layer.storage{background:var(--lm-ink-900);border-color:var(--lm-ink-900)}
+.arch-layer.storage .arch-tag{color:var(--lm-ink-300)}
+.arch-chips{display:flex;flex-wrap:wrap;gap:8px}
+.arch-chips span{font-size:13px;font-weight:500;color:var(--lm-ink-700);background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-pill);padding:6px 13px}
+.arch-layer>p{font-size:14.5px;color:var(--lm-ink-600);line-height:1.55;margin:0}
+.arch-layer>p code{font-family:var(--lm-font-mono);font-size:.88em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1px 5px;border-radius:5px;color:var(--lm-ink-800)}
+.arch-grid4{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.arch-grid4>div b,.arch-store>div b{display:block;font-size:14px;font-weight:600;color:var(--lm-ink-900);margin-bottom:2px}
+.arch-grid4>div span,.arch-store>div span{font-size:13px;color:var(--lm-ink-600);line-height:1.45}
+.arch-store{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.arch-store>div b{color:#fff;font-family:var(--lm-font-mono)}
+.arch-store>div span{color:var(--lm-ink-300)}
+.arch-arrow{height:36px;position:relative;display:flex;align-items:center;justify-content:center}
+.arch-arrow::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:2.5px;background:var(--lm-weave-vivid);transform:translateX(-50%);border-radius:2px;opacity:.6}
+.arch-arrow span{position:relative;background:var(--lm-surface);padding:2px 12px;font-family:var(--lm-font-mono);font-size:11px;color:var(--lm-ink-500);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-pill)}
+@media(max-width:680px){.arch-grid4,.arch-store{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -450,33 +473,46 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
   <div class="wrap">
     <div class="sec-head">
       <div class="sec-eyebrow">Architecture</div>
-      <h2 class="sec">A single binary on RocksDB + Tantivy</h2>
-      <p class="sec-lead">No external services required. The server dispatches MCP and HTTP requests into the core engine, which handles search, consolidation, the entity graph, and optional encryption.</p>
+      <h2 class="sec">One binary, four clean layers</h2>
+      <p class="sec-lead">No external services, no queue, no vector database to run alongside. Requests flow top to bottom — from any client, through the server, into the engine, down to embedded storage — and the answer comes back up.</p>
     </div>
-    <div class="arch">
-<pre>                    ┌──────────────────────────────────────────────┐
-                    │                loomem-server                 │
- MCP client ──────► │  /mcp (JSON-RPC) ── dispatcher ─┐            │
- HTTP client ─────► │  /v1/* + /api/* ─── handlers ───┤            │
-                    └─────────────────────────────────┼────────────┘
-                                                      ▼
-                    ┌──────────────────────────────────────────────┐
-                    │                 loomem-core                  │
-                    │  hybrid search (BM25 + vector + graph + RRF) │
-                    │  consolidation / decay / dream workers       │
-                    │  entity extraction + alias graph             │
-                    │  encryption at rest (optional)               │
-                    └───────┬───────────────┬──────────────────────┘
-                            ▼               ▼
-                       RocksDB          Tantivy
-                  (chunks, graph,    (full-text index)
-                   embeddings)</pre>
+
+    <div class="arch-flow">
+      <div class="arch-layer clients">
+        <div class="arch-tag">Clients · any MCP-capable tool</div>
+        <div class="arch-chips"><span>Claude</span><span>ChatGPT</span><span>Cursor</span><span>OpenClaw</span><span>Your own agent</span></div>
+      </div>
+      <div class="arch-arrow"><span>MCP over HTTP — /mcp · /v1 · /api</span></div>
+      <div class="arch-layer server">
+        <div class="arch-tag">loomem-server</div>
+        <p>Speaks MCP (<code>/mcp</code>, JSON-RPC) and plain HTTP (<code>/v1</code>, <code>/api</code>). Handles auth and OAuth dynamic client registration, then dispatches every call into the engine. Stateless and thin.</p>
+      </div>
+      <div class="arch-arrow"><span>typed calls</span></div>
+      <div class="arch-layer core">
+        <div class="arch-tag">loomem-core · the engine</div>
+        <div class="arch-grid4">
+          <div><b>Hybrid retrieval</b><span>BM25 + vector + entity-graph signals, fused with reciprocal-rank fusion.</span></div>
+          <div><b>Consolidation</b><span>Background workers merge, resolve contradictions, and decay stale context — "dreaming."</span></div>
+          <div><b>Entity graph</b><span>People, projects, and tools linked with aliases and relations.</span></div>
+          <div><b>Bitemporal + encryption</b><span>Ingestion vs event time, plus optional field-level AES-GCM.</span></div>
+        </div>
+      </div>
+      <div class="arch-arrow"><span>reads &amp; writes</span></div>
+      <div class="arch-layer storage">
+        <div class="arch-tag">Storage · embedded, nothing to operate</div>
+        <div class="arch-store">
+          <div><b>RocksDB</b><span>Chunks, entity graph, and vector embeddings.</span></div>
+          <div><b>Tantivy</b><span>Full-text index powering the BM25 half of search.</span></div>
+        </div>
+      </div>
     </div>
+
+    <h3 class="sub" style="font-size:0.8125rem;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--lm-ink-400);margin:0 0 16px">Workspace crates</h3>
     <div class="crates">
-      <div class="crate"><code>loomem-core</code><span>The engine.</span></div>
-      <div class="crate"><code>loomem-server</code><span>HTTP / MCP server.</span></div>
-      <div class="crate"><code>loomem-migrate</code><span>Offline DB maintenance.</span></div>
-      <div class="crate"><code>loomem-cli</code><span>Command-line client.</span></div>
+      <div class="crate"><code>loomem-core</code><span>The engine — search, consolidation, graph, encryption.</span></div>
+      <div class="crate"><code>loomem-server</code><span>HTTP + MCP server and request dispatch.</span></div>
+      <div class="crate"><code>loomem-migrate</code><span>Offline database maintenance and migrations.</span></div>
+      <div class="crate"><code>loomem-cli</code><span>Command-line client for scripts and ops.</span></div>
     </div>
   </div>
 </section>
