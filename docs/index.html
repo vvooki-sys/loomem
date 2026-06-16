@@ -97,7 +97,7 @@ code,.mono{font-family:var(--lm-font-mono)}
 .hero::after{width:38vw;height:38vw;right:-6vw;bottom:-16vw;opacity:.72;background:radial-gradient(circle,#63B5F0,rgba(99,181,240,0) 72%);animation:heroDrift2 30s ease-in-out infinite}
 @keyframes heroDrift1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(5vw,4vw) scale(1.12)}}
 @keyframes heroDrift2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-4vw,-3vw) scale(1.1)}}
-.hero-inner{position:relative;z-index:1;display:grid;grid-template-columns:1.35fr 1fr;gap:48px;align-items:center;padding:clamp(56px,9vw,104px) 0}
+.hero-inner{position:relative;z-index:1;display:grid;grid-template-columns:1.35fr 1fr;gap:48px;align-items:center;padding:clamp(56px,9vw,104px) clamp(20px,5vw,40px)}
 .eyebrow{font-size:15px;font-weight:500;letter-spacing:0;color:var(--lm-ink-500);margin-bottom:18px}
 .eyebrow b{color:var(--lm-ink-900);font-weight:600}
 .hero h1{font-family:var(--lm-font-display);font-size:clamp(2.7rem,5.4vw,4.25rem);font-weight:500;
@@ -113,7 +113,7 @@ code,.mono{font-family:var(--lm-font-mono)}
 .mark-anim g.ring-inner{animation:lm-spin-rev 26s linear infinite}
 @keyframes lm-spin{to{transform:rotate(360deg)}}
 @keyframes lm-spin-rev{to{transform:rotate(-360deg)}}
-@media(max-width:860px){.hero-inner{grid-template-columns:1fr;gap:4px;padding:clamp(28px,7vw,80px) 0}.hero .art{order:-1;max-width:150px;margin:0 auto 4px}.hero .meta{gap:18px}}
+@media(max-width:860px){.hero-inner{grid-template-columns:1fr;gap:4px;padding:clamp(28px,7vw,80px) clamp(20px,5vw,40px)}.hero .art{order:-1;max-width:150px;margin:0 auto 4px}.hero .meta{gap:18px}}
 
 /* ---------- section scaffolding ---------- */
 section{padding:clamp(64px,9vw,104px) 0}
