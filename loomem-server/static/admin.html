@@ -4,30 +4,82 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Loomem Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke-linecap='round' fill='none'%3E%3Cg stroke='%23EE9913'%3E%3Ccircle cx='100' cy='100' r='72' stroke-width='14' stroke-dasharray='92 360' transform='rotate(8 100 100)'/%3E%3Ccircle cx='100' cy='100' r='56' stroke-width='14' stroke-dasharray='70 360' transform='rotate(98 100 100)'/%3E%3C/g%3E%3Cg stroke='%231684DC'%3E%3Ccircle cx='100' cy='100' r='72' stroke-width='14' stroke-dasharray='92 360' transform='rotate(188 100 100)'/%3E%3Ccircle cx='100' cy='100' r='56' stroke-width='14' stroke-dasharray='70 360' transform='rotate(278 100 100)'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E">
 <style>
+:root{
+  --lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-800:#7C4B0F;
+  --lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-ink-900:#1F1B16;--lm-ink-700:#423B31;--lm-ink-600:#564D40;--lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-300:#B7AE9E;--lm-ink-200:#DED7C8;--lm-ink-100:#EFE9DD;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;--lm-surface-cool:#EEF6FD;
+  --lm-success:#2E9E6B;--lm-success-text:#1B6E48;--lm-success-bg:#E4F4EC;
+  --lm-error:#D2553B;--lm-error-bg:#FBE9E3;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#1684DC 100%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-sm:6px;--lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);--lm-shadow-md:0 8px 24px rgba(31,27,22,0.09);--lm-shadow-blue:0 10px 30px rgba(15,105,184,0.18);
+  --lm-ease:cubic-bezier(0.16,1,0.3,1);
+}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:20px}
-h1{font-size:1.4em;margin-bottom:16px;color:#fff}
-.card{background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;margin-bottom:16px}
+body{font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);
+  padding:0;-webkit-font-smoothing:antialiased;line-height:1.55}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+.shell{max-width:920px;margin:0 auto;padding:clamp(20px,4vw,40px)}
+.topbar{display:flex;align-items:center;gap:11px;margin-bottom:24px}
+.topbar svg{width:30px;height:30px}
+.topbar .name{font-family:var(--lm-font-display);font-weight:600;font-size:22px;letter-spacing:-0.02em}
+.topbar .tag{font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--lm-ink-400);
+  border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-pill);padding:3px 10px;margin-left:2px}
+h1{font-size:1.4em;margin-bottom:16px;color:var(--lm-ink-900)}
+h2{font-family:var(--lm-font-display);letter-spacing:-0.01em;color:var(--lm-ink-900)}
+.card{background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);
+  padding:22px;margin-bottom:18px;box-shadow:var(--lm-shadow-sm)}
+label{font-size:13px;font-weight:600;color:var(--lm-ink-700)}
 table{width:100%;border-collapse:collapse;font-size:0.9em}
-th{text-align:left;padding:8px;border-bottom:1px solid #333;color:#888;font-weight:500}
-td{padding:8px;border-bottom:1px solid #222}
-.btn{background:#2563eb;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:0.85em}
-.btn:hover{background:#1d4ed8}
-.btn-danger{background:#dc2626}
-.btn-danger:hover{background:#b91c1c}
-.btn-sm{padding:4px 8px;font-size:0.8em}
-input[type=text],input[type=password]{background:#111;border:1px solid #333;color:#fff;padding:6px 10px;border-radius:4px;width:200px}
-.form-row{display:flex;gap:8px;align-items:center;margin-top:12px}
-.muted{color:#666;font-size:0.85em}
-.badge{background:#1e3a1e;color:#4ade80;padding:2px 8px;border-radius:10px;font-size:0.75em}
-#msg{padding:8px;margin:8px 0;border-radius:4px;display:none}
-.msg-ok{background:#1e3a1e;color:#4ade80;display:block!important}
-.msg-err{background:#3a1e1e;color:#f87171;display:block!important}
+th{text-align:left;padding:10px 8px;border-bottom:1px solid var(--lm-ink-200);
+  color:var(--lm-ink-400);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.06em}
+td{padding:11px 8px;border-bottom:1px solid var(--lm-ink-100);color:var(--lm-ink-700)}
+td code{font-family:var(--lm-font-mono);font-size:0.9em;color:var(--lm-blue-700);background:var(--lm-surface-cool);padding:2px 6px;border-radius:5px}
+tr:hover td{background:var(--lm-surface-sunk)}
+.btn{font-family:var(--lm-font-sans);background:var(--lm-brand);color:#fff;border:none;padding:9px 16px;
+  border-radius:var(--lm-radius-pill);cursor:pointer;font-size:0.85em;font-weight:600;
+  box-shadow:var(--lm-shadow-blue);transition:all 160ms var(--lm-ease)}
+.btn:hover{background:var(--lm-brand-hover);transform:translateY(-1px)}
+.btn:focus-visible{outline:3px solid var(--lm-focus-ring);outline-offset:2px}
+.btn-danger{background:var(--lm-error);box-shadow:none}
+.btn-danger:hover{background:#b8462f}
+.btn-sm{padding:5px 12px;font-size:0.8em;box-shadow:none}
+input[type=text],input[type=password]{font-family:var(--lm-font-sans);background:var(--lm-surface);
+  border:1.5px solid var(--lm-ink-200);color:var(--lm-ink-900);padding:9px 12px;border-radius:var(--lm-radius-md);width:240px;font-size:0.95em;
+  transition:all 160ms var(--lm-ease)}
+input[type=text]::placeholder,input[type=password]::placeholder{color:var(--lm-ink-400)}
+input[type=text]:focus,input[type=password]:focus{outline:none;border-color:var(--lm-brand);box-shadow:0 0 0 3px var(--lm-focus-ring)}
+.form-row{display:flex;gap:10px;align-items:center;margin-top:16px}
+.muted{color:var(--lm-ink-500);font-size:0.85em}
+pre.muted{font-family:var(--lm-font-mono);background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);
+  border-radius:var(--lm-radius-md);padding:12px 14px;color:var(--lm-ink-600);overflow-x:auto;line-height:1.6}
+.badge{background:var(--lm-success-bg);color:var(--lm-success-text);padding:3px 10px;border-radius:var(--lm-radius-pill);font-size:0.75em;font-weight:600}
+#msg{padding:11px 14px;margin:10px 0;border-radius:var(--lm-radius-md);display:none;font-size:0.9em;font-weight:500}
+.msg-ok{background:var(--lm-success-bg);color:var(--lm-success-text);border:1px solid #BBE3CD;display:block!important}
+.msg-err{background:var(--lm-error-bg);color:var(--lm-error);border:1px solid #F1C9BE;display:block!important}
+em.muted{font-style:italic}
 </style>
 </head>
 <body>
-<h1>Loomem Admin</h1>
+<div class="shell">
+<div class="topbar">
+  <svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none">
+    <g stroke="#EE9913"><circle cx="100" cy="100" r="72" stroke-width="12" stroke-dasharray="92 360" transform="rotate(8 100 100)"/><circle cx="100" cy="100" r="56" stroke-width="12" stroke-dasharray="70 360" transform="rotate(98 100 100)"/></g>
+    <g stroke="#1684DC"><circle cx="100" cy="100" r="72" stroke-width="12" stroke-dasharray="92 360" transform="rotate(188 100 100)"/><circle cx="100" cy="100" r="56" stroke-width="12" stroke-dasharray="70 360" transform="rotate(278 100 100)"/></g>
+  </g></svg>
+  <span class="name">Loomem</span>
+  <span class="tag">Admin</span>
+</div>
 
 <div id="auth-box" class="card">
   <label>Admin Token: <input type="password" id="token" placeholder="Bearer token"></label>
@@ -53,6 +105,7 @@ input[type=text],input[type=password]{background:#111;border:1px solid #333;colo
     <h2 style="font-size:1.1em;margin-bottom:8px">System</h2>
     <pre id="status" class="muted"></pre>
   </div>
+</div>
 </div>
 
 <script>

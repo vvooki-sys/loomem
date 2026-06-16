@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Loomem — Memory, woven</title>
+<meta name="description" content="A persistent memory engine for AI agents. Single binary, local-first, MCP-native — the missing memory component for people who already have the rest of their AI stack." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke-linecap='round' fill='none'%3E%3Cg stroke='%23EE9913'%3E%3Ccircle cx='100' cy='100' r='72' stroke-width='14' stroke-dasharray='92 360' transform='rotate(8 100 100)'/%3E%3Ccircle cx='100' cy='100' r='56' stroke-width='14' stroke-dasharray='70 360' transform='rotate(98 100 100)'/%3E%3C/g%3E%3Cg stroke='%231684DC'%3E%3Ccircle cx='100' cy='100' r='72' stroke-width='14' stroke-dasharray='92 360' transform='rotate(188 100 100)'/%3E%3Ccircle cx='100' cy='100' r='56' stroke-width='14' stroke-dasharray='70 360' transform='rotate(278 100 100)'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root{
+  --lm-gold-50:#FEF6E7;--lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;
+  --lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;
+  --lm-gold-800:#7C4B0F;--lm-gold-900:#5E3A11;
+  --lm-blue-50:#E9F4FD;--lm-blue-100:#CBE6FB;--lm-blue-200:#9CD0F7;--lm-blue-300:#63B5F0;
+  --lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-blue-800:#114674;--lm-blue-900:#123C61;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;
+  --lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-300:#B7AE9E;--lm-ink-200:#DED7C8;
+  --lm-ink-100:#EFE9DD;--lm-ink-50:#F7F2E9;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;
+  --lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-success:#2E9E6B;--lm-success-bg:#E4F4EC;--lm-error:#D2553B;--lm-error-bg:#FBE9E3;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-brand-press:#0F5491;
+  --lm-accent:#EE9913;--lm-accent-hover:#CE7D08;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave:linear-gradient(108deg,#EE9913 0%,#F4AC2E 20%,#63B5F0 64%,#1684DC 100%);
+  --lm-weave-soft:linear-gradient(108deg,#FBD68A 0%,#F9C254 26%,#9CD0F7 70%,#63B5F0 100%);
+  --lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#1684DC 100%);
+  --lm-weave-radial:radial-gradient(120% 120% at 0% 0%,#FDEAC4 0%,#FBF8F1 38%,#E9F4FD 100%);
+  --lm-weave-text:linear-gradient(100deg,#CE7D08 0%,#EE9913 30%,#1684DC 78%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-sm:6px;--lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-xl:24px;--lm-radius-2xl:32px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-shadow-md:0 8px 24px rgba(31,27,22,0.09);--lm-shadow-lg:0 18px 48px rgba(31,27,22,0.12);
+  --lm-shadow-gold:0 10px 30px rgba(206,125,8,0.18);--lm-shadow-blue:0 10px 30px rgba(15,105,184,0.18);
+  --lm-dur-base:200ms;--lm-ease:cubic-bezier(0.16,1,0.3,1);
+  --lm-container:1120px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);
+  line-height:1.55;-webkit-font-smoothing:antialiased;font-size:16px;
+}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{color:var(--lm-brand-hover)}
+.wrap{max-width:var(--lm-container);margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+code,.mono{font-family:var(--lm-font-mono)}
+
+/* ---------- top nav ---------- */
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.78);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
+.brand svg{width:26px;height:26px}
+.topnav{display:flex;align-items:center;gap:26px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900)}
+@media(max-width:760px){.topnav .hide-sm{display:none}}
+
+/* ---------- buttons ---------- */
+.btn{font-family:var(--lm-font-sans);font-size:15px;font-weight:600;border:none;cursor:pointer;
+  padding:11px 22px;border-radius:var(--lm-radius-pill);transition:all var(--lm-dur-base) var(--lm-ease);
+  display:inline-flex;align-items:center;gap:8px;text-decoration:none}
+.btn:focus-visible{outline:3px solid var(--lm-focus-ring);outline-offset:2px}
+.btn-primary{background:var(--lm-brand);color:#fff;box-shadow:var(--lm-shadow-blue)}
+.btn-primary:hover{background:var(--lm-brand-hover);transform:translateY(-1px);color:#fff}
+.btn-weave{background:var(--lm-weave-vivid);color:#fff;box-shadow:var(--lm-shadow-blue)}
+.btn-weave:hover{filter:brightness(1.05);transform:translateY(-1px);color:#fff}
+.btn-secondary{background:var(--lm-surface);color:var(--lm-ink-900);border:1.5px solid var(--lm-ink-300)}
+.btn-secondary:hover{border-color:var(--lm-ink-900);background:var(--lm-surface-sunk);color:var(--lm-ink-900)}
+.btn-sm{padding:8px 16px;font-size:13.5px}
+.btn-lg{padding:14px 30px;font-size:16px}
+
+/* ---------- hero ---------- */
+.hero{background:var(--lm-weave-radial);border-bottom:1px solid var(--lm-ink-200)}
+.hero-inner{display:grid;grid-template-columns:1.35fr 1fr;gap:48px;align-items:center;padding:clamp(56px,9vw,104px) 0}
+.eyebrow{font-size:12px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--lm-gold-700);margin-bottom:16px}
+.hero h1{font-family:var(--lm-font-display);font-size:clamp(2.7rem,5.4vw,4.25rem);font-weight:500;
+  line-height:1.04;letter-spacing:-0.03em;margin-bottom:20px}
+.hero h1 em{font-style:italic;background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.hero p.lead{font-size:1.1875rem;color:var(--lm-ink-600);max-width:48ch;margin-bottom:28px;line-height:1.6}
+.hero .cta{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:30px}
+.hero .meta{display:flex;gap:26px;flex-wrap:wrap;font-size:13px;color:var(--lm-ink-500)}
+.hero .meta b{display:block;color:var(--lm-ink-900);font-weight:600;margin-bottom:2px}
+.mark-svg{width:100%;max-width:300px;margin:0 auto;display:block;filter:drop-shadow(0 18px 40px rgba(15,105,184,.16))}
+@media(max-width:860px){.hero-inner{grid-template-columns:1fr;gap:8px}.hero .art{order:-1;max-width:200px;margin:0 auto 8px}}
+
+/* ---------- section scaffolding ---------- */
+section{padding:clamp(64px,9vw,104px) 0}
+.sec-head{max-width:62ch;margin-bottom:44px}
+.sec-eyebrow{font-size:12px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--lm-gold-700);margin-bottom:12px}
+h2.sec{font-family:var(--lm-font-display);font-size:clamp(1.9rem,3.5vw,2.5rem);font-weight:600;letter-spacing:-0.02em;line-height:1.15;margin-bottom:12px}
+.sec-lead{color:var(--lm-ink-500);font-size:1.0625rem;line-height:1.6}
+.alt{background:var(--lm-surface)}
+.alt-sunk{background:var(--lm-surface-sunk)}
+
+/* ---------- feature cards ---------- */
+.pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px}
+.pcard{background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);
+  padding:26px;box-shadow:var(--lm-shadow-sm);transition:all var(--lm-dur-base) var(--lm-ease)}
+.pcard:hover{box-shadow:var(--lm-shadow-md);transform:translateY(-2px)}
+.pcard .ic{width:44px;height:44px;border-radius:var(--lm-radius-md);background:var(--lm-surface-cool);
+  display:flex;align-items:center;justify-content:center;margin-bottom:16px}
+.pcard .ic svg{width:23px;height:23px;stroke:var(--lm-blue-600)}
+.pcard.warm .ic{background:var(--lm-surface-warm)}
+.pcard.warm .ic svg{stroke:var(--lm-gold-700)}
+.pcard h3{font-size:1.0625rem;font-weight:600;margin-bottom:7px}
+.pcard p{font-size:14.5px;color:var(--lm-ink-500);line-height:1.6}
+
+/* ---------- code blocks ---------- */
+.code{background:var(--lm-ink-900);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;
+  font-family:var(--lm-font-mono);font-size:13.5px;line-height:1.7;overflow-x:auto;box-shadow:var(--lm-shadow-md)}
+.code .c{color:var(--lm-ink-400)}
+.code .p{color:var(--lm-gold-300)}
+.code .s{color:var(--lm-blue-300)}
+
+/* ---------- quickstart steps ---------- */
+.steps{display:grid;gap:18px}
+.step{display:grid;grid-template-columns:46px 1fr;gap:18px;align-items:start;background:var(--lm-surface);
+  border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs)}
+.step .num{width:38px;height:38px;border-radius:var(--lm-radius-pill);background:var(--lm-weave-vivid);color:#fff;
+  font-family:var(--lm-font-display);font-weight:600;font-size:17px;display:flex;align-items:center;justify-content:center}
+.step .body{min-width:0}
+.step h4{font-size:1.0625rem;font-weight:600;margin-bottom:4px}
+.step p{font-size:14px;color:var(--lm-ink-500);margin-bottom:12px;line-height:1.55}
+.step .code{box-shadow:none;font-size:13px}
+
+/* ---------- callout ---------- */
+.callout{display:flex;gap:14px;padding:18px 20px;border-radius:var(--lm-radius-lg);
+  background:var(--lm-surface-warm);border:1px solid var(--lm-gold-200);margin-top:24px}
+.callout .bar{width:4px;border-radius:4px;background:var(--lm-accent);flex:none}
+.callout h4{font-size:14.5px;font-weight:600;margin-bottom:4px;color:var(--lm-gold-900)}
+.callout p{font-size:13.5px;color:var(--lm-ink-600);line-height:1.55}
+.callout code{background:rgba(0,0,0,.05);padding:1px 5px;border-radius:4px;font-size:0.92em}
+
+/* ---------- architecture ---------- */
+.arch{background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-xl);
+  padding:clamp(20px,4vw,36px);box-shadow:var(--lm-shadow-sm);margin-bottom:28px}
+.arch pre{font-family:var(--lm-font-mono);font-size:clamp(9px,1.35vw,13px);line-height:1.5;color:var(--lm-ink-700);
+  overflow-x:auto;white-space:pre}
+.crates{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.crate{border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-md);padding:16px 18px;background:var(--lm-surface)}
+.crate code{font-size:13.5px;font-weight:600;color:var(--lm-blue-700);font-family:var(--lm-font-mono)}
+.crate span{display:block;font-size:13px;color:var(--lm-ink-500);margin-top:4px}
+
+/* ---------- pills ---------- */
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;
+  padding:5px 12px;border-radius:var(--lm-radius-pill)}
+.pill-gold{background:var(--lm-gold-100);color:var(--lm-gold-800)}
+.pill .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+
+/* ---------- clients ---------- */
+.client-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+.client{background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs)}
+.client h4{font-size:1rem;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.client h4 .d{width:9px;height:9px;border-radius:50%;background:var(--lm-blue-400);flex:none}
+.client .code{font-size:12.5px;padding:12px 14px}
+.client p{font-size:13px;color:var(--lm-ink-500);line-height:1.55;margin-top:10px}
+
+/* ---------- cta band ---------- */
+.band{border-radius:var(--lm-radius-2xl);overflow:hidden;background:var(--lm-weave-radial);
+  border:1px solid var(--lm-ink-200);padding:clamp(36px,6vw,64px);text-align:center}
+.band h2{font-family:var(--lm-font-display);font-size:clamp(1.9rem,4vw,2.8rem);font-weight:500;letter-spacing:-0.02em;line-height:1.08;margin-bottom:14px}
+.band h2 em{font-style:italic;background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.band p{font-size:1.0625rem;color:var(--lm-ink-600);max-width:52ch;margin:0 auto 26px}
+.band .cta{display:flex;gap:14px;flex-wrap:wrap;justify-content:center}
+
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);padding:48px 0 56px}
+.foot-inner{display:flex;justify-content:space-between;gap:32px;flex-wrap:wrap;align-items:flex-start}
+.foot-brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:18px;margin-bottom:10px}
+.foot-brand svg{width:24px;height:24px}
+.foot-col h5{font-size:11.5px;text-transform:uppercase;letter-spacing:0.07em;color:var(--lm-ink-400);font-weight:600;margin-bottom:12px}
+.foot-col a{display:block;font-size:14px;color:var(--lm-ink-600);margin-bottom:8px}
+.foot-col a:hover{color:var(--lm-ink-900)}
+.foot-note{font-size:13px;color:var(--lm-ink-400);max-width:32ch;line-height:1.6}
+.foot-bottom{margin-top:36px;padding-top:24px;border-top:1px solid var(--lm-ink-100);font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+.foot-links{display:flex;gap:clamp(40px,8vw,90px);flex-wrap:wrap}
+</style>
+</head>
+<body>
+
+<!-- ============ TOP BAR ============ -->
+<header class="topbar">
+  <div class="wrap inner">
+    <a class="brand" href="#top">
+      <svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none">
+        <g stroke="#EE9913"><circle cx="100" cy="100" r="72" stroke-width="12" stroke-dasharray="92 360" transform="rotate(8 100 100)"/><circle cx="100" cy="100" r="56" stroke-width="12" stroke-dasharray="70 360" transform="rotate(98 100 100)"/></g>
+        <g stroke="#1684DC"><circle cx="100" cy="100" r="72" stroke-width="12" stroke-dasharray="92 360" transform="rotate(188 100 100)"/><circle cx="100" cy="100" r="56" stroke-width="12" stroke-dasharray="70 360" transform="rotate(278 100 100)"/></g>
+      </g></svg>
+      Loomem
+    </a>
+    <nav class="topnav">
+      <a class="hide-sm" href="#features">Features</a>
+      <a class="hide-sm" href="#quickstart">Quickstart</a>
+      <a class="hide-sm" href="#architecture">Architecture</a>
+      <a class="hide-sm" href="https://github.com/vvooki-sys/loomem">GitHub</a>
+      <a class="btn btn-primary btn-sm" href="#quickstart">Get started</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ============ HERO ============ -->
+<a id="top"></a>
+<div class="hero">
+  <div class="wrap hero-inner">
+    <div>
+      <div class="eyebrow">Persistent memory engine · MCP-native</div>
+      <h1>Memory,<br><em>woven.</em></h1>
+      <p class="lead">The missing memory component for people who already have the rest of their AI stack. One binary, local-first — it weaves conversations, decisions, and notes into a single searchable fabric.</p>
+      <div class="cta">
+        <a class="btn btn-weave btn-lg" href="#quickstart">Get started →</a>
+        <a class="btn btn-secondary btn-lg" href="https://github.com/vvooki-sys/loomem">View on GitHub</a>
+      </div>
+      <div class="meta">
+        <div><b>Built in Rust</b>RocksDB + Tantivy</div>
+        <div><b>Local-first</b>No external services</div>
+        <div><b>MCP-native</b>14 memory_* tools</div>
+      </div>
+    </div>
+    <div class="art">
+      <svg class="mark-svg" viewBox="0 0 200 200" fill="none">
+        <defs>
+          <linearGradient id="wg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="1" stop-color="#F9C254"/></linearGradient>
+          <linearGradient id="wb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#63B5F0"/><stop offset="1" stop-color="#1684DC"/></linearGradient>
+        </defs>
+        <g stroke-linecap="round" fill="none">
+          <g stroke="url(#wg)">
+            <circle cx="100" cy="100" r="72" stroke-width="9" stroke-dasharray="92 360" transform="rotate(8 100 100)"/>
+            <circle cx="100" cy="100" r="60" stroke-width="9" stroke-dasharray="78 360" transform="rotate(98 100 100)"/>
+            <circle cx="100" cy="100" r="48" stroke-width="9" stroke-dasharray="60 360" transform="rotate(188 100 100)"/>
+          </g>
+          <g stroke="url(#wb)">
+            <circle cx="100" cy="100" r="72" stroke-width="9" stroke-dasharray="92 360" transform="rotate(188 100 100)"/>
+            <circle cx="100" cy="100" r="60" stroke-width="9" stroke-dasharray="78 360" transform="rotate(278 100 100)"/>
+            <circle cx="100" cy="100" r="48" stroke-width="9" stroke-dasharray="60 360" transform="rotate(8 100 100)"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<!-- ============ FEATURES ============ -->
+<section id="features" class="alt">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">What it does</div>
+      <h2 class="sec">Structured memory, served back to any agent</h2>
+      <p class="sec-lead">Loomem stores structured knowledge extracted from conversations and serves it back to any MCP-capable client — Claude, Cursor, custom agents — through hybrid retrieval.</p>
+    </div>
+    <div class="pcards">
+      <div class="pcard">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div>
+        <h3>Hybrid search</h3>
+        <p>BM25 (Tantivy) + vector embeddings + entity-graph signals, fused with reciprocal-rank fusion.</p>
+      </div>
+      <div class="pcard warm">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5l3 2"/></svg></div>
+        <h3>Consolidation</h3>
+        <p>Background workers merge related facts, resolve contradictions, and decay stale memories — "dreaming."</p>
+      </div>
+      <div class="pcard">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg></div>
+        <h3>Bitemporal model</h3>
+        <p>Facts carry both ingestion and event time, so "what did I know in March" and "what happened in March" are distinct queries.</p>
+      </div>
+      <div class="pcard">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="9" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8 7l8 1.5M8.5 16l8-6"/></svg></div>
+        <h3>Entity graph</h3>
+        <p>People, projects, and technologies are extracted into a graph with aliases and relations — used for retrieval and exploration.</p>
+      </div>
+      <div class="pcard">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 4.5 3.2 7.5 8 9 4.8-1.5 8-4.5 8-9V6Z"/><path d="m9 12 2 2 4-4"/></svg></div>
+        <h3>MCP-native</h3>
+        <p>14 <code>memory_*</code> tools over standard MCP HTTP, including OAuth dynamic client registration for remote connectors.</p>
+      </div>
+      <div class="pcard warm">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+        <h3>Encryption at rest</h3>
+        <p>Optional field-level AES-GCM envelope encryption, with a master key supplied from the environment.</p>
+      </div>
+    </div>
+    <div class="callout">
+      <div class="bar"></div>
+      <div>
+        <h4>Status: early</h4>
+        <p>The engine has been in daily personal use for a while, but the public API and storage format may still change. Expect rough edges — issues and PRs are welcome.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ QUICKSTART ============ -->
+<section id="quickstart">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">Quickstart</div>
+      <h2 class="sec">From nothing to Claude remembering things</h2>
+      <p class="sec-lead">On macOS or Linux. Each step is independent — run them in order.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="num">1</div>
+        <div class="body">
+          <h4>Install the binaries</h4>
+          <p>No sudo; lands in <code>~/.loomem</code>.</p>
+          <div class="code"><span class="c"># prebuilt binaries, macOS + Linux</span><br>curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/install.sh | sh</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">2</div>
+        <div class="body">
+          <h4>Put <code>~/.loomem/bin</code> on your PATH</h4>
+          <p>The installer prints this too.</p>
+          <div class="code">echo 'export PATH="$HOME/.loomem/bin:$PATH"' >> ~/.zshrc   <span class="c"># or ~/.bashrc</span><br>exec $SHELL</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">3</div>
+        <div class="body">
+          <h4>Start the server</h4>
+          <p>Config is already seeded in <code>~/.loomem</code>.</p>
+          <div class="code">cd ~/.loomem && loomem-server</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">4</div>
+        <div class="body">
+          <h4>Check it's alive</h4>
+          <p>In another terminal.</p>
+          <div class="code">curl http://localhost:3030/health<br><span class="c"># {"status":"ok","version":"0.2.0"}</span></div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">5</div>
+        <div class="body">
+          <h4>Connect Claude Code</h4>
+          <p>Add the MCP server over streamable HTTP.</p>
+          <div class="code">claude mcp add --transport http loomem http://localhost:3030/mcp</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">6</div>
+        <div class="body">
+          <h4>Try it</h4>
+          <p>In Claude: <em>"Remember that I prefer dark mode in all my tools."</em> Then, in a fresh conversation: <em>"What do you know about my preferences?"</em> — the answer comes back from Loomem.</p>
+        </div>
+      </div>
+    </div>
+    <div class="callout">
+      <div class="bar"></div>
+      <div>
+        <h4>Repo still private?</h4>
+        <p>Install through the GitHub CLI instead — same script, authenticated: <code>gh api repos/vvooki-sys/loomem/contents/install.sh -H "Accept: application/vnd.github.raw" | sh</code></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CLIENTS ============ -->
+<section class="alt-sunk">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">Connect a client</div>
+      <h2 class="sec">Speaks MCP over streamable HTTP</h2>
+      <p class="sec-lead">Loomem listens at <code>/mcp</code>. Any MCP-capable client works — recipes for the common ones. One instance can serve several clients at once; they share the same memory.</p>
+    </div>
+    <div class="client-grid">
+      <div class="client">
+        <h4><span class="d"></span>Claude Code</h4>
+        <div class="code">claude mcp add --transport http loomem http://localhost:3030/mcp</div>
+      </div>
+      <div class="client">
+        <h4><span class="d"></span>Claude (claude.ai / desktop)</h4>
+        <p>Expose your instance behind TLS, set <code>SERVER_ORIGIN</code>, then add the remote connector pointing at <code>https://your-domain/mcp</code>. OAuth dynamic client registration works out of the box.</p>
+      </div>
+      <div class="client">
+        <h4><span class="d"></span>ChatGPT</h4>
+        <p>Requires HTTPS + OAuth and developer mode. Expose over HTTPS, then Settings → Connectors → Add custom connector and complete the OAuth flow.</p>
+      </div>
+      <div class="client">
+        <h4><span class="d"></span>OpenClaw</h4>
+        <div class="code">openclaw mcp add loomem \<br>&nbsp;&nbsp;--url http://localhost:3030/mcp \<br>&nbsp;&nbsp;--transport http</div>
+      </div>
+    </div>
+    <div class="callout">
+      <div class="bar"></div>
+      <div>
+        <h4>Keep it local unless fronted by TLS</h4>
+        <p>Authentication is off by default for local use. Keep the bind address <code>127.0.0.1</code> unless you front it with TLS + auth; never expose the bare HTTP port to the internet.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ARCHITECTURE ============ -->
+<section id="architecture" class="alt">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">Architecture</div>
+      <h2 class="sec">A single binary on RocksDB + Tantivy</h2>
+      <p class="sec-lead">No external services required. The server dispatches MCP and HTTP requests into the core engine, which handles search, consolidation, the entity graph, and optional encryption.</p>
+    </div>
+    <div class="arch">
+<pre>                    ┌──────────────────────────────────────────────┐
+                    │                loomem-server                 │
+ MCP client ──────► │  /mcp (JSON-RPC) ── dispatcher ─┐            │
+ HTTP client ─────► │  /v1/* + /api/* ─── handlers ───┤            │
+                    └─────────────────────────────────┼────────────┘
+                                                      ▼
+                    ┌──────────────────────────────────────────────┐
+                    │                 loomem-core                  │
+                    │  hybrid search (BM25 + vector + graph + RRF) │
+                    │  consolidation / decay / dream workers       │
+                    │  entity extraction + alias graph             │
+                    │  encryption at rest (optional)               │
+                    └───────┬───────────────┬──────────────────────┘
+                            ▼               ▼
+                       RocksDB          Tantivy
+                  (chunks, graph,    (full-text index)
+                   embeddings)</pre>
+    </div>
+    <div class="crates">
+      <div class="crate"><code>loomem-core</code><span>The engine.</span></div>
+      <div class="crate"><code>loomem-server</code><span>HTTP / MCP server.</span></div>
+      <div class="crate"><code>loomem-migrate</code><span>Offline DB maintenance.</span></div>
+      <div class="crate"><code>loomem-cli</code><span>Command-line client.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CTA BAND ============ -->
+<section>
+  <div class="wrap">
+    <div class="band">
+      <span class="pill pill-gold" style="margin-bottom:18px"><span class="dot"></span>Your memory, not someone else's cloud</span>
+      <h2>Give your agents a memory<br>that's <em>yours.</em></h2>
+      <p>Local-first, single binary, open source under Apache-2.0. Install it in one line and connect your first client in minutes.</p>
+      <div class="cta">
+        <a class="btn btn-weave btn-lg" href="#quickstart">Get started →</a>
+        <a class="btn btn-secondary btn-lg" href="https://github.com/vvooki-sys/loomem">Star on GitHub</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FOOTER ============ -->
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <div>
+        <div class="foot-brand">
+          <svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none">
+            <g stroke="#EE9913"><circle cx="100" cy="100" r="72" stroke-width="12" stroke-dasharray="92 360" transform="rotate(8 100 100)"/><circle cx="100" cy="100" r="56" stroke-width="12" stroke-dasharray="70 360" transform="rotate(98 100 100)"/></g>
+            <g stroke="#1684DC"><circle cx="100" cy="100" r="72" stroke-width="12" stroke-dasharray="92 360" transform="rotate(188 100 100)"/><circle cx="100" cy="100" r="56" stroke-width="12" stroke-dasharray="70 360" transform="rotate(278 100 100)"/></g>
+          </g></svg>
+          Loomem
+        </div>
+        <p class="foot-note">Memory, woven. A persistent memory engine for AI agents — local-first and MCP-native.</p>
+      </div>
+      <div class="foot-links">
+        <div class="foot-col">
+          <h5>Docs</h5>
+          <a href="QUICK_START.md">Quick start</a>
+          <a href="installation.md">Installation</a>
+          <a href="configuration.md">Configuration</a>
+          <a href="api-reference.md">API reference</a>
+          <a href="mcp-tools.md">MCP tools</a>
+        </div>
+        <div class="foot-col">
+          <h5>Project</h5>
+          <a href="architecture.md">Architecture</a>
+          <a href="deployment.md">Deployment</a>
+          <a href="SECURITY.md">Security model</a>
+          <a href="backup-and-restore.md">Backup &amp; restore</a>
+          <a href="https://github.com/vvooki-sys/loomem">GitHub</a>
+        </div>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>Apache-2.0 licensed.</span>
+      <span>Built in Rust on RocksDB + Tantivy.</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
