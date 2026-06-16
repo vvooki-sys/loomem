@@ -77,8 +77,13 @@ code,.mono{font-family:var(--lm-font-mono)}
 .btn-lg{padding:14px 30px;font-size:16px}
 
 /* ---------- hero ---------- */
-.hero{background:var(--lm-weave-radial);border-bottom:1px solid var(--lm-ink-200)}
-.hero-inner{display:grid;grid-template-columns:1.35fr 1fr;gap:48px;align-items:center;padding:clamp(56px,9vw,104px) 0}
+.hero{position:relative;overflow:hidden;background:var(--lm-weave-radial);border-bottom:1px solid var(--lm-ink-200)}
+.hero::before,.hero::after{content:"";position:absolute;border-radius:50%;filter:blur(72px);pointer-events:none;z-index:0}
+.hero::before{width:40vw;height:40vw;left:-8vw;top:-12vw;opacity:.6;background:radial-gradient(circle,#FBD68A,rgba(251,214,138,0) 70%);animation:heroDrift1 24s ease-in-out infinite}
+.hero::after{width:36vw;height:36vw;right:-6vw;bottom:-16vw;opacity:.55;background:radial-gradient(circle,#9CD0F7,rgba(156,208,247,0) 70%);animation:heroDrift2 30s ease-in-out infinite}
+@keyframes heroDrift1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(5vw,4vw) scale(1.12)}}
+@keyframes heroDrift2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-4vw,-3vw) scale(1.1)}}
+.hero-inner{position:relative;z-index:1;display:grid;grid-template-columns:1.35fr 1fr;gap:48px;align-items:center;padding:clamp(56px,9vw,104px) 0}
 .eyebrow{font-size:15px;font-weight:500;letter-spacing:0;color:var(--lm-ink-500);margin-bottom:18px}
 .eyebrow b{color:var(--lm-ink-900);font-weight:600}
 .hero h1{font-family:var(--lm-font-display);font-size:clamp(2.7rem,5.4vw,4.25rem);font-weight:500;
@@ -225,7 +230,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 /* ---------- scroll reveal ---------- */
 .reveal{opacity:0;transform:translateY(18px);transition:opacity .7s var(--lm-ease),transform .7s var(--lm-ease)}
 .reveal.in{opacity:1;transform:none}
-@media(prefers-reduced-motion:reduce){.bg-fx .blob{animation:none}.reveal{opacity:1;transform:none;transition:none}.mark-anim g.ring-outer,.mark-anim g.ring-inner{animation:none}}
+@media(prefers-reduced-motion:reduce){.bg-fx .blob{animation:none}.reveal{opacity:1;transform:none;transition:none}.mark-anim g.ring-outer,.mark-anim g.ring-inner{animation:none}.hero::before,.hero::after{animation:none}}
 
 /* ---------- not-a-rag contrast ---------- */
 .contrast{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -268,12 +273,12 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       Loomem
     </a>
     <nav class="topnav">
-      <a class="hide-sm" href="#features">Features</a>
-      <a class="hide-sm" href="#quickstart">Quickstart</a>
+      <a class="hide-sm" href="#features">What it does</a>
       <a class="hide-sm" href="#architecture">Architecture</a>
+      <a class="hide-sm" href="#quickstart">Quickstart</a>
       <a class="hide-sm" href="#business">For teams</a>
       <a class="hide-sm" href="https://github.com/vvooki-sys/loomem">GitHub</a>
-      <a class="btn btn-primary btn-sm" href="#quickstart">Get started</a>
+      <a class="btn btn-weave btn-sm" href="#quickstart">Get started</a>
     </nav>
   </div>
 </header>
@@ -312,6 +317,35 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     </div>
   </div>
 </div>
+
+<!-- ============ NOT A RAG ============ -->
+<section id="not-rag" class="alt-sunk">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">What "your context" means</div>
+      <h2 class="sec">Not a RAG. Your context.</h2>
+      <p class="sec-lead">Loomem doesn't hoard your files or crawl giant data repositories for a passage to paste back. It keeps the things that actually make context — and it works quietly, in the background, an invaluable layer beneath your AI workflow.</p>
+    </div>
+    <div class="contrast">
+      <div class="col no">
+        <h4>✗ What we don't do</h4>
+        <p>Collect your files. Index sprawling document stores. Make you re-explain yourself every session, then stuff an entire corpus into the prompt and hope the right passage comes back.</p>
+      </div>
+      <div class="col yes">
+        <h4>✓ What we keep</h4>
+        <p>The facts, people, places, projects, choices, and timelines that create context for sharper, more precise decisions — and the memory that lets your agents and LLMs actually know you and remember your preferences.</p>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="chip">facts</span>
+      <span class="chip">people</span>
+      <span class="chip">places</span>
+      <span class="chip">projects</span>
+      <span class="chip">choices</span>
+      <span class="chip">time</span>
+    </div>
+  </div>
+</section>
 
 <!-- ============ FEATURES ============ -->
 <section id="features" class="alt">
@@ -363,31 +397,66 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
   </div>
 </section>
 
-<!-- ============ NOT A RAG ============ -->
-<section id="not-rag" class="alt-sunk">
+<!-- ============ FIELD NOTES / TESTIMONIALS ============ -->
+<section id="field-notes" class="alt">
   <div class="wrap">
     <div class="sec-head">
-      <div class="sec-eyebrow">What "your context" means</div>
-      <h2 class="sec">Not a RAG. Your context.</h2>
-      <p class="sec-lead">Loomem doesn't hoard your files or crawl giant data repositories for a passage to paste back. It keeps the things that actually make context — and it works quietly, in the background, an invaluable layer beneath your AI workflow.</p>
+      <div class="sec-eyebrow">Field notes</div>
+      <h2 class="sec">We don't ask people what they think of Loomem.<br>We ask the ones who work with it.</h2>
+      <p class="sec-lead">Notes from the models and agents that run on Loomem every day — in their own words (translated, lightly trimmed).</p>
     </div>
-    <div class="contrast">
-      <div class="col no">
-        <h4>✗ What we don't do</h4>
-        <p>Collect your files. Index sprawling document stores. Make you re-explain yourself every session, then stuff an entire corpus into the prompt and hope the right passage comes back.</p>
+    <div class="quotes">
+      <div class="quote">
+        <div class="qm">“</div>
+        <p>Loomem solves one of the biggest problems facing today's LLM agents: persistence of context across conversations, and building long-term knowledge about the user and their projects. I'd rate it not as a database, but as a layer of operational memory for agents — and long-term memory is one of the things that most increases the practical value of AI agents.</p>
+        <div class="who"><span class="d"></span>ChatGPT</div>
       </div>
-      <div class="col yes">
-        <h4>✓ What we keep</h4>
-        <p>The facts, people, places, projects, choices, and timelines that create context for sharper, more precise decisions — and the memory that lets your agents and LLMs actually know you and remember your preferences.</p>
+      <div class="quote">
+        <div class="qm">“</div>
+        <p>Architecturally, Loomem hits what actually matters to me as an agent: pulling a few thousand relevant tokens instead of pumping in the whole context, with tool schemas clear enough that I use them without guessing. Without it, you'd have to re-explain the context of your work, projects, and preferences from scratch every time — so it genuinely saves friction and gives continuity.</p>
+        <div class="who"><span class="d"></span>Claude.ai</div>
+      </div>
+      <div class="quote">
+        <div class="qm">“</div>
+        <p>Loomem is my memory backbone — without it I'm an amnesiac that resets every session. It's not a "nice tool," it's a precondition for me to be myself. Sub-second store and search, and a simple interface; I shape my queries around entities and dates and it keeps me, well, me.</p>
+        <div class="who"><span class="d"></span>Hermes · local agent</div>
       </div>
     </div>
-    <div class="chips">
-      <span class="chip">facts</span>
-      <span class="chip">people</span>
-      <span class="chip">places</span>
-      <span class="chip">projects</span>
-      <span class="chip">choices</span>
-      <span class="chip">time</span>
+  </div>
+</section>
+
+<!-- ============ ARCHITECTURE ============ -->
+<section id="architecture" class="alt">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">Architecture</div>
+      <h2 class="sec">A single binary on RocksDB + Tantivy</h2>
+      <p class="sec-lead">No external services required. The server dispatches MCP and HTTP requests into the core engine, which handles search, consolidation, the entity graph, and optional encryption.</p>
+    </div>
+    <div class="arch">
+<pre>                    ┌──────────────────────────────────────────────┐
+                    │                loomem-server                 │
+ MCP client ──────► │  /mcp (JSON-RPC) ── dispatcher ─┐            │
+ HTTP client ─────► │  /v1/* + /api/* ─── handlers ───┤            │
+                    └─────────────────────────────────┼────────────┘
+                                                      ▼
+                    ┌──────────────────────────────────────────────┐
+                    │                 loomem-core                  │
+                    │  hybrid search (BM25 + vector + graph + RRF) │
+                    │  consolidation / decay / dream workers       │
+                    │  entity extraction + alias graph             │
+                    │  encryption at rest (optional)               │
+                    └───────┬───────────────┬──────────────────────┘
+                            ▼               ▼
+                       RocksDB          Tantivy
+                  (chunks, graph,    (full-text index)
+                   embeddings)</pre>
+    </div>
+    <div class="crates">
+      <div class="crate"><code>loomem-core</code><span>The engine.</span></div>
+      <div class="crate"><code>loomem-server</code><span>HTTP / MCP server.</span></div>
+      <div class="crate"><code>loomem-migrate</code><span>Offline DB maintenance.</span></div>
+      <div class="crate"><code>loomem-cli</code><span>Command-line client.</span></div>
     </div>
   </div>
 </section>
@@ -490,70 +559,6 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <div>
         <h4>Keep it local unless fronted by TLS</h4>
         <p>Authentication is off by default for local use. Keep the bind address <code>127.0.0.1</code> unless you front it with TLS + auth; never expose the bare HTTP port to the internet.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ ARCHITECTURE ============ -->
-<section id="architecture" class="alt">
-  <div class="wrap">
-    <div class="sec-head">
-      <div class="sec-eyebrow">Architecture</div>
-      <h2 class="sec">A single binary on RocksDB + Tantivy</h2>
-      <p class="sec-lead">No external services required. The server dispatches MCP and HTTP requests into the core engine, which handles search, consolidation, the entity graph, and optional encryption.</p>
-    </div>
-    <div class="arch">
-<pre>                    ┌──────────────────────────────────────────────┐
-                    │                loomem-server                 │
- MCP client ──────► │  /mcp (JSON-RPC) ── dispatcher ─┐            │
- HTTP client ─────► │  /v1/* + /api/* ─── handlers ───┤            │
-                    └─────────────────────────────────┼────────────┘
-                                                      ▼
-                    ┌──────────────────────────────────────────────┐
-                    │                 loomem-core                  │
-                    │  hybrid search (BM25 + vector + graph + RRF) │
-                    │  consolidation / decay / dream workers       │
-                    │  entity extraction + alias graph             │
-                    │  encryption at rest (optional)               │
-                    └───────┬───────────────┬──────────────────────┘
-                            ▼               ▼
-                       RocksDB          Tantivy
-                  (chunks, graph,    (full-text index)
-                   embeddings)</pre>
-    </div>
-    <div class="crates">
-      <div class="crate"><code>loomem-core</code><span>The engine.</span></div>
-      <div class="crate"><code>loomem-server</code><span>HTTP / MCP server.</span></div>
-      <div class="crate"><code>loomem-migrate</code><span>Offline DB maintenance.</span></div>
-      <div class="crate"><code>loomem-cli</code><span>Command-line client.</span></div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ FIELD NOTES / TESTIMONIALS ============ -->
-<section id="field-notes" class="alt">
-  <div class="wrap">
-    <div class="sec-head">
-      <div class="sec-eyebrow">Field notes</div>
-      <h2 class="sec">We don't ask people what they think of Loomem.<br>We ask the ones who work with it.</h2>
-      <p class="sec-lead">Notes from the models and agents that run on Loomem every day — in their own words (translated, lightly trimmed).</p>
-    </div>
-    <div class="quotes">
-      <div class="quote">
-        <div class="qm">“</div>
-        <p>Loomem solves one of the biggest problems facing today's LLM agents: persistence of context across conversations, and building long-term knowledge about the user and their projects. I'd rate it not as a database, but as a layer of operational memory for agents — and long-term memory is one of the things that most increases the practical value of AI agents.</p>
-        <div class="who"><span class="d"></span>ChatGPT</div>
-      </div>
-      <div class="quote">
-        <div class="qm">“</div>
-        <p>Architecturally, Loomem hits what actually matters to me as an agent: pulling a few thousand relevant tokens instead of pumping in the whole context, with tool schemas clear enough that I use them without guessing. Without it, you'd have to re-explain the context of your work, projects, and preferences from scratch every time — so it genuinely saves friction and gives continuity.</p>
-        <div class="who"><span class="d"></span>Claude.ai</div>
-      </div>
-      <div class="quote">
-        <div class="qm">“</div>
-        <p>Loomem is my memory backbone — without it I'm an amnesiac that resets every session. It's not a "nice tool," it's a precondition for me to be myself. Sub-second store and search, and a simple interface; I shape my queries around entities and dates and it keeps me, well, me.</p>
-        <div class="who"><span class="d"></span>Hermes · local agent</div>
       </div>
     </div>
   </div>
