@@ -54,9 +54,9 @@ code,.mono{font-family:var(--lm-font-mono)}
 
 /* ---------- top nav ---------- */
 .topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.78);border-bottom:1px solid var(--lm-ink-200)}
-.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
-.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
-.brand svg{width:26px;height:26px}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:90px}
+.brand{display:flex;align-items:center;gap:13px;font-family:var(--lm-font-display);font-weight:600;font-size:30px;letter-spacing:-0.02em;color:var(--lm-ink-900);margin-left:-2px}
+.brand svg{width:52px;height:52px;flex:none}
 .topnav{display:flex;align-items:center;gap:26px}
 .topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
 .topnav a:hover{color:var(--lm-ink-900)}
@@ -79,8 +79,8 @@ code,.mono{font-family:var(--lm-font-mono)}
 /* ---------- hero ---------- */
 .hero{position:relative;overflow:hidden;background:var(--lm-weave-radial);border-bottom:1px solid var(--lm-ink-200)}
 .hero::before,.hero::after{content:"";position:absolute;border-radius:50%;filter:blur(72px);pointer-events:none;z-index:0}
-.hero::before{width:40vw;height:40vw;left:-8vw;top:-12vw;opacity:.6;background:radial-gradient(circle,#FBD68A,rgba(251,214,138,0) 70%);animation:heroDrift1 24s ease-in-out infinite}
-.hero::after{width:36vw;height:36vw;right:-6vw;bottom:-16vw;opacity:.55;background:radial-gradient(circle,#9CD0F7,rgba(156,208,247,0) 70%);animation:heroDrift2 30s ease-in-out infinite}
+.hero::before{width:42vw;height:42vw;left:-8vw;top:-12vw;opacity:.85;background:radial-gradient(circle,#F9C254,rgba(249,194,84,0) 70%);animation:heroDrift1 24s ease-in-out infinite}
+.hero::after{width:38vw;height:38vw;right:-6vw;bottom:-16vw;opacity:.72;background:radial-gradient(circle,#63B5F0,rgba(99,181,240,0) 72%);animation:heroDrift2 30s ease-in-out infinite}
 @keyframes heroDrift1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(5vw,4vw) scale(1.12)}}
 @keyframes heroDrift2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-4vw,-3vw) scale(1.1)}}
 .hero-inner{position:relative;z-index:1;display:grid;grid-template-columns:1.35fr 1fr;gap:48px;align-items:center;padding:clamp(56px,9vw,104px) 0}
@@ -104,7 +104,7 @@ code,.mono{font-family:var(--lm-font-mono)}
 /* ---------- section scaffolding ---------- */
 section{padding:clamp(64px,9vw,104px) 0}
 .sec-head{max-width:62ch;margin-bottom:44px}
-.sec-eyebrow{font-size:12px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--lm-gold-700);margin-bottom:12px}
+.sec-eyebrow{font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:12px;color:var(--lm-gold-700);background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 h2.sec{font-family:var(--lm-font-display);font-size:clamp(1.9rem,3.5vw,2.5rem);font-weight:600;letter-spacing:-0.02em;line-height:1.15;margin-bottom:12px}
 .sec-lead{color:var(--lm-ink-500);font-size:1.0625rem;line-height:1.6}
 .alt{background:var(--lm-surface)}
@@ -197,7 +197,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 /* ---------- business / engram ---------- */
 .biz{background:var(--lm-ink-900);color:var(--lm-ink-100);position:relative;overflow:hidden}
 .biz::before{content:"";position:absolute;top:0;left:0;right:0;height:4px;background:var(--lm-weave)}
-.biz .sec-eyebrow{color:var(--lm-gold-300)}
+.biz .sec-eyebrow{background:none;-webkit-text-fill-color:initial;color:var(--lm-gold-300)}
 .biz h2.sec{color:#fff}
 .biz h2.sec em{font-style:italic;background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .biz .sec-lead{color:var(--lm-ink-300)}
@@ -220,10 +220,11 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 
 /* ---------- ambient background motion ---------- */
 .bg-fx{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none}
-.bg-fx .blob{position:absolute;border-radius:50%;filter:blur(90px);opacity:.55;will-change:transform}
-.bg-fx .b1{width:48vw;height:48vw;left:-10vw;top:-8vw;background:radial-gradient(circle,#FDEAC4,rgba(253,234,196,0) 70%);animation:drift1 28s ease-in-out infinite}
-.bg-fx .b2{width:44vw;height:44vw;right:-12vw;bottom:-10vw;background:radial-gradient(circle,#E9F4FD,rgba(233,244,253,0) 70%);animation:drift2 34s ease-in-out infinite}
-.bg-fx .b3{width:30vw;height:30vw;left:40vw;top:55vh;background:radial-gradient(circle,#FBD68A,rgba(251,214,138,0) 70%);opacity:.28;animation:drift1 40s ease-in-out infinite}
+.bg-fx .blob{position:absolute;border-radius:50%;filter:blur(85px);opacity:.72;will-change:transform}
+.bg-fx .b1{width:50vw;height:50vw;left:-10vw;top:-8vw;background:radial-gradient(circle,#FBD68A,rgba(251,214,138,0) 70%);animation:drift1 28s ease-in-out infinite}
+.bg-fx .b2{width:46vw;height:46vw;right:-12vw;bottom:-10vw;background:radial-gradient(circle,#9CD0F7,rgba(156,208,247,0) 70%);animation:drift2 34s ease-in-out infinite}
+.bg-fx .b3{width:34vw;height:34vw;left:38vw;top:52vh;background:radial-gradient(circle,#F9C254,rgba(249,194,84,0) 70%);opacity:.5;animation:drift1 40s ease-in-out infinite}
+.bg-fx .b4{width:30vw;height:30vw;right:30vw;top:120vh;background:radial-gradient(circle,#63B5F0,rgba(99,181,240,0) 70%);opacity:.4;animation:drift2 38s ease-in-out infinite}
 @keyframes drift1{0%,100%{transform:translate(0,0)}50%{transform:translate(6vw,4vw)}}
 @keyframes drift2{0%,100%{transform:translate(0,0)}50%{transform:translate(-5vw,-4vw)}}
 
@@ -252,17 +253,25 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 .quote p{font-size:15px;color:var(--lm-ink-700);line-height:1.62;margin-bottom:18px;flex:1}
 .quote .who{display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600;color:var(--lm-ink-900);font-family:var(--lm-font-mono)}
 .quote .who .d{width:8px;height:8px;border-radius:50%;background:var(--lm-blue-400);flex:none}
+
+/* ---------- gradient rhythm / more colour ---------- */
+.alt,.alt-sunk{position:relative}
+.alt::before,.alt-sunk::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:var(--lm-weave)}
+.pcard .ic{background:linear-gradient(135deg,var(--lm-surface-warm),var(--lm-surface-cool))}
+.pcard.warm .ic{background:linear-gradient(135deg,var(--lm-gold-100),var(--lm-surface-warm))}
+.quote .qm{background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.contrast .yes h4,.contrast .no h4{display:inline-block}
 </style>
 </head>
 <body>
 
-<div class="bg-fx" aria-hidden="true"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span></div>
+<div class="bg-fx" aria-hidden="true"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span><span class="blob b4"></span></div>
 
 <!-- ============ TOP BAR ============ -->
 <header class="topbar">
   <div class="wrap inner">
     <a class="brand" href="#top">
-      <svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13">
+      <svg viewBox="27 27 146 146" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13">
         <circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/>
         <circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/>
         <circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/>
@@ -313,6 +322,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
           <circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/>
           <circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/>
         </g>
+        <g id="ctxGraph" opacity="0"></g>
       </svg>
     </div>
   </div>
@@ -343,6 +353,34 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <span class="chip">projects</span>
       <span class="chip">choices</span>
       <span class="chip">time</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FIELD NOTES / TESTIMONIALS ============ -->
+<section id="field-notes" class="alt">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">Field notes</div>
+      <h2 class="sec">We don't ask people what they think of Loomem.<br>We ask the ones who work with it.</h2>
+      <p class="sec-lead">Notes from the models and agents that run on Loomem every day — in their own words (translated, lightly trimmed).</p>
+    </div>
+    <div class="quotes">
+      <div class="quote">
+        <div class="qm">“</div>
+        <p>Loomem solves one of the biggest problems facing today's LLM agents: persistence of context across conversations, and building long-term knowledge about the user and their projects. I'd rate it not as a database, but as a layer of operational memory for agents — and long-term memory is one of the things that most increases the practical value of AI agents.</p>
+        <div class="who"><span class="d"></span>ChatGPT</div>
+      </div>
+      <div class="quote">
+        <div class="qm">“</div>
+        <p>Architecturally, Loomem hits what actually matters to me as an agent: pulling a few thousand relevant tokens instead of pumping in the whole context, with tool schemas clear enough that I use them without guessing. Without it, you'd have to re-explain the context of your work, projects, and preferences from scratch every time — so it genuinely saves friction and gives continuity.</p>
+        <div class="who"><span class="d"></span>Claude.ai</div>
+      </div>
+      <div class="quote">
+        <div class="qm">“</div>
+        <p>Loomem is my memory backbone — without it I'm an amnesiac that resets every session. It's not a "nice tool," it's a precondition for me to be myself. Sub-second store and search, and a simple interface; I shape my queries around entities and dates and it keeps me, well, me.</p>
+        <div class="who"><span class="d"></span>Hermes · local agent</div>
+      </div>
     </div>
   </div>
 </section>
@@ -392,34 +430,6 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <div>
         <h4>Status: early</h4>
         <p>The engine has been in daily personal use for a while, but the public API and storage format may still change. Expect rough edges — issues and PRs are welcome.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ FIELD NOTES / TESTIMONIALS ============ -->
-<section id="field-notes" class="alt">
-  <div class="wrap">
-    <div class="sec-head">
-      <div class="sec-eyebrow">Field notes</div>
-      <h2 class="sec">We don't ask people what they think of Loomem.<br>We ask the ones who work with it.</h2>
-      <p class="sec-lead">Notes from the models and agents that run on Loomem every day — in their own words (translated, lightly trimmed).</p>
-    </div>
-    <div class="quotes">
-      <div class="quote">
-        <div class="qm">“</div>
-        <p>Loomem solves one of the biggest problems facing today's LLM agents: persistence of context across conversations, and building long-term knowledge about the user and their projects. I'd rate it not as a database, but as a layer of operational memory for agents — and long-term memory is one of the things that most increases the practical value of AI agents.</p>
-        <div class="who"><span class="d"></span>ChatGPT</div>
-      </div>
-      <div class="quote">
-        <div class="qm">“</div>
-        <p>Architecturally, Loomem hits what actually matters to me as an agent: pulling a few thousand relevant tokens instead of pumping in the whole context, with tool schemas clear enough that I use them without guessing. Without it, you'd have to re-explain the context of your work, projects, and preferences from scratch every time — so it genuinely saves friction and gives continuity.</p>
-        <div class="who"><span class="d"></span>Claude.ai</div>
-      </div>
-      <div class="quote">
-        <div class="qm">“</div>
-        <p>Loomem is my memory backbone — without it I'm an amnesiac that resets every session. It's not a "nice tool," it's a precondition for me to be myself. Sub-second store and search, and a simple interface; I shape my queries around entities and dates and it keeps me, well, me.</p>
-        <div class="who"><span class="d"></span>Hermes · local agent</div>
       </div>
     </div>
   </div>
@@ -687,6 +697,45 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     }, { threshold: 0.12 });
     document.querySelectorAll('section').forEach(function(s){ s.classList.add('reveal'); obs.observe(s); });
   }catch(e){}
+
+  // --- context graphs that bloom and fade inside the hero ring ---
+  var g = document.getElementById('ctxGraph');
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (g && !reduce) {
+    var NS = 'http://www.w3.org/2000/svg';
+    function rnd(a, b){ return a + Math.random() * (b - a); }
+    function line(x1, y1, x2, y2){
+      var l = document.createElementNS(NS, 'line');
+      l.setAttribute('x1', x1.toFixed(1)); l.setAttribute('y1', y1.toFixed(1));
+      l.setAttribute('x2', x2.toFixed(1)); l.setAttribute('y2', y2.toFixed(1));
+      l.setAttribute('stroke', '#B7AE9E'); l.setAttribute('stroke-width', '1.1'); l.setAttribute('stroke-linecap', 'round');
+      g.appendChild(l);
+    }
+    function spawn(){
+      while (g.firstChild) g.removeChild(g.firstChild);
+      var cx = rnd(82, 118), cy = rnd(82, 118);     // random spot inside the ring
+      var n = 3 + Math.floor(Math.random() * 3);     // 3..5 nodes
+      var pts = [];
+      for (var i = 0; i < n; i++){
+        var a = Math.random() * Math.PI * 2, r = rnd(5, 26);
+        pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+      }
+      for (var j = 1; j < n; j++) line(pts[j][0], pts[j][1], pts[Math.floor(Math.random()*j)][0], pts[Math.floor(Math.random()*j)][1]);
+      if (n > 3 && Math.random() < 0.6){ var p = Math.floor(Math.random()*n), q = Math.floor(Math.random()*n); if (p !== q) line(pts[p][0], pts[p][1], pts[q][0], pts[q][1]); }
+      for (var m = 0; m < n; m++){
+        var c = document.createElementNS(NS, 'circle');
+        c.setAttribute('cx', pts[m][0].toFixed(1)); c.setAttribute('cy', pts[m][1].toFixed(1));
+        c.setAttribute('r', m === 0 ? '3' : rnd(1.6, 2.4).toFixed(1));
+        c.setAttribute('fill', m % 2 ? '#1684DC' : '#F4AC2E');
+        g.appendChild(c);
+      }
+      g.style.transition = 'none'; g.style.opacity = '0';
+      requestAnimationFrame(function(){ g.style.transition = 'opacity 1s ease'; g.style.opacity = '0.92'; });
+      setTimeout(function(){ g.style.opacity = '0'; }, 2900);
+    }
+    spawn();
+    setInterval(spawn, 4200);
+  }
 })();
 </script>
 
