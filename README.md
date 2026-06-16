@@ -1,4 +1,20 @@
-# Loomem
+<div align="center">
+
+<img src="docs/assets/loomem-banner.svg" alt="Loomem — Memory, woven. A persistent memory engine for AI agents." width="100%">
+
+<br>
+
+[![Website](https://img.shields.io/badge/website-vvooki--sys.github.io%2Floomem-1684DC?style=flat-square&labelColor=1F1B16)](https://vvooki-sys.github.io/loomem/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-EE9913?style=flat-square&labelColor=1F1B16)](LICENSE)
+[![Built in Rust](https://img.shields.io/badge/built%20in-Rust-A2610B?style=flat-square&labelColor=1F1B16)](https://www.rust-lang.org)
+[![MCP-native](https://img.shields.io/badge/MCP-native-1684DC?style=flat-square&labelColor=1F1B16)](https://modelcontextprotocol.io)
+[![Status: early](https://img.shields.io/badge/status-early-CE7D08?style=flat-square&labelColor=1F1B16)](#)
+
+**[Website](https://vvooki-sys.github.io/loomem/)** · **[Quickstart](#quickstart)** · **[Install](#install)** · **[Architecture](#architecture)** · **[Docs](#documentation)**
+
+</div>
+
+---
 
 A persistent memory engine for AI agents. Single binary, local-first, MCP-native.
 
