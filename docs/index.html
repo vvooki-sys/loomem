@@ -89,10 +89,11 @@ code,.mono{font-family:var(--lm-font-mono)}
 .hero .meta{display:flex;gap:26px;flex-wrap:wrap;font-size:13px;color:var(--lm-ink-500)}
 .hero .meta b{display:block;color:var(--lm-ink-900);font-weight:600;margin-bottom:2px}
 .mark-svg{width:100%;max-width:300px;margin:0 auto;display:block;filter:drop-shadow(0 18px 40px rgba(15,105,184,.16))}
-.ring3d{position:relative;width:100%;max-width:360px;aspect-ratio:1/1;margin:0 auto}
-.ring3d canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
-.ring-fallback{position:absolute;inset:0;width:100%;height:100%;max-width:none;margin:0;transition:opacity .6s ease}
-.ring3d.is-3d .ring-fallback{opacity:0;pointer-events:none}
+.mark-anim g.ring-outer,.mark-anim g.ring-inner{transform-box:view-box;transform-origin:100px 100px}
+.mark-anim g.ring-outer{animation:lm-spin 34s linear infinite}
+.mark-anim g.ring-inner{animation:lm-spin-rev 26s linear infinite}
+@keyframes lm-spin{to{transform:rotate(360deg)}}
+@keyframes lm-spin-rev{to{transform:rotate(-360deg)}}
 @media(max-width:860px){.hero-inner{grid-template-columns:1fr;gap:8px}.hero .art{order:-1;max-width:220px;margin:0 auto 8px}}
 
 /* ---------- section scaffolding ---------- */
@@ -224,7 +225,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 /* ---------- scroll reveal ---------- */
 .reveal{opacity:0;transform:translateY(18px);transition:opacity .7s var(--lm-ease),transform .7s var(--lm-ease)}
 .reveal.in{opacity:1;transform:none}
-@media(prefers-reduced-motion:reduce){.bg-fx .blob{animation:none}.reveal{opacity:1;transform:none;transition:none}}
+@media(prefers-reduced-motion:reduce){.bg-fx .blob{animation:none}.reveal{opacity:1;transform:none;transition:none}.mark-anim g.ring-outer,.mark-anim g.ring-inner{animation:none}}
 </style>
 </head>
 <body>
@@ -275,17 +276,18 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       </div>
     </div>
     <div class="art">
-      <div class="ring3d" id="ring3d">
-        <canvas id="ringCanvas"></canvas>
-        <svg class="mark-svg ring-fallback" viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13">
+      <svg class="mark-svg mark-anim" viewBox="0 0 200 200" fill="none">
+        <g class="ring-outer" stroke-linecap="round" fill="none" stroke-width="13">
           <circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/>
           <circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/>
           <circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/>
           <circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/>
+        </g>
+        <g class="ring-inner" stroke-linecap="round" fill="none" stroke-width="13">
           <circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/>
           <circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/>
-        </g></svg>
-      </div>
+        </g>
+      </svg>
     </div>
   </div>
 </div>
@@ -593,7 +595,6 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
   </div>
 </footer>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 (function(){
   // --- scroll reveal (adds class via JS, so no-JS shows everything) ---
@@ -603,67 +604,6 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     }, { threshold: 0.12 });
     document.querySelectorAll('section').forEach(function(s){ s.classList.add('reveal'); obs.observe(s); });
   }catch(e){}
-
-  // --- 3D woven ring (graceful fallback to the SVG mark) ---
-  if(!window.THREE) return;
-  var host = document.getElementById('ring3d');
-  var canvas = document.getElementById('ringCanvas');
-  if(!host || !canvas) return;
-  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  try{
-    var renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    var scene = new THREE.Scene();
-    var camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
-    camera.position.set(0, 0, 4.4);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.85));
-    var key = new THREE.DirectionalLight(0xffffff, 0.7); key.position.set(2, 3, 4); scene.add(key);
-    var fill = new THREE.DirectionalLight(0x8ec5ff, 0.35); fill.position.set(-3, -2, 2); scene.add(fill);
-
-    var group = new THREE.Group(); scene.add(group);
-    var BLUE = 0x1684DC, GOLD = 0xF4AC2E, DEG = Math.PI / 180;
-
-    function arc(R, tube, center, span, color){
-      var mat = new THREE.MeshStandardMaterial({ color: color, metalness: 0.22, roughness: 0.45 });
-      var torus = new THREE.Mesh(new THREE.TorusGeometry(R, tube, 18, 90, span), mat);
-      torus.rotation.z = center - span / 2;
-      group.add(torus);
-      var cap = new THREE.SphereGeometry(tube, 16, 16);
-      [0, span].forEach(function(a){
-        var s = new THREE.Mesh(cap, mat);
-        var ang = center - span / 2 + a;
-        s.position.set(R * Math.cos(ang), R * Math.sin(ang), 0);
-        group.add(s);
-      });
-    }
-
-    var R = 1.18, rIn = 0.9, tube = 0.085, d75 = 75 * DEG, d60 = 60 * DEG;
-    arc(R, tube, 135 * DEG, d75, BLUE);   // upper-left
-    arc(R, tube,  45 * DEG, d75, BLUE);   // upper-right
-    arc(R, tube, 225 * DEG, d75, GOLD);   // lower-left
-    arc(R, tube, 315 * DEG, d75, GOLD);   // lower-right
-    arc(rIn, tube, 160 * DEG, d60, GOLD); // inner accent (left)
-    arc(rIn, tube, 340 * DEG, d60, BLUE); // inner accent (lower-right)
-
-    host.classList.add('is-3d');
-    function resize(){ var s = host.clientWidth || 320; renderer.setSize(s, s, false); }
-    resize();
-    window.addEventListener('resize', resize);
-
-    var t = 0, running = true;
-    document.addEventListener('visibilitychange', function(){ running = !document.hidden; });
-    (function loop(){
-      requestAnimationFrame(loop);
-      if(!running) return;
-      t += 0.01;
-      if(!reduce){
-        group.rotation.y += 0.006;
-        group.rotation.x = Math.sin(t * 0.6) * 0.28;
-        group.position.y = Math.sin(t * 0.8) * 0.05;
-      }
-      renderer.render(scene, camera);
-    })();
-  }catch(e){ /* WebGL unavailable — SVG fallback stays visible */ }
 })();
 </script>
 

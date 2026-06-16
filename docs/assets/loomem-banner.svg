@@ -1,16 +1,10 @@
-<svg width="1280" height="360" viewBox="0 0 1280 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Loomem — Memory, woven. A persistent memory engine for AI agents.">
+<svg width="1280" height="360" viewBox="0 0 1280 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Loomem — Your context, woven. The context layer that's yours.">
   <defs>
     <radialGradient id="bg" cx="0%" cy="0%" r="130%">
       <stop offset="0" stop-color="#FDEAC4"/>
       <stop offset="0.4" stop-color="#FBF8F1"/>
       <stop offset="1" stop-color="#E9F4FD"/>
     </radialGradient>
-    <linearGradient id="wg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#EE9913"/><stop offset="1" stop-color="#F9C254"/>
-    </linearGradient>
-    <linearGradient id="wb" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#63B5F0"/><stop offset="1" stop-color="#1684DC"/>
-    </linearGradient>
     <linearGradient id="weave" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0" stop-color="#EE9913"/><stop offset="0.2" stop-color="#F4AC2E"/>
       <stop offset="0.64" stop-color="#63B5F0"/><stop offset="1" stop-color="#1684DC"/>
@@ -23,29 +17,25 @@
   <!-- canvas -->
   <rect x="2" y="2" width="1276" height="356" rx="28" fill="url(#bg)" stroke="#DED7C8" stroke-width="2"/>
 
-  <!-- woven mark -->
-  <g transform="translate(150 180)" stroke-linecap="round" fill="none" filter="drop-shadow(0 14px 30px rgba(15,105,184,.18))">
-    <g stroke="url(#wg)" transform="scale(0.62)">
-      <circle cx="0" cy="0" r="72" stroke-width="11" stroke-dasharray="92 360" transform="rotate(8)"/>
-      <circle cx="0" cy="0" r="60" stroke-width="11" stroke-dasharray="78 360" transform="rotate(98)"/>
-      <circle cx="0" cy="0" r="48" stroke-width="11" stroke-dasharray="60 360" transform="rotate(188)"/>
-    </g>
-    <g stroke="url(#wb)" transform="scale(0.62)">
-      <circle cx="0" cy="0" r="72" stroke-width="11" stroke-dasharray="92 360" transform="rotate(188)"/>
-      <circle cx="0" cy="0" r="60" stroke-width="11" stroke-dasharray="78 360" transform="rotate(278)"/>
-      <circle cx="0" cy="0" r="48" stroke-width="11" stroke-dasharray="60 360" transform="rotate(8)"/>
-    </g>
+  <!-- woven split-ring mark -->
+  <g transform="translate(150 180) scale(0.74)" stroke-linecap="round" fill="none" stroke-width="14" filter="drop-shadow(0 14px 30px rgba(15,105,184,.18))">
+    <circle cx="0" cy="0" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5)"/>
+    <circle cx="0" cy="0" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5)"/>
+    <circle cx="0" cy="0" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5)"/>
+    <circle cx="0" cy="0" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5)"/>
+    <circle cx="0" cy="0" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5)"/>
+    <circle cx="0" cy="0" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5)"/>
   </g>
 
   <!-- wordmark -->
   <text x="276" y="158" font-family="Fraunces, 'Iowan Old Style', Georgia, 'Times New Roman', serif" font-size="92" font-weight="600" letter-spacing="-2" fill="#1F1B16">Loomem</text>
 
   <!-- tagline -->
-  <text x="280" y="222" font-family="Fraunces, 'Iowan Old Style', Georgia, serif" font-size="40" font-style="italic" font-weight="500" letter-spacing="-1" fill="url(#weaveText)">Memory, woven.</text>
+  <text x="280" y="222" font-family="Fraunces, 'Iowan Old Style', Georgia, serif" font-size="40" font-style="italic" font-weight="500" letter-spacing="-1" fill="url(#weaveText)">Your context, woven.</text>
 
   <!-- subline -->
-  <text x="282" y="266" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" font-weight="400" fill="#564D40">A persistent memory engine for AI agents</text>
-  <text x="282" y="296" font-family="'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace" font-size="14.5" font-weight="500" letter-spacing="0.5" fill="#6B6256">single binary  ·  local-first  ·  MCP-native</text>
+  <text x="282" y="266" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" font-weight="400" fill="#564D40">The context layer that's yours — keep it, carry it, own it.</text>
+  <text x="282" y="296" font-family="'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace" font-size="14.5" font-weight="500" letter-spacing="0.5" fill="#6B6256">multimodal  ·  portable  ·  model-agnostic</text>
 
   <!-- weave bar -->
   <rect x="40" y="330" width="1200" height="5" rx="2.5" fill="url(#weave)"/>

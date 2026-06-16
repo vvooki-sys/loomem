@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/loomem-banner.svg" alt="Loomem — Memory, woven. A persistent memory engine for AI agents." width="100%">
+<img src="docs/assets/loomem-banner.svg" alt="Loomem — Your context, woven. The context layer that's yours." width="100%">
 
 <br>
 
