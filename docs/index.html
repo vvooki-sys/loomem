@@ -730,7 +730,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
         g.appendChild(c);
       }
       g.style.transition = 'none'; g.style.opacity = '0';
-      requestAnimationFrame(function(){ g.style.transition = 'opacity 1s ease'; g.style.opacity = '0.92'; });
+      setTimeout(function(){ g.style.transition = 'opacity 1s ease'; g.style.opacity = '0.92'; }, 60);
       setTimeout(function(){ g.style.opacity = '0'; }, 2900);
     }
     spawn();
