@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Loomem — Memory, woven</title>
-<meta name="description" content="A persistent memory engine for AI agents. Single binary, local-first, MCP-native — the missing memory component for people who already have the rest of their AI stack." />
+<title>Loomem — Your context, woven</title>
+<meta name="description" content="Loomem is your context layer — multimodal, portable, and yours. Keep your context in one place you own, and bring it to any model or tool. Swap the LLM underneath; your context stays with you." />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke-linecap='round' fill='none'%3E%3Cg stroke='%23EE9913'%3E%3Ccircle cx='100' cy='100' r='72' stroke-width='14' stroke-dasharray='92 360' transform='rotate(8 100 100)'/%3E%3Ccircle cx='100' cy='100' r='56' stroke-width='14' stroke-dasharray='70 360' transform='rotate(98 100 100)'/%3E%3C/g%3E%3Cg stroke='%231684DC'%3E%3Ccircle cx='100' cy='100' r='72' stroke-width='14' stroke-dasharray='92 360' transform='rotate(188 100 100)'/%3E%3Ccircle cx='100' cy='100' r='56' stroke-width='14' stroke-dasharray='70 360' transform='rotate(278 100 100)'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke-linecap='round' fill='none' stroke-width='14'%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(187.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(277.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(7.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(97.5 100 100)'/%3E%3C/g%3E%3C/svg%3E">
 <style>
 :root{
   --lm-gold-50:#FEF6E7;--lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;
@@ -79,7 +79,8 @@ code,.mono{font-family:var(--lm-font-mono)}
 /* ---------- hero ---------- */
 .hero{background:var(--lm-weave-radial);border-bottom:1px solid var(--lm-ink-200)}
 .hero-inner{display:grid;grid-template-columns:1.35fr 1fr;gap:48px;align-items:center;padding:clamp(56px,9vw,104px) 0}
-.eyebrow{font-size:12px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--lm-gold-700);margin-bottom:16px}
+.eyebrow{font-size:15px;font-weight:500;letter-spacing:0;color:var(--lm-ink-500);margin-bottom:18px}
+.eyebrow b{color:var(--lm-ink-900);font-weight:600}
 .hero h1{font-family:var(--lm-font-display);font-size:clamp(2.7rem,5.4vw,4.25rem);font-weight:500;
   line-height:1.04;letter-spacing:-0.03em;margin-bottom:20px}
 .hero h1 em{font-style:italic;background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
@@ -88,7 +89,11 @@ code,.mono{font-family:var(--lm-font-mono)}
 .hero .meta{display:flex;gap:26px;flex-wrap:wrap;font-size:13px;color:var(--lm-ink-500)}
 .hero .meta b{display:block;color:var(--lm-ink-900);font-weight:600;margin-bottom:2px}
 .mark-svg{width:100%;max-width:300px;margin:0 auto;display:block;filter:drop-shadow(0 18px 40px rgba(15,105,184,.16))}
-@media(max-width:860px){.hero-inner{grid-template-columns:1fr;gap:8px}.hero .art{order:-1;max-width:200px;margin:0 auto 8px}}
+.ring3d{position:relative;width:100%;max-width:360px;aspect-ratio:1/1;margin:0 auto}
+.ring3d canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.ring-fallback{position:absolute;inset:0;width:100%;height:100%;max-width:none;margin:0;transition:opacity .6s ease}
+.ring3d.is-3d .ring-fallback{opacity:0;pointer-events:none}
+@media(max-width:860px){.hero-inner{grid-template-columns:1fr;gap:8px}.hero .art{order:-1;max-width:220px;margin:0 auto 8px}}
 
 /* ---------- section scaffolding ---------- */
 section{padding:clamp(64px,9vw,104px) 0}
@@ -206,17 +211,37 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 .biz-cta p a{color:var(--lm-gold-200);font-weight:600}
 .btn-gold{background:var(--lm-accent);color:var(--lm-ink-900);box-shadow:var(--lm-shadow-gold)}
 .btn-gold:hover{background:var(--lm-gold-400);color:var(--lm-ink-900);transform:translateY(-1px)}
+
+/* ---------- ambient background motion ---------- */
+.bg-fx{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none}
+.bg-fx .blob{position:absolute;border-radius:50%;filter:blur(90px);opacity:.55;will-change:transform}
+.bg-fx .b1{width:48vw;height:48vw;left:-10vw;top:-8vw;background:radial-gradient(circle,#FDEAC4,rgba(253,234,196,0) 70%);animation:drift1 28s ease-in-out infinite}
+.bg-fx .b2{width:44vw;height:44vw;right:-12vw;bottom:-10vw;background:radial-gradient(circle,#E9F4FD,rgba(233,244,253,0) 70%);animation:drift2 34s ease-in-out infinite}
+.bg-fx .b3{width:30vw;height:30vw;left:40vw;top:55vh;background:radial-gradient(circle,#FBD68A,rgba(251,214,138,0) 70%);opacity:.28;animation:drift1 40s ease-in-out infinite}
+@keyframes drift1{0%,100%{transform:translate(0,0)}50%{transform:translate(6vw,4vw)}}
+@keyframes drift2{0%,100%{transform:translate(0,0)}50%{transform:translate(-5vw,-4vw)}}
+
+/* ---------- scroll reveal ---------- */
+.reveal{opacity:0;transform:translateY(18px);transition:opacity .7s var(--lm-ease),transform .7s var(--lm-ease)}
+.reveal.in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){.bg-fx .blob{animation:none}.reveal{opacity:1;transform:none;transition:none}}
 </style>
 </head>
 <body>
+
+<div class="bg-fx" aria-hidden="true"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span></div>
 
 <!-- ============ TOP BAR ============ -->
 <header class="topbar">
   <div class="wrap inner">
     <a class="brand" href="#top">
-      <svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none">
-        <g stroke="#EE9913"><circle cx="100" cy="100" r="72" stroke-width="12" stroke-dasharray="92 360" transform="rotate(8 100 100)"/><circle cx="100" cy="100" r="56" stroke-width="12" stroke-dasharray="70 360" transform="rotate(98 100 100)"/></g>
-        <g stroke="#1684DC"><circle cx="100" cy="100" r="72" stroke-width="12" stroke-dasharray="92 360" transform="rotate(188 100 100)"/><circle cx="100" cy="100" r="56" stroke-width="12" stroke-dasharray="70 360" transform="rotate(278 100 100)"/></g>
+      <svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13">
+        <circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/>
+        <circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/>
+        <circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/>
+        <circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/>
+        <circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/>
+        <circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/>
       </g></svg>
       Loomem
     </a>
@@ -236,38 +261,31 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 <div class="hero">
   <div class="wrap hero-inner">
     <div>
-      <div class="eyebrow">Persistent memory engine · MCP-native</div>
-      <h1>Memory,<br><em>woven.</em></h1>
-      <p class="lead">The missing memory component for people who already have the rest of their AI stack. One binary, local-first — it weaves conversations, decisions, and notes into a single searchable fabric.</p>
+      <div class="eyebrow">Your context. <b>Yours to keep</b> — wherever you take it.</div>
+      <h1>Your context,<br><em>woven.</em></h1>
+      <p class="lead">Loomem is the context layer that belongs to you. It holds your conversations, decisions, and documents in one place — multimodal and portable. Treat any LLM as a service you can swap; your context stays with you and travels between tools.</p>
       <div class="cta">
         <a class="btn btn-weave btn-lg" href="#quickstart">Get started →</a>
         <a class="btn btn-secondary btn-lg" href="https://github.com/vvooki-sys/loomem">View on GitHub</a>
       </div>
       <div class="meta">
-        <div><b>Built in Rust</b>RocksDB + Tantivy</div>
-        <div><b>Local-first</b>No external services</div>
-        <div><b>MCP-native</b>14 memory_* tools</div>
+        <div><b>Yours to own</b>Local-first, your data</div>
+        <div><b>Portable</b>Across every tool</div>
+        <div><b>Model-agnostic</b>Works with any LLM</div>
       </div>
     </div>
     <div class="art">
-      <svg class="mark-svg" viewBox="0 0 200 200" fill="none">
-        <defs>
-          <linearGradient id="wg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="1" stop-color="#F9C254"/></linearGradient>
-          <linearGradient id="wb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#63B5F0"/><stop offset="1" stop-color="#1684DC"/></linearGradient>
-        </defs>
-        <g stroke-linecap="round" fill="none">
-          <g stroke="url(#wg)">
-            <circle cx="100" cy="100" r="72" stroke-width="9" stroke-dasharray="92 360" transform="rotate(8 100 100)"/>
-            <circle cx="100" cy="100" r="60" stroke-width="9" stroke-dasharray="78 360" transform="rotate(98 100 100)"/>
-            <circle cx="100" cy="100" r="48" stroke-width="9" stroke-dasharray="60 360" transform="rotate(188 100 100)"/>
-          </g>
-          <g stroke="url(#wb)">
-            <circle cx="100" cy="100" r="72" stroke-width="9" stroke-dasharray="92 360" transform="rotate(188 100 100)"/>
-            <circle cx="100" cy="100" r="60" stroke-width="9" stroke-dasharray="78 360" transform="rotate(278 100 100)"/>
-            <circle cx="100" cy="100" r="48" stroke-width="9" stroke-dasharray="60 360" transform="rotate(8 100 100)"/>
-          </g>
-        </g>
-      </svg>
+      <div class="ring3d" id="ring3d">
+        <canvas id="ringCanvas"></canvas>
+        <svg class="mark-svg ring-fallback" viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13">
+          <circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/>
+          <circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/>
+          <circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/>
+          <circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/>
+          <circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/>
+          <circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/>
+        </g></svg>
+      </div>
     </div>
   </div>
 </div>
@@ -277,39 +295,39 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
   <div class="wrap">
     <div class="sec-head">
       <div class="sec-eyebrow">What it does</div>
-      <h2 class="sec">Structured memory, served back to any agent</h2>
-      <p class="sec-lead">Loomem stores structured knowledge extracted from conversations and serves it back to any MCP-capable client — Claude, Cursor, custom agents — through hybrid retrieval.</p>
+      <h2 class="sec">Your context, retrieved and ready for any model</h2>
+      <p class="sec-lead">Loomem captures the context worth keeping — and serves it back to whatever tool or model you're using, through fast hybrid retrieval. The model is interchangeable; the context is yours.</p>
     </div>
     <div class="pcards">
       <div class="pcard">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div>
-        <h3>Hybrid search</h3>
-        <p>BM25 (Tantivy) + vector embeddings + entity-graph signals, fused with reciprocal-rank fusion.</p>
+        <h3>Find the right context</h3>
+        <p>BM25 (Tantivy) + vector embeddings + entity-graph signals, fused with reciprocal-rank fusion — the relevant context surfaces first.</p>
       </div>
       <div class="pcard warm">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5l3 2"/></svg></div>
-        <h3>Consolidation</h3>
-        <p>Background workers merge related facts, resolve contradictions, and decay stale memories — "dreaming."</p>
+        <h3>Context that stays clean</h3>
+        <p>Background workers merge related facts, resolve contradictions, and let stale context fade — "dreaming," so your context sharpens over time.</p>
       </div>
       <div class="pcard">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg></div>
-        <h3>Bitemporal model</h3>
-        <p>Facts carry both ingestion and event time, so "what did I know in March" and "what happened in March" are distinct queries.</p>
+        <h3>Context through time</h3>
+        <p>Every fact carries both ingestion and event time, so "what did I know in March" and "what happened in March" stay distinct — your context remembers when, not just what.</p>
       </div>
       <div class="pcard">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="9" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8 7l8 1.5M8.5 16l8-6"/></svg></div>
-        <h3>Entity graph</h3>
-        <p>People, projects, and technologies are extracted into a graph with aliases and relations — used for retrieval and exploration.</p>
+        <h3>Context with structure</h3>
+        <p>People, projects, and tools in your context are linked into a graph with aliases and relations — for sharper retrieval and exploration.</p>
       </div>
       <div class="pcard">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 4.5 3.2 7.5 8 9 4.8-1.5 8-4.5 8-9V6Z"/><path d="m9 12 2 2 4-4"/></svg></div>
-        <h3>MCP-native</h3>
-        <p>14 <code>memory_*</code> tools over standard MCP HTTP, including OAuth dynamic client registration for remote connectors.</p>
+        <h3>Follows you anywhere</h3>
+        <p>Speaks MCP over standard HTTP — 14 tools, plus OAuth client registration. Your context plugs into Claude, ChatGPT, Cursor, or your own agent.</p>
       </div>
       <div class="pcard warm">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
-        <h3>Encryption at rest</h3>
-        <p>Optional field-level AES-GCM envelope encryption, with a master key supplied from the environment.</p>
+        <h3>Your context, your keys</h3>
+        <p>Optional field-level AES-GCM envelope encryption, with a master key supplied from your environment. Owning your context means owning its privacy.</p>
       </div>
     </div>
     <div class="callout">
@@ -466,8 +484,8 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
   <div class="wrap">
     <div class="sec-head">
       <div class="sec-eyebrow">Loomem T · for teams</div>
-      <h2 class="sec">Loomem remembers for you.<br><em>Loomem&nbsp;T</em> remembers for the whole team.</h2>
-      <p class="sec-lead">Loomem T is the managed, multiplayer edition built on the very same engine — hosted, shared, and ready for documents, teams, and single sign-on. The same fabric, woven wide enough for an organization. No binary to babysit, no server to secure.</p>
+      <h2 class="sec">Loomem keeps your context.<br><em>Loomem&nbsp;T</em> keeps your team's.</h2>
+      <p class="sec-lead">Loomem T is the managed, multiplayer edition built on the very same engine — shared context, documents, teams, and single sign-on. One fabric, woven wide enough for an organization. No binary to babysit, no server to secure.</p>
     </div>
     <div class="biz-cards">
       <div class="biz-card">
@@ -477,7 +495,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       </div>
       <div class="biz-card">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 6a3 3 0 0 1 0 6M21 20a6 6 0 0 0-4-5.7"/></svg></div>
-        <h3>Shared &amp; project memory</h3>
+        <h3>Shared &amp; project context</h3>
         <p>Private, team-shared, and per-project streams side by side. Everyone draws from the same fabric — RBAC decides who sees which thread.</p>
       </div>
       <div class="biz-card">
@@ -515,9 +533,9 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 <section>
   <div class="wrap">
     <div class="band">
-      <span class="pill pill-gold" style="margin-bottom:18px"><span class="dot"></span>Your memory, not someone else's cloud</span>
-      <h2>Give your agents a memory<br>that's <em>yours.</em></h2>
-      <p>Local-first, single binary, open source under Apache-2.0. Install it in one line and connect your first client in minutes.</p>
+      <span class="pill pill-gold" style="margin-bottom:18px"><span class="dot"></span>Your context, not someone else's cloud</span>
+      <h2>Own your context.<br>Swap the <em>model.</em></h2>
+      <p>Local-first, single binary, open source under Apache-2.0. Your context layer — portable across every tool and model you use. Install it in one line and connect your first client in minutes.</p>
       <div class="cta">
         <a class="btn btn-weave btn-lg" href="#quickstart">Get started →</a>
         <a class="btn btn-secondary btn-lg" href="https://github.com/vvooki-sys/loomem">Star on GitHub</a>
@@ -532,13 +550,17 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     <div class="foot-inner">
       <div>
         <div class="foot-brand">
-          <svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none">
-            <g stroke="#EE9913"><circle cx="100" cy="100" r="72" stroke-width="12" stroke-dasharray="92 360" transform="rotate(8 100 100)"/><circle cx="100" cy="100" r="56" stroke-width="12" stroke-dasharray="70 360" transform="rotate(98 100 100)"/></g>
-            <g stroke="#1684DC"><circle cx="100" cy="100" r="72" stroke-width="12" stroke-dasharray="92 360" transform="rotate(188 100 100)"/><circle cx="100" cy="100" r="56" stroke-width="12" stroke-dasharray="70 360" transform="rotate(278 100 100)"/></g>
+          <svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13">
+            <circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/>
+            <circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/>
+            <circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/>
+            <circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/>
+            <circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/>
+            <circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/>
           </g></svg>
           Loomem
         </div>
-        <p class="foot-note">Memory, woven. A persistent memory engine for AI agents — local-first and MCP-native.</p>
+        <p class="foot-note">Your context, woven. The context layer that's yours — local-first, portable, and model-agnostic.</p>
       </div>
       <div class="foot-links">
         <div class="foot-col">
@@ -570,6 +592,80 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     </div>
   </div>
 </footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+  // --- scroll reveal (adds class via JS, so no-JS shows everything) ---
+  try{
+    var obs = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); obs.unobserve(e.target); } });
+    }, { threshold: 0.12 });
+    document.querySelectorAll('section').forEach(function(s){ s.classList.add('reveal'); obs.observe(s); });
+  }catch(e){}
+
+  // --- 3D woven ring (graceful fallback to the SVG mark) ---
+  if(!window.THREE) return;
+  var host = document.getElementById('ring3d');
+  var canvas = document.getElementById('ringCanvas');
+  if(!host || !canvas) return;
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  try{
+    var renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    var scene = new THREE.Scene();
+    var camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+    camera.position.set(0, 0, 4.4);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+    var key = new THREE.DirectionalLight(0xffffff, 0.7); key.position.set(2, 3, 4); scene.add(key);
+    var fill = new THREE.DirectionalLight(0x8ec5ff, 0.35); fill.position.set(-3, -2, 2); scene.add(fill);
+
+    var group = new THREE.Group(); scene.add(group);
+    var BLUE = 0x1684DC, GOLD = 0xF4AC2E, DEG = Math.PI / 180;
+
+    function arc(R, tube, center, span, color){
+      var mat = new THREE.MeshStandardMaterial({ color: color, metalness: 0.22, roughness: 0.45 });
+      var torus = new THREE.Mesh(new THREE.TorusGeometry(R, tube, 18, 90, span), mat);
+      torus.rotation.z = center - span / 2;
+      group.add(torus);
+      var cap = new THREE.SphereGeometry(tube, 16, 16);
+      [0, span].forEach(function(a){
+        var s = new THREE.Mesh(cap, mat);
+        var ang = center - span / 2 + a;
+        s.position.set(R * Math.cos(ang), R * Math.sin(ang), 0);
+        group.add(s);
+      });
+    }
+
+    var R = 1.18, rIn = 0.9, tube = 0.085, d75 = 75 * DEG, d60 = 60 * DEG;
+    arc(R, tube, 135 * DEG, d75, BLUE);   // upper-left
+    arc(R, tube,  45 * DEG, d75, BLUE);   // upper-right
+    arc(R, tube, 225 * DEG, d75, GOLD);   // lower-left
+    arc(R, tube, 315 * DEG, d75, GOLD);   // lower-right
+    arc(rIn, tube, 160 * DEG, d60, GOLD); // inner accent (left)
+    arc(rIn, tube, 340 * DEG, d60, BLUE); // inner accent (lower-right)
+
+    host.classList.add('is-3d');
+    function resize(){ var s = host.clientWidth || 320; renderer.setSize(s, s, false); }
+    resize();
+    window.addEventListener('resize', resize);
+
+    var t = 0, running = true;
+    document.addEventListener('visibilitychange', function(){ running = !document.hidden; });
+    (function loop(){
+      requestAnimationFrame(loop);
+      if(!running) return;
+      t += 0.01;
+      if(!reduce){
+        group.rotation.y += 0.006;
+        group.rotation.x = Math.sin(t * 0.6) * 0.28;
+        group.position.y = Math.sin(t * 0.8) * 0.05;
+      }
+      renderer.render(scene, camera);
+    })();
+  }catch(e){ /* WebGL unavailable — SVG fallback stays visible */ }
+})();
+</script>
 
 </body>
 </html>
