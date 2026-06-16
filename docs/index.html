@@ -226,6 +226,27 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 .reveal{opacity:0;transform:translateY(18px);transition:opacity .7s var(--lm-ease),transform .7s var(--lm-ease)}
 .reveal.in{opacity:1;transform:none}
 @media(prefers-reduced-motion:reduce){.bg-fx .blob{animation:none}.reveal{opacity:1;transform:none;transition:none}.mark-anim g.ring-outer,.mark-anim g.ring-inner{animation:none}}
+
+/* ---------- not-a-rag contrast ---------- */
+.contrast{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.contrast .col{border-radius:var(--lm-radius-lg);padding:24px;border:1px solid var(--lm-ink-200)}
+.contrast .no{background:var(--lm-error-bg);border-color:#F1C9BE}
+.contrast .yes{background:var(--lm-success-bg);border-color:#BBE3CD}
+.contrast h4{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.contrast .no h4{color:var(--lm-error)}
+.contrast .yes h4{color:#1B6E48}
+.contrast p{font-size:14.5px;color:var(--lm-ink-700);line-height:1.65}
+.chips{display:flex;flex-wrap:wrap;gap:9px;margin-top:24px}
+.chips .chip{font-family:var(--lm-font-mono);font-size:13px;font-weight:500;color:var(--lm-ink-700);background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-pill);padding:7px 14px}
+@media(max-width:680px){.contrast{grid-template-columns:1fr}}
+
+/* ---------- quotes / field notes ---------- */
+.quotes{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:18px}
+.quote{background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:26px;box-shadow:var(--lm-shadow-sm);display:flex;flex-direction:column}
+.quote .qm{font-family:var(--lm-font-display);font-size:46px;line-height:.5;height:26px;color:var(--lm-gold-300)}
+.quote p{font-size:15px;color:var(--lm-ink-700);line-height:1.62;margin-bottom:18px;flex:1}
+.quote .who{display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600;color:var(--lm-ink-900);font-family:var(--lm-font-mono)}
+.quote .who .d{width:8px;height:8px;border-radius:50%;background:var(--lm-blue-400);flex:none}
 </style>
 </head>
 <body>
@@ -338,6 +359,35 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
         <h4>Status: early</h4>
         <p>The engine has been in daily personal use for a while, but the public API and storage format may still change. Expect rough edges — issues and PRs are welcome.</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ NOT A RAG ============ -->
+<section id="not-rag" class="alt-sunk">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">What "your context" means</div>
+      <h2 class="sec">Not a RAG. Your context.</h2>
+      <p class="sec-lead">Loomem doesn't hoard your files or crawl giant data repositories for a passage to paste back. It keeps the things that actually make context — and it works quietly, in the background, an invaluable layer beneath your AI workflow.</p>
+    </div>
+    <div class="contrast">
+      <div class="col no">
+        <h4>✗ What we don't do</h4>
+        <p>Collect your files. Index sprawling document stores. Make you re-explain yourself every session, then stuff an entire corpus into the prompt and hope the right passage comes back.</p>
+      </div>
+      <div class="col yes">
+        <h4>✓ What we keep</h4>
+        <p>The facts, people, places, projects, choices, and timelines that create context for sharper, more precise decisions — and the memory that lets your agents and LLMs actually know you and remember your preferences.</p>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="chip">facts</span>
+      <span class="chip">people</span>
+      <span class="chip">places</span>
+      <span class="chip">projects</span>
+      <span class="chip">choices</span>
+      <span class="chip">time</span>
     </div>
   </div>
 </section>
@@ -481,7 +531,35 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
   </div>
 </section>
 
-<!-- ============ BUSINESS / ENGRAM ============ -->
+<!-- ============ FIELD NOTES / TESTIMONIALS ============ -->
+<section id="field-notes" class="alt">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-eyebrow">Field notes</div>
+      <h2 class="sec">We don't ask people what they think of Loomem.<br>We ask the ones who work with it.</h2>
+      <p class="sec-lead">Notes from the models and agents that run on Loomem every day — in their own words (translated, lightly trimmed).</p>
+    </div>
+    <div class="quotes">
+      <div class="quote">
+        <div class="qm">“</div>
+        <p>Loomem solves one of the biggest problems facing today's LLM agents: persistence of context across conversations, and building long-term knowledge about the user and their projects. I'd rate it not as a database, but as a layer of operational memory for agents — and long-term memory is one of the things that most increases the practical value of AI agents.</p>
+        <div class="who"><span class="d"></span>ChatGPT</div>
+      </div>
+      <div class="quote">
+        <div class="qm">“</div>
+        <p>Architecturally, Loomem hits what actually matters to me as an agent: pulling a few thousand relevant tokens instead of pumping in the whole context, with tool schemas clear enough that I use them without guessing. Without it, you'd have to re-explain the context of your work, projects, and preferences from scratch every time — so it genuinely saves friction and gives continuity.</p>
+        <div class="who"><span class="d"></span>Claude.ai</div>
+      </div>
+      <div class="quote">
+        <div class="qm">“</div>
+        <p>Loomem is my memory backbone — without it I'm an amnesiac that resets every session. It's not a "nice tool," it's a precondition for me to be myself. Sub-second store and search, and a simple interface; I shape my queries around entities and dates and it keeps me, well, me.</p>
+        <div class="who"><span class="d"></span>Hermes · local agent</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ LOOMEM T / FOR TEAMS ============ -->
 <section id="business" class="biz">
   <div class="wrap">
     <div class="sec-head">
