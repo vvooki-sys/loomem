@@ -403,6 +403,19 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 .faq details[open] summary::after{content:"\2013"}
 .faq p{font-size:15px;color:var(--lm-ink-600);line-height:1.62;padding:0 0 20px;margin:0;max-width:68ch}
 .faq p code{font-family:var(--lm-font-mono);font-size:.9em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1px 5px;border-radius:5px}
+/* ---------- the dream loop ---------- */
+.dream-h{font-family:var(--lm-font-display);font-size:1.55rem;font-weight:600;letter-spacing:-.01em;margin:10px 0 10px}
+.dream-h em{font-style:italic;background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.dream-lead{color:var(--lm-ink-500);font-size:1.0625rem;line-height:1.6;max-width:66ch;margin-bottom:26px}
+.loop{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:38px}
+.loop .stage{position:relative;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:20px;box-shadow:var(--lm-shadow-xs)}
+.loop .stage::before{content:"";position:absolute;top:0;left:20px;right:20px;height:2px;border-radius:2px;background:var(--lm-weave)}
+.loop .stage .n{font-family:var(--lm-font-mono);font-size:11px;color:var(--lm-gold-600);font-weight:600}
+.loop .stage h4{font-size:1rem;font-weight:600;margin:8px 0 6px}
+.loop .stage p{font-size:13.5px;color:var(--lm-ink-500);line-height:1.55}
+.loop .stage .when{display:inline-block;margin-top:12px;font-family:var(--lm-font-mono);font-size:10.5px;color:var(--lm-ink-600);background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-pill);padding:3px 10px}
+@media(max-width:760px){.loop{grid-template-columns:1fr 1fr}}
+@media(max-width:460px){.loop{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -661,6 +674,31 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
           <div><b>RocksDB</b><span>Chunks, entity graph, and vector embeddings.</span></div>
           <div><b>Tantivy</b><span>Full-text index powering the BM25 half of search.</span></div>
         </div>
+      </div>
+    </div>
+
+    <h3 class="dream-h">The <em>dream</em> loop — memory that tends itself</h3>
+    <p class="dream-lead">Loomem doesn't just store and fetch. Background workers quietly reshape memory over time — the way sleep consolidates what you learned during the day. Context sharpens instead of bloating, and you don't lift a finger.</p>
+    <div class="loop">
+      <div class="stage">
+        <div class="n">01</div><h4>Ingest</h4>
+        <p>Raw events land as L0 chunks. New facts are checked against what's already known — contradictions get flagged and versioned, never silently overwritten.</p>
+        <span class="when">on write</span>
+      </div>
+      <div class="stage">
+        <div class="n">02</div><h4>Consolidate</h4>
+        <p>Related L0 chunks are grouped by topic and compressed by an LLM into clean L1 observations — each one linked back to its sources.</p>
+        <span class="when">every 5 min</span>
+      </div>
+      <div class="stage">
+        <div class="n">03</div><h4>Dream &amp; decay</h4>
+        <p>Memories fade on an ACT-R-inspired curve. What you actually use decays slower; stale, untouched facts go dormant. Forgetting is a feature, not a bug.</p>
+        <span class="when">hourly</span>
+      </div>
+      <div class="stage">
+        <div class="n">04</div><h4>Associate</h4>
+        <p>Clustering over L1 memories surfaces non-obvious links between people, projects, and decisions — the serendipity flat storage can't give you.</p>
+        <span class="when">every 6 h</span>
       </div>
     </div>
 
