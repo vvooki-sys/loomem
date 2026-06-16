@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Configuration — Loomem docs</title>
+<meta name="description" content="Loomem documentation — Configuration"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke-linecap='round' fill='none' stroke-width='14'%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(187.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(277.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(7.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(97.5 100 100)'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root{
+  --lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;--lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;--lm-gold-900:#5E3A11;
+  --lm-blue-300:#63B5F0;--lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;--lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-200:#DED7C8;--lm-ink-100:#EFE9DD;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;--lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#1684DC 100%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);line-height:1.62;-webkit-font-smoothing:antialiased;font-size:16px}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.82);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
+.brand:hover{text-decoration:none}
+.brand svg{width:26px;height:26px}
+.brand .tag{font-family:var(--lm-font-sans);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--lm-ink-400);border:1px solid var(--lm-ink-200);border-radius:999px;padding:2px 9px;margin-left:2px}
+.topnav{display:flex;align-items:center;gap:22px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900);text-decoration:none}
+.doc-wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px);display:grid;grid-template-columns:248px 1fr;gap:52px;align-items:start}
+.doc-side{position:sticky;top:88px;align-self:start;max-height:calc(100vh - 110px);overflow-y:auto;padding:26px 0}
+.doc-side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--lm-ink-400);font-weight:600;margin:20px 12px 8px}
+.doc-side .grp:first-child{margin-top:0}
+.doc-side a{display:block;font-size:14px;color:var(--lm-ink-600);padding:7px 12px;border-radius:8px;font-weight:500}
+.doc-side a:hover{background:var(--lm-surface-sunk);color:var(--lm-ink-900);text-decoration:none}
+.doc-side a.active{background:var(--lm-surface-cool);color:var(--lm-blue-700);font-weight:600}
+.doc-main{min-width:0;max-width:760px;padding:48px 0 96px}
+.doc-eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-gold-700);margin-bottom:10px}
+.doc-content h1{font-family:var(--lm-font-display);font-size:2.5rem;font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 22px}
+.doc-content h2{font-family:var(--lm-font-display);font-size:1.6rem;font-weight:600;letter-spacing:-.01em;line-height:1.25;margin:44px 0 14px}
+.doc-content h3{font-size:1.22rem;font-weight:600;margin:30px 0 10px;letter-spacing:-.01em}
+.doc-content h4{font-size:1.02rem;font-weight:600;margin:22px 0 8px}
+.doc-content p{margin:0 0 16px;color:var(--lm-ink-700)}
+.doc-content ul,.doc-content ol{margin:0 0 18px;padding-left:24px;color:var(--lm-ink-700)}
+.doc-content li{margin:7px 0}
+.doc-content li>ul,.doc-content li>ol{margin:7px 0}
+.doc-content code{font-family:var(--lm-font-mono);font-size:.87em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1.5px 6px;border-radius:5px;color:var(--lm-ink-800)}
+.doc-content pre{background:var(--lm-ink-900);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;overflow-x:auto;margin:0 0 18px;box-shadow:var(--lm-shadow-sm)}
+.doc-content pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;line-height:1.65}
+.doc-content blockquote{border-left:3px solid var(--lm-gold-400);background:var(--lm-surface-warm);padding:12px 18px;border-radius:0 var(--lm-radius-md) var(--lm-radius-md) 0;margin:0 0 18px;color:var(--lm-ink-700)}
+.doc-content blockquote p:last-child{margin:0}
+.doc-content table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;display:block;overflow-x:auto}
+.doc-content thead{background:var(--lm-surface-sunk)}
+.doc-content th{text-align:left;padding:9px 12px;border-bottom:2px solid var(--lm-ink-200);color:var(--lm-ink-700);font-weight:600;white-space:nowrap}
+.doc-content td{padding:9px 12px;border-bottom:1px solid var(--lm-ink-100);color:var(--lm-ink-700);vertical-align:top}
+.doc-content hr{border:none;border-top:1px solid var(--lm-ink-200);margin:34px 0}
+.doc-content a{font-weight:500}
+.doc-content h2 code,.doc-content h3 code,.doc-content h4 code{font-size:.86em;background:var(--lm-surface-sunk)}
+.doc-content img{max-width:100%}
+.doc-foot{border-top:1px solid var(--lm-ink-200);margin-top:40px;padding-top:22px;font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+/* hub */
+.hub-head{padding:56px 0 8px;max-width:720px}
+.hub-head h1{font-family:var(--lm-font-display);font-size:clamp(2.2rem,4vw,3rem);font-weight:600;letter-spacing:-.02em;line-height:1.1;margin-bottom:14px}
+.hub-head p{font-size:1.0625rem;color:var(--lm-ink-500);line-height:1.6}
+.hub-grp{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-ink-400);font-weight:600;margin:40px 0 16px}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.hub-card{display:block;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs);transition:all 180ms var(--lm-ease)}
+.hub-card:hover{box-shadow:var(--lm-shadow-sm);transform:translateY(-2px);text-decoration:none;border-color:var(--lm-blue-300)}
+.hub-card h3{font-size:1.05rem;font-weight:600;color:var(--lm-ink-900);margin-bottom:5px}
+.hub-card span{font-size:13.5px;color:var(--lm-ink-500)}
+@media(max-width:820px){.doc-wrap{grid-template-columns:1fr;gap:0}.doc-side{position:static;max-height:none;border-bottom:1px solid var(--lm-ink-200);padding:16px 0}.doc-main{padding-top:28px}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="wrap inner">
+<a class="brand" href="../"><svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
+<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
+</div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html" class="active">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Docs</div><article class="doc-content"><h1 id="configuration-reference">Configuration Reference</h1>
+<p>All settings live in <code>config.toml</code>. There are no hardcoded defaults — every value must be explicitly configured.</p>
+<p>Override config file path with <code>LOOMEM_CONFIG</code> environment variable.</p>
+<p>Authentication is configured via <code>[server].auth_token_env</code> (see <a href="#server">[server]</a>) — there is no separate <code>[auth]</code> section.</p>
+<hr />
+<h2 id="storage">[storage]</h2>
+<pre><code class="language-toml">[storage]
+data_dir = &quot;./data&quot;
+vector_enabled = true
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>data_dir</code></td>
+<td>string</td>
+<td>"./data"</td>
+<td>Root directory for RocksDB, Tantivy, embeddings</td>
+</tr>
+<tr>
+<td><code>vector_enabled</code></td>
+<td>bool</td>
+<td>true</td>
+<td>Enable vector (embedding) search</td>
+</tr>
+</tbody>
+</table>
+<h3 id="storagerocksdb">[storage.rocksdb]</h3>
+<pre><code class="language-toml">[storage.rocksdb]
+max_open_files = 1000
+compression = &quot;lz4&quot;
+write_buffer_size = 67108864
+max_write_buffer_number = 3
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max_open_files</code></td>
+<td>int</td>
+<td>File descriptor pool size</td>
+</tr>
+<tr>
+<td><code>compression</code></td>
+<td>string</td>
+<td><code>"lz4"</code> or <code>"snappy"</code> — LZ4 recommended</td>
+</tr>
+<tr>
+<td><code>write_buffer_size</code></td>
+<td>int</td>
+<td>Bytes per write buffer (64 MB)</td>
+</tr>
+<tr>
+<td><code>max_write_buffer_number</code></td>
+<td>int</td>
+<td>Number of write buffers</td>
+</tr>
+</tbody>
+</table>
+<h3 id="storagetantivy">[storage.tantivy]</h3>
+<pre><code class="language-toml">[storage.tantivy]
+enabled = true
+heap_size_mb = 128
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td>bool</td>
+<td>Enable BM25 full-text search</td>
+</tr>
+<tr>
+<td><code>heap_size_mb</code></td>
+<td>int</td>
+<td>Index writer memory pool</td>
+</tr>
+</tbody>
+</table>
+<h3 id="storageintent_log">[storage.intent_log]</h3>
+<p>Write-ahead log for cross-store consistency.</p>
+<pre><code class="language-toml">[storage.intent_log]
+enabled = true
+dir = &quot;wal&quot;
+max_size_mb = 10
+sync_on_write = false
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td>bool</td>
+<td>Enable WAL</td>
+</tr>
+<tr>
+<td><code>dir</code></td>
+<td>string</td>
+<td>WAL directory (relative to data_dir)</td>
+</tr>
+<tr>
+<td><code>max_size_mb</code></td>
+<td>int</td>
+<td>Rotate when log reaches this size</td>
+</tr>
+<tr>
+<td><code>sync_on_write</code></td>
+<td>bool</td>
+<td>fsync every write (safer but slower)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="search">[search]</h2>
+<pre><code class="language-toml">[search]
+top_k = 10
+surprise_boost = 1.5
+synonyms_file = &quot;synonyms.toml&quot;
+entities_file = &quot;entities.toml&quot;
+rerank_enabled = false
+rerank_candidates = 20
+rerank_model_dir = &quot;models/reranker&quot;
+multi_query_enabled = false
+stem_polish = true
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>top_k</code></td>
+<td>int</td>
+<td>Default number of search results</td>
+</tr>
+<tr>
+<td><code>surprise_boost</code></td>
+<td>f64</td>
+<td>Novelty multiplier on ingest (Titans-inspired)</td>
+</tr>
+<tr>
+<td><code>synonyms_file</code></td>
+<td>string</td>
+<td>Path to synonym expansion map</td>
+</tr>
+<tr>
+<td><code>entities_file</code></td>
+<td>string</td>
+<td>Path to entity dictionary</td>
+</tr>
+<tr>
+<td><code>rerank_enabled</code></td>
+<td>bool</td>
+<td>Enable cross-encoder reranking (~97ms/pair)</td>
+</tr>
+<tr>
+<td><code>rerank_candidates</code></td>
+<td>int</td>
+<td>Send top N to reranker</td>
+</tr>
+<tr>
+<td><code>rerank_model_dir</code></td>
+<td>string</td>
+<td>ONNX model directory</td>
+</tr>
+<tr>
+<td><code>multi_query_enabled</code></td>
+<td>bool</td>
+<td>Decompose complex queries into sub-queries</td>
+</tr>
+<tr>
+<td><code>stem_polish</code></td>
+<td>bool</td>
+<td>Enable Polish language stemming</td>
+</tr>
+</tbody>
+</table>
+<h3 id="searchcache">[search.cache]</h3>
+<pre><code class="language-toml">[search.cache]
+enabled = true
+max_entries = 500
+ttl_secs = 300
+</code></pre>
+<p>Semantic query cache. Identical queries within TTL return cached results.</p>
+<h3 id="searchgraph">[search.graph]</h3>
+<pre><code class="language-toml">[search.graph]
+enabled = true
+max_hops = 1
+boost_factor = 0.3
+max_graph_additions = 3
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td>bool</td>
+<td>Enable graph-enhanced search</td>
+</tr>
+<tr>
+<td><code>max_hops</code></td>
+<td>int</td>
+<td>1 = direct neighbors, 2 = 2-hop</td>
+</tr>
+<tr>
+<td><code>boost_factor</code></td>
+<td>f64</td>
+<td>Score multiplier for graph-discovered results (0.0 – 1.0)</td>
+</tr>
+<tr>
+<td><code>max_graph_additions</code></td>
+<td>int</td>
+<td>Max graph-only results added to search</td>
+</tr>
+</tbody>
+</table>
+<h3 id="searchhybrid_weights">[search.hybrid_weights]</h3>
+<pre><code class="language-toml">[search.hybrid_weights]
+vector = 0.6
+bm25 = 0.4
+</code></pre>
+<p>Controls the fusion ratio. Must sum to 1.0.</p>
+<h3 id="searchdecay">[search.decay]</h3>
+<pre><code class="language-toml">[search.decay]
+l0_lambda = 0.05
+l1_lambda = 0.03
+</code></pre>
+<p>Exponential decay rate per tier. Higher = faster decay. Half-life ≈ ln(2) / lambda days.</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Lambda</th>
+<th>Approximate half-life</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>L0</td>
+<td>0.05</td>
+<td>~14 days</td>
+</tr>
+<tr>
+<td>L1</td>
+<td>0.03</td>
+<td>~23 days</td>
+</tr>
+</tbody>
+</table>
+<h3 id="searchcomplexity">[search.complexity]</h3>
+<pre><code class="language-toml">[search.complexity]
+enabled = false
+simple_top_k = 3
+medium_top_k = 10
+complex_top_k = 20
+</code></pre>
+<p>Complexity-aware routing. When enabled, adjusts <code>top_k</code> based on query complexity classification. Currently disabled — all queries use full pipeline.</p>
+<hr />
+<h2 id="worker">[worker]</h2>
+<h3 id="workerconsolidation">[worker.consolidation]</h3>
+<pre><code class="language-toml">[worker.consolidation]
+interval_secs = 300
+batch_size = 200
+concurrency = 2
+timeout_secs = 300
+min_chunks_to_consolidate = 3
+min_age_secs = 60
+prompt_version = 1
+consolidation_style = &quot;structured&quot;
+similarity_threshold = 0.20
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>interval_secs</code></td>
+<td>int</td>
+<td>How often to run (5 min)</td>
+</tr>
+<tr>
+<td><code>batch_size</code></td>
+<td>int</td>
+<td>Max chunks per stream per run</td>
+</tr>
+<tr>
+<td><code>concurrency</code></td>
+<td>int</td>
+<td>Parallel streams</td>
+</tr>
+<tr>
+<td><code>min_chunks_to_consolidate</code></td>
+<td>int</td>
+<td>Skip streams with fewer chunks</td>
+</tr>
+<tr>
+<td><code>min_age_secs</code></td>
+<td>int</td>
+<td>Only consolidate chunks older than this</td>
+</tr>
+<tr>
+<td><code>consolidation_style</code></td>
+<td>string</td>
+<td><code>"structured"</code> = typed facts with date resolution, <code>"observation"</code> = granular facts, <code>"summary"</code> = paragraph</td>
+</tr>
+<tr>
+<td><code>similarity_threshold</code></td>
+<td>f64</td>
+<td>Cosine similarity for topic grouping before compress (0.0 = one per chunk, 1.0 = all in one)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="workerdecay_worker">[worker.decay_worker]</h3>
+<pre><code class="language-toml">[worker.decay_worker]
+interval_secs = 3600
+factor = 0.995
+l0_factor = 0.990
+l1_factor = 0.995
+dormant_threshold = 0.01
+access_boost = true
+adaptive_enabled = true
+adaptive_dampening = 0.5
+adaptive_cap = 200
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>interval_secs</code></td>
+<td>int</td>
+<td>Run every hour</td>
+</tr>
+<tr>
+<td><code>l0/l1_factor</code></td>
+<td>f64</td>
+<td>Decay multiplier per hour per tier</td>
+</tr>
+<tr>
+<td><code>dormant_threshold</code></td>
+<td>f64</td>
+<td>Score below this = marked dormant</td>
+</tr>
+<tr>
+<td><code>access_boost</code></td>
+<td>bool</td>
+<td>Reset score on search hit</td>
+</tr>
+<tr>
+<td><code>adaptive_enabled</code></td>
+<td>bool</td>
+<td>ACT-R: frequently accessed decay slower</td>
+</tr>
+<tr>
+<td><code>adaptive_dampening</code></td>
+<td>f64</td>
+<td>How much access_count influences decay</td>
+</tr>
+<tr>
+<td><code>adaptive_cap</code></td>
+<td>int</td>
+<td>access_count ceiling for adaptive effect</td>
+</tr>
+</tbody>
+</table>
+<h3 id="workercompaction">[worker.compaction]</h3>
+<pre><code class="language-toml">[worker.compaction]
+interval_secs = 3600
+timeout_secs = 300
+</code></pre>
+<p>RocksDB background compaction trigger.</p>
+<h3 id="workerclustering">[worker.clustering]</h3>
+<pre><code class="language-toml">[worker.clustering]
+interval_secs = 21600
+max_iterations = 1000
+timeout_secs = 600
+</code></pre>
+<p>Clustering worker runs k-means on L1 embeddings to group related memories.</p>
+<hr />
+<h2 id="scheduler">[scheduler]</h2>
+<pre><code class="language-toml">[scheduler]
+enabled = true
+</code></pre>
+<p>Master switch for all background workers.</p>
+<hr />
+<h2 id="llm">[llm]</h2>
+<pre><code class="language-toml">[llm]
+provider = &quot;openai&quot;                  # completions (consolidation / reflect)
+api_key_env = &quot;OPENAI_API_KEY&quot;
+embedding_provider = &quot;local&quot;         # &quot;local&quot; (on-device ONNX) or &quot;openai&quot;
+embedding_model = &quot;text-embedding-3-small&quot;   # used when embedding_provider = &quot;openai&quot;
+# embedding_model_path = &quot;/abs/path&quot;  # local model dir; default ~/.loomem/models/multilingual-e5-small
+embedding_dim = 384                  # MUST match the active embedding model
+compression_model = &quot;gpt-4.1-mini&quot;
+timeout_secs = 10
+fallback_to_regex = true
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>provider</code></td>
+<td>string</td>
+<td>Completions provider for consolidation / reflect (<code>"openai"</code>)</td>
+</tr>
+<tr>
+<td><code>embedding_provider</code></td>
+<td>string</td>
+<td><code>"local"</code> (on-device ONNX, no API key) or <code>"openai"</code>. Missing in older configs → treated as <code>"openai"</code></td>
+</tr>
+<tr>
+<td><code>api_key_env</code></td>
+<td>string</td>
+<td>Environment variable name for the API key</td>
+</tr>
+<tr>
+<td><code>embedding_model</code></td>
+<td>string</td>
+<td>Embedding model name when <code>embedding_provider = "openai"</code></td>
+</tr>
+<tr>
+<td><code>embedding_model_path</code></td>
+<td>string?</td>
+<td>Directory with <code>model.onnx</code> + <code>tokenizer.json</code> for local embeddings. Unset → <code>~/.loomem/models/multilingual-e5-small</code></td>
+</tr>
+<tr>
+<td><code>embedding_dim</code></td>
+<td>int</td>
+<td>Embedding vector dimensions — <strong>must match the active model</strong></td>
+</tr>
+<tr>
+<td><code>compression_model</code></td>
+<td>string</td>
+<td>Model for consolidation, extraction, dream</td>
+</tr>
+<tr>
+<td><code>timeout_secs</code></td>
+<td>int</td>
+<td>API call timeout</td>
+</tr>
+<tr>
+<td><code>fallback_to_regex</code></td>
+<td>bool</td>
+<td>Use regex extraction if the completions LLM is unavailable</td>
+</tr>
+</tbody>
+</table>
+<h3 id="local-embeddings-default">Local embeddings (default)</h3>
+<p>Fresh installs use <strong><code>embedding_provider = "local"</code></strong>: embeddings are computed
+on-device with a quantization-free ONNX model (default
+<code>multilingual-e5-small</code>, 384-dim, good multilingual/Polish recall) via the pure-Rust
+<code>tract</code> runtime. No API key is required and no text leaves the machine. The model
+ships in the default build; obtain the model files with:</p>
+<pre><code class="language-sh">./scripts/fetch-embedding-model.sh         # → ~/.loomem/models/multilingual-e5-small
+</code></pre>
+<p>The completions LLM (consolidation, fact extraction, dream) is independent: with
+no <code>OPENAI_API_KEY</code>, those steps fall back to regex (<code>fallback_to_regex</code>), while
+<code>memory_store</code> and semantic search work fully locally. To use a local LLM for
+completions too, point <code>provider</code> at an OpenAI-compatible endpoint (future cycle).</p>
+<h3 id="embedding-dimension-re-embedding">Embedding dimension &amp; re-embedding</h3>
+<p><code>embedding_dim</code> <strong>must</strong> match the active embedding model
+(<code>multilingual-e5-small</code> = 384, OpenAI <code>text-embedding-3-small</code> = 1536). The
+dimension a database was built with is recorded in its metadata; on a mismatch
+the server <strong>refuses to start</strong> rather than silently mixing vector sizes. To
+switch providers/models on an existing database, re-embed it:</p>
+<pre><code class="language-sh">loomem-server --reembed   # recompute all vectors with the configured provider (run with the server stopped)
+</code></pre>
+<p>To use the API instead of local embeddings, set <code>embedding_provider = "openai"</code>,
+<code>embedding_dim = 1536</code>, export <code>OPENAI_API_KEY</code>, and re-embed.</p>
+<hr />
+<h2 id="server">[server]</h2>
+<pre><code class="language-toml">[server]
+host = &quot;127.0.0.1&quot;
+port = 3030
+auth_token_env = &quot;LOOMEM_AUTH_TOKEN&quot;
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>host</code></td>
+<td>string</td>
+<td>Bind address (<code>0.0.0.0</code> for production)</td>
+</tr>
+<tr>
+<td><code>port</code></td>
+<td>int</td>
+<td>HTTP port (overridden by <code>PORT</code> env var)</td>
+</tr>
+<tr>
+<td><code>auth_token_env</code></td>
+<td>string</td>
+<td>Name of the env var holding the API Bearer key (default <code>LOOMEM_AUTH_TOKEN</code>). If that env var is unset or empty, auth is disabled and the server runs in local passthrough mode</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="resource_guards">[resource_guards]</h2>
+<pre><code class="language-toml">[resource_guards]
+max_cpu_cores = 1.0
+max_memory_mb = 512
+min_disk_space_mb = 1024
+llm_timeout_secs = 30
+worker_timeout_secs = 120
+</code></pre>
+<p>Startup checks. Server refuses to start if resources are below thresholds.</p>
+<hr />
+<h2 id="streams-and-namespaces">[streams] and [namespaces]</h2>
+<pre><code class="language-toml">[streams]
+shared = &quot;001&quot;
+
+[streams.agents]
+assistant = { raw = &quot;100&quot;, compressed = &quot;101&quot; }
+
+[namespaces]
+personal = &quot;100&quot;
+work = &quot;110&quot;
+</code></pre>
+<p><code>streams</code> — agent-specific raw/compressed stream IDs.
+<code>namespaces</code> — human-readable name → stream ID mapping. Returned by <code>memory_namespaces</code>.</p>
+<p>Data written without an explicit stream goes to the built-in default stream <code>__user_default__</code>.</p>
+<hr />
+<h2 id="pii">[pii]</h2>
+<pre><code class="language-toml">[pii]
+enabled = true
+redact_phones = true
+redact_emails = true
+redact_ids = true
+blocklist_file = &quot;pii_blocklist.txt&quot;
+audit_log = true
+</code></pre>
+<p>PII is stripped before <strong>every</strong> LLM API call (consolidation, extraction, dream). Original content in RocksDB remains untouched.</p>
+<hr />
+<h2 id="cost">[cost]</h2>
+<pre><code class="language-toml">[cost]
+daily_cap_usd = 15.00
+alert_threshold_usd = 10.00
+anomaly_multiplier = 3.0
+persist = true
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>daily_cap_usd</code></td>
+<td>f64</td>
+<td>Hard stop — no LLM calls beyond this</td>
+</tr>
+<tr>
+<td><code>alert_threshold_usd</code></td>
+<td>f64</td>
+<td>Warning threshold</td>
+</tr>
+<tr>
+<td><code>anomaly_multiplier</code></td>
+<td>f64</td>
+<td>3x typical daily cost = anomaly alert</td>
+</tr>
+<tr>
+<td><code>persist</code></td>
+<td>bool</td>
+<td>Save cost counters across restarts</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="knowledge_extraction">[knowledge_extraction]</h2>
+<pre><code class="language-toml">[knowledge_extraction]
+enabled = true
+model = &quot;gpt-4.1-mini&quot;
+max_transcript_tokens = 20000
+dedup_cosine_threshold = 0.92
+contradiction_check = true
+contradiction_cosine_min = 0.5
+max_facts_per_transcript = 20
+</code></pre>
+<p>Controls the <code>memory_ingest</code> LLM pipeline.</p>
+<hr />
+<h2 id="entity_extraction">[entity_extraction]</h2>
+<pre><code class="language-toml">[entity_extraction]
+enabled = true
+model = &quot;gpt-4.1-mini&quot;
+batch_size = 20
+flush_interval_secs = 3
+queue_capacity = 200
+confidence_threshold = 0.7
+max_tokens_per_batch = 2000
+</code></pre>
+<p>Async LLM NER for entities not in the dictionary.</p>
+<hr />
+<h2 id="contradiction">[contradiction]</h2>
+<pre><code class="language-toml">[contradiction]
+enabled = true
+similarity_threshold = 0.70
+max_candidates = 5
+model = &quot;gpt-4.1-mini&quot;
+</code></pre>
+<p>When a new fact arrives, top <code>max_candidates</code> similar existing facts are checked via LLM for contradiction. Verdict: <code>updates</code> (supersede), <code>extends</code> (keep both), <code>none</code> (no relation).</p>
+<hr />
+<h2 id="conversation_extraction">[conversation_extraction]</h2>
+<pre><code class="language-toml">[conversation_extraction]
+enabled = true
+model = &quot;gpt-4.1-mini&quot;
+max_tokens = 2000
+confidence_threshold = 0.7
+dedup_threshold = 0.80
+max_extractions_per_request = 30
+</code></pre>
+<hr />
+<h2 id="profile">[profile]</h2>
+<pre><code class="language-toml">[profile]
+enabled = true
+model = &quot;gpt-4.1-mini&quot;
+max_chunks = 100
+cache_ttl_secs = 3600
+max_static_facts = 30
+max_recent_items = 15
+</code></pre>
+<p>User profile synthesis. Cached for <code>cache_ttl_secs</code>.</p>
+<hr />
+<h2 id="retention">[retention]</h2>
+<pre><code class="language-toml">[retention]
+soft_delete_days = 30
+hard_purge_interval_secs = 86400
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>soft_delete_days</code></td>
+<td>int</td>
+<td>Days to keep soft-deleted chunks before hard purge</td>
+</tr>
+<tr>
+<td><code>hard_purge_interval_secs</code></td>
+<td>int</td>
+<td>How often the purge worker runs (seconds)</td>
+</tr>
+</tbody>
+</table>
+<p>The hard-purge worker removes expired soft-deleted chunks from RocksDB, Tantivy, and graph.</p>
+<hr />
+<h2 id="associator">[associator]</h2>
+<pre><code class="language-toml">[associator]
+enabled = true
+k_clusters = 0
+max_clusters = 50
+max_iterations = 100
+min_serendipity = 0.1
+max_associations = 3
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td>bool</td>
+<td>Enable ECA serendipity engine and auto-clustering</td>
+</tr>
+<tr>
+<td><code>k_clusters</code></td>
+<td>int</td>
+<td>Fixed cluster count (0 = auto)</td>
+</tr>
+<tr>
+<td><code>max_clusters</code></td>
+<td>int</td>
+<td>Upper bound on auto-determined clusters</td>
+</tr>
+<tr>
+<td><code>min_serendipity</code></td>
+<td>f64</td>
+<td>Minimum score to include an association</td>
+</tr>
+<tr>
+<td><code>max_associations</code></td>
+<td>int</td>
+<td>Max serendipitous results per search</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="dream">[dream]</h2>
+<pre><code class="language-toml">[dream]
+enabled = true
+batch_size = 50
+min_group_size = 2
+model = &quot;gpt-4.1-mini&quot;
+cost_cap_usd_per_run = 0.10
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>batch_size</code></td>
+<td>int</td>
+<td>Chunks per dream run</td>
+</tr>
+<tr>
+<td><code>min_group_size</code></td>
+<td>int</td>
+<td>Min chunks per subject to merge</td>
+</tr>
+<tr>
+<td><code>cost_cap_usd_per_run</code></td>
+<td>f64</td>
+<td>Safety cap per dream session</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="memory_generator">[memory_generator]</h2>
+<pre><code class="language-toml">[memory_generator]
+enabled = true
+max_chunks = 200
+max_sections = 20
+model = &quot;gpt-4.1-mini&quot;
+</code></pre>
+<p>Controls <code>generate-memory-md</code> endpoint output.</p>
+<hr />
+<h2 id="environment-variables">Environment variables</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LOOMEM_AUTH_TOKEN</code></td>
+<td>API Bearer key (name configurable via <code>server.auth_token_env</code>)</td>
+<td>No (auth disabled if unset — local passthrough mode)</td>
+</tr>
+<tr>
+<td><code>OPENAI_API_KEY</code></td>
+<td>LLM API key (name configurable via <code>llm.api_key_env</code>)</td>
+<td>Yes (unless <code>provider = "local"</code>)</td>
+</tr>
+<tr>
+<td><code>LOOMEM_CONFIG</code></td>
+<td>Config file path</td>
+<td>No (default: <code>config.toml</code>)</td>
+</tr>
+<tr>
+<td><code>PORT</code></td>
+<td>Override server port</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>SERVER_ORIGIN</code></td>
+<td>OAuth redirect base URL</td>
+<td>No (for MCP Remote)</td>
+</tr>
+<tr>
+<td><code>LOOMEM_LOG_FORMAT</code></td>
+<td><code>"json"</code> for structured logs</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>LOOMEM_AT_REST_MASTER_KEY</code></td>
+<td>Master key enabling at-rest encryption (32-byte base64)</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>LOOMEM_AT_REST_EXPECT_ENABLED</code></td>
+<td>Refuse to start without a master key when set</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>LOOMEM_AMBIENT_CACHE_TTL_SECS</code></td>
+<td>Cache TTL for <code>/v1/ambient</code> responses</td>
+<td>No (default 60)</td>
+</tr>
+<tr>
+<td><code>TELEGRAM_BOT_TOKEN</code>, <code>LOOMEM_TELEGRAM_CHAT_ID</code></td>
+<td>Optional cost-alert webhook</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<p>For at-rest encryption, see <a href="security.html#data-at-rest">SECURITY.md — Data at rest</a>.</p></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/Configuration">Edit on GitHub</a></span></div></main></div></body></html>

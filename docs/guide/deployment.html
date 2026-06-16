@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Deployment — Loomem docs</title>
+<meta name="description" content="Loomem documentation — Deployment"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke-linecap='round' fill='none' stroke-width='14'%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(187.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(277.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(7.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(97.5 100 100)'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root{
+  --lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;--lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;--lm-gold-900:#5E3A11;
+  --lm-blue-300:#63B5F0;--lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;--lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-200:#DED7C8;--lm-ink-100:#EFE9DD;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;--lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#1684DC 100%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);line-height:1.62;-webkit-font-smoothing:antialiased;font-size:16px}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.82);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
+.brand:hover{text-decoration:none}
+.brand svg{width:26px;height:26px}
+.brand .tag{font-family:var(--lm-font-sans);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--lm-ink-400);border:1px solid var(--lm-ink-200);border-radius:999px;padding:2px 9px;margin-left:2px}
+.topnav{display:flex;align-items:center;gap:22px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900);text-decoration:none}
+.doc-wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px);display:grid;grid-template-columns:248px 1fr;gap:52px;align-items:start}
+.doc-side{position:sticky;top:88px;align-self:start;max-height:calc(100vh - 110px);overflow-y:auto;padding:26px 0}
+.doc-side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--lm-ink-400);font-weight:600;margin:20px 12px 8px}
+.doc-side .grp:first-child{margin-top:0}
+.doc-side a{display:block;font-size:14px;color:var(--lm-ink-600);padding:7px 12px;border-radius:8px;font-weight:500}
+.doc-side a:hover{background:var(--lm-surface-sunk);color:var(--lm-ink-900);text-decoration:none}
+.doc-side a.active{background:var(--lm-surface-cool);color:var(--lm-blue-700);font-weight:600}
+.doc-main{min-width:0;max-width:760px;padding:48px 0 96px}
+.doc-eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-gold-700);margin-bottom:10px}
+.doc-content h1{font-family:var(--lm-font-display);font-size:2.5rem;font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 22px}
+.doc-content h2{font-family:var(--lm-font-display);font-size:1.6rem;font-weight:600;letter-spacing:-.01em;line-height:1.25;margin:44px 0 14px}
+.doc-content h3{font-size:1.22rem;font-weight:600;margin:30px 0 10px;letter-spacing:-.01em}
+.doc-content h4{font-size:1.02rem;font-weight:600;margin:22px 0 8px}
+.doc-content p{margin:0 0 16px;color:var(--lm-ink-700)}
+.doc-content ul,.doc-content ol{margin:0 0 18px;padding-left:24px;color:var(--lm-ink-700)}
+.doc-content li{margin:7px 0}
+.doc-content li>ul,.doc-content li>ol{margin:7px 0}
+.doc-content code{font-family:var(--lm-font-mono);font-size:.87em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1.5px 6px;border-radius:5px;color:var(--lm-ink-800)}
+.doc-content pre{background:var(--lm-ink-900);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;overflow-x:auto;margin:0 0 18px;box-shadow:var(--lm-shadow-sm)}
+.doc-content pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;line-height:1.65}
+.doc-content blockquote{border-left:3px solid var(--lm-gold-400);background:var(--lm-surface-warm);padding:12px 18px;border-radius:0 var(--lm-radius-md) var(--lm-radius-md) 0;margin:0 0 18px;color:var(--lm-ink-700)}
+.doc-content blockquote p:last-child{margin:0}
+.doc-content table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;display:block;overflow-x:auto}
+.doc-content thead{background:var(--lm-surface-sunk)}
+.doc-content th{text-align:left;padding:9px 12px;border-bottom:2px solid var(--lm-ink-200);color:var(--lm-ink-700);font-weight:600;white-space:nowrap}
+.doc-content td{padding:9px 12px;border-bottom:1px solid var(--lm-ink-100);color:var(--lm-ink-700);vertical-align:top}
+.doc-content hr{border:none;border-top:1px solid var(--lm-ink-200);margin:34px 0}
+.doc-content a{font-weight:500}
+.doc-content h2 code,.doc-content h3 code,.doc-content h4 code{font-size:.86em;background:var(--lm-surface-sunk)}
+.doc-content img{max-width:100%}
+.doc-foot{border-top:1px solid var(--lm-ink-200);margin-top:40px;padding-top:22px;font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+/* hub */
+.hub-head{padding:56px 0 8px;max-width:720px}
+.hub-head h1{font-family:var(--lm-font-display);font-size:clamp(2.2rem,4vw,3rem);font-weight:600;letter-spacing:-.02em;line-height:1.1;margin-bottom:14px}
+.hub-head p{font-size:1.0625rem;color:var(--lm-ink-500);line-height:1.6}
+.hub-grp{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-ink-400);font-weight:600;margin:40px 0 16px}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.hub-card{display:block;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs);transition:all 180ms var(--lm-ease)}
+.hub-card:hover{box-shadow:var(--lm-shadow-sm);transform:translateY(-2px);text-decoration:none;border-color:var(--lm-blue-300)}
+.hub-card h3{font-size:1.05rem;font-weight:600;color:var(--lm-ink-900);margin-bottom:5px}
+.hub-card span{font-size:13.5px;color:var(--lm-ink-500)}
+@media(max-width:820px){.doc-wrap{grid-template-columns:1fr;gap:0}.doc-side{position:static;max-height:none;border-bottom:1px solid var(--lm-ink-200);padding:16px 0}.doc-main{padding-top:28px}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="wrap inner">
+<a class="brand" href="../"><svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
+<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
+</div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html" class="active">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Project</div><article class="doc-content"><h1 id="deployment-guide">Deployment Guide</h1>
+<h2 id="local-development">Local development</h2>
+<h3 id="prerequisites">Prerequisites</h3>
+<ul>
+<li>Rust toolchain (stable)</li>
+<li>clang + libclang-dev (for RocksDB)</li>
+<li>OpenAI API key (optional — local embeddings available)</li>
+</ul>
+<h3 id="build-and-run">Build and run</h3>
+<pre><code class="language-bash">git clone &lt;repository-url&gt;
+cd loomem
+
+# Build
+cargo build --release -p loomem-server
+
+# Set environment (optional)
+export OPENAI_API_KEY=&quot;sk-...&quot;
+export LOOMEM_AUTH_TOKEN=&quot;your-secret-token&quot;
+
+# Run
+./target/release/loomem-server
+
+# Verify
+curl http://localhost:3030/health
+</code></pre>
+<h3 id="first-memory">First memory</h3>
+<pre><code class="language-bash">curl -X POST http://localhost:3030/v1/store \
+  -H &quot;Authorization: Bearer your-secret-token&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{&quot;content&quot;: &quot;Hello, this is my first memory&quot;}'
+</code></pre>
+<h3 id="local-embeddings-no-openai-dependency">Local embeddings (no OpenAI dependency)</h3>
+<p>Set <code>provider = "local"</code> in <code>config.toml</code> under <code>[llm]</code>. Uses tract ONNX runtime — pure Rust, no native dependencies.</p>
+<p>Note: consolidation, extraction, and dream features still require an OpenAI API key (they use <code>compression_model</code>).</p>
+<hr />
+<h2 id="docker">Docker</h2>
+<h3 id="build">Build</h3>
+<pre><code class="language-bash">docker build -t loomem .
+</code></pre>
+<h3 id="run">Run</h3>
+<pre><code class="language-bash">docker run -d \
+  --name loomem \
+  -p 3030:3030 \
+  -v loomem-data:/data \
+  -e OPENAI_API_KEY=&quot;sk-...&quot; \
+  -e LOOMEM_AUTH_TOKEN=&quot;your-secret-token&quot; \
+  loomem
+</code></pre>
+<p>The Dockerfile automatically:
+- Binds to <code>0.0.0.0</code> (accessible from outside container)
+- Sets data directory to <code>/data</code> (mount a volume here)</p>
+<h3 id="docker-compose">Docker Compose</h3>
+<pre><code class="language-yaml">version: '3.8'
+services:
+  loomem:
+    build: .
+    ports:
+      - &quot;3030:3030&quot;
+    volumes:
+      - loomem-data:/data
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LOOMEM_AUTH_TOKEN=${LOOMEM_AUTH_TOKEN}
+    restart: unless-stopped
+    healthcheck:
+      test: [&quot;CMD&quot;, &quot;curl&quot;, &quot;-f&quot;, &quot;http://localhost:3030/health&quot;]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  loomem-data:
+</code></pre>
+<hr />
+<h2 id="railway">Railway</h2>
+<h3 id="one-click-deploy">One-click deploy</h3>
+<ol>
+<li>Fork the repository</li>
+<li>Connect it to Railway</li>
+<li>Create new project → Deploy from GitHub repo</li>
+<li>Add environment variables:
+   - <code>OPENAI_API_KEY</code> — your OpenAI API key
+   - <code>LOOMEM_AUTH_TOKEN</code> — admin token (generate a random string)</li>
+<li>Add a volume mounted at <code>/data</code> for persistent storage</li>
+<li>Deploy</li>
+</ol>
+<h3 id="configuration">Configuration</h3>
+<p>If you deploy to Railway, add a <code>railway.toml</code> at the repo root (not shipped by default):</p>
+<pre><code class="language-toml">[build]
+dockerfilePath = &quot;Dockerfile&quot;
+
+[deploy]
+healthcheckPath = &quot;/health&quot;
+healthcheckTimeout = 30
+restartPolicyType = &quot;ON_FAILURE&quot;
+restartPolicyMaxRetries = 3
+</code></pre>
+<p>The <code>PORT</code> environment variable is automatically set by Railway and overrides <code>server.port</code> in config.</p>
+<h3 id="custom-domain">Custom domain</h3>
+<p>After deployment, you can add a custom domain in Railway settings. Update <code>SERVER_ORIGIN</code> env var to match (required for OAuth).</p>
+<hr />
+<h2 id="container-entrypoint-and-startup-migrations">Container entrypoint and startup migrations</h2>
+<p>The container image starts via <code>scripts/docker-entrypoint.sh</code> (works on any container platform). It supports an optional one-time data migration before the server starts:</p>
+<table>
+<thead>
+<tr>
+<th>Env var</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LOOMEM_MIGRATE_GRAPH_STREAMS_ON_START</code></td>
+<td>Set to <code>1</code> to run <code>loomem-migrate --migrate-graph-entity-streams</code> before server start (re-stamps graph entities/edges whose stream disagrees with the chunks they reference). Unset = skip.</td>
+</tr>
+<tr>
+<td><code>LOOMEM_MIGRATE_GRAPH_STREAMS_COMMIT</code></td>
+<td>Set to <code>1</code> to actually write changes. Default is a dry run.</td>
+</tr>
+<tr>
+<td><code>LOOMEM_MIGRATE_GRAPH_STREAMS_MANIFEST_DIR</code></td>
+<td>Where migration manifests are written. Defaults to <code>/data/graph-migration-plans</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>The migration is idempotent (already-correct entities are skipped) and creates a backup checkpoint before the first write when committing. After a successful migration, unset the <code>ON_START</code> flag and redeploy so subsequent restarts take the no-op fast path.</p>
+<p>Other <code>loomem-migrate</code> subcommands (run manually, not via the entrypoint): <code>--validate-graph-entity-streams</code> and <code>--sample-embeddings</code>.</p>
+<hr />
+<h2 id="production-checklist">Production checklist</h2>
+<h3 id="security">Security</h3>
+<ul>
+<li>[ ] Set strong <code>LOOMEM_AUTH_TOKEN</code> (64+ random hex chars) — without it the server accepts every request (local passthrough mode)</li>
+<li>[ ] Move API keys to environment variables (not in config.toml)</li>
+<li>[ ] Review PII settings — ensure <code>pii.enabled = true</code></li>
+<li>[ ] Consider enabling at-rest encryption (<code>LOOMEM_AT_REST_MASTER_KEY</code>) — see <a href="security.html">SECURITY.md</a></li>
+<li>[ ] Set up HTTPS (managed platforms provide this; Docker needs a reverse proxy)</li>
+</ul>
+<p>If a secret leaks, rotate it: replace the env var value, restart the service, and verify with a request using the old key (must be rejected).</p>
+<h3 id="performance">Performance</h3>
+<ul>
+<li>[ ] Mount <code>/data</code> on fast storage (SSD)</li>
+<li>[ ] Set <code>storage.rocksdb.write_buffer_size</code> based on available RAM</li>
+<li>[ ] Review <code>storage.tantivy.heap_size_mb</code> — more RAM = faster indexing</li>
+<li>[ ] Consider enabling <code>search.cache</code> for high-traffic deployments</li>
+</ul>
+<h3 id="reliability">Reliability</h3>
+<ul>
+<li>[ ] Enable <code>storage.intent_log.enabled = true</code> for crash recovery</li>
+<li>[ ] Set <code>storage.intent_log.sync_on_write = true</code> for durability</li>
+<li>[ ] Configure backup: <code>worker.backup.enabled = true</code></li>
+<li>[ ] Set appropriate <code>resource_guards</code> for your environment</li>
+<li>[ ] Monitor with <code>GET /v1/status</code> endpoint</li>
+</ul>
+<h3 id="cost-control">Cost control</h3>
+<ul>
+<li>[ ] Set <code>cost.daily_cap_usd</code> to prevent runaway LLM costs</li>
+<li>[ ] Set <code>cost.alert_threshold_usd</code> for early warnings</li>
+<li>[ ] Review <code>dream.cost_cap_usd_per_run</code> per dream session</li>
+<li>[ ] Monitor daily costs via RocksDB cost column family</li>
+</ul>
+<hr />
+<h2 id="connecting-mcp-clients">Connecting MCP clients</h2>
+<h3 id="claudeai-web">Claude.ai (web)</h3>
+<ol>
+<li>Settings → Customize → Connectors</li>
+<li>Add new connector</li>
+<li>Enter URL: <code>https://your-loomem.app/mcp</code></li>
+<li>Complete OAuth — enter API key when prompted</li>
+</ol>
+<h3 id="claude-desktop">Claude Desktop</h3>
+<p>Edit <code>claude_desktop_config.json</code>:</p>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;loomem&quot;: {
+      &quot;url&quot;: &quot;https://your-loomem.app/mcp&quot;,
+      &quot;headers&quot;: {
+        &quot;Authorization&quot;: &quot;Bearer loom_your_api_key&quot;
+      }
+    }
+  }
+}
+</code></pre>
+<p>Restart Claude Desktop.</p>
+<h3 id="claude-code-cli-vs-code">Claude Code (CLI / VS Code)</h3>
+<p>Add to <code>.mcp.json</code> in your project or global config:</p>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;loomem&quot;: {
+      &quot;url&quot;: &quot;https://your-loomem.app/mcp&quot;,
+      &quot;headers&quot;: {
+        &quot;Authorization&quot;: &quot;Bearer loom_your_api_key&quot;
+      }
+    }
+  }
+}
+</code></pre>
+<hr />
+<h2 id="logging">Logging</h2>
+<h3 id="text-logs-default">Text logs (default)</h3>
+<pre><code class="language-bash">RUST_LOG=debug ./target/release/loomem-server
+</code></pre>
+<h3 id="json-logs-for-grafana-elk">JSON logs (for Grafana / ELK)</h3>
+<pre><code class="language-bash">LOOMEM_LOG_FORMAT=json ./target/release/loomem-server
+</code></pre>
+<hr />
+<h2 id="backups">Backups</h2>
+<h3 id="automatic">Automatic</h3>
+<p>Enable in config:</p>
+<pre><code class="language-toml">[worker.backup]
+enabled = true
+interval_secs = 86400    # every 24 hours
+max_copies = 3            # keep last 3 backups
+</code></pre>
+<p>Checkpoints are written to <code>{data_dir}/backups/checkpoint-&lt;timestamp&gt;/</code>. For an out-of-band backup, copy that directory (or snapshot the volume) while the server is running — checkpoints are consistent point-in-time copies. See <a href="backup-and-restore.html">Backup and Restore</a> for details, including the extra requirements for encrypted instances.</p>
+<h3 id="restore">Restore</h3>
+<ol>
+<li>Stop Loomem</li>
+<li>Replace <code>data/</code> directory with backup</li>
+<li>Start Loomem — Tantivy index rebuilds automatically if schema mismatches</li>
+</ol>
+<hr />
+<h2 id="upgrading">Upgrading</h2>
+<ol>
+<li>Pull latest code: <code>git pull</code></li>
+<li>Build: <code>cargo build --release -p loomem-server</code></li>
+<li>Stop old instance</li>
+<li>Start new binary</li>
+</ol>
+<p>Loomem handles schema migrations automatically:
+- RocksDB: backward-compatible (new fields get defaults)
+- Tantivy: auto-rebuild on schema version mismatch
+- Config: new keys are required — check <code>config.toml</code> after upgrade</p>
+<hr />
+<h2 id="ci">CI</h2>
+<p>GitHub Actions runs on every push/PR to <code>main</code>:
+- <code>cargo check --workspace</code>
+- <code>cargo test --workspace --lib</code>
+- <code>cargo clippy -- -D warnings</code>
+- <code>cargo fmt --check</code></p>
+<hr />
+<h2 id="security-notes">Security notes</h2>
+<ul>
+<li><strong>Never hardcode API keys in <code>config.toml</code></strong> — use <code>OPENAI_API_KEY</code> env var instead. The <code>api_key_env</code> field specifies which env var to read.</li>
+<li><code>config_snapshot.toml</code> files (created by eval runs) are gitignored to prevent accidental secret leaks.</li>
+<li>All dependencies use permissive licenses (MIT, Apache-2.0, BSD, ISC).</li>
+</ul></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/Deployment">Edit on GitHub</a></span></div></main></div></body></html>

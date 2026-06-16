@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Security model — Loomem docs</title>
+<meta name="description" content="Loomem documentation — Security model"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke-linecap='round' fill='none' stroke-width='14'%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(187.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(277.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(7.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(97.5 100 100)'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root{
+  --lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;--lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;--lm-gold-900:#5E3A11;
+  --lm-blue-300:#63B5F0;--lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;--lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-200:#DED7C8;--lm-ink-100:#EFE9DD;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;--lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#1684DC 100%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);line-height:1.62;-webkit-font-smoothing:antialiased;font-size:16px}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.82);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
+.brand:hover{text-decoration:none}
+.brand svg{width:26px;height:26px}
+.brand .tag{font-family:var(--lm-font-sans);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--lm-ink-400);border:1px solid var(--lm-ink-200);border-radius:999px;padding:2px 9px;margin-left:2px}
+.topnav{display:flex;align-items:center;gap:22px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900);text-decoration:none}
+.doc-wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px);display:grid;grid-template-columns:248px 1fr;gap:52px;align-items:start}
+.doc-side{position:sticky;top:88px;align-self:start;max-height:calc(100vh - 110px);overflow-y:auto;padding:26px 0}
+.doc-side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--lm-ink-400);font-weight:600;margin:20px 12px 8px}
+.doc-side .grp:first-child{margin-top:0}
+.doc-side a{display:block;font-size:14px;color:var(--lm-ink-600);padding:7px 12px;border-radius:8px;font-weight:500}
+.doc-side a:hover{background:var(--lm-surface-sunk);color:var(--lm-ink-900);text-decoration:none}
+.doc-side a.active{background:var(--lm-surface-cool);color:var(--lm-blue-700);font-weight:600}
+.doc-main{min-width:0;max-width:760px;padding:48px 0 96px}
+.doc-eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-gold-700);margin-bottom:10px}
+.doc-content h1{font-family:var(--lm-font-display);font-size:2.5rem;font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 22px}
+.doc-content h2{font-family:var(--lm-font-display);font-size:1.6rem;font-weight:600;letter-spacing:-.01em;line-height:1.25;margin:44px 0 14px}
+.doc-content h3{font-size:1.22rem;font-weight:600;margin:30px 0 10px;letter-spacing:-.01em}
+.doc-content h4{font-size:1.02rem;font-weight:600;margin:22px 0 8px}
+.doc-content p{margin:0 0 16px;color:var(--lm-ink-700)}
+.doc-content ul,.doc-content ol{margin:0 0 18px;padding-left:24px;color:var(--lm-ink-700)}
+.doc-content li{margin:7px 0}
+.doc-content li>ul,.doc-content li>ol{margin:7px 0}
+.doc-content code{font-family:var(--lm-font-mono);font-size:.87em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1.5px 6px;border-radius:5px;color:var(--lm-ink-800)}
+.doc-content pre{background:var(--lm-ink-900);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;overflow-x:auto;margin:0 0 18px;box-shadow:var(--lm-shadow-sm)}
+.doc-content pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;line-height:1.65}
+.doc-content blockquote{border-left:3px solid var(--lm-gold-400);background:var(--lm-surface-warm);padding:12px 18px;border-radius:0 var(--lm-radius-md) var(--lm-radius-md) 0;margin:0 0 18px;color:var(--lm-ink-700)}
+.doc-content blockquote p:last-child{margin:0}
+.doc-content table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;display:block;overflow-x:auto}
+.doc-content thead{background:var(--lm-surface-sunk)}
+.doc-content th{text-align:left;padding:9px 12px;border-bottom:2px solid var(--lm-ink-200);color:var(--lm-ink-700);font-weight:600;white-space:nowrap}
+.doc-content td{padding:9px 12px;border-bottom:1px solid var(--lm-ink-100);color:var(--lm-ink-700);vertical-align:top}
+.doc-content hr{border:none;border-top:1px solid var(--lm-ink-200);margin:34px 0}
+.doc-content a{font-weight:500}
+.doc-content h2 code,.doc-content h3 code,.doc-content h4 code{font-size:.86em;background:var(--lm-surface-sunk)}
+.doc-content img{max-width:100%}
+.doc-foot{border-top:1px solid var(--lm-ink-200);margin-top:40px;padding-top:22px;font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+/* hub */
+.hub-head{padding:56px 0 8px;max-width:720px}
+.hub-head h1{font-family:var(--lm-font-display);font-size:clamp(2.2rem,4vw,3rem);font-weight:600;letter-spacing:-.02em;line-height:1.1;margin-bottom:14px}
+.hub-head p{font-size:1.0625rem;color:var(--lm-ink-500);line-height:1.6}
+.hub-grp{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-ink-400);font-weight:600;margin:40px 0 16px}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.hub-card{display:block;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs);transition:all 180ms var(--lm-ease)}
+.hub-card:hover{box-shadow:var(--lm-shadow-sm);transform:translateY(-2px);text-decoration:none;border-color:var(--lm-blue-300)}
+.hub-card h3{font-size:1.05rem;font-weight:600;color:var(--lm-ink-900);margin-bottom:5px}
+.hub-card span{font-size:13.5px;color:var(--lm-ink-500)}
+@media(max-width:820px){.doc-wrap{grid-template-columns:1fr;gap:0}.doc-side{position:static;max-height:none;border-bottom:1px solid var(--lm-ink-200);padding:16px 0}.doc-main{padding-top:28px}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="wrap inner">
+<a class="brand" href="../"><svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
+<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
+</div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html" class="active">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Project</div><article class="doc-content"><h1 id="security-overview">Security overview</h1>
+<p>This document describes Loomem's security model: authentication, encryption at rest, data in transit, PII handling, and logging. Where Loomem does not have a control in place, the gap is named explicitly under <a href="#known-limitations">Known limitations</a>.</p>
+<hr />
+<h2 id="threat-model-summary">Threat model summary</h2>
+<p><strong>With at-rest encryption enabled (see below), Loomem blocks:</strong></p>
+<ul>
+<li><strong>Storage volume snapshot or full-disk dump leaking memory content.</strong> Chunk content and entity-graph entries are encrypted at the row level in RocksDB before the storage layer sees the bytes.</li>
+<li><strong>RocksDB backup file leaks</strong> (e.g., a checkpoint copied off the host). The chunk and entity-graph rows inside the checkpoint are ciphertext.</li>
+<li><strong>Decommissioned or reassigned storage hardware.</strong> Application-layer ciphertext provides protection independent of any host-level disk encryption.</li>
+</ul>
+<p><strong>Loomem does NOT block:</strong></p>
+<ul>
+<li><strong>Runtime compromise.</strong> If an attacker obtains the running <code>loomem-server</code> process memory (environment access, core dumps), the master key is readable in process memory and all stream-level DEKs decrypt.</li>
+<li><strong>Operator access.</strong> Whoever controls the host environment holds the master key and can decrypt all stored content. Loomem is not zero-knowledge, operator-blind, or end-to-end encrypted: plaintext crosses the trust boundary at the server process, which decrypts to serve responses.</li>
+<li><strong>LLM provider reads.</strong> Memory content is sent in plaintext to the configured LLM provider (e.g., OpenAI) for embedding generation, consolidation, and contradiction detection. Review your provider's data-retention policy.</li>
+<li><strong>Full-text index and embedding exposure.</strong> The Tantivy index requires plaintext tokens for BM25 search, and embedding vectors are stored unencrypted (they are required for cosine search and are partially invertible per published research). See <a href="#known-limitations">Known limitations</a>.</li>
+</ul>
+<hr />
+<h2 id="authentication">Authentication</h2>
+<p>Loomem uses a single API key:</p>
+<ul>
+<li>Set the environment variable named by <code>server.auth_token_env</code> in <code>config.toml</code> (default: <code>LOOMEM_AUTH_TOKEN</code>).</li>
+<li>All requests except <code>GET /health</code> must carry <code>Authorization: Bearer &lt;key&gt;</code>.</li>
+<li>If no key is configured, the server runs in <strong>local passthrough mode</strong>: every request is accepted with admin privileges. Only use this for local development on a trusted machine — never expose an unauthenticated instance to a network.</li>
+</ul>
+<p>MCP clients that cannot send custom headers can use the built-in OAuth 2.0 flow (<code>/oauth/register</code>, <code>/oauth/authorize</code>, <code>/oauth/token</code>): the user enters the API key once during authorization, and the resulting access token is equivalent to the key.</p>
+<p>Recommendations:</p>
+<ul>
+<li>Generate a long random key (64+ hex characters).</li>
+<li>Store it only in environment variables — never in <code>config.toml</code> or version control.</li>
+<li>Rotate it if you suspect exposure; rotation is just changing the env var and restarting.</li>
+</ul>
+<hr />
+<h2 id="data-at-rest">Data at rest</h2>
+<h3 id="without-encryption-enabled-default">Without encryption enabled (default)</h3>
+<table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>Plaintext?</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RocksDB chunks (<code>chunk:L*:{id}</code>)</td>
+<td>yes</td>
+<td>Compressed (LZ4/Snappy) but not encrypted at the application layer.</td>
+</tr>
+<tr>
+<td>RocksDB entity / relation / graph records</td>
+<td>yes</td>
+<td>Same.</td>
+</tr>
+<tr>
+<td>Tantivy full-text index</td>
+<td>yes</td>
+<td>Plaintext is a functional requirement for BM25 search.</td>
+</tr>
+<tr>
+<td>Embedding vectors (<code>embeddings</code> column family)</td>
+<td>yes</td>
+<td>Required for cosine search.</td>
+</tr>
+<tr>
+<td>WAL / intent log</td>
+<td>n/a</td>
+<td>Contains operation type + chunk id only — no content.</td>
+</tr>
+</tbody>
+</table>
+<p>If your hosting provider encrypts the storage volume at the host layer, you get the at-rest protection typical of a managed platform — but a leaked database checkpoint is readable.</p>
+<h3 id="with-encryption-enabled">With encryption enabled</h3>
+<p>Set <code>LOOMEM_AT_REST_MASTER_KEY</code> (32-byte, base64-encoded) to enable application-layer envelope encryption:</p>
+<ul>
+<li><strong>Algorithm:</strong> AES-256-GCM.</li>
+<li><strong>Key hierarchy:</strong></li>
+</ul>
+<p><code>master_key (env var LOOMEM_AT_REST_MASTER_KEY)
+     └─ wraps → per-stream data-encryption key (DEK)
+          └─ encrypts → chunk content, entity names, relation data</code></p>
+<p>Per-stream DEKs are generated lazily on first encrypted write and persisted as wrapped blobs in a dedicated RocksDB column family. Master-key rotation re-wraps the DEKs (fast), not every chunk.</p>
+<ul>
+<li><strong>Encrypted:</strong> chunk content and metadata, entity/relation value blobs, graph entity names and aliases.</li>
+<li><strong>Not encrypted (by design):</strong> embedding vectors and the Tantivy index (functional requirements for search), and routing metadata (chunk id, level, stream id, timestamps, supersede chain) needed for filtering, retention, and decay.</li>
+<li><strong>Legacy data:</strong> plaintext rows written before encryption was enabled are recognized by the absence of a magic prefix and remain readable. <code>POST /v1/admin/backfill/encrypt-at-rest</code> walks existing records and encrypts them idempotently; check progress at <code>GET /v1/admin/backfill/encrypt-at-rest/status</code>.</li>
+<li><strong>Status endpoint:</strong> <code>GET /v1/encryption/status</code> reports whether encryption is active and the master-key fingerprint (a one-way digest, safe to record alongside backups).</li>
+<li><strong>Fail-closed expectation:</strong> set <code>LOOMEM_AT_REST_EXPECT_ENABLED=1</code> to make the server refuse to start without a master key — protects against accidentally booting an encrypted dataset in plaintext mode.</li>
+</ul>
+<p><strong>Back up the master key separately from the data.</strong> An encrypted checkpoint without the matching master key is unrecoverable. See <a href="backup-and-restore.html">Backup and Restore</a>.</p>
+<hr />
+<h2 id="data-in-transit">Data in transit</h2>
+<ul>
+<li>Loomem itself serves plain HTTP; run it behind a TLS-terminating reverse proxy or a platform that provides HTTPS.</li>
+<li>Outbound HTTPS to the LLM provider uses <code>reqwest</code> with <code>rustls</code>.</li>
+<li>The MCP transport is JSON-RPC over HTTPS on <code>/mcp</code>, Bearer-authenticated. No custom encryption layer beyond TLS.</li>
+</ul>
+<hr />
+<h2 id="pii-filtering">PII filtering</h2>
+<p>When <code>[pii]</code> is enabled in <code>config.toml</code>, phone numbers, email addresses, national ID numbers, and blocklisted terms are redacted <strong>before every LLM API call</strong> (consolidation, extraction, dream). Redaction replaces matches with <code>[PHONE]</code>, <code>[EMAIL]</code>, <code>[ID]</code>, <code>[REDACTED]</code> tokens. See <a href="configuration.html#pii">Configuration</a>.</p>
+<p>Note that ingest-time sanitization (HTML stripping, instruction-injection detection) logs suspicious input but does not block it — see <a href="architecture.html">Architecture</a>.</p>
+<hr />
+<h2 id="secrets-management">Secrets management</h2>
+<p>Environment variables that may contain secrets:</p>
+<table>
+<thead>
+<tr>
+<th>Env var</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OPENAI_API_KEY</code> (or the var named by <code>llm.api_key_env</code>)</td>
+<td>LLM API (embeddings + extraction)</td>
+</tr>
+<tr>
+<td><code>LOOMEM_AUTH_TOKEN</code> (or the var named by <code>server.auth_token_env</code>)</td>
+<td>API Bearer key</td>
+</tr>
+<tr>
+<td><code>LOOMEM_AT_REST_MASTER_KEY</code></td>
+<td>Envelope-encryption master key</td>
+</tr>
+<tr>
+<td><code>TELEGRAM_BOT_TOKEN</code>, <code>LOOMEM_TELEGRAM_CHAT_ID</code></td>
+<td>Optional cost-alert webhook</td>
+</tr>
+</tbody>
+</table>
+<p>Keep all of these in your platform's secret store or environment configuration — never in <code>config.toml</code>, the repository, or build artifacts.</p>
+<hr />
+<h2 id="logging">Logging</h2>
+<p>Loomem logs to <strong>stdout</strong> (12-factor); it does not ship, store, or alert on logs itself.</p>
+<ul>
+<li>Set <code>LOOMEM_LOG_FORMAT=json</code> for structured JSON output in production. The default is a compact human-readable format for local development.</li>
+<li>Security-relevant events (auth failures, deletes, admin actions) are tagged with <code>target: "audit"</code> — a log shipper can filter on this target to isolate the security stream.</li>
+<li>If you run Loomem in production, wire stdout to a log sink with a retention policy, and consider alerting on spikes of <code>target=audit</code> errors and repeated auth failures.</li>
+</ul>
+<hr />
+<h2 id="known-limitations">Known limitations</h2>
+<ol>
+<li><strong>Runtime compromise reveals the master key.</strong> Process-memory access decrypts everything. Mitigation would require a TEE-style deployment, which Loomem does not currently support.</li>
+<li><strong>Tantivy index content is plaintext.</strong> Functional requirement for BM25 full-text search.</li>
+<li><strong>Embedding vectors are plaintext.</strong> Functional requirement for vector search; embeddings are partially invertible.</li>
+<li><strong>LLM provider sees plaintext</strong> at ingest and consolidation time.</li>
+<li><strong>Backup encryption is inherited, not added.</strong> RocksDB checkpoints rely on the at-rest row encryption above (when enabled) plus whatever volume encryption your host provides; Loomem does not add a separate backup encryption layer.</li>
+</ol>
+<p>Loomem ships no compliance attestations (SOC 2, HIPAA, ISO 27001). If you need them, they are properties of your deployment and organization, not of this software.</p>
+<hr />
+<h2 id="reporting-security-issues">Reporting security issues</h2>
+<p>If you discover a security issue in Loomem, please report it privately to the project maintainers (for example via your code host's private vulnerability reporting feature) rather than filing a public issue with reproduction steps.</p></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/Security model">Edit on GitHub</a></span></div></main></div></body></html>

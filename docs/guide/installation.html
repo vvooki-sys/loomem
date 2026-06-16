@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Installation — Loomem docs</title>
+<meta name="description" content="Loomem documentation — Installation"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke-linecap='round' fill='none' stroke-width='14'%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(187.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(277.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(7.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(97.5 100 100)'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root{
+  --lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;--lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;--lm-gold-900:#5E3A11;
+  --lm-blue-300:#63B5F0;--lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;--lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-200:#DED7C8;--lm-ink-100:#EFE9DD;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;--lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#1684DC 100%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);line-height:1.62;-webkit-font-smoothing:antialiased;font-size:16px}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.82);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
+.brand:hover{text-decoration:none}
+.brand svg{width:26px;height:26px}
+.brand .tag{font-family:var(--lm-font-sans);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--lm-ink-400);border:1px solid var(--lm-ink-200);border-radius:999px;padding:2px 9px;margin-left:2px}
+.topnav{display:flex;align-items:center;gap:22px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900);text-decoration:none}
+.doc-wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px);display:grid;grid-template-columns:248px 1fr;gap:52px;align-items:start}
+.doc-side{position:sticky;top:88px;align-self:start;max-height:calc(100vh - 110px);overflow-y:auto;padding:26px 0}
+.doc-side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--lm-ink-400);font-weight:600;margin:20px 12px 8px}
+.doc-side .grp:first-child{margin-top:0}
+.doc-side a{display:block;font-size:14px;color:var(--lm-ink-600);padding:7px 12px;border-radius:8px;font-weight:500}
+.doc-side a:hover{background:var(--lm-surface-sunk);color:var(--lm-ink-900);text-decoration:none}
+.doc-side a.active{background:var(--lm-surface-cool);color:var(--lm-blue-700);font-weight:600}
+.doc-main{min-width:0;max-width:760px;padding:48px 0 96px}
+.doc-eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-gold-700);margin-bottom:10px}
+.doc-content h1{font-family:var(--lm-font-display);font-size:2.5rem;font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 22px}
+.doc-content h2{font-family:var(--lm-font-display);font-size:1.6rem;font-weight:600;letter-spacing:-.01em;line-height:1.25;margin:44px 0 14px}
+.doc-content h3{font-size:1.22rem;font-weight:600;margin:30px 0 10px;letter-spacing:-.01em}
+.doc-content h4{font-size:1.02rem;font-weight:600;margin:22px 0 8px}
+.doc-content p{margin:0 0 16px;color:var(--lm-ink-700)}
+.doc-content ul,.doc-content ol{margin:0 0 18px;padding-left:24px;color:var(--lm-ink-700)}
+.doc-content li{margin:7px 0}
+.doc-content li>ul,.doc-content li>ol{margin:7px 0}
+.doc-content code{font-family:var(--lm-font-mono);font-size:.87em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1.5px 6px;border-radius:5px;color:var(--lm-ink-800)}
+.doc-content pre{background:var(--lm-ink-900);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;overflow-x:auto;margin:0 0 18px;box-shadow:var(--lm-shadow-sm)}
+.doc-content pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;line-height:1.65}
+.doc-content blockquote{border-left:3px solid var(--lm-gold-400);background:var(--lm-surface-warm);padding:12px 18px;border-radius:0 var(--lm-radius-md) var(--lm-radius-md) 0;margin:0 0 18px;color:var(--lm-ink-700)}
+.doc-content blockquote p:last-child{margin:0}
+.doc-content table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;display:block;overflow-x:auto}
+.doc-content thead{background:var(--lm-surface-sunk)}
+.doc-content th{text-align:left;padding:9px 12px;border-bottom:2px solid var(--lm-ink-200);color:var(--lm-ink-700);font-weight:600;white-space:nowrap}
+.doc-content td{padding:9px 12px;border-bottom:1px solid var(--lm-ink-100);color:var(--lm-ink-700);vertical-align:top}
+.doc-content hr{border:none;border-top:1px solid var(--lm-ink-200);margin:34px 0}
+.doc-content a{font-weight:500}
+.doc-content h2 code,.doc-content h3 code,.doc-content h4 code{font-size:.86em;background:var(--lm-surface-sunk)}
+.doc-content img{max-width:100%}
+.doc-foot{border-top:1px solid var(--lm-ink-200);margin-top:40px;padding-top:22px;font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+/* hub */
+.hub-head{padding:56px 0 8px;max-width:720px}
+.hub-head h1{font-family:var(--lm-font-display);font-size:clamp(2.2rem,4vw,3rem);font-weight:600;letter-spacing:-.02em;line-height:1.1;margin-bottom:14px}
+.hub-head p{font-size:1.0625rem;color:var(--lm-ink-500);line-height:1.6}
+.hub-grp{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-ink-400);font-weight:600;margin:40px 0 16px}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.hub-card{display:block;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs);transition:all 180ms var(--lm-ease)}
+.hub-card:hover{box-shadow:var(--lm-shadow-sm);transform:translateY(-2px);text-decoration:none;border-color:var(--lm-blue-300)}
+.hub-card h3{font-size:1.05rem;font-weight:600;color:var(--lm-ink-900);margin-bottom:5px}
+.hub-card span{font-size:13.5px;color:var(--lm-ink-500)}
+@media(max-width:820px){.doc-wrap{grid-template-columns:1fr;gap:0}.doc-side{position:static;max-height:none;border-bottom:1px solid var(--lm-ink-200);padding:16px 0}.doc-main{padding-top:28px}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="wrap inner">
+<a class="brand" href="../"><svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
+<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
+</div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html" class="active">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Docs</div><article class="doc-content"><h1 id="installation-guide">Installation Guide</h1>
+<p>Loomem ships as three static binaries — <code>loomem-server</code>, <code>loomem-cli</code>, <code>loomem-migrate</code> — with no runtime dependencies (RocksDB and Tantivy are compiled in). This guide covers every supported install path, verification, upgrades, and troubleshooting.</p>
+<h2 id="supported-platforms">Supported platforms</h2>
+<table>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Target</th>
+<th>Prebuilt binary</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>macOS Apple Silicon</td>
+<td><code>aarch64-apple-darwin</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>macOS Intel</td>
+<td><code>x86_64-apple-darwin</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Linux x86_64 (glibc ≥ 2.35: Ubuntu 22.04+, Debian 12+, Fedora 36+)</td>
+<td><code>x86_64-unknown-linux-gnu</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Linux ARM64 (glibc ≥ 2.35)</td>
+<td><code>aarch64-unknown-linux-gnu</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Anything else (musl, BSD, Windows/WSL2…)</td>
+<td>—</td>
+<td>build <a href="#from-source">from source</a></td>
+</tr>
+</tbody>
+</table>
+<p>Requirements for the installer: <code>sh</code>, <code>tar</code>, and <code>curl</code> or <code>wget</code>. No sudo — everything lands in your home directory.</p>
+<h2 id="quick-install">Quick install</h2>
+<p><strong>Public repository:</strong></p>
+<pre><code class="language-bash">curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/install.sh | sh
+</code></pre>
+<p><strong>Private repository</strong> (current state) — authenticate with the <a href="https://cli.github.com">GitHub CLI</a>:</p>
+<pre><code class="language-bash">gh auth login            # once
+gh api repos/vvooki-sys/loomem/contents/install.sh -H &quot;Accept: application/vnd.github.raw&quot; | sh
+</code></pre>
+<p>No <code>gh</code>? A personal access token with <code>repo</code> scope works too:</p>
+<pre><code class="language-bash">export GH_TOKEN=ghp_xxx
+curl -fsSL -H &quot;Authorization: Bearer $GH_TOKEN&quot; -H &quot;Accept: application/vnd.github.raw&quot; \
+  https://api.github.com/repos/vvooki-sys/loomem/contents/install.sh | sh
+</code></pre>
+<h3 id="what-the-installer-does">What the installer does</h3>
+<ol>
+<li>Detects OS and architecture (<code>uname</code>).</li>
+<li>Picks a download source, first match wins: <code>LOOMEM_BASE_URL</code> mirror → <code>GH_TOKEN</code>/<code>GITHUB_TOKEN</code> (GitHub API) → logged-in <code>gh</code> CLI → public release URLs.</li>
+<li>Resolves the latest release (or the tag pinned with <code>LOOMEM_VERSION</code>).</li>
+<li>Downloads the platform archive and <code>SHA256SUMS</code>, <strong>verifies the checksum</strong> (hard failure on mismatch).</li>
+<li>Installs the three binaries to <code>~/.loomem/bin</code>.</li>
+<li>Copies config templates (<code>config.toml</code>, <code>entities.toml.example</code>, <code>synonyms.toml.example</code>) to <code>~/.loomem</code> and seeds <code>entities.toml</code> from the example (the server requires it at startup) — <strong>never overwrites existing files</strong>, so re-running is safe.</li>
+<li>Prints PATH instructions if <code>~/.loomem/bin</code> isn't on your PATH yet.</li>
+</ol>
+<h3 id="installer-environment-variables">Installer environment variables</h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LOOMEM_VERSION</code></td>
+<td>latest release</td>
+<td>Pin a tag, e.g. <code>v0.2.0</code>. Required for prereleases (<code>v0.2.0-rc1</code>), which are excluded from "latest".</td>
+</tr>
+<tr>
+<td><code>LOOMEM_INSTALL_DIR</code></td>
+<td><code>~/.loomem/bin</code></td>
+<td>Where binaries go.</td>
+</tr>
+<tr>
+<td><code>LOOMEM_CONFIG_DIR</code></td>
+<td><code>~/.loomem</code></td>
+<td>Where config templates go.</td>
+</tr>
+<tr>
+<td><code>GH_TOKEN</code> / <code>GITHUB_TOKEN</code></td>
+<td>—</td>
+<td>GitHub token for private-repo downloads.</td>
+</tr>
+<tr>
+<td><code>LOOMEM_BASE_URL</code></td>
+<td>—</td>
+<td>Fetch archives from a plain HTTP(S) mirror instead of GitHub (requires <code>LOOMEM_VERSION</code>).</td>
+</tr>
+</tbody>
+</table>
+<p>Example — pin a version into a custom prefix:</p>
+<pre><code class="language-bash">LOOMEM_VERSION=v0.2.0 LOOMEM_INSTALL_DIR=/opt/loomem/bin sh install.sh
+</code></pre>
+<h2 id="path-setup">PATH setup</h2>
+<p>The installer doesn't modify your shell config. Add once:</p>
+<pre><code class="language-bash">echo 'export PATH=&quot;$HOME/.loomem/bin:$PATH&quot;' &gt;&gt; ~/.zshrc   # or ~/.bashrc
+exec $SHELL
+</code></pre>
+<h2 id="first-run">First run</h2>
+<pre><code class="language-bash">cd ~/.loomem
+loomem-server
+</code></pre>
+<p>The server <strong>requires</strong> <code>config.toml</code> and <code>entities.toml</code> in its working directory — the installer seeds both, so running from <code>~/.loomem</code> just works. Edit <code>entities.toml</code> to teach Loomem your people/projects/aliases (see the comments inside).</p>
+<p>The server listens on <code>http://127.0.0.1:3030</code> and stores data in <code>./data</code> (relative to the working directory — running from <code>~/.loomem</code> keeps data in <code>~/.loomem/data</code>). Verify:</p>
+<pre><code class="language-bash">curl http://localhost:3030/health
+</code></pre>
+<p>Then connect an MCP client — recipes for Claude Code, claude.ai, ChatGPT, and OpenClaw are in the <a href="https://github.com/vvooki-sys/loomem/blob/main/docs/README.md#connect-an-mcp-client">README</a>.</p>
+<p><strong>Security:</strong> authentication is off by default, fine for localhost. If the server is reachable by anyone but you, set <code>LOOMEM_AUTH_TOKEN</code> (see <a href="security.html">SECURITY.md</a> and <a href="deployment.html">deployment.md</a>).</p>
+<h2 id="verifying-checksums-manually">Verifying checksums manually</h2>
+<p>The installer verifies automatically, but to audit by hand:</p>
+<pre><code class="language-bash">gh release download v0.2.0 --repo vvooki-sys/loomem \
+  --pattern 'loomem-0.2.0-aarch64-apple-darwin.tar.gz' --pattern 'SHA256SUMS'
+shasum -a 256 -c --ignore-missing SHA256SUMS    # macOS
+sha256sum -c --ignore-missing SHA256SUMS        # Linux
+</code></pre>
+<h2 id="upgrading">Upgrading</h2>
+<p>Re-run the installer — binaries are replaced, your config files are left untouched:</p>
+<pre><code class="language-bash">gh api repos/vvooki-sys/loomem/contents/install.sh -H &quot;Accept: application/vnd.github.raw&quot; | sh
+</code></pre>
+<p>Check the <a href="https://github.com/vvooki-sys/loomem/blob/main/docs/CHANGELOG.md">CHANGELOG</a> for breaking changes first. If a release notes a storage-format migration, stop the server and run <code>loomem-migrate</code> before starting the new version.</p>
+<h2 id="uninstalling">Uninstalling</h2>
+<p>Loomem touches nothing outside its two directories:</p>
+<pre><code class="language-bash">rm -rf ~/.loomem          # binaries + config + data (if run from ~/.loomem)
+</code></pre>
+<p>Remove the PATH line from your shell config if you added one. If you ran the server from another working directory, its <code>./data</code> lives there.</p>
+<h2 id="from-source">From source</h2>
+<pre><code class="language-bash">git clone https://github.com/vvooki-sys/loomem.git
+cd loomem
+cp entities.toml.example entities.toml
+cargo build --release -p loomem-server -p loomem-cli -p loomem-migrate
+# binaries in target/release/
+</code></pre>
+<p>Requires Rust (stable) and libclang for the RocksDB build: <code>apt install libclang-dev</code> on Debian/Ubuntu; on macOS it ships with the Xcode Command Line Tools.</p>
+<h2 id="docker">Docker</h2>
+<pre><code class="language-bash">docker build -t loomem .
+docker run -p 3030:3030 -v loomem-data:/data loomem
+</code></pre>
+<p>See <a href="deployment.html">deployment.md</a> for reverse-proxy, TLS, and cloud options.</p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause / fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>could not determine the latest release</code></td>
+<td>Repo is private and you're unauthenticated → <code>gh auth login</code> or set <code>GH_TOKEN</code>. Or the only release is a prerelease → pin <code>LOOMEM_VERSION=v0.2.0-rc1</code>.</td>
+</tr>
+<tr>
+<td><code>download failed: … If this repo is private…</code></td>
+<td>Same as above — the installer can't see the release assets without auth.</td>
+</tr>
+<tr>
+<td><code>checksum mismatch</code></td>
+<td>Corrupted or tampered download. Re-run; if it persists, <strong>don't install</strong> — compare against <code>SHA256SUMS</code> on the releases page and open an issue.</td>
+</tr>
+<tr>
+<td><code>WARNING: SHA256SUMS not available</code></td>
+<td>The release has no checksum file (shouldn't happen for official releases). Install proceeds unverified — treat with suspicion.</td>
+</tr>
+<tr>
+<td><code>unsupported OS/architecture</code></td>
+<td>No prebuilt binary for your platform — <a href="#from-source">build from source</a>.</td>
+</tr>
+<tr>
+<td><code>version 'GLIBC_2.35' not found</code> (or similar)</td>
+<td>Your distro's glibc is older than the build baseline — <a href="#from-source">build from source</a> or use <a href="#docker">Docker</a>.</td>
+</tr>
+<tr>
+<td><code>loomem-server: command not found</code> after install</td>
+<td><code>~/.loomem/bin</code> not on PATH — see <a href="#path-setup">PATH setup</a>.</td>
+</tr>
+<tr>
+<td><code>gh: Not Found (HTTP 404)</code> on the <code>gh api</code> one-liner</td>
+<td>Your GitHub account has no access to the private repo, or you're logged into the wrong account (<code>gh auth status</code>).</td>
+</tr>
+<tr>
+<td><code>Error: Failed to load entities file (entities.toml)</code></td>
+<td>The server needs <code>entities.toml</code> in its working directory — <code>cp ~/.loomem/entities.toml.example ~/.loomem/entities.toml</code> and run from <code>~/.loomem</code>.</td>
+</tr>
+<tr>
+<td>Server starts but <code>curl /health</code> fails</td>
+<td>First start builds indexes (can take a few seconds). Port 3030 taken? Check the server log; the bind address/port live in <code>config.toml</code>.</td>
+</tr>
+</tbody>
+</table></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/Installation">Edit on GitHub</a></span></div></main></div></body></html>

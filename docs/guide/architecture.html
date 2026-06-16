@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Architecture — Loomem docs</title>
+<meta name="description" content="Loomem documentation — Architecture"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke-linecap='round' fill='none' stroke-width='14'%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(187.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(277.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(7.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(97.5 100 100)'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root{
+  --lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;--lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;--lm-gold-900:#5E3A11;
+  --lm-blue-300:#63B5F0;--lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;--lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-200:#DED7C8;--lm-ink-100:#EFE9DD;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;--lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#1684DC 100%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);line-height:1.62;-webkit-font-smoothing:antialiased;font-size:16px}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.82);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
+.brand:hover{text-decoration:none}
+.brand svg{width:26px;height:26px}
+.brand .tag{font-family:var(--lm-font-sans);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--lm-ink-400);border:1px solid var(--lm-ink-200);border-radius:999px;padding:2px 9px;margin-left:2px}
+.topnav{display:flex;align-items:center;gap:22px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900);text-decoration:none}
+.doc-wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px);display:grid;grid-template-columns:248px 1fr;gap:52px;align-items:start}
+.doc-side{position:sticky;top:88px;align-self:start;max-height:calc(100vh - 110px);overflow-y:auto;padding:26px 0}
+.doc-side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--lm-ink-400);font-weight:600;margin:20px 12px 8px}
+.doc-side .grp:first-child{margin-top:0}
+.doc-side a{display:block;font-size:14px;color:var(--lm-ink-600);padding:7px 12px;border-radius:8px;font-weight:500}
+.doc-side a:hover{background:var(--lm-surface-sunk);color:var(--lm-ink-900);text-decoration:none}
+.doc-side a.active{background:var(--lm-surface-cool);color:var(--lm-blue-700);font-weight:600}
+.doc-main{min-width:0;max-width:760px;padding:48px 0 96px}
+.doc-eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-gold-700);margin-bottom:10px}
+.doc-content h1{font-family:var(--lm-font-display);font-size:2.5rem;font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 22px}
+.doc-content h2{font-family:var(--lm-font-display);font-size:1.6rem;font-weight:600;letter-spacing:-.01em;line-height:1.25;margin:44px 0 14px}
+.doc-content h3{font-size:1.22rem;font-weight:600;margin:30px 0 10px;letter-spacing:-.01em}
+.doc-content h4{font-size:1.02rem;font-weight:600;margin:22px 0 8px}
+.doc-content p{margin:0 0 16px;color:var(--lm-ink-700)}
+.doc-content ul,.doc-content ol{margin:0 0 18px;padding-left:24px;color:var(--lm-ink-700)}
+.doc-content li{margin:7px 0}
+.doc-content li>ul,.doc-content li>ol{margin:7px 0}
+.doc-content code{font-family:var(--lm-font-mono);font-size:.87em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1.5px 6px;border-radius:5px;color:var(--lm-ink-800)}
+.doc-content pre{background:var(--lm-ink-900);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;overflow-x:auto;margin:0 0 18px;box-shadow:var(--lm-shadow-sm)}
+.doc-content pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;line-height:1.65}
+.doc-content blockquote{border-left:3px solid var(--lm-gold-400);background:var(--lm-surface-warm);padding:12px 18px;border-radius:0 var(--lm-radius-md) var(--lm-radius-md) 0;margin:0 0 18px;color:var(--lm-ink-700)}
+.doc-content blockquote p:last-child{margin:0}
+.doc-content table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;display:block;overflow-x:auto}
+.doc-content thead{background:var(--lm-surface-sunk)}
+.doc-content th{text-align:left;padding:9px 12px;border-bottom:2px solid var(--lm-ink-200);color:var(--lm-ink-700);font-weight:600;white-space:nowrap}
+.doc-content td{padding:9px 12px;border-bottom:1px solid var(--lm-ink-100);color:var(--lm-ink-700);vertical-align:top}
+.doc-content hr{border:none;border-top:1px solid var(--lm-ink-200);margin:34px 0}
+.doc-content a{font-weight:500}
+.doc-content h2 code,.doc-content h3 code,.doc-content h4 code{font-size:.86em;background:var(--lm-surface-sunk)}
+.doc-content img{max-width:100%}
+.doc-foot{border-top:1px solid var(--lm-ink-200);margin-top:40px;padding-top:22px;font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+/* hub */
+.hub-head{padding:56px 0 8px;max-width:720px}
+.hub-head h1{font-family:var(--lm-font-display);font-size:clamp(2.2rem,4vw,3rem);font-weight:600;letter-spacing:-.02em;line-height:1.1;margin-bottom:14px}
+.hub-head p{font-size:1.0625rem;color:var(--lm-ink-500);line-height:1.6}
+.hub-grp{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-ink-400);font-weight:600;margin:40px 0 16px}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.hub-card{display:block;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs);transition:all 180ms var(--lm-ease)}
+.hub-card:hover{box-shadow:var(--lm-shadow-sm);transform:translateY(-2px);text-decoration:none;border-color:var(--lm-blue-300)}
+.hub-card h3{font-size:1.05rem;font-weight:600;color:var(--lm-ink-900);margin-bottom:5px}
+.hub-card span{font-size:13.5px;color:var(--lm-ink-500)}
+@media(max-width:820px){.doc-wrap{grid-template-columns:1fr;gap:0}.doc-side{position:static;max-height:none;border-bottom:1px solid var(--lm-ink-200);padding:16px 0}.doc-main{padding-top:28px}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="wrap inner">
+<a class="brand" href="../"><svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
+<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
+</div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html" class="active">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Project</div><article class="doc-content"><h1 id="architecture">Architecture</h1>
+<h2 id="overview">Overview</h2>
+<p>Loomem is a Rust workspace with four crates:</p>
+<table>
+<thead>
+<tr>
+<th>Crate</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>loomem-core</code></td>
+<td>Core library — storage, search, consolidation, graph, LLM, embeddings</td>
+</tr>
+<tr>
+<td><code>loomem-server</code></td>
+<td>HTTP + MCP server (Axum), auth, handlers, routing</td>
+</tr>
+<tr>
+<td><code>loomem-cli</code></td>
+<td>Command-line interface for direct interaction</td>
+</tr>
+<tr>
+<td><code>loomem-migrate</code></td>
+<td>Data migration utilities</td>
+</tr>
+</tbody>
+</table>
+<p>All business logic lives in <code>loomem-core</code>. The server is a thin HTTP layer that maps routes to core functions.</p>
+<hr />
+<h2 id="data-model">Data model</h2>
+<h3 id="chunk">Chunk</h3>
+<p>The fundamental unit of memory. Every piece of knowledge — raw event, compressed summary, semantic group — is a Chunk.</p>
+<pre><code>chunk:L{level}:{uuid}  →  Chunk (JSON in RocksDB)
+</code></pre>
+<p><strong>Core fields:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>UUID</td>
+<td>Unique identifier</td>
+</tr>
+<tr>
+<td><code>content</code></td>
+<td>String</td>
+<td>Memory text</td>
+</tr>
+<tr>
+<td><code>stream</code></td>
+<td>String</td>
+<td>Namespace / isolation boundary (default: <code>__user_default__</code>)</td>
+</tr>
+<tr>
+<td><code>level</code></td>
+<td>0, 1</td>
+<td>Memory tier (raw, compressed)</td>
+</tr>
+<tr>
+<td><code>score</code></td>
+<td>f64</td>
+<td>Decay-adjusted relevance (0.0 – 1.0)</td>
+</tr>
+<tr>
+<td><code>timestamp</code></td>
+<td>u64</td>
+<td>Ingestion time (Unix seconds)</td>
+</tr>
+<tr>
+<td><code>importance</code></td>
+<td>f64</td>
+<td>Surprise-based boost (0.7 – 1.5)</td>
+</tr>
+<tr>
+<td><code>access_count</code></td>
+<td>u32</td>
+<td>Search hit counter (for adaptive decay)</td>
+</tr>
+<tr>
+<td><code>persistent</code></td>
+<td>bool</td>
+<td>Exempt from decay</td>
+</tr>
+<tr>
+<td><code>is_latest</code></td>
+<td>bool</td>
+<td>Head of supersede chain</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Consolidation fields:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>consolidated</code></td>
+<td>bool</td>
+<td>L0: has been compressed to L1</td>
+</tr>
+<tr>
+<td><code>source_ids</code></td>
+<td>Vec\&lt;String&gt;</td>
+<td>L1: which L0 chunks were merged</td>
+</tr>
+<tr>
+<td><code>prompt_version</code></td>
+<td>u32</td>
+<td>Which consolidation prompt was used</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Contradiction / versioning fields:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>superseded_by</code></td>
+<td>Option\&lt;String&gt;</td>
+<td>Points to newer version</td>
+</tr>
+<tr>
+<td><code>supersedes_id</code></td>
+<td>Option\&lt;String&gt;</td>
+<td>What this chunk replaced</td>
+</tr>
+<tr>
+<td><code>root_memory_id</code></td>
+<td>Option\&lt;String&gt;</td>
+<td>Root of the version chain</td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td>u32</td>
+<td>Semantic version counter</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Knowledge extraction metadata:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>extraction_meta.fact_type</code></td>
+<td>Enum</td>
+<td><code>PreferenceOrDecision</code>, <code>ProjectState</code>, <code>Fact</code></td>
+</tr>
+<tr>
+<td><code>extraction_meta.subject</code></td>
+<td>String</td>
+<td>Entity name (person, project)</td>
+</tr>
+<tr>
+<td><code>extraction_meta.event_date</code></td>
+<td>String</td>
+<td>ISO date of the event</td>
+</tr>
+<tr>
+<td><code>extraction_meta.confidence</code></td>
+<td>f64</td>
+<td>LLM extraction confidence (0.0 – 1.0)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="memory-tiers">Memory tiers</h3>
+<pre><code>L0 (Raw)          L1 (Compressed)
+─────────         ─────────────
+Verbatim input    LLM-summarized
+Fast decay        Medium decay
+</code></pre>
+<p><strong>Promotion flow:</strong></p>
+<pre><code>Ingest → L0 (raw event)
+            │
+            ▼  [Consolidation worker, every 5 min]
+         L1 (compressed observations)
+</code></pre>
+<p>A separate clustering worker periodically groups L1 chunks by embedding similarity; the clusters feed the associator (serendipity engine), not a separate storage tier.</p>
+<h3 id="entity-graph">Entity graph</h3>
+<p>Entities and their relationships form a knowledge graph stored in RocksDB:</p>
+<pre><code>EntityNode {
+    canonical_name: &quot;Cursor&quot;
+    entity_type: &quot;TECHNOLOGY&quot;
+    aliases: [&quot;cursor&quot;, &quot;Cursor IDE&quot;]
+    chunk_ids: [&quot;abc-123&quot;, &quot;def-456&quot;]   // evidence
+}
+
+Edge {
+    source: &quot;Alice&quot;
+    target: &quot;Cursor&quot;
+    relation_type: &quot;uses&quot;
+    chunk_ids: [&quot;abc-123&quot;]              // evidence
+}
+</code></pre>
+<p><strong>Per-stream isolation:</strong> Each entity and edge is scoped to a <code>stream_id</code>. The same entity name in two streams gets separate entity nodes. Name/alias indexes are prefixed by stream.</p>
+<p><strong>RocksDB key scheme for graph:</strong></p>
+<pre><code>graph:entity:{id}                    → EntityNode (JSON, includes stream_id)
+graph:s:{stream_id}:name:{lower()}   → entity_id
+graph:s:{stream_id}:alias:{lower()}  → entity_id
+graph:adj:{src_id}:{edge_id}         → target_id
+graph:radj:{tgt_id}:{edge_id}        → source_id
+graph:chunk:{chunk_id}               → [entity_ids]  (reverse index)
+</code></pre>
+<hr />
+<h2 id="storage-layer">Storage layer</h2>
+<h3 id="rocksdb">RocksDB</h3>
+<p>Primary persistent store. Holds chunks, embeddings, graph, users, cost tracking.</p>
+<p><strong>Column families:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>default</td>
+<td>Chunks (<code>chunk:L{n}:{id}</code>), graph</td>
+</tr>
+<tr>
+<td>embeddings</td>
+<td>Vectors (<code>emb:{id}</code> → f32 array)</td>
+</tr>
+<tr>
+<td>cost</td>
+<td>Daily cost counters (<code>cost:{date}</code>)</td>
+</tr>
+<tr>
+<td>keys</td>
+<td>Wrapped per-stream data-encryption keys (at-rest encryption)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Configuration:</strong>
+- Compression: LZ4
+- Write buffer: 64 MB x 3 buffers
+- Max open files: 1000</p>
+<h3 id="tantivy">Tantivy</h3>
+<p>Full-text search index. Mirrors chunk content with additional indexed fields.</p>
+<p><strong>Schema:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Boost</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>String</td>
+<td>—</td>
+<td>Chunk reference</td>
+</tr>
+<tr>
+<td><code>content</code></td>
+<td>Text</td>
+<td>1.0</td>
+<td>Primary search target</td>
+</tr>
+<tr>
+<td><code>entities</code></td>
+<td>Text</td>
+<td>0.2</td>
+<td>Entity mentions (comma-separated)</td>
+</tr>
+<tr>
+<td><code>relations</code></td>
+<td>Text</td>
+<td>0.2</td>
+<td>Relation triples</td>
+</tr>
+<tr>
+<td><code>stream</code></td>
+<td>String</td>
+<td>—</td>
+<td>Filtering</td>
+</tr>
+<tr>
+<td><code>timestamp</code></td>
+<td>i64</td>
+<td>—</td>
+<td>Date filtering</td>
+</tr>
+<tr>
+<td><code>event_date</code></td>
+<td>i64</td>
+<td>—</td>
+<td>Temporal queries</td>
+</tr>
+<tr>
+<td><code>level</code></td>
+<td>i64</td>
+<td>—</td>
+<td>Tier filtering</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Polish stemming</strong> enabled for content field.</p>
+<h3 id="vector-store">Vector store</h3>
+<p>Embeddings stored in RocksDB's embeddings column family.</p>
+<p><strong>Providers:</strong>
+- <strong>OpenAI</strong> — <code>text-embedding-3-small</code> (1536 dimensions)
+- <strong>Local</strong> — tract ONNX runtime (pure Rust, no native dependencies)</p>
+<p><strong>Embedding queue:</strong> batch processing (50 items, 5s flush interval) to amortize API latency.</p>
+<h3 id="intent-log-wal">Intent log (WAL)</h3>
+<p>Write-ahead log ensures cross-store consistency between RocksDB and Tantivy.</p>
+<pre><code>1. Append: PENDING(op_type, chunk_id)
+2. Write to RocksDB
+3. Write to Tantivy
+4. Append: COMMITTED(op_type, chunk_id)
+</code></pre>
+<p>On crash recovery:
+- PENDING without COMMITTED → rollback partial writes
+- COMMITTED → verify both stores have the data</p>
+<hr />
+<h2 id="ingest-pipeline">Ingest pipeline</h2>
+<p>Content is sanitized before any storage:</p>
+<pre><code>Input content
+    │
+    ▼  [sanitizer.rs]
+ 1. HTML tag stripping + entity decoding
+ 2. Instruction injection detection (18 patterns — logs warning, does not block)
+    │
+    ▼  [pii_filter.rs]
+ 3. PII redaction (phones, emails, PESEL, blocklist words)
+    │
+    ▼  [persist_chunk]
+ 4. RocksDB store (sanitized content)
+ 5. Entity extraction + graph population (stream-scoped)
+ 6. Tantivy indexing
+ 7. Embedding queue
+ 8. Contradiction detection
+</code></pre>
+<p>The sanitizer detects but does not block injection attempts — content is stored after stripping. PII redaction replaces sensitive data with <code>[PHONE]</code>, <code>[EMAIL]</code>, <code>[ID]</code>, <code>[REDACTED]</code> tokens before storage.</p>
+<hr />
+<h2 id="search-pipeline">Search pipeline</h2>
+<p>A query flows through multiple stages:</p>
+<h3 id="1-query-classification">1. Query classification</h3>
+<pre><code>&quot;what do you know about me?&quot;   → Profile
+&quot;how many projects do I run?&quot;  → Aggregation (top_k boosted to 30)
+&quot;when did I change my IDE?&quot;    → Temporal (date filtering)
+&quot;why did I choose Rust?&quot;       → Complex (top_k = 20)
+&quot;my dog's name&quot;                → Simple (top_k = 3, BM25 only)
+</code></pre>
+<h3 id="2-date-filter-extraction">2. Date filter extraction</h3>
+<p>Parses relative dates from query text:
+- "last week" → <code>date_from: now - 7d</code>
+- "in March" → <code>date_from: 2026-03-01, date_to: 2026-03-31</code>
+- Explicit <code>date_from</code>/<code>date_to</code> params override</p>
+<h3 id="3-parallel-search">3. Parallel search</h3>
+<p>BM25 and vector search run concurrently:</p>
+<p><strong>BM25 (Tantivy):</strong></p>
+<pre><code>QueryParser(content^1.0, entities^0.2, relations^0.2)
+  + stream filter
+  + date range filter
+  → ranked results
+</code></pre>
+<p><strong>Vector (cosine similarity):</strong></p>
+<pre><code>query_embedding = embed(query_text)
+for each stored embedding:
+    score = cosine(query_embedding, chunk_embedding)
+→ top-K by similarity
+</code></pre>
+<h3 id="4-fusion">4. Fusion</h3>
+<pre><code>normalized_bm25   = bm25_score / max_bm25
+normalized_vector  = vector_score / max_vector
+fusion_score       = 0.6 * normalized_vector + 0.4 * normalized_bm25
+</code></pre>
+<h3 id="5-time-decay">5. Time decay</h3>
+<pre><code>age_days = (now - chunk.timestamp) / 86400
+lambda   = { L0: search.decay.l0_lambda, L1: search.decay.l1_lambda }
+decay    = e^(-lambda * age_days)
+score    = fusion_score * decay
+</code></pre>
+<h3 id="6-graph-enhancement">6. Graph enhancement</h3>
+<p>For top results, find related entities and add their connected chunks:</p>
+<pre><code>result &quot;Cursor&quot; → entity &quot;Cursor&quot; → edges → related entities
+  → neighbor chunks added with score * boost_factor (0.3)
+</code></pre>
+<h3 id="7-deduplication">7. Deduplication</h3>
+<p>Collapse near-identical results (high cosine similarity between result contents).</p>
+<h3 id="8-optional-reranking">8. Optional reranking</h3>
+<p>If enabled, top-20 candidates are re-scored by:
+- ONNX cross-encoder (local, ~97ms/pair) — or
+- Async LLM reranking with speculative cache</p>
+<h3 id="9-implicit-boost">9. Implicit boost</h3>
+<p>Non-dry-run searches increment <code>access_count</code> and boost <code>importance</code> of returned chunks (capped at 1.5, 1-hour cooldown).</p>
+<h3 id="10-response">10. Response</h3>
+<pre><code class="language-json">{
+  &quot;results&quot;: [
+    {
+      &quot;chunk_id&quot;: &quot;abc-123&quot;,
+      &quot;content&quot;: &quot;User prefers Cursor over VSCode&quot;,
+      &quot;score_final&quot;: 0.87,
+      &quot;trace_info&quot;: {
+        &quot;level&quot;: &quot;L1&quot;,
+        &quot;source&quot;: &quot;consolidation&quot;,
+        &quot;is_latest&quot;: true,
+        &quot;access_count&quot;: 5
+      }
+    }
+  ],
+  &quot;trace_metadata&quot;: {
+    &quot;total_results_before_topk&quot;: 42,
+    &quot;search_latency_us&quot;: 1200
+  }
+}
+</code></pre>
+<hr />
+<h2 id="background-workers">Background workers</h2>
+<p>The scheduler orchestrates background jobs. All workers can be paused/resumed at runtime via <code>POST /admin/workers/pause|resume</code> (useful for eval runs). Pause state is an <code>AtomicBool</code> shared between <code>AppState</code> and <code>Scheduler</code> — does not survive restart.</p>
+<h3 id="consolidation-l0-l1">Consolidation (L0 → L1)</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Interval</td>
+<td>5 minutes</td>
+</tr>
+<tr>
+<td>Batch size</td>
+<td>200 chunks</td>
+</tr>
+<tr>
+<td>Min age</td>
+<td>60 seconds</td>
+</tr>
+<tr>
+<td>Min chunks</td>
+<td>3 per stream</td>
+</tr>
+<tr>
+<td>Style</td>
+<td><code>observation</code> (granular facts)</td>
+</tr>
+<tr>
+<td>Similarity threshold</td>
+<td>0.3 (cosine, for topic grouping)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Process:</strong>
+1. Scan unconsolidated L0 chunks
+2. Group by stream (user isolation)
+3. <strong>Sub-group by topic similarity</strong> — greedy clustering on embeddings (cosine threshold). Prevents unrelated facts from merging into one L1 chunk.
+4. PII redaction (per sub-group)
+5. LLM compression (gpt-4.1-mini) — one call per sub-group
+6. Create L1 chunk with <code>source_ids</code> linking back to L0
+7. Index in Tantivy + embedding queue
+8. Mark L0 as <code>consolidated: true</code></p>
+<p>Chunks without embeddings fall back to a single group (pre-clustering behavior). Single-topic streams produce one sub-group — zero regression risk.</p>
+<h3 id="decay">Decay</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Interval</td>
+<td>1 hour</td>
+</tr>
+<tr>
+<td>L0 factor</td>
+<td>0.990 per hour</td>
+</tr>
+<tr>
+<td>L1 factor</td>
+<td>0.995 per hour</td>
+</tr>
+<tr>
+<td>Dormant threshold</td>
+<td>0.01</td>
+</tr>
+<tr>
+<td>Adaptive</td>
+<td>enabled (ACT-R)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Adaptive decay:</strong> chunks with high <code>access_count</code> decay slower (<code>adaptive_dampening</code> / <code>adaptive_cap</code> in <code>[worker.decay_worker]</code>).</p>
+<h3 id="clustering">Clustering</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Interval</td>
+<td>6 hours</td>
+</tr>
+<tr>
+<td>Algorithm</td>
+<td>k-means on L1 embeddings</td>
+</tr>
+<tr>
+<td>Max iterations</td>
+<td>1000</td>
+</tr>
+</tbody>
+</table>
+<p>Cluster output feeds the associator (below); there is no separate storage tier for clusters.</p>
+<h3 id="entity-extraction-queue">Entity extraction queue</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Flush interval</td>
+<td>3 seconds</td>
+</tr>
+<tr>
+<td>Queue capacity</td>
+<td>200</td>
+</tr>
+<tr>
+<td>Confidence threshold</td>
+<td>0.7</td>
+</tr>
+<tr>
+<td>Model</td>
+<td>gpt-4.1-mini</td>
+</tr>
+</tbody>
+</table>
+<p>Async LLM NER runs in background for entities not in the dictionary.</p>
+<h3 id="embedding-queue">Embedding queue</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Batch size</td>
+<td>50</td>
+</tr>
+<tr>
+<td>Flush interval</td>
+<td>5 seconds</td>
+</tr>
+</tbody>
+</table>
+<h3 id="associator-eca-serendipity-engine">Associator (ECA — serendipity engine)</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Interval</td>
+<td>6 hours (with clustering)</td>
+</tr>
+<tr>
+<td>Min serendipity</td>
+<td>0.1</td>
+</tr>
+<tr>
+<td>Max associations</td>
+<td>3 per query</td>
+</tr>
+<tr>
+<td>Mechanisms</td>
+<td>graph walk, temporal, adjacent</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Components:</strong>
+- <strong>Clustering</strong> — k-means on chunk embeddings, per-stream
+- <strong>Graph walk</strong> — random walk with weak-tie preference (fewer shared chunks = more novel)
+- <strong>Temporal</strong> — find chunks near the same time period
+- <strong>Serendipity scoring</strong> — relevance × (1 - obviousness) × cluster distance</p>
+<h3 id="hard-purge-retention-worker">Hard-purge (retention worker)</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Interval</td>
+<td>24 hours (<code>retention.hard_purge_interval_secs</code>)</td>
+</tr>
+<tr>
+<td>Retention window</td>
+<td>30 days (<code>retention.soft_delete_days</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>Scans for soft-deleted chunks past their recovery window. Purge pipeline: graph references → Tantivy → RocksDB hard delete (chunk + embedding + entities + relations).</p>
+<h3 id="dream-auto-consolidation">Dream (auto-consolidation)</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Auto-trigger</td>
+<td>30 min idle</td>
+</tr>
+<tr>
+<td>Batch size</td>
+<td>50 chunks</td>
+</tr>
+<tr>
+<td>Min group size</td>
+<td>2</td>
+</tr>
+<tr>
+<td>Cost cap</td>
+<td>$0.10 / run</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="authentication">Authentication</h2>
+<p>Loomem is single-user: one API key controls access to the whole instance.</p>
+<ul>
+<li>The key is read from the env var named by <code>server.auth_token_env</code> in <code>config.toml</code> (default <code>LOOMEM_AUTH_TOKEN</code>).</li>
+<li>All requests require <code>Authorization: Bearer &lt;key&gt;</code>; <code>/health</code> remains open.</li>
+<li>If no key is configured, the server runs in <strong>local passthrough mode</strong> — every request is accepted with admin privileges. Use only for local development.</li>
+</ul>
+<p>Data written without an explicit stream lands in the default stream <code>__user_default__</code>. Additional streams (from <code>[streams]</code> / <code>[namespaces]</code> in config) partition data within the same instance — they are an organizational boundary, not separate identities.</p>
+<h3 id="oauth-20">OAuth 2.0</h3>
+<p>For MCP Remote Connector (claude.ai):
+- Dynamic Client Registration (RFC 7591)
+- Authorization Code flow with PKCE
+- User enters API key during authorization
+- Access token = API key (no extra token layer)</p>
+<hr />
+<h2 id="mcp-integration">MCP integration</h2>
+<p>Loomem implements the Model Context Protocol (MCP) as a JSON-RPC 2.0 endpoint at <code>POST /mcp</code>.</p>
+<p><strong>Request flow:</strong></p>
+<pre><code>Claude (MCP client)
+    │
+    ▼
+POST /mcp (JSON-RPC)
+    │
+    ▼
+mcp::handler → parse request → extract tool + args
+    │
+    ▼
+mcp::dispatcher → match tool name → call internal handler
+    │
+    ▼
+loomem-core / handlers → execute → return ToolResult
+    │
+    ▼
+JSON-RPC response → Claude
+</code></pre>
+<p><strong>Session management:</strong> OAuth tokens map to sessions, sessions map to <code>stream_id</code> for data isolation.</p>
+<hr />
+<h2 id="crash-recovery">Crash recovery</h2>
+<ol>
+<li><strong>Intent log replay</strong> — on startup, scan WAL for uncommitted operations</li>
+<li><strong>Partial write detection</strong> — check RocksDB and Tantivy for consistency</li>
+<li><strong>Orphan cleanup</strong> — remove chunks marked <code>in_progress</code> from failed consolidation</li>
+<li><strong>Tantivy rebuild</strong> — if schema version mismatch, rebuild index from RocksDB source of truth</li>
+</ol>
+<hr />
+<h2 id="cost-tracking">Cost tracking</h2>
+<p>Every LLM call (consolidation, extraction, embedding) is tracked:</p>
+<pre><code>[cost]
+daily_cap_usd = 15.00           # Hard stop
+alert_threshold_usd = 10.00     # Warning
+anomaly_multiplier = 3.0        # 3x typical = anomaly alert
+</code></pre>
+<p>Costs persisted in RocksDB column family. Workers check budget before each LLM call.</p></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/Architecture">Edit on GitHub</a></span></div></main></div></body></html>

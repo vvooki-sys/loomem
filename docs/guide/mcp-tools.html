@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MCP tools — Loomem docs</title>
+<meta name="description" content="Loomem documentation — MCP tools"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke-linecap='round' fill='none' stroke-width='14'%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(187.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%231684DC' stroke-dasharray='86 329' transform='rotate(277.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(7.5 100 100)'/%3E%3Ccircle cx='100' cy='100' r='66' stroke='%23F4AC2E' stroke-dasharray='86 329' transform='rotate(97.5 100 100)'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root{
+  --lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;--lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;--lm-gold-900:#5E3A11;
+  --lm-blue-300:#63B5F0;--lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;--lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-200:#DED7C8;--lm-ink-100:#EFE9DD;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;--lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#1684DC 100%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);line-height:1.62;-webkit-font-smoothing:antialiased;font-size:16px}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.82);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
+.brand:hover{text-decoration:none}
+.brand svg{width:26px;height:26px}
+.brand .tag{font-family:var(--lm-font-sans);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--lm-ink-400);border:1px solid var(--lm-ink-200);border-radius:999px;padding:2px 9px;margin-left:2px}
+.topnav{display:flex;align-items:center;gap:22px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900);text-decoration:none}
+.doc-wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px);display:grid;grid-template-columns:248px 1fr;gap:52px;align-items:start}
+.doc-side{position:sticky;top:88px;align-self:start;max-height:calc(100vh - 110px);overflow-y:auto;padding:26px 0}
+.doc-side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--lm-ink-400);font-weight:600;margin:20px 12px 8px}
+.doc-side .grp:first-child{margin-top:0}
+.doc-side a{display:block;font-size:14px;color:var(--lm-ink-600);padding:7px 12px;border-radius:8px;font-weight:500}
+.doc-side a:hover{background:var(--lm-surface-sunk);color:var(--lm-ink-900);text-decoration:none}
+.doc-side a.active{background:var(--lm-surface-cool);color:var(--lm-blue-700);font-weight:600}
+.doc-main{min-width:0;max-width:760px;padding:48px 0 96px}
+.doc-eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-gold-700);margin-bottom:10px}
+.doc-content h1{font-family:var(--lm-font-display);font-size:2.5rem;font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 22px}
+.doc-content h2{font-family:var(--lm-font-display);font-size:1.6rem;font-weight:600;letter-spacing:-.01em;line-height:1.25;margin:44px 0 14px}
+.doc-content h3{font-size:1.22rem;font-weight:600;margin:30px 0 10px;letter-spacing:-.01em}
+.doc-content h4{font-size:1.02rem;font-weight:600;margin:22px 0 8px}
+.doc-content p{margin:0 0 16px;color:var(--lm-ink-700)}
+.doc-content ul,.doc-content ol{margin:0 0 18px;padding-left:24px;color:var(--lm-ink-700)}
+.doc-content li{margin:7px 0}
+.doc-content li>ul,.doc-content li>ol{margin:7px 0}
+.doc-content code{font-family:var(--lm-font-mono);font-size:.87em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1.5px 6px;border-radius:5px;color:var(--lm-ink-800)}
+.doc-content pre{background:var(--lm-ink-900);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;overflow-x:auto;margin:0 0 18px;box-shadow:var(--lm-shadow-sm)}
+.doc-content pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;line-height:1.65}
+.doc-content blockquote{border-left:3px solid var(--lm-gold-400);background:var(--lm-surface-warm);padding:12px 18px;border-radius:0 var(--lm-radius-md) var(--lm-radius-md) 0;margin:0 0 18px;color:var(--lm-ink-700)}
+.doc-content blockquote p:last-child{margin:0}
+.doc-content table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;display:block;overflow-x:auto}
+.doc-content thead{background:var(--lm-surface-sunk)}
+.doc-content th{text-align:left;padding:9px 12px;border-bottom:2px solid var(--lm-ink-200);color:var(--lm-ink-700);font-weight:600;white-space:nowrap}
+.doc-content td{padding:9px 12px;border-bottom:1px solid var(--lm-ink-100);color:var(--lm-ink-700);vertical-align:top}
+.doc-content hr{border:none;border-top:1px solid var(--lm-ink-200);margin:34px 0}
+.doc-content a{font-weight:500}
+.doc-content h2 code,.doc-content h3 code,.doc-content h4 code{font-size:.86em;background:var(--lm-surface-sunk)}
+.doc-content img{max-width:100%}
+.doc-foot{border-top:1px solid var(--lm-ink-200);margin-top:40px;padding-top:22px;font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+/* hub */
+.hub-head{padding:56px 0 8px;max-width:720px}
+.hub-head h1{font-family:var(--lm-font-display);font-size:clamp(2.2rem,4vw,3rem);font-weight:600;letter-spacing:-.02em;line-height:1.1;margin-bottom:14px}
+.hub-head p{font-size:1.0625rem;color:var(--lm-ink-500);line-height:1.6}
+.hub-grp{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-ink-400);font-weight:600;margin:40px 0 16px}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.hub-card{display:block;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs);transition:all 180ms var(--lm-ease)}
+.hub-card:hover{box-shadow:var(--lm-shadow-sm);transform:translateY(-2px);text-decoration:none;border-color:var(--lm-blue-300)}
+.hub-card h3{font-size:1.05rem;font-weight:600;color:var(--lm-ink-900);margin-bottom:5px}
+.hub-card span{font-size:13.5px;color:var(--lm-ink-500)}
+@media(max-width:820px){.doc-wrap{grid-template-columns:1fr;gap:0}.doc-side{position:static;max-height:none;border-bottom:1px solid var(--lm-ink-200);padding:16px 0}.doc-main{padding-top:28px}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="wrap inner">
+<a class="brand" href="../"><svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
+<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
+</div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html" class="active">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Docs</div><article class="doc-content"><h1 id="mcp-tools-reference">MCP Tools Reference</h1>
+<p>Loomem exposes 14 <code>memory_*</code> tools via the Model Context Protocol. These tools are what Claude (or any MCP client) uses to interact with memory. The MCP server identifies itself as <code>loomem-memory</code>.</p>
+<blockquote>
+<p><strong>Runtime sync:</strong> The condensed version sent to MCP clients lives in <code>loomem-server/mcp_instructions.md</code> (embedded at compile time). Edit that file to change what clients see.</p>
+</blockquote>
+<hr />
+<h2 id="scope-model">Scope model</h2>
+<p>Data lives in <strong>streams</strong>. Different tools operate at different scopes:</p>
+<table>
+<thead>
+<tr>
+<th>Scope</th>
+<th>Tools</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Per-stream</strong> (isolated)</td>
+<td><code>memory_store</code>, <code>memory_search</code>, <code>memory_ingest</code>, <code>memory_context</code>, <code>memory_profile</code>, <code>memory_dream</code>, <code>memory_reflect</code>, <code>memory_associate</code></td>
+<td>Only sees/writes data in the active stream</td>
+</tr>
+<tr>
+<td><strong>Global</strong> (engine-wide)</td>
+<td><code>memory_status</code>, <code>memory_namespaces</code></td>
+<td>Returns system-level info</td>
+</tr>
+<tr>
+<td><strong>Per-stream</strong> (isolated graph)</td>
+<td><code>memory_graph</code></td>
+<td>Knowledge graph is per-stream isolated</td>
+</tr>
+<tr>
+<td><strong>By chunk ID</strong></td>
+<td><code>memory_history</code>, <code>memory_delete</code>, <code>memory_feedback</code></td>
+<td>Operates on a specific chunk</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key concepts:</strong>
+- <strong>Stream</strong> — the data isolation boundary. The built-in default stream is <code>__user_default__</code>.
+- <strong>Namespace</strong> — a human-readable label mapped to a stream ID (e.g., <code>personal</code> → <code>100</code>). Configured in <code>config.toml</code>, listed by <code>memory_namespaces</code>.</p>
+<hr />
+<h2 id="storing-memories">Storing memories</h2>
+<h3 id="memory_store">memory_store</h3>
+<p>Store a single, confirmed fact.</p>
+<p><strong>Use for:</strong> explicit user statements, confirmed decisions, biographical facts.
+<strong>Don't use for:</strong> raw conversation text — use <code>memory_ingest</code> instead.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>content</code></td>
+<td>string</td>
+<td>yes</td>
+<td>The fact to store</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>string</td>
+<td>no</td>
+<td>Provenance (e.g., "user-stated")</td>
+</tr>
+<tr>
+<td><code>subject</code></td>
+<td>string</td>
+<td>no</td>
+<td>Entity name (person, project)</td>
+</tr>
+<tr>
+<td><code>metadata</code></td>
+<td>object</td>
+<td>no</td>
+<td>Custom JSON metadata</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example:</strong></p>
+<pre><code>memory_store(
+  content: &quot;Prefers Cursor over VSCode for AI features&quot;,
+  subject: &quot;Alice&quot;,
+  source: &quot;user-stated&quot;
+)
+</code></pre>
+<p><strong>Behavior:</strong>
+- Preferences automatically get <code>importance: 2.0</code>
+- Entity extraction runs (dictionary + LLM queue)
+- Contradiction detection checks against existing memories
+- Embedding generated asynchronously</p>
+<hr />
+<h3 id="memory_ingest">memory_ingest</h3>
+<p>Extract structured knowledge from a conversation via LLM. <strong>Preferred method</strong> for storing multi-fact content.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>content</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Conversation transcript</td>
+</tr>
+<tr>
+<td><code>conversation_date</code></td>
+<td>string</td>
+<td>no</td>
+<td>ISO date (e.g., "2026-04-02")</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example:</strong></p>
+<pre><code>memory_ingest(
+  content: &quot;User: I switched from VSCode to Cursor last week. Also, the dashboard deadline is April 15th.&quot;,
+  conversation_date: &quot;2026-04-02&quot;
+)
+</code></pre>
+<p><strong>What happens:</strong>
+1. LLM extracts individual facts with type, subject, date, confidence
+2. Each fact checked for duplicates (cosine similarity &gt; 0.92 = skip)
+3. Contradiction detection runs (updates supersede older facts)
+4. Facts stored with full <code>extraction_meta</code></p>
+<p><strong>Typical output (illustrative — exact extraction depends on LLM judgment):</strong>
+- <code>PreferenceOrDecision</code>: "User prefers Cursor over VSCode" (subject: user, confidence: 0.95)
+- <code>ProjectState</code>: "Dashboard deadline is 2026-04-15" (subject: dashboard, confidence: 0.90)</p>
+<p>The number of extracted facts, their phrasing, and confidence scores vary by input. Treat examples as representative, not contractual.</p>
+<hr />
+<h2 id="searching-memories">Searching memories</h2>
+<h3 id="memory_search">memory_search</h3>
+<p>Hybrid search across all memory tiers.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>query</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Search query</td>
+</tr>
+<tr>
+<td><code>top_k</code></td>
+<td>int</td>
+<td>no</td>
+<td>Max results (default: 10)</td>
+</tr>
+<tr>
+<td><code>time_filter</code></td>
+<td>string</td>
+<td>no</td>
+<td>"today", "this_week", "this_month"</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example:</strong></p>
+<pre><code>memory_search(query: &quot;What IDE does the user prefer?&quot;)
+</code></pre>
+<p><strong>Behavior:</strong>
+- Runs BM25 + vector + graph search in parallel
+- Applies time decay (recent memories score higher)
+- Deduplicates near-identical results
+- Marks superseded facts with <code>[UPDATED]</code>
+- For aggregation queries ("how many..."), boosts <code>top_k</code> to 30</p>
+<hr />
+<h3 id="memory_context">memory_context</h3>
+<p>Load relevant background at the start of a task. Token-budgeted — won't overwhelm the context window.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>query</code></td>
+<td>string</td>
+<td>no</td>
+<td>Topic focus (e.g., "dashboard project")</td>
+</tr>
+<tr>
+<td><code>budget_tokens</code></td>
+<td>int</td>
+<td>no</td>
+<td>Max tokens (default: 4000)</td>
+</tr>
+<tr>
+<td><code>sections</code></td>
+<td>string[]</td>
+<td>no</td>
+<td>Which sections: <code>profile</code>, <code>relevant</code>, <code>recent</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example:</strong></p>
+<pre><code>memory_context(query: &quot;Loomem project&quot;, budget_tokens: 2000)
+</code></pre>
+<p><strong>Section allocation:</strong>
+- <code>profile</code> (20%) — who the user is, stable facts
+- <code>relevant</code> (50%) — memories matching the query
+- <code>recent</code> (30%) — last 7 days of activity</p>
+<p><strong>When to call:</strong> Once at conversation start, when the topic requires background knowledge.</p>
+<hr />
+<h3 id="memory_profile">memory_profile</h3>
+<p>Get the user's synthesized profile.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>format</code></td>
+<td>string</td>
+<td>no</td>
+<td><code>"markdown"</code> or <code>"json"</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Returns:</strong>
+- <code>stable_facts</code> — permanent truths (max 30)
+- <code>recent_context</code> — last 7 days (max 15)
+- <code>summary</code> — 2-3 sentence overview</p>
+<p>Profile is LLM-generated and cached for 1 hour.</p>
+<hr />
+<h3 id="memory_associate">memory_associate</h3>
+<p>Surface serendipitous associations — memories that are surprisingly relevant but not obvious — using graph walks, temporal co-occurrence, and semantic adjacency.</p>
+<p><strong>Use for:</strong> unexpected connections and creative links across topics (e.g., "what past projects relate to this new idea?"). Use <code>memory_search</code> for direct fact retrieval.</p>
+<p><strong>Returns:</strong> a numbered list of associations with mechanism and score. If results are empty, clustering may not have run yet — call <code>memory_dream</code> first.</p>
+<hr />
+<h2 id="memory-maintenance">Memory maintenance</h2>
+<h3 id="memory_dream">memory_dream</h3>
+<p>Trigger memory consolidation. Like sleep for the brain — merges, deduplicates, and organizes memories.</p>
+<p><strong>No parameters.</strong></p>
+<p><strong>What happens:</strong>
+1. Groups memories by subject
+2. Merges related observations into concise summaries
+3. Resolves contradictions (newer facts win)
+4. Creates L1 compressed chunks from L0 raw events
+5. Respects cost cap ($0.10/run by default)</p>
+<p><strong>Returns:</strong></p>
+<pre><code>{
+  &quot;chunks_processed&quot;: 50,
+  &quot;groups_found&quot;: 12,
+  &quot;facts_merged&quot;: 8,
+  &quot;contradictions_resolved&quot;: 2,
+  &quot;cost_usd&quot;: 0.04,
+  &quot;duration_ms&quot;: 3200
+}
+</code></pre>
+<p><strong>When to call:</strong>
+- After a long, productive session
+- When the user asks to "clean up" or "consolidate" memory
+- Automatically triggered after 30 minutes of inactivity</p>
+<hr />
+<h3 id="memory_reflect">memory_reflect</h3>
+<p>Analyze memory quality and get improvement suggestions.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max_chunks</code></td>
+<td>int</td>
+<td>no</td>
+<td>How many chunks to analyze</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Returns:</strong></p>
+<pre><code>{
+  &quot;quality_score&quot;: 78,
+  &quot;breakdown&quot;: {
+    &quot;by_level&quot;: { &quot;L0&quot;: 45, &quot;L1&quot;: 62 },
+    &quot;with_extraction_meta&quot;: &quot;87%&quot;,
+    &quot;with_subject&quot;: &quot;72%&quot;
+  },
+  &quot;suggestions&quot;: [
+    &quot;28 chunks lack subject metadata — run memory_dream&quot;,
+    &quot;5 potential contradictions detected&quot;
+  ]
+}
+</code></pre>
+<p><strong>Quality score formula:</strong> <code>has_meta*0.4 + has_subject*0.3 + structured*0.3</code></p>
+<p><strong>When to call:</strong> Periodically (once per week), or when memory quality seems poor.</p>
+<hr />
+<h3 id="memory_graph">memory_graph</h3>
+<p>Explore entity connections in the knowledge graph. <strong>Per-stream isolated</strong> — each user sees only their own entities and connections.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>entity</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Entity name to explore</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example:</strong></p>
+<pre><code>memory_graph(entity: &quot;Cursor&quot;)
+</code></pre>
+<p><strong>Returns:</strong> entity details (name, type, aliases), connections to other entities, linked chunk count. Only entities and edges within the active stream are visible.</p>
+<p>Useful for understanding "who works on what", "what technologies are connected", etc.</p>
+<hr />
+<h3 id="memory_history">memory_history</h3>
+<p>Trace how a fact evolved over time (version chain).</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chunk_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Chunk to trace</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>int</td>
+<td>no</td>
+<td>Max versions to return</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example:</strong></p>
+<pre><code>memory_history(chunk_id: &quot;abc-123&quot;)
+</code></pre>
+<p><strong>Returns:</strong> version chain showing how the fact changed:</p>
+<pre><code>v1 (2026-03-15): &quot;User uses VSCode&quot;        ← superseded
+v2 (2026-04-01): &quot;User uses Cursor&quot;         ← current
+</code></pre>
+<p><strong>When to call:</strong> when the user asks "what did I use before X?" or when investigating contradictory information.</p>
+<hr />
+<h3 id="memory_delete">memory_delete</h3>
+<p>Delete a specific memory by ID.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chunk_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Memory to delete</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Important:</strong> Never delete without user confirmation.</p>
+<hr />
+<h3 id="memory_feedback">memory_feedback</h3>
+<p>Rate the usefulness of a memory chunk after a task, providing a reinforcement signal to the ranking system.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chunk_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Chunk to rate (from the id returned by <code>memory_store</code> / <code>memory_ingest</code>)</td>
+</tr>
+<tr>
+<td><code>usefulness</code></td>
+<td>int</td>
+<td>yes</td>
+<td>0 (not useful) – 4 (crucial)</td>
+</tr>
+<tr>
+<td><code>harmful</code></td>
+<td>bool</td>
+<td>no</td>
+<td>Set only when the chunk contained incorrect or misleading information</td>
+</tr>
+</tbody>
+</table>
+<p>Only rate chunks where the usefulness is clear; this is not a general write tool.</p>
+<hr />
+<h2 id="informational">Informational</h2>
+<h3 id="memory_status">memory_status</h3>
+<p>Engine health and statistics. Use to verify the engine is running, check capacity, or diagnose issues when other tools seem unresponsive.</p>
+<p><strong>No parameters.</strong></p>
+<p><strong>When to call:</strong>
+- Tools return unexpected errors or empty results
+- User asks about memory health or capacity
+- Before a complex operation (bulk ingest, dream) to verify readiness</p>
+<p><strong>Returns:</strong></p>
+<pre><code>{
+  &quot;status&quot;: &quot;ok&quot;,
+  &quot;uptime_secs&quot;: 86400,
+  &quot;rocksdb_keys&quot;: 311,
+  &quot;tantivy_docs&quot;: 115,
+  &quot;embeddings_count&quot;: 112,
+  &quot;vector&quot;: true,
+  &quot;tantivy&quot;: true,
+  &quot;scheduler&quot;: true
+}
+</code></pre>
+<p>Key indicators:
+- <code>vector: false</code> means semantic search is degraded (BM25 only)
+- <code>scheduler: false</code> means background workers (consolidation, decay, dream) are not running
+- Large gap between <code>rocksdb_keys</code> and <code>embeddings_count</code> suggests embedding backfill needed</p>
+<hr />
+<h3 id="memory_namespaces">memory_namespaces</h3>
+<p>List available memory spaces.</p>
+<p><strong>No parameters.</strong></p>
+<p><strong>Returns:</strong></p>
+<pre><code>{
+  &quot;namespaces&quot;: {
+    &quot;personal&quot;: &quot;100&quot;,
+    &quot;work&quot;: &quot;110&quot;
+  }
+}
+</code></pre>
+<hr />
+<h2 id="best-practices">Best practices</h2>
+<h3 id="do">Do</h3>
+<ul>
+<li>Use <code>memory_ingest</code> for conversations (not <code>memory_store</code>)</li>
+<li>Call <code>memory_context</code> at conversation start for relevant tasks</li>
+<li>Run <code>memory_dream</code> after productive sessions</li>
+<li>Check <code>memory_reflect</code> periodically</li>
+<li>Use <code>memory_search</code> before answering from training data</li>
+</ul>
+<h3 id="dont">Don't</h3>
+<ul>
+<li>Don't store raw conversation text via <code>memory_store</code></li>
+<li>Don't call <code>memory_search</code> for every response — only when recall matters</li>
+<li>Don't store temporary status, small talk, or questions without answers</li>
+<li>Don't store passwords, API keys, or other secrets</li>
+<li>Don't delete without user confirmation</li>
+</ul></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/MCP tools">Edit on GitHub</a></span></div></main></div></body></html>
