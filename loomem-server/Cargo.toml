@@ -1,0 +1,49 @@
+[package]
+name = "loomem-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "loomem-server"
+path = "src/main.rs"
+
+[dependencies]
+
+loomem-core = { path = "../loomem-core", features = ["onnx-rerank"] }
+
+reqwest.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+
+# Signal handling
+signal-hook.workspace = true
+signal-hook-tokio.workspace = true
+
+# System utilities
+num_cpus = "1.16"
+futures = "0.3"
+regex = "1"
+libc = "0.2"
+
+
+[features]
+default = ["onnx-rerank"]
+onnx-rerank = []
+
+[dev-dependencies]
+tempfile = "3.8"

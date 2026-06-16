@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds pinned to the oldest supported GA image: the produced
+          # binaries require the build host's glibc, so 22.04 (glibc 2.35) keeps
+          # them runnable on Ubuntu 22.04+/Debian 12+. Building on 24.04 produced
+          # GLIBC_2.39 requirements (verified live with v0.2.0-rc1, cycle/009).
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-15-intel  # macos-13 retired 2025-12-08 (actions/runner-images#13046)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev
+
+      - name: Build release binaries
+        run: cargo build --release --target ${{ matrix.target }} -p loomem-server -p loomem-cli -p loomem-migrate
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG="loomem-${VERSION}-${{ matrix.target }}"
+          mkdir -p "dist/${PKG}"
+          for bin in loomem-server loomem-cli loomem-migrate; do
+            cp "target/${{ matrix.target }}/release/${bin}" "dist/${PKG}/"
+          done
+          cp config.toml entities.toml.example synonyms.toml.example LICENSE README.md "dist/${PKG}/"
+          tar -C dist -czf "dist/${PKG}.tar.gz" "${PKG}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256")
+          else
+            (cd dist && shasum -a 256 "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256")
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: loomem-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Combine checksums
+        run: |
+          cat dist/*.sha256 > dist/SHA256SUMS
+          rm dist/*.sha256
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true
+          draft: false
+          # rc/beta/alpha tags become prereleases — excluded from /releases/latest,
+          # so `install.sh` users only get them when pinning LOOMEM_VERSION explicitly.
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Pre-commit hook: byte-identical with CI.
+# Refuses the commit if fmt or clippy are not clean.
+# Scope matches CI: workspace default features (not --all-features).
+#
+# Versioned copy. To activate locally:
+#   scripts/install-hooks.sh
+# or manually:
+#   ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+
+set -euo pipefail
+
+echo "pre-commit: cargo fmt --check..."
+cargo fmt --check || {
+    echo ""
+    echo "ERROR: cargo fmt --check failed."
+    echo "Run 'cargo fmt' to fix, then retry commit."
+    exit 1
+}
+
+echo "pre-commit: cargo clippy --workspace -- -D warnings..."
+cargo clippy --workspace -- -D warnings || {
+    echo ""
+    echo "ERROR: cargo clippy --workspace -- -D warnings failed."
+    echo "Fix warnings or add a justified #[allow(...)] with a comment."
+    exit 1
+}
+
+echo "pre-commit: OK"

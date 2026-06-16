@@ -1,0 +1,26 @@
+{
+  "formula": "relevance * (1 - obviousness) * cluster_distance",
+  "max": 0.44799999999999995,
+  "min": 0.0,
+  "poc_baseline_2signal": {
+    "range": [
+      0.24,
+      0.37
+    ],
+    "spread": 0.13,
+    "status": "Fail"
+  },
+  "scores": [
+    0.44799999999999995,
+    0.27999999999999997,
+    0.0,
+    0.06400000000000002,
+    0.05599999999999999,
+    0.378,
+    0.40375
+  ],
+  "spread": 0.44799999999999995,
+  "status": "Pass",
+  "target": "> 0.40",
+  "test": "se_regression_synthetic"
+}

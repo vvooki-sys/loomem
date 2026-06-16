@@ -1,0 +1,16 @@
+# Loomem synonym configuration example
+# Copy this file to synonyms.toml and customize for your domain language.
+# IMPORTANT: synonyms.toml is gitignored — it tends to accumulate personal
+# names and project-specific vocabulary.
+#
+# Each [[synonyms]] group is an equivalence class: a query containing any
+# term in the group also matches memories containing the other terms.
+
+[[synonyms]]
+terms = ["AI", "artificial intelligence", "machine learning", "ML"]
+
+[[synonyms]]
+terms = ["meeting", "call", "sync", "standup"]
+
+[[synonyms]]
+terms = ["bug", "issue", "defect", "regression"]

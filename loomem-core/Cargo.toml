@@ -1,0 +1,48 @@
+[package]
+name = "loomem-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rocksdb.workspace = true
+tantivy.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+toml.workspace = true
+reqwest.workspace = true
+bincode.workspace = true
+regex.workspace = true
+blake3.workspace = true
+unicode-normalization.workspace = true
+
+# Local cross-encoder reranking (pure Rust, no native deps)
+tract-onnx = { version = "0.22", optional = true }
+tokenizers = { version = "0.22", optional = true }
+tiktoken-rs = "0.11.0"
+aes-gcm = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+
+[features]
+# Local ONNX embeddings ship in the default build so a fresh install runs
+# keyless out of the box. Disable with --no-default-features for an
+# API-only (OpenAI) build without the tract-onnx/tokenizers deps.
+default = ["local-embeddings"]
+local-embeddings = ["tract-onnx", "tokenizers"]
+onnx-rerank = ["tract-onnx", "tokenizers"]
+
+[dev-dependencies]
+tempfile = "3.8"

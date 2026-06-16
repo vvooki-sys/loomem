@@ -1,0 +1,17 @@
+# Gitleaks configuration — extends the default ruleset with an allowlist
+# for documentation placeholders and test fixtures (no real secrets).
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documentation placeholders and test fixtures"
+regexes = [
+    '''your-secret-token''',
+    '''your-admin-token''',
+    '''snap-\d{8}-test-[0-9a-f]+''',
+]
+# Model checksums (SHA256 of the local embedding model files — not secrets).
+paths = [
+    '''scripts/fetch-embedding-model\.sh''',
+]

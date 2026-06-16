@@ -1,0 +1,51 @@
+# Loomem Entity Configuration Example
+# Copy this file to entities.toml and customize for your personal knowledge base
+# IMPORTANT: entities.toml is gitignored to protect personal information
+
+# Old format (backward compatible) — simple entity lists
+[persons]
+names = [
+    "John Doe",
+    "Jane Smith",
+]
+
+[organizations]
+names = [
+    "Example Corp",
+]
+
+[projects]
+names = [
+    "Example Project",
+]
+
+[technology]
+names = [
+    "Rust", "Python",
+]
+
+[places]
+names = [
+    "New York",
+]
+
+[relations]
+# Format: "subject|relation|object"
+entries = [
+    "John Doe|works_at|Example Corp",
+]
+
+# New format — structured entities with aliases and query expansion
+[[entity]]
+canonical = "John Doe"
+type = "person"
+aliases = ["John", "JD", "Johnny"]
+role = "Software Engineer"
+expand_with = ["engineering", "software"]
+
+[[entity]]
+canonical = "Example Corp"
+type = "organization"
+aliases = ["ExCorp", "the company"]
+role = "Technology company"
+expand_with = ["tech", "innovation"]

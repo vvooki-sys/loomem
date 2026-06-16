@@ -1,0 +1,10 @@
+# cargo-audit configuration — consciously accepted advisories.
+# Review quarterly.
+
+[advisories]
+ignore = [
+    "RUSTSEC-2025-0141",  # bincode unmaintained — migration to 2.x is on the backlog
+    "RUSTSEC-2024-0436",  # paste unmaintained — transitive via tokenizers
+    "RUSTSEC-2026-0002",  # lru unsound IterMut — transitive via tantivy
+    "RUSTSEC-2026-0097",  # rand unsound custom logger — transitive
+]

@@ -1,0 +1,21 @@
+# Release builds of loomem-server crash rustc on aarch64-apple-darwin:
+# SIGSEGV inside LLVM SLPVectorizer during ThinLTO codegen
+# (backtrace: spawn_thin_lto_work -> SLPVectorizerPass::vectorizeStores).
+# Empirics 2026-06-10: RUST_MIN_STACK 32/64/256 MiB all crash with the
+# rustc hint doubling each time -> runaway recursion (LLVM bug), not
+# finite depth. Disabling the SLP pass fixes the build; scoped to the
+# Mac target only — Linux/Docker/Railway builds are unaffected and keep
+# full vectorization. Recurring issue: /103a close §7, /112 close F-4.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "no-vectorize-slp"]
+
+# Belt-and-braces for the finite-depth crash class from /112 (MIR opt
+# stack overflow). Note: cargo's [env] table is always global (no
+# per-target scoping) and propagates to child processes of `cargo run`
+# and `cargo test` on every platform — dev/test binaries inherit the
+# 64 MiB minimum thread stack too. That is virtual address-space
+# reservation only (harmless under OS overcommit); production
+# containers start the binary directly, bypassing cargo, so they are
+# unaffected.
+[env]
+RUST_MIN_STACK = "67108864"

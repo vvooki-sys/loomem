@@ -1,0 +1,35 @@
+[package]
+name = "loomem-migrate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "loomem-migrate"
+path = "src/main.rs"
+
+# /109 AC-3 leakage probe
+[[bin]]
+name = "leakage_probe"
+path = "src/bin/leakage_probe.rs"
+
+# /109 AC-4 Tantivy parity check
+[[bin]]
+name = "tantivy_parity"
+path = "src/bin/tantivy_parity.rs"
+
+# /109 AC-2 classification helper
+[[bin]]
+name = "db_probe"
+path = "src/bin/db_probe.rs"
+
+[dependencies]
+serde_json.workspace = true
+anyhow.workspace = true
+rocksdb = { version = "0.24", features = ["snappy"] }
+tantivy.workspace = true

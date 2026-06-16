@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loomem Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:20px}
+h1{font-size:1.4em;margin-bottom:16px;color:#fff}
+.card{background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;margin-bottom:16px}
+table{width:100%;border-collapse:collapse;font-size:0.9em}
+th{text-align:left;padding:8px;border-bottom:1px solid #333;color:#888;font-weight:500}
+td{padding:8px;border-bottom:1px solid #222}
+.btn{background:#2563eb;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:0.85em}
+.btn:hover{background:#1d4ed8}
+.btn-danger{background:#dc2626}
+.btn-danger:hover{background:#b91c1c}
+.btn-sm{padding:4px 8px;font-size:0.8em}
+input[type=text],input[type=password]{background:#111;border:1px solid #333;color:#fff;padding:6px 10px;border-radius:4px;width:200px}
+.form-row{display:flex;gap:8px;align-items:center;margin-top:12px}
+.muted{color:#666;font-size:0.85em}
+.badge{background:#1e3a1e;color:#4ade80;padding:2px 8px;border-radius:10px;font-size:0.75em}
+#msg{padding:8px;margin:8px 0;border-radius:4px;display:none}
+.msg-ok{background:#1e3a1e;color:#4ade80;display:block!important}
+.msg-err{background:#3a1e1e;color:#f87171;display:block!important}
+</style>
+</head>
+<body>
+<h1>Loomem Admin</h1>
+
+<div id="auth-box" class="card">
+  <label>Admin Token: <input type="password" id="token" placeholder="Bearer token"></label>
+  <button class="btn" onclick="authenticate()" style="margin-left:8px">Connect</button>
+</div>
+
+<div id="main" style="display:none">
+  <div id="msg"></div>
+
+  <div class="card">
+    <h2 style="font-size:1.1em;margin-bottom:12px">Users</h2>
+    <table>
+      <thead><tr><th>Label</th><th>Stream</th><th>Chunks</th><th>Last Active</th><th>Actions</th></tr></thead>
+      <tbody id="users"></tbody>
+    </table>
+    <div class="form-row">
+      <input type="text" id="new-label" placeholder="User label (e.g. Jan Kowalski)">
+      <button class="btn" onclick="createUser()">+ Add User</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 style="font-size:1.1em;margin-bottom:8px">System</h2>
+    <pre id="status" class="muted"></pre>
+  </div>
+</div>
+
+<script>
+let TOKEN = sessionStorage.getItem('loomem_token') || '';
+
+function api(method, path, body) {
+  return fetch(path, {
+    method,
+    headers: {'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json'},
+    body: body ? JSON.stringify(body) : undefined,
+  }).then(r => r.json());
+}
+
+function msg(text, ok) {
+  const el = document.getElementById('msg');
+  el.textContent = text;
+  el.className = ok ? 'msg-ok' : 'msg-err';
+  setTimeout(() => el.style.display = 'none', 3000);
+}
+
+function timeAgo(ts) {
+  if (!ts) return 'never';
+  const diff = Date.now()/1000 - ts;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  return Math.floor(diff/86400) + 'd ago';
+}
+
+async function authenticate() {
+  TOKEN = document.getElementById('token').value;
+  sessionStorage.setItem('loomem_token', TOKEN);
+  try {
+    await loadUsers();
+    document.getElementById('auth-box').style.display = 'none';
+    document.getElementById('main').style.display = 'block';
+    loadStatus();
+  } catch(e) { msg('Auth failed', false); }
+}
+
+async function loadUsers() {
+  const users = await api('GET', '/admin/users');
+  const tbody = document.getElementById('users');
+  tbody.innerHTML = users.map(u => `<tr>
+    <td>${u.label || '<em class="muted">no label</em>'}</td>
+    <td><code>${u.stream_id}</code></td>
+    <td>${u.chunk_count}</td>
+    <td>${timeAgo(u.last_active)}</td>
+    <td>
+      <button class="btn btn-sm" onclick="copyKey('${u.id}')">Copy Key</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteUser('${u.id}','${u.label||u.id}')">Del</button>
+    </td>
+  </tr>`).join('');
+}
+
+async function loadStatus() {
+  const s = await api('GET', '/v1/status');
+  document.getElementById('status').textContent =
+    `Status: ${s.status} | Uptime: ${s.uptime_secs}s | Keys: ${s.config_summary.rocksdb_keys} | Docs: ${s.config_summary.tantivy_docs}`;
+}
+
+async function createUser() {
+  const label = document.getElementById('new-label').value;
+  const result = await api('POST', '/admin/users', {label: label || null});
+  msg(`Created! API Key: ${result.api_key}`, true);
+  document.getElementById('new-label').value = '';
+  await navigator.clipboard.writeText(result.api_key).catch(()=>{});
+  loadUsers();
+}
+
+async function copyKey(userId) {
+  // Re-fetch to get api_key (list doesn't include it for security)
+  // For POC: store keys in a local map during create
+  msg('Key was shown at creation time. Re-create user if lost.', false);
+}
+
+async function deleteUser(id, label) {
+  if (!confirm(`Delete user "${label}"?`)) return;
+  await api('DELETE', `/admin/users/${id}`);
+  msg('Deleted', true);
+  loadUsers();
+}
+
+// Auto-connect if token in session
+if (TOKEN) { authenticate(); }
+</script>
+</body>
+</html>

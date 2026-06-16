@@ -1,0 +1,14 @@
+# Minimal entities config for cloud deployment
+# Per-user entities are discovered by LLM entity extraction
+
+[persons]
+names = []
+
+[organizations]
+names = []
+
+[projects]
+names = []
+
+[technology]
+names = []

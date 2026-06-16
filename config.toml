@@ -1,0 +1,262 @@
+# Loomem Configuration File
+# All settings are required - no hardcoded defaults in code
+
+[storage]
+data_dir = "./data"
+vector_enabled = true  # Re-enabled post-ingestion
+
+[storage.rocksdb]
+max_open_files = 1000
+compression = "lz4"
+write_buffer_size = 67108864  # 64MB
+max_write_buffer_number = 3
+
+[storage.tantivy]
+enabled = true
+heap_size_mb = 128
+# Cycle /39: drift detection — warn at startup if Tantivy doc count diverges
+# from RocksDB chunk count. auto_rebuild_on_drift=true: rebuild_from_rocksdb
+# fires automatically at startup when drift > drift_warn_pct (covers H3
+# silent-skip — Tantivy data dir wiped/restored without schema_version bump).
+drift_warn_pct = 5.0
+auto_rebuild_on_drift = true
+
+[storage.intent_log]
+enabled = true
+dir = "wal"
+max_size_mb = 10
+archive_max_age_days = 7  # drop aged archives even with pending entries (lost-write threshold)
+sync_on_write = false  # true = fsync every write (safer, slower)
+
+[search]
+top_k = 10
+surprise_boost = 1.5  # Surprise boost multiplier from Titans intelligence
+synonyms_file = "synonyms.toml"
+entities_file = "entities.toml"
+rerank_enabled = false       # Reranking of top results (~97ms/pair on M3, too slow for default)
+rerank_candidates = 20      # send top N to reranker, return top_k
+rerank_model_dir = "models/reranker"  # ONNX cross-encoder dir (model.onnx + tokenizer.json)
+multi_query_enabled = false  # /45 measured -5pp strict on default-on (LongMemEval-S 100q paired); keep off
+counting_l0_preference = false
+vector_multi_query = true
+stem_polish = true
+implicit_access_boost_weight = 0.0  # Cycle/118: log-frequency boost for access_count. 0.0=disabled (default, byte-identical to pre-cycle); 0.3-0.5 for eval/production.
+
+[search.cache]
+enabled = true
+max_entries = 500
+ttl_secs = 300  # 5 minutes
+
+[search.complexity]
+enabled = false                # disabled — all queries use full hybrid pipeline
+simple_top_k = 3               # BM25 only, skip vector+graph
+medium_top_k = 10              # hybrid BM25+vector
+complex_top_k = 20             # full pipeline + graph + reranking
+
+[search.graph]
+enabled = true             # Phase 4: cross-session entity linking via graph
+max_hops = 1               # 1 = direct + 1-hop neighbors
+boost_factor = 0.3         # how much graph proximity boosts score (0.0-1.0)
+max_graph_additions = 3    # max graph-only results added to search
+
+[search.hybrid_weights]
+vector = 0.6
+bm25 = 0.4
+
+[search.decay]
+l0_lambda = 0.05   # L0: raw events — reduced from 0.10 for multi-session recall
+l1_lambda = 0.03   # L1: compressed, medium decay
+
+[worker]
+
+[worker.consolidation]
+interval_secs = 300      # 5 minutes
+batch_size = 200
+concurrency = 2
+timeout_secs = 300
+min_chunks_to_consolidate = 3
+min_age_secs = 60       # 10 minutes
+prompt_version = 1
+consolidation_style = "structured"  # "observation" (granular) or "summary" (legacy) or "structured" (typed + date resolver)
+similarity_threshold = 0.20          # Cosine sim for topic grouping — compromise between 0.15 (too liberal) and 0.28 (too strict, blocked all consolidation)
+quality_gate_threshold = 0.25        # Mean cosine L1 vs sources — lowered from 0.5 for diverse/multi-session streams
+
+[worker.decay_worker]
+interval_secs = 3600     # every 1h — enabled 2026-02-28
+factor = 0.995           # Half-life ~6 days (vs 0.9 = 1 hour in Memorose!)
+timeout_secs = 60
+l0_factor = 0.990        # L0 decays faster
+l1_factor = 0.995        # L1 medium decay
+dormant_threshold = 0.01
+access_boost = true
+adaptive_enabled = true       # ACT-R inspired: frequently accessed chunks decay slower
+adaptive_dampening = 0.5      # was 0.1 — see cycle/115-salience-cap-tune
+adaptive_cap = 200            # was 20 — see cycle/115-salience-cap-tune
+persistent_auto_enabled = true
+persistent_auto_threshold = 50
+
+[worker.compaction]
+interval_secs = 3600     # 1 hour
+timeout_secs = 300       # 5 minutes
+
+[worker.clustering]
+interval_secs = 21600    # 6 hours
+max_iterations = 1000    # Bounded O(n log n)
+timeout_secs = 600       # 10 minutes
+
+[worker.backup]
+enabled = true
+interval_secs = 43200    # 12 hours
+max_copies = 2
+
+[retention]
+soft_delete_days = 30
+hard_purge_interval_secs = 86400  # daily
+
+[scheduler]
+enabled = true  # Phase 3: enabled
+
+[llm]
+# Completions (consolidation / reflect). Uses OPENAI_API_KEY when set; without
+# a key these degrade to the regex fallback below.
+provider = "openai"
+# api_key = ""  # DO NOT hardcode — use OPENAI_API_KEY env var
+api_key_env = "OPENAI_API_KEY"
+
+# Embeddings. "local" runs an on-device ONNX model (no API key, nothing leaves
+# the machine) — the default so a fresh install works out of the box. Set to
+# "openai" to use the API instead (requires a key + embedding_dim = 1536).
+embedding_provider = "local"
+
+# Used when embedding_provider = "openai".
+embedding_model = "text-embedding-3-small"
+
+# Local model directory (model.onnx + tokenizer.json). When unset and
+# embedding_provider = "local", defaults to
+# ~/.loomem/models/multilingual-e5-small (seeded by the installer / fetch script).
+# embedding_model_path = "/absolute/path/to/model-dir"
+
+# MUST match the active provider/model: multilingual-e5-small = 384,
+# OpenAI text-embedding-3-small = 1536. A mismatch with the existing index
+# makes the server refuse to start (run `loomem-cli reembed`).
+embedding_dim = 384
+
+compression_model = "gpt-4.1-mini"
+timeout_secs = 10
+fallback_to_regex = true  # Graceful degradation if LLM unavailable
+
+[server]
+host = "127.0.0.1"
+port = 3030
+auth_token_env = "LOOMEM_AUTH_TOKEN"  # Set env var to enable Bearer auth; empty/unset = no auth
+
+[resource_guards]
+max_cpu_cores = 1.0
+max_memory_mb = 512
+min_disk_space_mb = 1024      # 1GB minimum
+llm_timeout_secs = 30
+worker_timeout_secs = 120
+
+[streams]
+shared = "001"
+
+[streams.agents]
+assistant = { raw = "100", compressed = "101" }
+auditor = { raw = "200", compressed = "201" }
+
+[namespaces]
+personal = "100"
+work = "110"
+project = "120"
+journal = "140"
+
+[pii]
+enabled = true
+redact_phones = true
+redact_emails = true
+redact_ids = true
+blocklist_file = "pii_blocklist.txt"
+audit_log = true
+
+[cost]
+daily_cap_usd = 15.00
+alert_threshold_usd = 10.00
+anomaly_multiplier = 3.0
+persist = true
+
+[knowledge_extraction]
+enabled = true               # Knowledge extraction pipeline: LLM extracts structured facts from conversations
+model = "gpt-4.1-mini"
+max_transcript_tokens = 20000
+dedup_cosine_threshold = 0.92
+contradiction_check = true
+contradiction_cosine_min = 0.5   # Skip LLM judge if top-1 cosine < this
+max_facts_per_transcript = 20
+
+[entity_extraction]
+enabled = true               # Phase 4: entity linking for cross-session retrieval
+model = "gpt-4.1-mini"
+batch_size = 20               # max chunks per LLM call
+flush_interval_secs = 3
+queue_capacity = 200
+confidence_threshold = 0.5   # 0.0-1.0, below = ignore. Lowered from 0.7 for better relation coverage (edges in graph)
+max_tokens_per_batch = 2000  # dynamic batching: stop adding chunks when token estimate exceeds this
+
+[memory_generator]
+enabled = true
+max_chunks = 200           # Top N chunks to consider (L1+ only)
+max_sections = 20          # Max topic sections in output
+model = "gpt-4.1-mini"     # Model for formatting (inherits from compression_model)
+
+# v2: Contradiction detection (Supermemory-inspired)
+[contradiction]
+enabled = true
+similarity_threshold = 0.70    # fast vector screen cutoff
+max_candidates = 5              # max similar chunks to check via LLM
+model = "gpt-4.1-mini"         # LLM for updates/extends/none classification
+
+# v2: Conversation memory extraction
+[conversation_extraction]
+enabled = true
+model = "gpt-4.1-mini"
+max_tokens = 2000
+confidence_threshold = 0.7
+dedup_threshold = 0.80         # cosine sim for dedup (lower than 0.90 — LLM resolves ambiguity)
+max_extractions_per_request = 30
+
+# v2: User profile synthesis
+[profile]
+enabled = true
+model = "gpt-4.1-mini"
+max_chunks = 100               # top N chunks to consider
+cache_ttl_secs = 3600          # 1 hour
+max_static_facts = 30
+max_recent_items = 15
+
+[event_log]
+enabled = true
+dir = "events"
+max_size_mb = 10
+max_files = 30
+
+[associator]
+enabled = true
+k_clusters = 0
+max_clusters = 50
+max_iterations = 100
+min_serendipity = 0.1
+max_associations = 3
+
+# autoDream: background consolidation worker
+[dream]
+enabled = true
+batch_size = 50                   # chunks per run
+min_group_size = 2                # min chunks per subject to trigger merge
+model = "gpt-4.1-mini"
+cost_cap_usd_per_run = 0.10      # safety: stop if exceeded
+
+# Cycle/112: POST /v1/feedback — agent-supplied chunk ratings (write-only in v1).
+[feedback]
+enabled = true
+max_ratings_per_request = 50
+max_justification_chars = 500

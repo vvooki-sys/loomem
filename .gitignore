@@ -1,0 +1,30 @@
+# Rust
+target/
+
+# Local data & state
+data/
+wal/
+*.log
+
+# Personal configuration (contains names/entities)
+entities.toml
+synonyms.toml
+pii_blocklist.txt
+
+# Generated artifacts
+loomem-install-*.command
+models/
+
+# Internal planning (not for public repo)
+docs/desktop-app-plan.md
+cycles/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.gstack/
