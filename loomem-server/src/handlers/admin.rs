@@ -568,6 +568,7 @@ pub async fn api_update_memory_handler(
                 "preference" | "decision" => loomem_core::storage::FactType::PreferenceOrDecision,
                 "project" => loomem_core::storage::FactType::ProjectState,
                 "event" => loomem_core::storage::FactType::Event,
+                "experience" => loomem_core::storage::FactType::Experience,
                 _ => loomem_core::storage::FactType::Fact,
             };
         }
@@ -1941,6 +1942,7 @@ async fn decide_persist_action(
         similarity_threshold: state.config.knowledge_extraction.dedup_cosine_threshold,
         max_candidates: 3,
         model: state.config.contradiction.model.clone(),
+        history_preserving_rewrite: false,
     };
     let candidates = match loomem_core::contradiction::find_candidates(
         &state.store,
@@ -2847,6 +2849,7 @@ mod api_get_memory_handler_tests {
                 confidence: 0.9,
                 extracted_from: None,
                 extraction_model: None,
+                original_content: None,
             }),
             deleted_at: None,
             trust_level: None,

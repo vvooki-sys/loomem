@@ -19,6 +19,12 @@ pub struct ContradictionConfig {
     pub similarity_threshold: f64,
     pub max_candidates: usize,
     pub model: String,
+    /// /156: when true, a trust-OK supersede merges old+new into one
+    /// trajectory-carrying sentence via an LLM rewrite. Default false keeps
+    /// the supersede path byte-identical (serde default keeps a config
+    /// without this field deserializing unchanged).
+    #[serde(default)]
+    pub history_preserving_rewrite: bool,
 }
 
 impl Default for ContradictionConfig {
@@ -28,6 +34,7 @@ impl Default for ContradictionConfig {
             similarity_threshold: 0.70,
             max_candidates: 5,
             model: "gpt-4.1-mini".to_string(),
+            history_preserving_rewrite: false,
         }
     }
 }
@@ -197,6 +204,120 @@ pub async fn classify_relation(
             })
         }
     }
+}
+
+/// /156: system prompt for the history-preserving rewrite. The rewrite merges
+/// an OLD and NEW memory about the same subject into a single sentence that
+/// carries the trajectory of change (where things were → where they are now).
+const REWRITE_PROMPT: &str = r#"You merge an OLD memory and a NEW memory about the same subject into ONE sentence that preserves the trajectory of change — where things were, and where they are now.
+
+Rules:
+- Write in the 3rd person, declarative voice.
+- Output exactly one self-contained sentence carrying both the prior and the current state.
+- No meta-words about memory or the update process. No provenance. Do NOT write phrases like "previously stated" or "according to memory".
+- Preserve the original language and diacritics.
+
+Examples:
+- OLD: "Anna is an ML engineer at Acme." NEW: "Anna is the CEO of Acme." -> "Anna, formerly an ML engineer at Acme, is now its CEO."
+- OLD: "Marek uses VS Code as his editor." NEW: "Marek uses Cursor as his editor." -> "Marek switched his editor from VS Code to Cursor."
+
+Return ONLY the merged sentence — no markdown, no quotes, no JSON."#;
+
+/// Build the user message for the history-preserving rewrite: the OLD and NEW
+/// memories with their event dates (or "unknown date" when absent).
+fn build_rewrite_user_message(
+    old_content: &str,
+    new_content: &str,
+    old_date: Option<&str>,
+    new_date: Option<&str>,
+) -> String {
+    format!(
+        "OLD memory (from {}): {}\nNEW memory (from {}): {}",
+        old_date.unwrap_or("unknown date"),
+        old_content,
+        new_date.unwrap_or("unknown date"),
+        new_content,
+    )
+}
+
+/// /156: merge old+new into one trajectory-carrying sentence via the LLM.
+///
+/// Returns the rewritten sentence on success. Errors (no API key, non-2xx,
+/// transport/parse failure, or an empty completion) are surfaced to the caller
+/// via `Err` so it can fall back to the original content without blocking the
+/// write. Mirrors [`classify_relation`]'s HTTP shape.
+pub async fn rewrite_with_history(
+    client: &Client,
+    llm_config: &LlmConfig,
+    model: &str,
+    old_content: &str,
+    new_content: &str,
+    old_date: Option<&str>,
+    new_date: Option<&str>,
+) -> Result<String> {
+    let api_key = llm_config
+        .get_api_key()
+        .context("OpenAI API key not configured for history-preserving rewrite")?;
+
+    let user_message = build_rewrite_user_message(old_content, new_content, old_date, new_date);
+
+    let request_body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": REWRITE_PROMPT},
+            {"role": "user", "content": user_message}
+        ],
+        "max_tokens": 200,
+        "temperature": 0.0
+    });
+
+    let response = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&request_body)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .context("Failed to send history-preserving rewrite request")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_text = response.text().await.unwrap_or_default();
+        anyhow::bail!("Rewrite LLM call failed ({}): {}", status, error_text);
+    }
+
+    #[derive(Deserialize)]
+    struct LlmResponse {
+        choices: Vec<LlmChoice>,
+    }
+    #[derive(Deserialize)]
+    struct LlmChoice {
+        message: LlmMessage,
+    }
+    #[derive(Deserialize)]
+    struct LlmMessage {
+        content: String,
+    }
+
+    let llm_resp: LlmResponse = response
+        .json()
+        .await
+        .context("Failed to parse history-preserving rewrite response")?;
+
+    let content = llm_resp
+        .choices
+        .first()
+        .map(|c| c.message.content.clone())
+        .unwrap_or_default();
+
+    let rewritten = content.trim().trim_matches('"').trim().to_string();
+
+    if rewritten.is_empty() {
+        anyhow::bail!("History-preserving rewrite returned empty content");
+    }
+
+    Ok(rewritten)
 }
 
 /// Trust rank for the supersede guard: a1=3, a2=2, b=1, unknown=0.
@@ -617,4 +738,62 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
         return 0.0;
     }
     (dot / (norm_a * norm_b)) as f64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// /156: the rewrite prompt demands 3rd-person, declarative output.
+    #[test]
+    fn rewrite_prompt_is_third_person_declarative() {
+        assert!(REWRITE_PROMPT.contains("3rd person"));
+        assert!(REWRITE_PROMPT.contains("declarative"));
+    }
+
+    /// /156: the prompt forbids meta-words and provenance.
+    #[test]
+    fn rewrite_prompt_forbids_meta_and_provenance() {
+        assert!(REWRITE_PROMPT.contains("No meta-words"));
+        assert!(REWRITE_PROMPT.contains("No provenance"));
+    }
+
+    /// /156: the forbidden phrases appear as negative examples.
+    #[test]
+    fn rewrite_prompt_lists_forbidden_phrases_as_negatives() {
+        assert!(REWRITE_PROMPT.contains("previously stated"));
+        assert!(REWRITE_PROMPT.contains("according to memory"));
+    }
+
+    /// /156: the few-shot covers a job change (ML engineer -> CEO).
+    #[test]
+    fn rewrite_prompt_fewshot_covers_job_change() {
+        assert!(REWRITE_PROMPT.contains("ML engineer"));
+        assert!(REWRITE_PROMPT.contains("CEO"));
+    }
+
+    /// /156: the few-shot covers a tool-preference change (VS Code -> Cursor).
+    #[test]
+    fn rewrite_prompt_fewshot_covers_tool_pref_change() {
+        assert!(REWRITE_PROMPT.contains("VS Code"));
+        assert!(REWRITE_PROMPT.contains("Cursor"));
+    }
+
+    /// /156: the user message carries both states and both dates.
+    #[test]
+    fn build_rewrite_user_message_includes_both_states_and_dates() {
+        let msg = build_rewrite_user_message(
+            "Anna is an ML engineer.",
+            "Anna is the CEO.",
+            Some("2025-01-01"),
+            Some("2026-06-01"),
+        );
+        assert!(msg.contains("Anna is an ML engineer."));
+        assert!(msg.contains("Anna is the CEO."));
+        assert!(msg.contains("2025-01-01"));
+        assert!(msg.contains("2026-06-01"));
+        // absent dates fall back to a placeholder.
+        let msg2 = build_rewrite_user_message("a", "b", None, None);
+        assert!(msg2.contains("unknown date"));
+    }
 }
