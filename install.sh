@@ -19,6 +19,8 @@
 #   LOOMEM_CONFIG_DIR   — config location (default: ~/.loomem)
 #   LOOMEM_VERSION      — specific version tag, e.g. v0.2.0 (default: latest)
 #   LOOMEM_BASE_URL     — fetch archives from this base URL instead of GitHub
+#   LOOMEM_PORT         — bind port; skips the interactive prompt (default: 3030,
+#                         auto-bumped to the next free port if taken)
 #
 # No sudo required for the default install location.
 
@@ -75,6 +77,79 @@ fetch_to() {
 }
 
 command -v tar >/dev/null 2>&1 || fail "need tar"
+
+# --- sed in-place (GNU vs BSD/macOS) -----------------------------------------
+sed_inplace() {  # sed_inplace <expr> <file>
+  if sed --version >/dev/null 2>&1; then
+    sed -i "$1" "$2"      # GNU
+  else
+    sed -i '' "$1" "$2"   # BSD / macOS
+  fi
+}
+
+# --- port selection ----------------------------------------------------------
+DEFAULT_PORT=3030
+
+port_in_use() {  # $1 = port — return 0 if something is already listening
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+  elif command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -qE "[:.]$1[[:space:]]"
+  elif command -v nc >/dev/null 2>&1; then
+    nc -z 127.0.0.1 "$1" >/dev/null 2>&1
+  else
+    return 1   # no probe available — assume free
+  fi
+}
+
+first_free_port() {  # $1 = starting port
+  p="$1"
+  while port_in_use "$p"; do
+    p=$((p + 1))
+    [ "$p" -gt 65000 ] && break
+  done
+  printf '%s' "$p"
+}
+
+# Resolves $PORT. Honors $LOOMEM_PORT non-interactively; otherwise suggests a
+# free port (avoiding conflicts) and asks via /dev/tty so it also works when the
+# script is piped to `sh` (curl | sh leaves stdin pointing at the pipe).
+choose_port() {
+  base="$DEFAULT_PORT"
+  if [ "${CONFIG_EXISTED:-no}" = yes ]; then
+    cur="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$CONFIG_DIR/config.toml" 2>/dev/null | head -n1)"
+    [ -n "${cur:-}" ] && base="$cur"
+  fi
+
+  if [ -n "${LOOMEM_PORT:-}" ]; then
+    PORT="$LOOMEM_PORT"
+    port_in_use "$PORT" && say "WARNING: port $PORT is already in use — the server may fail to start."
+  else
+    suggested="$base"
+    port_in_use "$base" && suggested="$(first_free_port "$base")"
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+      if [ "$suggested" != "$base" ]; then
+        printf 'Port %s is in use. Port for Loomem [%s]: ' "$base" "$suggested" > /dev/tty
+      else
+        printf 'Port for Loomem [%s]: ' "$suggested" > /dev/tty
+      fi
+      read PORT < /dev/tty || PORT=""
+      PORT="${PORT:-$suggested}"
+      if port_in_use "$PORT"; then
+        alt="$(first_free_port "$PORT")"
+        printf 'Port %s is in use; using %s instead.\n' "$PORT" "$alt" > /dev/tty
+        PORT="$alt"
+      fi
+    else
+      PORT="$suggested"
+      [ "$PORT" != "$base" ] && say "Port $base in use; selected free port $PORT (override with LOOMEM_PORT)."
+    fi
+  fi
+
+  case "$PORT" in
+    ''|*[!0-9]*) fail "invalid port: '$PORT'" ;;
+  esac
+}
 
 # --- platform detection ------------------------------------------------------
 OS="$(uname -s)"
@@ -207,6 +282,8 @@ done
 
 # First-install config templates (never overwrite existing ones)
 mkdir -p "$CONFIG_DIR"
+CONFIG_EXISTED=no
+[ -e "$CONFIG_DIR/config.toml" ] && CONFIG_EXISTED=yes
 for f in config.toml entities.toml.example synonyms.toml.example; do
   if [ ! -e "$CONFIG_DIR/$f" ]; then
     cp "$TMP/${PKG}/$f" "$CONFIG_DIR/$f"
@@ -217,13 +294,20 @@ if [ ! -e "$CONFIG_DIR/entities.toml" ]; then
   cp "$TMP/${PKG}/entities.toml.example" "$CONFIG_DIR/entities.toml"
 fi
 
+# Pick a port (avoids conflicts; prompts when run interactively) and write it
+# into config.toml — the server reads [server].port, not the environment.
+choose_port
+if [ -f "$CONFIG_DIR/config.toml" ] && grep -qE '^[[:space:]]*port[[:space:]]*=' "$CONFIG_DIR/config.toml"; then
+  sed_inplace "s/^[[:space:]]*port[[:space:]]*=.*/port = $PORT/" "$CONFIG_DIR/config.toml"
+fi
+
 say ""
 say "Installed:"
 say "  $INSTALL_DIR/loomem-server"
 say "  $INSTALL_DIR/loomem-cli"
 say "  $INSTALL_DIR/loomem-migrate"
 say ""
-say "Config in $CONFIG_DIR (entities.toml seeded from the example — edit it to personalize)."
+say "Config in $CONFIG_DIR (port $PORT; entities.toml seeded from the example — edit it to personalize)."
 say ""
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*) ;;
@@ -236,7 +320,11 @@ esac
 say "Start the server:"
 say "  cd $CONFIG_DIR && loomem-server"
 say ""
-say "Connect an MCP client (Claude Code example):"
-say "  claude mcp add --transport http loomem http://localhost:3030/mcp"
+say "Connect Claude Code (speaks HTTP natively):"
+say "  claude mcp add --transport http loomem http://localhost:$PORT/mcp"
+say ""
+say "Connect the Claude desktop app / Cowork (needs a stdio bridge — add to"
+say "claude_desktop_config.json, then restart Claude; requires Node/npx):"
+say "  {\"mcpServers\":{\"loomem\":{\"command\":\"npx\",\"args\":[\"-y\",\"mcp-remote\",\"http://127.0.0.1:$PORT/mcp\",\"--allow-http\"]}}}"
 say ""
 say "Docs: https://github.com/${REPO}#readme  (docs/installation.md for the full guide)"

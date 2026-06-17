@@ -212,6 +212,12 @@ Edit `claude_desktop_config.json`:
 
 Restart Claude Desktop.
 
+> The `url` form above is for a **remote instance reachable over HTTPS**. If Loomem
+> runs **locally** over plain HTTP (`http://127.0.0.1:<port>`), the desktop app can't
+> use a bare `http://localhost` URL — bridge it to stdio with
+> `"command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"]`.
+> See the [User Guide](user-guide.md#claude-desktop-macos--windows).
+
 ### Claude Code (CLI / VS Code)
 
 Add to `.mcp.json` in your project or global config:

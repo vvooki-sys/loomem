@@ -22,7 +22,7 @@ LOOMEM_HOME="${LOOMEM_HOME:-$HOME/.loomem}"
 BIN_DIR="$LOOMEM_HOME/bin"
 MODELS_DIR="$LOOMEM_HOME/models"
 LOG_DIR="$LOOMEM_HOME/logs"
-PORT="${LOOMEM_PORT:-3030}"
+if [ -n "${LOOMEM_PORT:-}" ]; then PORT="$LOOMEM_PORT"; LOOMEM_PORT_SET=1; else PORT=3030; fi
 LABEL="${LOOMEM_AGENT_LABEL:-com.loomem.server}"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
@@ -30,6 +30,47 @@ say()  { printf '%s\n' "$*"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$*"; }
 fail() { printf '\nLoomem installer: %s\n' "$*" >&2; exit 1; }
+
+port_in_use() {  # $1 = port — return 0 if something is already listening
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+}
+first_free_port() {  # $1 = starting port
+  p="$1"
+  while port_in_use "$p"; do p=$((p + 1)); [ "$p" -gt 65000 ] && break; done
+  printf '%s' "$p"
+}
+# Resolve $PORT: honor $LOOMEM_PORT non-interactively, else suggest a free port
+# (avoiding conflicts with anything already listening) and ask in the Terminal.
+choose_port() {
+  if [ -n "${LOOMEM_PORT_SET:-}" ]; then
+    port_in_use "$PORT" && warn "port $PORT is in use — the server may fail to start."
+    return
+  fi
+  # Respect an existing install's port as the default (re-run safe).
+  if [ -f "$LOOMEM_HOME/config.toml" ]; then
+    cur="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$LOOMEM_HOME/config.toml" 2>/dev/null | head -n1)"
+    [ -n "${cur:-}" ] && PORT="$cur"
+  fi
+  suggested="$PORT"
+  port_in_use "$PORT" && suggested="$(first_free_port "$PORT")"
+  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    if [ "$suggested" != "$PORT" ]; then
+      printf 'Port %s is in use. Port for Loomem [%s]: ' "$PORT" "$suggested" > /dev/tty
+    else
+      printf 'Port for Loomem [%s]: ' "$suggested" > /dev/tty
+    fi
+    read ans < /dev/tty || ans=""
+    PORT="${ans:-$suggested}"
+    if port_in_use "$PORT"; then
+      alt="$(first_free_port "$PORT")"
+      printf 'Port %s is in use; using %s instead.\n' "$PORT" "$alt" > /dev/tty
+      PORT="$alt"
+    fi
+  else
+    PORT="$suggested"
+  fi
+  case "$PORT" in ''|*[!0-9]*) fail "invalid port: '$PORT'" ;; esac
+}
 
 say ""
 say "Loomem installer"
@@ -61,12 +102,14 @@ done
 if [ ! -e "$LOOMEM_HOME/entities.toml" ] && [ -f "$LOOMEM_HOME/_seed/entities.toml.example" ]; then
   cp "$LOOMEM_HOME/_seed/entities.toml.example" "$LOOMEM_HOME/entities.toml"
 fi
-# Keep the server's bind port in sync with what we health-check and advertise
+# Ask which port to use (suggests a free one if the default is taken), then keep
+# the server's bind port in sync with what we health-check and advertise
 # (the server reads [server].port from config.toml, not the environment).
+choose_port
 if [ -f "$LOOMEM_HOME/config.toml" ]; then
-  sed -i '' "s/^port = .*/port = $PORT/" "$LOOMEM_HOME/config.toml" 2>/dev/null || true
+  sed -i '' "s/^[[:space:]]*port[[:space:]]*=.*/port = $PORT/" "$LOOMEM_HOME/config.toml" 2>/dev/null || true
 fi
-ok "config ready (embeddings run locally — no API key needed)"
+ok "config ready on port $PORT (embeddings run locally — no API key needed)"
 
 # --- 3. clear Gatekeeper quarantine on the unsigned binaries -----------------
 # The installer itself was approved by the user (right-click → Open); we can
@@ -119,6 +162,15 @@ else
   say "    URL:  http://127.0.0.1:$PORT/mcp"
   say "    (Claude Code:  claude mcp add --transport http loomem http://127.0.0.1:$PORT/mcp)"
 fi
+
+# The Claude *desktop app* (and Cowork) speak stdio, not HTTP, and reject a bare
+# http://localhost connector — so they need an mcp-remote bridge regardless of
+# whether Claude Code was wired up above.
+say ""
+say "Using the Claude desktop app or Cowork? It needs a stdio bridge (requires"
+say "Node/npx). Add this to ~/Library/Application Support/Claude/claude_desktop_config.json"
+say "and restart Claude:"
+say "    {\"mcpServers\":{\"loomem\":{\"command\":\"npx\",\"args\":[\"-y\",\"mcp-remote\",\"http://127.0.0.1:$PORT/mcp\",\"--allow-http\"]}}}"
 
 say ""
 say "Done. Loomem remembers across conversations, fully on this Mac."

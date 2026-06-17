@@ -21,6 +21,22 @@ To connect Claude Code manually (if it wasn't auto-detected):
 claude mcp add --transport http loomem http://127.0.0.1:3030/mcp
 ```
 
+To connect the **Claude desktop app** (or Cowork) instead: it speaks stdio, not
+HTTP, so bridge the local endpoint with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)
+(needs Node 18+). Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`
+and restart Claude (swap `3030` for the port you chose during install):
+
+```json
+{
+  "mcpServers": {
+    "loomem": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"]
+    }
+  }
+}
+```
+
 ### Uninstalling
 
 ```sh
@@ -32,9 +48,11 @@ sh ~/.loomem/uninstall.command --purge    # also deletes ~/.loomem/data
 
 - **Nothing on `/health`** — check `~/.loomem/logs/stderr.log`. The first start
   loads the embedding model and can take a few seconds.
-- **Port 3030 in use** — another Loomem (or service) holds the port. The
-  installer binds the port from `~/.loomem/config.toml` (`[server].port`); edit
-  it and reload: `launchctl bootout gui/$(id -u)/com.loomem.server && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.loomem.server.plist`.
+- **Port already in use** — the installer detects this and offers a free port
+  (default `3030`); accept the suggestion or type your own. To change it later,
+  edit `[server].port` in `~/.loomem/config.toml` and reload:
+  `launchctl bootout gui/$(id -u)/com.loomem.server && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.loomem.server.plist`.
+  Set `LOOMEM_PORT` before running the installer to skip the prompt entirely.
 - **Service status** — `launchctl print gui/$(id -u)/com.loomem.server`.
 
 ## For the maintainer — building the installer

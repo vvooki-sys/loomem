@@ -20,6 +20,21 @@ cd ~/.loomem && loomem-server
 claude mcp add --transport http loomem http://localhost:3030/mcp
 ```
 
+### 2b. Or connect the Claude desktop app (and Cowork)
+
+The Claude **desktop app** connects to local servers over **stdio**, not HTTP, and its custom-connector box only accepts an `https://` URL — so `http://localhost` won't paste in. Bridge it with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node 18+). Add this to `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`), then fully restart Claude:
+
+```json
+{
+  "mcpServers": {
+    "loomem": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"]
+    }
+  }
+}
+```
+
 ### 3. Try it
 
 In Claude, say:

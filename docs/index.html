@@ -762,8 +762,10 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
         <div class="code">claude mcp add --transport http loomem http://localhost:3030/mcp</div>
       </div>
       <div class="client">
-        <h4><span class="d"></span>Claude (claude.ai / desktop)</h4>
-        <p>Expose your instance behind TLS, set <code>SERVER_ORIGIN</code>, then add the remote connector pointing at <code>https://your-domain/mcp</code>. OAuth dynamic client registration works out of the box.</p>
+        <h4><span class="d"></span>Claude desktop app &amp; Cowork</h4>
+        <p>The desktop app connects to local servers over <strong>stdio</strong>, and its custom-connector box only takes an <code>https://</code> URL — so <code>http://localhost</code> won't paste in. Bridge it with <code>mcp-remote</code> in <code>claude_desktop_config.json</code>, then restart Claude:</p>
+        <div class="code">"loomem": {<br>&nbsp;&nbsp;"command": "npx",<br>&nbsp;&nbsp;"args": ["-y", "mcp-remote",<br>&nbsp;&nbsp;&nbsp;&nbsp;"http://127.0.0.1:3030/mcp", "--allow-http"]<br>}</div>
+        <p>Running Loomem on another machine? Front it with TLS, set <code>SERVER_ORIGIN</code>, and add it as a remote <code>https://your-domain/mcp</code> connector instead (OAuth DCR works out of the box).</p>
       </div>
       <div class="client">
         <h4><span class="d"></span>ChatGPT</h4>

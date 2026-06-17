@@ -114,9 +114,26 @@ Loomem speaks MCP over streamable HTTP at `/mcp`. Any MCP-capable client works; 
 claude mcp add --transport http loomem http://localhost:3030/mcp
 ```
 
-### Claude (claude.ai / desktop) — remote connector
+### Claude desktop app (and Cowork) — local stdio bridge
 
-claude.ai connects to remote MCP servers over HTTPS. Expose your instance behind a reverse proxy with TLS (or a tunnel like Cloudflare Tunnel), set `SERVER_ORIGIN=https://your-domain` (required so OAuth metadata advertises the right URL), then add the connector in Claude settings pointing at `https://your-domain/mcp`. Loomem supports OAuth dynamic client registration out of the box (`/.well-known/oauth-authorization-server`).
+The Claude **desktop app** (and Cowork) connect to *local* MCP servers over **stdio**, not HTTP, and the "Add custom connector" box in Settings only accepts an `https://` URL — so you cannot paste `http://localhost:3030/mcp` there. Bridge Loomem's local HTTP endpoint to stdio with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node 18+, ships with `npx`). Add this to `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows: `%APPDATA%\Claude\claude_desktop_config.json`), then fully restart Claude:
+
+```json
+{
+  "mcpServers": {
+    "loomem": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"]
+    }
+  }
+}
+```
+
+`--allow-http` is required because the endpoint is plain HTTP on localhost. If you enabled an auth token, append `"--header", "Authorization: Bearer ${LOOMEM_AUTH_TOKEN}"` to `args` and add an `"env": { "LOOMEM_AUTH_TOKEN": "<your token>" }` block. This same stdio-bridge config works for any other desktop client that only speaks stdio. (Claude **Code** is the exception — it speaks HTTP natively, so use the `claude mcp add` recipe above instead of a bridge.)
+
+### Claude — remote connector (HTTPS, hosted elsewhere)
+
+To connect to a Loomem instance running on another machine, claude.ai/desktop's remote connector talks HTTPS. Expose your instance behind a reverse proxy with TLS (or a tunnel like Cloudflare Tunnel), set `SERVER_ORIGIN=https://your-domain` (required so OAuth metadata advertises the right URL), then add the connector in Claude settings pointing at `https://your-domain/mcp`. Loomem supports OAuth dynamic client registration out of the box (`/.well-known/oauth-authorization-server`).
 
 ### ChatGPT — custom connector
 

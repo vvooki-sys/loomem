@@ -272,6 +272,9 @@ restartPolicyMaxRetries = 3
 }
 </code></pre>
 <p>Restart Claude Desktop.</p>
+<blockquote>
+<p>The <code>url</code> form above is for a <strong>remote instance reachable over HTTPS</strong>. If Loomem runs <strong>locally</strong> over plain HTTP (<code>http://127.0.0.1:&lt;port&gt;</code>), the desktop app can't use a bare <code>http://localhost</code> URL — bridge it to stdio with <code>&quot;command&quot;: &quot;npx&quot;, &quot;args&quot;: [&quot;-y&quot;, &quot;mcp-remote&quot;, &quot;http://127.0.0.1:3030/mcp&quot;, &quot;--allow-http&quot;]</code>. See the <a href="../user-guide.md">User Guide</a>.</p>
+</blockquote>
 <h3 id="claude-code-cli-vs-code">Claude Code (CLI / VS Code)</h3>
 <p>Add to <code>.mcp.json</code> in your project or global config:</p>
 <pre><code class="language-json">{

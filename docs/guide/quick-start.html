@@ -101,6 +101,17 @@ Every fact, decision, or preference you share gets remembered.</p>
 <h3 id="2-connect-claude-code">2. Connect Claude Code</h3>
 <pre><code class="language-bash">claude mcp add --transport http loomem http://localhost:3030/mcp
 </code></pre>
+<h3 id="2b-connect-claude-desktop">2b. Or connect the Claude desktop app (and Cowork)</h3>
+<p>The Claude <strong>desktop app</strong> connects to local servers over <strong>stdio</strong>, not HTTP, and its custom-connector box only accepts an <code>https://</code> URL — so <code>http://localhost</code> won't paste in. Bridge it with <a href="https://www.npmjs.com/package/mcp-remote"><code>mcp-remote</code></a> (needs Node 18+). Add this to <code>claude_desktop_config.json</code> (macOS: <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>), then fully restart Claude:</p>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;loomem&quot;: {
+      &quot;command&quot;: &quot;npx&quot;,
+      &quot;args&quot;: [&quot;-y&quot;, &quot;mcp-remote&quot;, &quot;http://127.0.0.1:3030/mcp&quot;, &quot;--allow-http&quot;]
+    }
+  }
+}
+</code></pre>
 <h3 id="3-try-it">3. Try it</h3>
 <p>In Claude, say:</p>
 <blockquote>
