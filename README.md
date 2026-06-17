@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/loomem-banner.svg" alt="Loomem — Your context, woven. The context layer that's yours." width="100%">
+<img src="docs/assets/loomem-banner.svg" alt="Loomem — Your context, woven. The context layer your AI agents work from." width="100%">
 
 <br>
 
@@ -16,12 +16,12 @@
 
 ---
 
-Loomem is an open-source, self-hosted long-term memory engine for LLM agents, written in Rust and served over MCP. Single binary, local-first, model-agnostic.
+Loomem is the open-source context layer for your LLM agents — a single Rust binary on your laptop, served over MCP, that feeds Claude, ChatGPT, Codex, or any MCP client the facts, decisions, and history they need to do real work for you. Swap the model, switch the tool; your context follows.
 
-Loomem stores structured knowledge extracted from conversations, and serves it back to any MCP-capable client (Claude, Cursor, custom agents) through hybrid retrieval:
+Loomem stores structured knowledge extracted from conversations, and serves it back to any MCP-capable client (Claude, ChatGPT, Codex, Cursor, your own agents) through hybrid retrieval:
 
 - **Hybrid search** — BM25 (Tantivy) + vector embeddings + entity graph signals, fused with reciprocal-rank fusion.
-- **Consolidation** — background workers merge related facts, resolve contradictions, and decay stale memories ("dreaming").
+- **Consolidation** — background workers merge related facts, resolve contradictions, and let stale ones decay ("dreaming").
 - **Bitemporal model** — facts carry both ingestion time and event time (`valid_from` / `valid_until`), so "what did I know in March" and "what happened in March" are different queries.
 - **Entity graph** — people, projects, and technologies are extracted into a graph with aliases and relations, used both for retrieval and exploration.
 - **MCP-native** — 14 `memory_*` tools over the standard MCP HTTP transport, including OAuth dynamic client registration for remote connectors.
@@ -30,20 +30,6 @@ Loomem stores structured knowledge extracted from conversations, and serves it b
 Built in Rust on RocksDB + Tantivy. Single binary, no external services required.
 
 > **Status: early.** The engine has been in daily personal use for a while, but the public API and storage format may still change. Expect rough edges; issues and PRs are welcome.
-
-## How it compares
-
-An honest snapshot (June 2026) of Loomem next to other open-source memory layers for LLM agents. Verify before relying on it — the field moves fast.
-
-| | Loomem | mem0 | Zep | Letta | cognee |
-|---|---|---|---|---|---|
-| Open source | ✅ Apache-2.0 | ✅ + SaaS | ✅ (Graphiti) + SaaS | ✅ + SaaS | ✅ |
-| Self-hosted / local-first | ✅ | ✅ | ✅ | ✅ | ✅ |
-| External services required | ❌ one binary | vector DB | graph + DB | DB | vector + graph DB |
-| Language | Rust | Python | Python | Python | Python |
-| MCP-native | ✅ | ✅ | partial | partial | ✅ |
-| Bitemporal (event vs ingest time) | ✅ | ❌ | ✅ | ❌ | partial |
-| Offline embeddings (no API) | ✅ ONNX | ❌ | ❌ | ❌ | partial |
 
 ## Quickstart
 
@@ -54,11 +40,6 @@ From nothing to Claude remembering things across conversations, on macOS or Linu
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/install.sh | sh
 ```
-
-> Repo still private? Install through the [GitHub CLI](https://cli.github.com) instead — same script, authenticated:
-> ```bash
-> gh api repos/vvooki-sys/loomem/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
-> ```
 
 **2. Put `~/.loomem/bin` on your PATH** (the installer prints this too):
 
@@ -97,14 +78,6 @@ Other clients (claude.ai, ChatGPT, OpenClaw), TLS/remote exposure, and the full 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/install.sh | sh
 ```
-
-> **While this repository is private**, the raw URL above requires authentication. Use the [GitHub CLI](https://cli.github.com) instead — same script, authenticated transparently:
->
-> ```bash
-> gh api repos/vvooki-sys/loomem/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
-> ```
->
-> The installer detects your `gh` login (or a `GH_TOKEN`) automatically and downloads release assets through the GitHub API.
 
 Installs `loomem-server`, `loomem-cli`, and `loomem-migrate` to `~/.loomem/bin` (no sudo) and drops config templates into `~/.loomem`. Pin a version with `LOOMEM_VERSION=v0.2.0`, change the location with `LOOMEM_INSTALL_DIR`. Archives are verified against `SHA256SUMS` from the [releases page](https://github.com/vvooki-sys/loomem/releases).
 
@@ -174,7 +147,7 @@ For a remote OpenClaw gateway, point `--url` at your HTTPS endpoint instead.
 
 ### Standalone server notes
 
-One Loomem instance can serve several clients at once (Claude Code locally, ChatGPT through the HTTPS endpoint, etc.) — they share the same memory. Keep the bind address `127.0.0.1` unless you front it with TLS + auth; never expose the bare HTTP port to the internet.
+One Loomem instance can serve several clients at once (Claude Code locally, ChatGPT through the HTTPS endpoint, etc.) — they share the same context. Keep the bind address `127.0.0.1` unless you front it with TLS + auth; never expose the bare HTTP port to the internet.
 
 ## Architecture
 
@@ -214,7 +187,7 @@ Workspace crates: `loomem-core` (engine), `loomem-server` (HTTP/MCP server), `lo
 ## FAQ
 
 **What is Loomem?**
-An open-source, self-hosted long-term memory engine for LLM agents. Written in Rust, it runs as a single binary on RocksDB and Tantivy and is served over the Model Context Protocol (MCP). It stores facts, decisions, and preferences and serves them back to any model, so your context stays portable and local-first.
+The open-source context layer for LLM agents. Written in Rust, it runs as a single binary on RocksDB and Tantivy and is served over the Model Context Protocol (MCP). It gives Claude, ChatGPT, Codex, or any MCP client the facts, decisions, and history they need to do real work for you — portable, local-first, and yours.
 
 **How is Loomem different from mem0, Zep, Letta, and cognee?**
 Loomem ships as a single Rust binary with no external services — most alternatives need a separate vector and/or graph database. It leads on context ownership and portability, runs fully self-hosted and local-first, supports offline embeddings via local ONNX models, and is MCP-native out of the box.
@@ -223,13 +196,13 @@ Loomem ships as a single Rust binary with no external services — most alternat
 Yes — Apache-2.0, free to self-host. Source is in this repository.
 
 **Does Loomem require an internet connection or OpenAI?**
-No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching memories work fully offline. An OpenAI API key is optional and only enhances LLM-based consolidation, extraction, and contradiction detection; without it those steps fall back to regex.
+No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching context works fully offline. An OpenAI API key is optional and only enhances LLM-based consolidation, extraction, and contradiction detection; without it those steps fall back to regex.
 
 **Which LLM clients can connect?**
 Any MCP-capable client. Loomem speaks MCP over streamable HTTP and provides recipes for Claude, Claude Code, ChatGPT, and Cursor, plus OAuth dynamic client registration for remote connectors.
 
 **Why not just use ChatGPT or Claude built-in memory?**
-Built-in memory is locked to one vendor. Loomem keeps your context portable across every tool and model, self-hosted and owned by you, with a structured entity graph and bitemporal history a single product's memory doesn't give you.
+Built-in memory is locked to one vendor. Loomem keeps your context portable across every tool and model, self-hosted and owned by you, with a structured entity graph and bitemporal history a single vendor's feature doesn't give you.
 
 ## License
 

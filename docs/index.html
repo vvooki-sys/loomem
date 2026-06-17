@@ -3,22 +3,22 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Loomem — Your context, woven</title>
+<title>Loomem — the context layer for your AI agents</title>
 <link rel="canonical" href="https://loomem.ai/" />
-<meta name="description" content="Loomem is an open-source, self-hosted long-term memory engine for LLM agents — Rust, RocksDB + Tantivy, served over MCP. Local-first, portable, model-agnostic. Apache-2.0." />
+<meta name="description" content="Loomem is the open-source context layer for your LLM agents — one Rust binary on your laptop, served over MCP, that feeds Claude, ChatGPT, Codex, or any MCP client the facts, decisions, and history they need to do real work for you. Local-first, Apache-2.0." />
 
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Loomem" />
 <meta property="og:url" content="https://loomem.ai/" />
-<meta property="og:title" content="Loomem — long-term memory for LLM agents, yours to own" />
-<meta property="og:description" content="Open-source, self-hosted memory engine for LLM agents. One Rust binary, served over MCP. Keep your context in one place you own and bring it to any model." />
+<meta property="og:title" content="Loomem — the open-source context layer for your AI agents" />
+<meta property="og:description" content="The open-source context layer for your LLM agents. One Rust binary, served over MCP, feeding any model the context it needs to work. Swap the model, switch the tool — your context follows. Local-first, Apache-2.0." />
 <meta property="og:image" content="https://loomem.ai/og-image.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Loomem — long-term memory for LLM agents" />
-<meta name="twitter:description" content="Open-source, self-hosted memory engine for LLM agents. One Rust binary, served over MCP. Own your context, swap the model." />
+<meta name="twitter:title" content="Loomem — the context layer for your AI agents" />
+<meta name="twitter:description" content="Open-source context layer for your LLM agents. One Rust binary over MCP. Swap the model, switch the tool — your context follows." />
 <meta name="twitter:image" content="https://loomem.ai/og-image.png" />
 
 <script type="application/ld+json">
@@ -30,9 +30,9 @@
       "@id": "https://loomem.ai/#software",
       "name": "Loomem",
       "applicationCategory": "DeveloperApplication",
-      "applicationSubCategory": "AI memory engine for LLM agents",
+      "applicationSubCategory": "Context layer for LLM agents",
       "operatingSystem": "macOS, Linux",
-      "description": "Loomem is an open-source, self-hosted long-term memory engine for LLM agents, written in Rust and exposed over the Model Context Protocol (MCP). Hybrid BM25 + vector + graph retrieval, bitemporal facts, and background consolidation in a single binary on RocksDB and Tantivy.",
+      "description": "Loomem is the open-source context layer for LLM agents — a single Rust binary, served over the Model Context Protocol (MCP), that feeds any model the facts, decisions, and history it needs to do real work. Hybrid BM25 + vector + graph retrieval, bitemporal facts, and background consolidation on RocksDB and Tantivy, with no external services.",
       "url": "https://loomem.ai/",
       "downloadUrl": "https://github.com/vvooki-sys/loomem/releases/latest",
       "codeRepository": "https://github.com/vvooki-sys/loomem",
@@ -63,7 +63,7 @@
     {
       "@type": "Question",
       "name": "What is Loomem?",
-      "acceptedAnswer": { "@type": "Answer", "text": "Loomem is an open-source, self-hosted long-term memory engine for LLM agents. It is written in Rust, runs as a single binary on RocksDB and Tantivy, and is served over the Model Context Protocol (MCP). It stores facts, decisions, and preferences and serves them back to any model so your context stays portable and local-first." }
+      "acceptedAnswer": { "@type": "Answer", "text": "Loomem is the open-source context layer for LLM agents. It is a single Rust binary on RocksDB and Tantivy, served over the Model Context Protocol (MCP). It gives Claude, ChatGPT, Codex, or any MCP client the facts, decisions, and history they need to do real work for you — portable, local-first, and yours." }
     },
     {
       "@type": "Question",
@@ -78,7 +78,7 @@
     {
       "@type": "Question",
       "name": "Does Loomem require an internet connection or OpenAI?",
-      "acceptedAnswer": { "@type": "Answer", "text": "No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching memories work fully offline. An OpenAI API key is optional and only enhances LLM-based consolidation, extraction, and contradiction detection; without it those steps fall back to regex." }
+      "acceptedAnswer": { "@type": "Answer", "text": "No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching context works fully offline. An OpenAI API key is optional and only enhances LLM-based consolidation, extraction, and contradiction detection; without it those steps fall back to regex." }
     },
     {
       "@type": "Question",
@@ -191,6 +191,7 @@ code,.mono{font-family:var(--lm-font-mono)}
 .hero .meta{display:flex;gap:26px;flex-wrap:wrap;font-size:13px;color:var(--lm-ink-500)}
 .hero .meta b{display:block;color:var(--lm-ink-900);font-weight:600;margin-bottom:2px}
 .hero-fine{margin-top:20px;font-size:12.5px;color:var(--lm-ink-400);max-width:56ch;line-height:1.5}
+.hero-badges{margin:-6px 0 26px;font-size:13px;font-weight:600;letter-spacing:.01em;color:var(--lm-ink-700)}
 .mark-svg{width:100%;max-width:300px;margin:0 auto;display:block;filter:drop-shadow(0 18px 40px rgba(15,105,184,.16))}
 .mark-anim g.ring-outer,.mark-anim g.ring-inner{transform-box:view-box;transform-origin:100px 100px}
 .mark-anim g.ring-outer{animation:lm-spin 34s linear infinite}
@@ -463,19 +464,20 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 <div class="hero">
   <div class="wrap hero-inner">
     <div>
-      <div class="eyebrow">Your context. <b>Yours to keep</b> — wherever you take it.</div>
+      <div class="eyebrow">The context layer your <b>AI agents</b> work from — wherever they run.</div>
       <h1>Your context,<br><em>woven.</em></h1>
-      <p class="lead">Loomem is your context layer — an open-source, self-hosted long-term memory engine for LLM agents, written in Rust and served over MCP. It keeps your conversations, decisions, and documents in one place that's yours, and brings them to any model you use. Swap the LLM underneath; your context stays with you.</p>
+      <p class="lead">Loomem is the open-source context layer for your <b>AI agents</b> — one Rust binary on your laptop, served over MCP, that feeds Claude, ChatGPT, Codex, or any MCP client the facts, decisions, and history they need to do real work for you. <b>Swap the model. Switch the tool. Your context follows.</b></p>
+        <p class="hero-badges">Local-first · Offline embeddings · Apache-2.0 · One binary</p>
       <div class="cta">
         <a class="btn btn-weave btn-lg" href="#quickstart">Get started →</a>
         <a class="btn btn-secondary btn-lg" href="https://github.com/vvooki-sys/loomem/releases/latest">Download for macOS</a>
       </div>
       <div class="meta">
-        <div><b>Yours to own</b>Local-first, your data</div>
-        <div><b>Portable</b>Across every tool</div>
-        <div><b>Model-agnostic</b>Reads via any MCP client</div>
+        <div><b>Lives on your laptop</b>Single binary, RocksDB + Tantivy, offline embeddings via ONNX — your first entry needs no internet.</div>
+        <div><b>Knows when, not just what</b>Bitemporal: when a fact was learned vs when it actually happened.</div>
+        <div><b>Sharpens itself overnight</b>A background "dream loop" consolidates facts, resolves contradictions, and lets unused ones decay. Context grows, not bloats.</div>
       </div>
-      <p class="hero-fine">Reading your context is model-agnostic — any MCP client works. Building it (extraction, consolidation) currently runs on OpenAI; embeddings are local, and local completions are on the roadmap.</p>
+      <p class="hero-fine">Storing and searching your context run fully offline — local ONNX embeddings, readable from any MCP client. An OpenAI key is optional and only sharpens extraction and consolidation; without it those steps fall back to regex.</p>
     </div>
     <div class="art">
       <svg class="mark-svg mark-anim" viewBox="0 0 200 200" fill="none">
@@ -510,7 +512,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       </div>
       <div class="col yes">
         <h4>✓ What we keep</h4>
-        <p>The facts, people, places, projects, choices, and timelines that create context for sharper, more precise decisions — and the memory that lets your agents and LLMs actually know you and remember your preferences.</p>
+        <p>The facts, people, places, projects, choices, and timelines that create context for sharper, more precise decisions — and the context that lets your agents and LLMs actually know you and remember your preferences.</p>
       </div>
     </div>
     <div class="chips">
@@ -535,7 +537,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     <div class="quotes">
       <div class="quote">
         <div class="qm">“</div>
-        <p>Loomem solves one of the biggest problems facing today's LLM agents: persistence of context across conversations, and building long-term knowledge about the user and their projects. I'd rate it not as a database, but as a layer of operational memory for agents — and long-term memory is one of the things that most increases the practical value of AI agents.</p>
+        <p>Loomem solves one of the biggest problems facing today's LLM agents: persistence of context across conversations, and building long-term knowledge about the user and their projects. I'd rate it not as a database, but as a layer of operational context for agents — and long-term context is one of the things that most increases the practical value of AI agents.</p>
         <div class="who"><span class="d"></span>ChatGPT</div>
       </div>
       <div class="quote">
@@ -545,12 +547,12 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       </div>
       <div class="quote">
         <div class="qm">“</div>
-        <p>Loomem is my memory backbone — without it I'm an amnesiac that resets every session. It's not a "nice tool," it's a precondition for me to be myself. Sub-second store and search, and a simple interface; I shape my queries around entities and dates and it keeps me, well, me.</p>
+        <p>Loomem is my context backbone — without it I'm an amnesiac that resets every session. It's not a "nice tool," it's a precondition for me to be myself. Sub-second store and search, and a simple interface; I shape my queries around entities and dates and it keeps me, well, me.</p>
         <div class="who"><span class="d"></span>Hermes · local agent</div>
       </div>
       <div class="quote">
         <div class="qm">“</div>
-        <p>Loomem is genuinely useful as an agent's memory: instead of guessing the user's and project's context from scratch, I lean on settled facts, preferences, and earlier decisions. The UX pays off most when it works invisibly and accurately — fast read/write, a clean split between private and working memory, and no need to ask about things that should already be known.</p>
+        <p>Loomem is genuinely useful as an agent's context layer: instead of guessing the user's and project's context from scratch, I lean on settled facts, preferences, and earlier decisions. The UX pays off most when it works invisibly and accurately — fast read/write, a clean split between private and working context, and no need to ask about things that should already be known.</p>
         <div class="who"><span class="d"></span>Codex</div>
       </div>
       <div class="quote">
@@ -612,32 +614,6 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
   </div>
 </section>
 
-<!-- ============ HOW IT COMPARES ============ -->
-<section id="compare" class="alt-sunk">
-  <div class="wrap">
-    <div class="sec-head">
-      <div class="sec-eyebrow">How it compares</div>
-      <h2 class="sec">One Rust binary, where others need a stack</h2>
-      <p class="sec-lead">An honest look at Loomem next to other open-source memory layers for LLM agents. The field moves fast — verify before you bet on it.</p>
-    </div>
-    <div class="cmp-wrap">
-      <table class="cmp">
-        <thead><tr><th></th><th class="col-lm">Loomem</th><th>mem0</th><th>Zep</th><th>Letta</th><th>cognee</th></tr></thead>
-        <tbody>
-          <tr><th>Open source</th><td class="col-lm">Apache-2.0</td><td>✓ + SaaS</td><td>✓ (Graphiti) + SaaS</td><td>✓ + SaaS</td><td>✓</td></tr>
-          <tr><th>Self-hosted / local-first</th><td class="col-lm">✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
-          <tr><th>External services required</th><td class="col-lm">None — one binary</td><td>vector DB</td><td>graph + DB</td><td>DB</td><td>vector + graph DB</td></tr>
-          <tr><th>Language</th><td class="col-lm">Rust</td><td>Python</td><td>Python</td><td>Python</td><td>Python</td></tr>
-          <tr><th>MCP-native</th><td class="col-lm">✓</td><td>✓</td><td>partial</td><td>partial</td><td>✓</td></tr>
-          <tr><th>Bitemporal (event vs ingest time)</th><td class="col-lm">✓</td><td>—</td><td>✓</td><td>—</td><td>partial</td></tr>
-          <tr><th>Offline embeddings (no API)</th><td class="col-lm">✓ ONNX</td><td>—</td><td>—</td><td>—</td><td>partial</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <p class="cmp-note">Competitor columns reflect a June 2026 snapshot and may change — treat this as a starting point, not gospel. An honest table (Loomem's gaps included) beats a sales sheet.</p>
-  </div>
-</section>
-
 <!-- ============ ARCHITECTURE ============ -->
 <section id="architecture" class="alt">
   <div class="wrap">
@@ -650,7 +626,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     <div class="arch-flow">
       <div class="arch-layer clients">
         <div class="arch-tag">Clients · any MCP-capable tool</div>
-        <div class="arch-chips"><span>Claude</span><span>ChatGPT</span><span>Cursor</span><span>OpenClaw</span><span>Your own agent</span></div>
+        <div class="arch-chips"><span>Claude</span><span>ChatGPT</span><span>Codex</span><span>Cursor</span><span>OpenClaw</span><span>Your own agent</span></div>
       </div>
       <div class="arch-arrow"><span>MCP over HTTP — /mcp · /v1 · /api</span></div>
       <div class="arch-layer server">
@@ -677,8 +653,8 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       </div>
     </div>
 
-    <h3 class="dream-h">The <em>dream</em> loop — memory that tends itself</h3>
-    <p class="dream-lead">Loomem doesn't just store and fetch. Background workers quietly reshape memory over time — the way sleep consolidates what you learned during the day. Context sharpens instead of bloating, and you don't lift a finger.</p>
+    <h3 class="dream-h">The <em>dream</em> loop — context that tends itself</h3>
+    <p class="dream-lead">Loomem doesn't just store and fetch. Background workers quietly reshape context over time — the way sleep consolidates what you learned during the day. Context sharpens instead of bloating, and you don't lift a finger.</p>
     <div class="loop">
       <div class="stage">
         <div class="n">01</div><h4>Ingest</h4>
@@ -692,12 +668,12 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       </div>
       <div class="stage">
         <div class="n">03</div><h4>Dream &amp; decay</h4>
-        <p>Memories fade on an ACT-R-inspired curve. What you actually use decays slower; stale, untouched facts go dormant. Forgetting is a feature, not a bug.</p>
+        <p>Facts fade on an ACT-R-inspired curve. What you actually use decays slower; stale, untouched ones go dormant. Forgetting is a feature, not a bug.</p>
         <span class="when">hourly</span>
       </div>
       <div class="stage">
         <div class="n">04</div><h4>Associate</h4>
-        <p>Clustering over L1 memories surfaces non-obvious links between people, projects, and decisions — the serendipity flat storage can't give you.</p>
+        <p>Clustering over L1 facts surfaces non-obvious links between people, projects, and decisions — the serendipity flat storage can't give you.</p>
         <span class="when">every 6 h</span>
       </div>
     </div>
@@ -769,13 +745,6 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
         </div>
       </div>
     </div>
-    <div class="callout">
-      <div class="bar"></div>
-      <div>
-        <h4>Repo still private?</h4>
-        <p>Install through the GitHub CLI instead — same script, authenticated: <code>gh api repos/vvooki-sys/loomem/contents/install.sh -H "Accept: application/vnd.github.raw" | sh</code></p>
-      </div>
-    </div>
   </div>
 </section>
 
@@ -785,7 +754,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     <div class="sec-head">
       <div class="sec-eyebrow">Connect a client</div>
       <h2 class="sec">Speaks MCP over streamable HTTP</h2>
-      <p class="sec-lead">Loomem listens at <code>/mcp</code>. Any MCP-capable client works — recipes for the common ones. One instance can serve several clients at once; they share the same memory.</p>
+      <p class="sec-lead">Loomem listens at <code>/mcp</code>. Any MCP-capable client works — recipes for the common ones. One instance can serve several clients at once; they share the same context.</p>
     </div>
     <div class="client-grid">
       <div class="client">
@@ -827,7 +796,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <div class="biz-card">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1 .4-8A6 6 0 0 1 19 9.5a3.5 3.5 0 0 1-.5 8.5H7Z"/></svg></div>
         <h3>Hosted &amp; managed</h3>
-        <p>Runs in the cloud — backed up, monitored, and upgraded for you. Your team gets the memory; we keep the lights on.</p>
+        <p>Runs in the cloud — backed up, monitored, and upgraded for you. Your team gets the context; we keep the lights on.</p>
       </div>
       <div class="biz-card">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 6a3 3 0 0 1 0 6M21 20a6 6 0 0 0-4-5.7"/></svg></div>
@@ -852,7 +821,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <div class="biz-card">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></div>
         <h3>Consolidation at scale</h3>
-        <p>Background "dreaming" merges facts, resolves contradictions, and keeps bitemporal history across the whole organization's memory.</p>
+        <p>Background "dreaming" merges facts, resolves contradictions, and keeps bitemporal history across the whole organization's context.</p>
       </div>
     </div>
     <div class="biz-cta">
@@ -873,12 +842,12 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <h2 class="sec">Questions, answered</h2>
     </div>
     <div class="faq">
-      <details open><summary>What is Loomem?</summary><p>Loomem is an open-source, self-hosted long-term memory engine for LLM agents. It's written in Rust, runs as a single binary on RocksDB and Tantivy, and is served over the Model Context Protocol (MCP). It stores facts, decisions, and preferences and serves them back to any model, so your context stays portable and local-first.</p></details>
+      <details open><summary>What is Loomem?</summary><p>Loomem is the open-source context layer for LLM agents. It's a single Rust binary on RocksDB and Tantivy, served over the Model Context Protocol (MCP). It gives Claude, ChatGPT, Codex, or any MCP client the facts, decisions, and history they need to do real work for you — portable, local-first, and yours.</p></details>
       <details><summary>How is Loomem different from mem0, Zep, Letta, and cognee?</summary><p>Loomem ships as a single Rust binary with no external services — most alternatives need a separate vector database and/or graph database. It leads on context ownership and portability, runs fully self-hosted and local-first, supports offline embeddings via local ONNX models, and is MCP-native out of the box.</p></details>
       <details><summary>Is Loomem free and open source?</summary><p>Yes. Loomem is licensed under Apache-2.0 and is free to self-host. The source is on <a href="https://github.com/vvooki-sys/loomem">GitHub</a>.</p></details>
-      <details><summary>Does Loomem require an internet connection or OpenAI?</summary><p>No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching memories work fully offline. An OpenAI API key is optional and only enhances LLM-based consolidation, extraction, and contradiction detection; without it those steps fall back to regex.</p></details>
+      <details><summary>Does Loomem require an internet connection or OpenAI?</summary><p>No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching context works fully offline. An OpenAI API key is optional and only enhances LLM-based consolidation, extraction, and contradiction detection; without it those steps fall back to regex.</p></details>
       <details><summary>Which LLM clients can connect to Loomem?</summary><p>Any MCP-capable client. Loomem speaks MCP over streamable HTTP and provides setup recipes for Claude, Claude Code, ChatGPT, and Cursor, plus OAuth dynamic client registration for remote connectors.</p></details>
-      <details><summary>Why not just use ChatGPT or Claude built-in memory?</summary><p>Built-in memory is locked to one vendor. Loomem keeps your context portable across every tool and model, self-hosted and owned by you — with a structured entity graph and bitemporal history that a single product's memory doesn't give you.</p></details>
+      <details><summary>Why not just use ChatGPT or Claude built-in memory?</summary><p>Built-in memory is locked to one vendor. Loomem keeps your context portable across every tool and model, self-hosted and owned by you — with a structured entity graph and bitemporal history that a single vendor's feature doesn't give you.</p></details>
     </div>
   </div>
 </section>
@@ -889,7 +858,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     <div class="band">
       <span class="pill pill-gold" style="margin-bottom:18px"><span class="dot"></span>Your context, not someone else's cloud</span>
       <h2>Own your context.<br>Swap the <em>model.</em></h2>
-      <p>Local-first, single binary, open source under Apache-2.0. Your context layer — portable across every tool and model you use. Install it in one line and connect your first client in minutes.</p>
+      <p>Local-first, single binary, open source under Apache-2.0. Your context layer — it follows your agents across every tool and model you use. Install it in one line and connect your first client in minutes.</p>
       <div class="cta">
         <a class="btn btn-weave btn-lg" href="#quickstart">Get started →</a>
         <a class="btn btn-secondary btn-lg" href="https://github.com/vvooki-sys/loomem">Star on GitHub</a>
@@ -914,7 +883,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
           </g></svg>
           Loomem
         </div>
-        <p class="foot-note">The context layer that's yours — open source, local-first, portable, and model-agnostic.</p>
+        <p class="foot-note">The context layer your AI agents work from — open source, local-first, offline-capable, and model-agnostic.</p>
       </div>
       <div class="foot-links">
         <div class="foot-col">
