@@ -1,20 +1,20 @@
 # Loomem
 
-> Loomem is an open-source, self-hosted long-term memory engine for LLM agents, written in Rust and exposed over the Model Context Protocol (MCP). It captures facts, decisions, and preferences from your conversations and serves them back to any model — Claude, ChatGPT, Cursor, or your own agent — so your context is portable, local-first, and yours to own. Apache-2.0 licensed; a single binary on RocksDB + Tantivy with no external services.
+> Loomem is the open-source context layer for LLM agents — written in Rust and exposed over the Model Context Protocol (MCP), it captures facts, decisions, and preferences from conversations and feeds them back to any model — Claude, ChatGPT, Codex, or your own agent — so the agent has the context it needs to do real work for the person using it. Swap the model, switch the tool; your context follows. Apache-2.0 licensed; a single binary on RocksDB + Tantivy with no external services.
 
 ## What it is
-- Category: AI memory layer / context layer for LLM agents (not a RAG document store)
+- Category: Context layer for LLM agents (not a RAG document store, not an agent-fleet coordination graph)
 - License: Apache-2.0, open source
 - Language: Rust
 - Storage: single binary, RocksDB (data + graph + embeddings) + Tantivy (full-text)
 - Interface: Model Context Protocol (MCP) over streamable HTTP; 14 `memory_*` tools
 - Deployment: local-first (macOS, Linux), Docker, or any cloud; runs offline with local ONNX embeddings
-- Differentiator vs mem0 / Zep / Letta / cognee: zero external services (one Rust binary), context-ownership/portability framing, bitemporal memory
+- Distinctive: zero external services (one Rust binary), context-layer/portability framing, bitemporal facts, background consolidation ("dreaming")
 
 ## How it works
 - Hybrid retrieval: BM25 (Tantivy) + vector embeddings + entity-graph signals
 - Bitemporal: every fact carries both ingestion time and event time
-- Consolidation ("dreaming"): background workers merge related facts, resolve contradictions, decay stale memories
+- Consolidation ("dreaming"): background workers merge related facts, resolve contradictions, let stale ones decay
 - Knowledge graph: people, projects, and tools linked with aliases and relations
 - Optional AES-256-GCM field-level encryption at rest
 
