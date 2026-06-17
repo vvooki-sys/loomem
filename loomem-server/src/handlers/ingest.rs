@@ -564,11 +564,26 @@ pub async fn store_handler(
                                                     .await
                                                     {
                                                         Ok(rewritten) => {
+                                                            // Sanitize the pre-rewrite original the
+                                                            // same way persist_chunk sanitizes
+                                                            // content (HTML/injection + PII), so
+                                                            // secrets are never persisted raw in the
+                                                            // audit-only original_content field while
+                                                            // the visible content is redacted.
+                                                            let sanitized_orig = state
+                                                                .pii_filter
+                                                                .sanitize(
+                                                                    &loomem_core::sanitizer::sanitize(
+                                                                        &orig,
+                                                                    )
+                                                                    .content,
+                                                                )
+                                                                .0;
                                                             if let Some(ref mut meta) =
                                                                 result_chunk.extraction_meta
                                                             {
                                                                 meta.original_content =
-                                                                    Some(orig);
+                                                                    Some(sanitized_orig);
                                                             }
                                                             result_chunk.content = rewritten;
                                                         }
