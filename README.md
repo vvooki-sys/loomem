@@ -61,10 +61,18 @@ curl http://localhost:3030/health
 # {"status":"ok","version":"0.2.0"}
 ```
 
+> The installer uses port **3030** by default and asks for an alternative if it's already taken (set `LOOMEM_PORT` to skip the prompt). If you picked a different port, use it in the commands below.
+
 **5. Connect Claude Code:**
 
 ```bash
 claude mcp add --transport http loomem http://localhost:3030/mcp
+```
+
+**5b. Using the Claude desktop app (or Cowork) instead?** It connects to local servers over stdio, not HTTP, so bridge it with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node 18+) in `claude_desktop_config.json`, then restart Claude:
+
+```json
+{ "mcpServers": { "loomem": { "command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"] } } }
 ```
 
 **6. Try it.** In Claude: *"Remember that I prefer dark mode in all my tools."* Then, in a fresh conversation: *"What do you know about my preferences?"* — the answer comes back from Loomem.

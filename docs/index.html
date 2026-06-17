@@ -725,7 +725,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
         <div class="num">4</div>
         <div class="body">
           <h4>Check it's alive</h4>
-          <p>In another terminal.</p>
+          <p>In another terminal. The installer uses port <strong>3030</strong> by default and asks for another if it's taken (set <code>LOOMEM_PORT</code> to skip the prompt) — use your port if you changed it.</p>
           <div class="code">curl http://localhost:3030/health<br><span class="c"># {"status":"ok","version":"0.2.0"}</span></div>
         </div>
       </div>
@@ -735,6 +735,8 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
           <h4>Connect Claude Code</h4>
           <p>Add the MCP server over streamable HTTP.</p>
           <div class="code">claude mcp add --transport http loomem http://localhost:3030/mcp</div>
+          <p>Using the Claude <strong>desktop app</strong> (or Cowork) instead? It speaks stdio, not HTTP — bridge it with <code>mcp-remote</code> in <code>claude_desktop_config.json</code>, then restart Claude:</p>
+          <div class="code">"loomem": { "command": "npx",<br>&nbsp;&nbsp;"args": ["-y", "mcp-remote",<br>&nbsp;&nbsp;&nbsp;&nbsp;"http://127.0.0.1:3030/mcp", "--allow-http"] }</div>
         </div>
       </div>
       <div class="step">

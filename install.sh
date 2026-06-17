@@ -127,7 +127,9 @@ choose_port() {
   else
     suggested="$base"
     port_in_use "$base" && suggested="$(first_free_port "$base")"
-    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    # Only prompt if /dev/tty is actually openable — the perm bits can pass while
+    # open() fails with ENXIO when there's no controlling terminal (CI, pipes).
+    if { : >/dev/tty; } 2>/dev/null; then
       if [ "$suggested" != "$base" ]; then
         printf 'Port %s is in use. Port for Loomem [%s]: ' "$base" "$suggested" > /dev/tty
       else
