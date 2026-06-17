@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-17
+
+### Added
+
+- **Native stdio↔HTTP MCP bridge** — `loomem-cli mcp-stdio --url http://127.0.0.1:<port>` proxies a stdio MCP client (the Claude desktop app, Cowork, Cursor, …) to the server's HTTP `/mcp` endpoint, with **no Node/npx required** (a drop-in replacement for `npx mcp-remote`). It reads newline-delimited JSON-RPC on stdin, POSTs each message to `/mcp`, captures and echoes the `mcp-session-id`, and writes replies to stdout; notifications get no reply. `--url` is now a global flag.
+- **Installer port selection** — `install.sh` and the macOS turnkey installer detect a busy port, suggest a free one, and prompt for it (works under `curl | sh` via `/dev/tty`); set `LOOMEM_PORT` to skip the prompt. The chosen port is written into `config.toml`.
+
+### Fixed
+
+- **Robust `/dev/tty` probe** in the installers: the port prompt no longer prints a spurious error when there is no controlling terminal (CI, pipes), and cleanly falls back to auto-selecting a free port.
+
+### Changed
+
+- **Docs** — the Claude desktop app / Cowork connection is now documented as a stdio bridge (native `loomem-cli mcp-stdio` recommended, `mcp-remote` as the universal fallback) across the README, landing page, quick-start, and user guide, clarifying that the desktop app cannot use a bare `http://localhost` connector.
+
 ## [0.2.0] - 2026-06-16
 
 First public release.
