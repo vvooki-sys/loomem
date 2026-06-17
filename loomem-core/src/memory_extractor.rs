@@ -1,7 +1,7 @@
 //! Knowledge extraction pipeline.
 //!
 //! Extracts typed, temporally-annotated facts from conversation text using LLM.
-//! Uses 3-type taxonomy: preference_or_decision, project_state, fact.
+//! Uses 4-type taxonomy: preference_or_decision, project_state, fact, experience.
 
 use anyhow::{Context, Result};
 use reqwest::Client;
@@ -52,10 +52,11 @@ const EXTRACTION_PROMPT: &str = r#"Extract factual knowledge from this conversat
 - "preference_or_decision": Choices, preferences, decisions, opinions. E.g. "Anna prefers dark mode", "Team decided to use Rust for the backend".
 - "project_state": Current state of work, ongoing projects, deadlines, statuses. E.g. "Auth migration is blocked by legal review", "Sprint ends on 2026-03-15".
 - "fact": Biographical, permanent facts. E.g. "Anna is a senior engineer at Acme", "The main repo is github.com/acme/core".
+- "experience": Transferable lesson about how to act — proven procedure, lesson from a mistake, effective strategy, anti-pattern. E.g. "When dispatching long tasks to Claude Code, the full brief must be in the first message — drip-feeding instructions degrades output quality", "Running cargo clippy before cargo test catches most issues earlier and saves CI time".
 
 ## Rules:
 1. Each fact must be a single, self-contained sentence in natural language
-2. Extract: preferences, decisions, facts about people, project states, deadlines, contacts, technical decisions
+2. Extract: preferences, decisions, facts about people, project states, deadlines, contacts, technical decisions, procedural lessons
 3. SKIP: greetings, small talk, questions without answers, uncertain statements, action items, temporary debugging states, summaries
 4. CHANGE RULE: When something changed, always record before→after. E.g. "Anna switched from VS Code to Neovim" (not just "Anna uses Neovim")
 5. THREE DATES MODEL: For each fact, provide:
@@ -69,7 +70,7 @@ const EXTRACTION_PROMPT: &str = r#"Extract factual knowledge from this conversat
 The conversation_date is: {conversation_date}
 
 Return ONLY valid JSON (no markdown, no code blocks):
-{"facts": [{"content": "...", "fact_type": "preference_or_decision"|"project_state"|"fact", "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "confidence": 0.9}]}"#;
+{"facts": [{"content": "...", "fact_type": "preference_or_decision"|"project_state"|"fact"|"experience", "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "confidence": 0.9}]}"#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedFact {
@@ -90,6 +91,7 @@ impl ExtractedFact {
         match self.fact_type.as_str() {
             "preference_or_decision" => crate::storage::FactType::PreferenceOrDecision,
             "project_state" => crate::storage::FactType::ProjectState,
+            "experience" => crate::storage::FactType::Experience,
             _ => crate::storage::FactType::Fact,
         }
     }
@@ -732,5 +734,54 @@ mod tests {
         let t = truncate_reason(&long);
         assert!(t.chars().count() <= MAX_FAILURE_REASON_CHARS + 1);
         assert!(t.ends_with('…'));
+    }
+
+    /// Build a minimal ExtractedFact with the given fact_type string.
+    fn fact_with_type(fact_type: &str) -> ExtractedFact {
+        ExtractedFact {
+            content: "c".to_string(),
+            fact_type: fact_type.to_string(),
+            subject: None,
+            event_date: None,
+            event_date_context: None,
+            confidence: 0.9,
+        }
+    }
+
+    /// /154: "experience" maps to FactType::Experience.
+    #[test]
+    fn to_fact_type_experience() {
+        assert_eq!(
+            fact_with_type("experience").to_fact_type(),
+            crate::storage::FactType::Experience
+        );
+    }
+
+    /// /154: an unknown fact_type still falls back to Fact (backward-safe).
+    #[test]
+    fn to_fact_type_unknown_still_falls_back_to_fact() {
+        assert_eq!(
+            fact_with_type("totally_unknown").to_fact_type(),
+            crate::storage::FactType::Fact
+        );
+    }
+
+    /// /154: the extraction prompt advertises the experience type and its
+    /// definition (capital-T "Transferable lesson").
+    #[test]
+    fn extraction_prompt_contains_experience_type() {
+        assert!(EXTRACTION_PROMPT.contains("\"experience\""));
+        assert!(EXTRACTION_PROMPT.contains("Transferable lesson"));
+    }
+
+    /// /154: FactType::Experience round-trips as the wire value "experience".
+    #[test]
+    fn fact_type_experience_serde_roundtrip() {
+        let json = serde_json::to_string(&crate::storage::FactType::Experience)
+            .expect("serialize Experience");
+        assert_eq!(json, "\"experience\"");
+        let back: crate::storage::FactType =
+            serde_json::from_str(&json).expect("deserialize Experience");
+        assert_eq!(back, crate::storage::FactType::Experience);
     }
 }

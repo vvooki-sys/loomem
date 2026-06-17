@@ -197,6 +197,7 @@ fn parse_structured_response(
     let fact_type = match dominant_type.as_str() {
         "event" => FactType::Event,
         "preference" => FactType::PreferenceOrDecision,
+        "experience" => FactType::Experience,
         _ => FactType::Fact,
     };
 

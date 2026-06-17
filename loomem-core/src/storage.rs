@@ -70,6 +70,7 @@ pub enum FactType {
     ProjectState,
     Fact,
     Event,
+    Experience,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

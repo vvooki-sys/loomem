@@ -49,7 +49,7 @@ Task:
 3. Return JSON only (no markdown):
 {
   "merged_fact": "single sentence — the current truth about this subject",
-  "fact_type": "preference_or_decision"|"project_state"|"fact",
+  "fact_type": "preference_or_decision"|"project_state"|"fact"|"experience",
   "fact_date": "YYYY-MM-DD or null",
   "contradictions": [
     {"old_uuid": "...", "reason": "brief explanation"}
@@ -581,6 +581,7 @@ pub async fn apply_dream_response_for_subject(
         Some("preference_or_decision") => crate::storage::FactType::PreferenceOrDecision,
         Some("project_state") => crate::storage::FactType::ProjectState,
         _ => crate::storage::FactType::Fact,
+        Some("experience") => crate::storage::FactType::Experience,
     };
     let new_chunk = build_dream_chunk(&new_id, &ctx, &dream_resp, source_ids, fact_type);
     let text_doc = build_dream_text_doc(&new_chunk);

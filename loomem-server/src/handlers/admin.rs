@@ -568,6 +568,7 @@ pub async fn api_update_memory_handler(
                 "preference" | "decision" => loomem_core::storage::FactType::PreferenceOrDecision,
                 "project" => loomem_core::storage::FactType::ProjectState,
                 "event" => loomem_core::storage::FactType::Event,
+                "experience" => loomem_core::storage::FactType::Experience,
                 _ => loomem_core::storage::FactType::Fact,
             };
         }

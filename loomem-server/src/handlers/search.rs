@@ -1909,6 +1909,7 @@ fn filter_and_truncate(
                             loomem_core::storage::FactType::ProjectState => "project_state",
                             loomem_core::storage::FactType::Fact => "fact",
                             loomem_core::storage::FactType::Event => "event",
+                            loomem_core::storage::FactType::Experience => "experience",
                         };
                         chunk_type == ft.as_str()
                     });

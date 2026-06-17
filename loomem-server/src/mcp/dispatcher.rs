@@ -218,6 +218,27 @@ fn classify_fact_type(content: &str) -> loomem_core::storage::FactType {
         return loomem_core::storage::FactType::PreferenceOrDecision;
     }
 
+    // Experience keywords (checked before project_state)
+    let exp_keywords = [
+        "lesson",
+        "learned",
+        "always ",
+        "never ",
+        "best practice",
+        "anti-pattern",
+        "antipattern",
+        "tip:",
+        "when you ",
+        "lekcja",
+        "nauczył",
+        "sprawdzon",
+        "unikaj",
+        "strategia",
+    ];
+    if exp_keywords.iter().any(|k| lower.contains(k)) {
+        return loomem_core::storage::FactType::Experience;
+    }
+
     // Project state keywords
     let proj_keywords = [
         "working on",
@@ -812,6 +833,7 @@ async fn tool_reflect(
                 loomem_core::storage::FactType::Fact => "fact",
                 loomem_core::storage::FactType::Event => "event",
             };
+                loomem_core::storage::FactType::Experience => "experience",
             *by_type.entry(ft.to_string()).or_default() += 1;
         } else {
             no_extraction_meta += 1;
@@ -1215,7 +1237,7 @@ async fn tool_ingest_extract(
                     version: 1,
                     memory_type: Some(
                         match fact.fact_type.as_str() {
-                            "fact" | "preference_or_decision" => "static",
+                            "fact" | "preference_or_decision" | "experience" => "static",
                             _ => "dynamic",
                         }
                         .to_string(),
