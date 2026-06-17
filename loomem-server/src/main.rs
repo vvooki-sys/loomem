@@ -1766,6 +1766,7 @@ mod tests {
             extracted_from: None,
             extraction_model: None,
             original_content: None,
+            topic: None,
         });
         chunk
     }

@@ -319,6 +319,7 @@ async fn store_extraction_meta(
         // the pre-/151 None (no LLM touched this chunk's metadata).
         extraction_model: probe_enabled.then(|| state.config.knowledge_extraction.model.clone()),
         original_content: None,
+        topic: None,
     };
     (meta, valid_from_ts)
 }

@@ -271,6 +271,7 @@ fn parse_structured_response(
         extracted_from: None,
         extraction_model: Some(model.to_string()),
         original_content: None,
+        topic: None,
     };
 
     Some(Enrichment {

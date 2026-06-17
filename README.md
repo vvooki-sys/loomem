@@ -243,7 +243,7 @@ Yes — Apache-2.0, free to self-host. Source is in this repository.
 No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching context works fully offline. An OpenAI API key is optional and only enhances LLM-based consolidation, extraction, and contradiction detection; without it those steps fall back to regex.
 
 **Which LLM clients can connect?**
-Any MCP-capable client. Loomem speaks MCP over streamable HTTP and provides recipes for Claude, Claude Code, ChatGPT, and Cursor, plus OAuth dynamic client registration for remote connectors.
+Any MCP-capable client. Loomem speaks MCP over streamable HTTP and provides recipes for Claude, Claude Code, ChatGPT, Codex, and Cursor, plus OAuth dynamic client registration for remote connectors.
 
 **Why not just use ChatGPT or Claude built-in memory?**
 Built-in memory is locked to one vendor. Loomem keeps your context portable across every tool and model, self-hosted and owned by you, with a structured entity graph and bitemporal history a single vendor's feature doesn't give you.

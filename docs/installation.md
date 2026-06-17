@@ -16,17 +16,22 @@ Requirements for the installer: `sh`, `tar`, and `curl` or `wget`. No sudo — e
 
 ## Quick install
 
-**Public repository:**
+The repository is public, so the one-liner needs no authentication:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/install.sh | sh
 ```
 
-**Private repository** (current state) — authenticate with the [GitHub CLI](https://cli.github.com):
+The installer defaults to port **3030** and asks for a free one if it's taken; set `LOOMEM_PORT=NNNN` to pick a port non-interactively.
+
+<details>
+<summary>Installing from a <strong>private fork</strong> (authenticated)</summary>
+
+If your copy of the repo is private, authenticate with the [GitHub CLI](https://cli.github.com):
 
 ```bash
 gh auth login            # once
-gh api repos/vvooki-sys/loomem/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
+gh api repos/<owner>/loomem/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
 ```
 
 No `gh`? A personal access token with `repo` scope works too:
@@ -34,8 +39,10 @@ No `gh`? A personal access token with `repo` scope works too:
 ```bash
 export GH_TOKEN=ghp_xxx
 curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
-  https://api.github.com/repos/vvooki-sys/loomem/contents/install.sh | sh
+  https://api.github.com/repos/<owner>/loomem/contents/install.sh | sh
 ```
+
+</details>
 
 ### What the installer does
 
@@ -54,7 +61,8 @@ curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.gith
 | `LOOMEM_VERSION` | latest release | Pin a tag, e.g. `v0.2.0`. Required for prereleases (`v0.2.0-rc1`), which are excluded from "latest". |
 | `LOOMEM_INSTALL_DIR` | `~/.loomem/bin` | Where binaries go. |
 | `LOOMEM_CONFIG_DIR` | `~/.loomem` | Where config templates go. |
-| `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub token for private-repo downloads. |
+| `LOOMEM_PORT` | `3030` | Bind port written into `config.toml`; skips the interactive prompt and auto-bumps to the next free port if taken. |
+| `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub token for downloads from a private fork. |
 | `LOOMEM_BASE_URL` | — | Fetch archives from a plain HTTP(S) mirror instead of GitHub (requires `LOOMEM_VERSION`). |
 
 Example — pin a version into a custom prefix:
@@ -147,8 +155,8 @@ See [deployment.md](deployment.md) for reverse-proxy, TLS, and cloud options.
 
 | Symptom | Cause / fix |
 |---|---|
-| `could not determine the latest release` | Repo is private and you're unauthenticated → `gh auth login` or set `GH_TOKEN`. Or the only release is a prerelease → pin `LOOMEM_VERSION=v0.2.0-rc1`. |
-| `download failed: … If this repo is private…` | Same as above — the installer can't see the release assets without auth. |
+| `could not determine the latest release` | The only release is a prerelease (excluded from "latest") → pin it with `LOOMEM_VERSION=v0.2.0-rc1`. Installing from a **private fork**? Authenticate first: `gh auth login` or set `GH_TOKEN`. |
+| `download failed: … If this repo is private…` | Network/transient failure on the public repo — re-run. From a **private fork**, the installer can't see release assets without auth (`gh auth login` / `GH_TOKEN`). |
 | `checksum mismatch` | Corrupted or tampered download. Re-run; if it persists, **don't install** — compare against `SHA256SUMS` on the releases page and open an issue. |
 | `WARNING: SHA256SUMS not available` | The release has no checksum file (shouldn't happen for official releases). Install proceeds unverified — treat with suspicion. |
 | `unsupported OS/architecture` | No prebuilt binary for your platform — [build from source](#from-source). |

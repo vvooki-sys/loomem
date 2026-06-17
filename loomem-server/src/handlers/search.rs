@@ -1911,7 +1911,10 @@ fn filter_and_truncate(
                             loomem_core::storage::FactType::Event => "event",
                             loomem_core::storage::FactType::Experience => "experience",
                         };
-                        chunk_type == ft.as_str()
+                        // Match the built-in enum string, or an operator-configured
+                        // custom topic preserved in `meta.topic` (collapses to Fact
+                        // in the enum, so the raw key is the only way to filter it).
+                        chunk_type == ft.as_str() || meta.topic.as_deref() == Some(ft.as_str())
                     });
                     let subject_ok = payload.subject.as_ref().is_none_or(|s| {
                         meta.subject

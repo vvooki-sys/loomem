@@ -90,6 +90,14 @@ pub struct ExtractionMeta {
     /// unchanged).
     #[serde(default)]
     pub original_content: Option<String>,
+    /// Operator-configured custom topic key (from `[knowledge_extraction].topics`)
+    /// when the extracted `fact_type` is not one of the built-in `FactType`
+    /// variants. Built-in types collapse the raw key into the enum, so this
+    /// preserves the configured key (e.g. `risk_item`, `contact`) for filtering.
+    /// `None` for built-in types and for chunks written before this field
+    /// existed (serde default keeps old chunks deserializing unchanged).
+    #[serde(default)]
+    pub topic: Option<String>,
 }
 
 impl ExtractionMeta {
@@ -1883,6 +1891,7 @@ mod tests {
             extracted_from: None,
             extraction_model: None,
             original_content: None,
+            topic: None,
         }
     }
 
@@ -2420,6 +2429,7 @@ mod tests {
             extracted_from: Some("enc-1".to_string()),
             extraction_model: None,
             original_content: None,
+            topic: None,
         });
         store.store_chunk(&chunk).expect("store_chunk");
 
@@ -2523,6 +2533,7 @@ mod tests {
             extracted_from: Some("rt-1".to_string()),
             extraction_model: None,
             original_content: None,
+            topic: None,
         });
         store.store_chunk(&chunk).expect("store_chunk");
 

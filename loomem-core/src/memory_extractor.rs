@@ -169,7 +169,21 @@ impl ExtractedFact {
             "preference_or_decision" => crate::storage::FactType::PreferenceOrDecision,
             "project_state" => crate::storage::FactType::ProjectState,
             "experience" => crate::storage::FactType::Experience,
+            "event" => crate::storage::FactType::Event,
             _ => crate::storage::FactType::Fact,
+        }
+    }
+
+    /// The raw operator-configured topic key when `fact_type` is not a built-in
+    /// variant. Built-in types collapse into [`crate::storage::FactType`], which
+    /// would lose a configured key like `risk_item` or `contact`; this preserves
+    /// it (stored in `ExtractionMeta.topic`) so configured topic filters match.
+    /// Returns `None` for built-in types and empty strings.
+    pub fn custom_topic(&self) -> Option<String> {
+        match self.fact_type.as_str() {
+            "preference_or_decision" | "project_state" | "fact" | "experience" | "event" => None,
+            other if other.trim().is_empty() => None,
+            other => Some(other.to_string()),
         }
     }
 
@@ -190,6 +204,7 @@ impl ExtractedFact {
             extracted_from,
             extraction_model: Some(model.to_string()),
             original_content: None,
+            topic: self.custom_topic(),
         }
     }
 }
@@ -842,6 +857,43 @@ mod tests {
             fact_with_type("totally_unknown").to_fact_type(),
             crate::storage::FactType::Fact
         );
+    }
+
+    /// Greptile P1: an operator-configured custom topic collapses to
+    /// `FactType::Fact` in the enum, but its raw key survives in
+    /// `custom_topic()` / `ExtractionMeta.topic` so configured topic filters
+    /// can still match the extracted memory.
+    #[test]
+    fn custom_topic_preserved_when_not_builtin() {
+        let f = fact_with_type("risk_item");
+        assert_eq!(f.to_fact_type(), crate::storage::FactType::Fact);
+        assert_eq!(f.custom_topic().as_deref(), Some("risk_item"));
+        let meta = f.to_extraction_meta(None, "test-model");
+        assert_eq!(meta.fact_type, crate::storage::FactType::Fact);
+        assert_eq!(meta.topic.as_deref(), Some("risk_item"));
+    }
+
+    /// Built-in types never set a custom topic (and an empty key is ignored).
+    #[test]
+    fn builtin_types_have_no_custom_topic() {
+        for t in [
+            "preference_or_decision",
+            "project_state",
+            "fact",
+            "experience",
+            "event",
+            "",
+        ] {
+            assert_eq!(
+                fact_with_type(t).custom_topic(),
+                None,
+                "{t:?} should not be a custom topic"
+            );
+            assert!(fact_with_type(t)
+                .to_extraction_meta(None, "m")
+                .topic
+                .is_none());
+        }
     }
 
     /// /154: the extraction prompt advertises the experience type and its

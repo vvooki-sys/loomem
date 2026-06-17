@@ -80,12 +80,13 @@ For each observation, classify its type:
 - "event": Something that happened at a specific time (meeting, deployment, trip, purchase)
 - "fact": Timeless knowledge (biographical detail, technical spec, permanent truth)
 - "preference": Subjective choice, opinion, taste, or decision that may change
+- "experience": Transferable lesson about how to act — a proven procedure, a lesson from a mistake, an effective strategy, or an anti-pattern
 
 Rules:
 1. One observation per item — do NOT merge multiple facts
 2. Preserve exact dates, names, numbers — do not generalize
 3. For events, set event_at_raw to the VERBATIM time expression from the text (e.g. "yesterday", "last Friday", "15 marca", "2026-03-15"). If no time expression but context implies a time, use "during this conversation"
-4. For facts and preferences, set event_at_raw to null
+4. For facts, preferences, and experiences, set event_at_raw to null
 5. confidence: 0.9+ for explicit statements, 0.6-0.8 for inferences
 6. importance: "high" for decisions/preferences/deadlines, "medium" for project details, "low" for background/filler
 7. content must be SELF-CONTAINED — reader should understand without the original conversation. Include subject ("User deployed..." not "Deployed...")

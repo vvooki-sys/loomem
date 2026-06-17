@@ -495,6 +495,7 @@ fn build_dream_chunk(
             extracted_from: Some(source_ids.join(",")),
             extraction_model: Some(ctx.model.to_string()),
             original_content: None,
+            topic: None,
         }),
         deleted_at: None,
         // Cycle /40: dream output is assistant_generated -> A2 (derived

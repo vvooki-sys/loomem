@@ -130,18 +130,22 @@ a:hover{text-decoration:underline}
 </table>
 <p>Requirements for the installer: <code>sh</code>, <code>tar</code>, and <code>curl</code> or <code>wget</code>. No sudo — everything lands in your home directory.</p>
 <h2 id="quick-install">Quick install</h2>
-<p><strong>Public repository:</strong></p>
+<p>The repository is public, so the one-liner needs no authentication:</p>
 <pre><code class="language-bash">curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/install.sh | sh
 </code></pre>
-<p><strong>Private repository</strong> (current state) — authenticate with the <a href="https://cli.github.com">GitHub CLI</a>:</p>
+<p>The installer defaults to port <strong>3030</strong> and asks for a free one if it's taken; set <code>LOOMEM_PORT=NNNN</code> to pick a port non-interactively.</p>
+<details>
+<summary>Installing from a <strong>private fork</strong> (authenticated)</summary>
+<p>If your copy of the repo is private, authenticate with the <a href="https://cli.github.com">GitHub CLI</a>:</p>
 <pre><code class="language-bash">gh auth login            # once
-gh api repos/vvooki-sys/loomem/contents/install.sh -H &quot;Accept: application/vnd.github.raw&quot; | sh
+gh api repos/&lt;owner&gt;/loomem/contents/install.sh -H &quot;Accept: application/vnd.github.raw&quot; | sh
 </code></pre>
 <p>No <code>gh</code>? A personal access token with <code>repo</code> scope works too:</p>
 <pre><code class="language-bash">export GH_TOKEN=ghp_xxx
 curl -fsSL -H &quot;Authorization: Bearer $GH_TOKEN&quot; -H &quot;Accept: application/vnd.github.raw&quot; \
-  https://api.github.com/repos/vvooki-sys/loomem/contents/install.sh | sh
+  https://api.github.com/repos/&lt;owner&gt;/loomem/contents/install.sh | sh
 </code></pre>
+</details>
 <h3 id="what-the-installer-does">What the installer does</h3>
 <ol>
 <li>Detects OS and architecture (<code>uname</code>).</li>

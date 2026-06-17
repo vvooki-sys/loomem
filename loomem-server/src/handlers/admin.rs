@@ -2850,6 +2850,7 @@ mod api_get_memory_handler_tests {
                 extracted_from: None,
                 extraction_model: None,
                 original_content: None,
+                topic: None,
             }),
             deleted_at: None,
             trust_level: None,
