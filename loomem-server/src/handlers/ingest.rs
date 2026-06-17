@@ -530,6 +530,54 @@ pub async fn store_handler(
                                         ) {
                                             Ok(updated) => {
                                                 result_chunk = updated;
+                                                // /156: optionally merge old+new
+                                                // into one trajectory-carrying
+                                                // sentence. Default off ⇒ this
+                                                // block is skipped (byte-identical
+                                                // path). Runs before persist, so
+                                                // the rewritten content is what
+                                                // gets embedded/indexed. LLM error
+                                                // ⇒ keep original + warn.
+                                                if state
+                                                    .config
+                                                    .contradiction
+                                                    .history_preserving_rewrite
+                                                    && result_chunk.supersedes_id.is_some()
+                                                {
+                                                    let orig = result_chunk.content.clone();
+                                                    match loomem_core::contradiction::rewrite_with_history(
+                                                        &state.http_client,
+                                                        &state.config.llm,
+                                                        &state.config.contradiction.model,
+                                                        &candidate.chunk.content,
+                                                        &orig,
+                                                        candidate
+                                                            .chunk
+                                                            .extraction_meta
+                                                            .as_ref()
+                                                            .and_then(|m| m.event_date.as_deref()),
+                                                        result_chunk
+                                                            .extraction_meta
+                                                            .as_ref()
+                                                            .and_then(|m| m.event_date.as_deref()),
+                                                    )
+                                                    .await
+                                                    {
+                                                        Ok(rewritten) => {
+                                                            if let Some(ref mut meta) =
+                                                                result_chunk.extraction_meta
+                                                            {
+                                                                meta.original_content =
+                                                                    Some(orig);
+                                                            }
+                                                            result_chunk.content = rewritten;
+                                                        }
+                                                        Err(e) => warn!(
+                                                            "History-preserving rewrite failed, using original: {}",
+                                                            e
+                                                        ),
+                                                    }
+                                                }
                                                 break; // only supersede one chunk
                                             }
                                             Err(e) => {
@@ -573,10 +621,17 @@ pub async fn store_handler(
         chunk // contradiction disabled
     };
 
+    // /156: index/embed the chunk's own (possibly history-rewritten) content,
+    // not the raw payload — keeps RocksDB, Tantivy and the embedding queue
+    // consistent. Identical to `payload.content` whenever no rewrite occurred
+    // (the rewrite is the only path that mutates `chunk.content` post-build),
+    // so this is byte-identical with the flag off. Cloned to avoid borrowing
+    // `chunk` across its by-value move into `persist_chunk`.
+    let persist_content = chunk.content.clone();
     persist_chunk(
         &state,
         chunk,
-        &payload.content,
+        &persist_content,
         &user_id,
         &app_id,
         &stream,

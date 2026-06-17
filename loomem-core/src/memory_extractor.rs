@@ -189,6 +189,7 @@ impl ExtractedFact {
             confidence: self.confidence,
             extracted_from,
             extraction_model: Some(model.to_string()),
+            original_content: None,
         }
     }
 }

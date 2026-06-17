@@ -494,6 +494,7 @@ fn build_dream_chunk(
             confidence: dream_resp.confidence,
             extracted_from: Some(source_ids.join(",")),
             extraction_model: Some(ctx.model.to_string()),
+            original_content: None,
         }),
         deleted_at: None,
         // Cycle /40: dream output is assistant_generated -> A2 (derived
@@ -580,8 +581,8 @@ pub async fn apply_dream_response_for_subject(
     let fact_type = match dream_resp.fact_type.as_deref() {
         Some("preference_or_decision") => crate::storage::FactType::PreferenceOrDecision,
         Some("project_state") => crate::storage::FactType::ProjectState,
-        _ => crate::storage::FactType::Fact,
         Some("experience") => crate::storage::FactType::Experience,
+        _ => crate::storage::FactType::Fact,
     };
     let new_chunk = build_dream_chunk(&new_id, &ctx, &dream_resp, source_ids, fact_type);
     let text_doc = build_dream_text_doc(&new_chunk);

@@ -84,6 +84,12 @@ pub struct ExtractionMeta {
     pub confidence: f64,
     pub extracted_from: Option<String>,
     pub extraction_model: Option<String>,
+    /// /156: the original extracted text before a history-preserving rewrite
+    /// merged it with a superseded memory. Audit-only — not indexed. `None`
+    /// when no rewrite occurred (serde default keeps old chunks deserializing
+    /// unchanged).
+    #[serde(default)]
+    pub original_content: Option<String>,
 }
 
 impl ExtractionMeta {
@@ -1876,6 +1882,7 @@ mod tests {
             confidence: 0.9,
             extracted_from: None,
             extraction_model: None,
+            original_content: None,
         }
     }
 
@@ -2412,6 +2419,7 @@ mod tests {
             confidence: 0.9,
             extracted_from: Some("enc-1".to_string()),
             extraction_model: None,
+            original_content: None,
         });
         store.store_chunk(&chunk).expect("store_chunk");
 
@@ -2514,6 +2522,7 @@ mod tests {
             confidence: 0.9,
             extracted_from: Some("rt-1".to_string()),
             extraction_model: None,
+            original_content: None,
         });
         store.store_chunk(&chunk).expect("store_chunk");
 

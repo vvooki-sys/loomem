@@ -1765,6 +1765,7 @@ mod tests {
             confidence: 0.9,
             extracted_from: None,
             extraction_model: None,
+            original_content: None,
         });
         chunk
     }

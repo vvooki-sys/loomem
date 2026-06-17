@@ -318,6 +318,7 @@ async fn store_extraction_meta(
         // Model recorded only when the probe actually ran — gate off keeps
         // the pre-/151 None (no LLM touched this chunk's metadata).
         extraction_model: probe_enabled.then(|| state.config.knowledge_extraction.model.clone()),
+        original_content: None,
     };
     (meta, valid_from_ts)
 }
@@ -832,8 +833,8 @@ async fn tool_reflect(
                 loomem_core::storage::FactType::ProjectState => "project_state",
                 loomem_core::storage::FactType::Fact => "fact",
                 loomem_core::storage::FactType::Event => "event",
-            };
                 loomem_core::storage::FactType::Experience => "experience",
+            };
             *by_type.entry(ft.to_string()).or_default() += 1;
         } else {
             no_extraction_meta += 1;
