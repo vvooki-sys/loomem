@@ -69,11 +69,13 @@ curl http://localhost:3030/health
 claude mcp add --transport http loomem http://localhost:3030/mcp
 ```
 
-**5b. Using the Claude desktop app (or Cowork) instead?** It connects to local servers over stdio, not HTTP, so bridge it with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node 18+) in `claude_desktop_config.json`, then restart Claude:
+**5b. Using the Claude desktop app (or Cowork) instead?** It connects to local servers over stdio, not HTTP, so bridge it in `claude_desktop_config.json`, then restart Claude. Native, no Node (Loomem ≥ v0.2.1):
 
 ```json
-{ "mcpServers": { "loomem": { "command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"] } } }
+{ "mcpServers": { "loomem": { "command": "/absolute/path/to/.loomem/bin/loomem-cli", "args": ["mcp-stdio", "--url", "http://127.0.0.1:3030"] } } }
 ```
+
+(Any version, needs Node: `"command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"]`.) See [Connect an MCP client](#connect-an-mcp-client) for auth and details.
 
 **6. Try it.** In Claude: *"Remember that I prefer dark mode in all my tools."* Then, in a fresh conversation: *"What do you know about my preferences?"* — the answer comes back from Loomem.
 
@@ -124,7 +126,24 @@ claude mcp add --transport http loomem http://localhost:3030/mcp
 
 ### Claude desktop app (and Cowork) — local stdio bridge
 
-The Claude **desktop app** (and Cowork) connect to *local* MCP servers over **stdio**, not HTTP, and the "Add custom connector" box in Settings only accepts an `https://` URL — so you cannot paste `http://localhost:3030/mcp` there. Bridge Loomem's local HTTP endpoint to stdio with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node 18+, ships with `npx`). Add this to `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows: `%APPDATA%\Claude\claude_desktop_config.json`), then fully restart Claude:
+The Claude **desktop app** (and Cowork) connect to *local* MCP servers over **stdio**, not HTTP, and the "Add custom connector" box in Settings only accepts an `https://` URL — so you cannot paste `http://localhost:3030/mcp` there. You bridge Loomem's local HTTP endpoint to stdio. Add one of the blocks below to `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows: `%APPDATA%\Claude\claude_desktop_config.json`), then fully restart Claude.
+
+**Recommended — native bridge, no Node** (Loomem ≥ v0.2.1; the `loomem-cli` you already installed includes it):
+
+```json
+{
+  "mcpServers": {
+    "loomem": {
+      "command": "/absolute/path/to/.loomem/bin/loomem-cli",
+      "args": ["mcp-stdio", "--url", "http://127.0.0.1:3030"]
+    }
+  }
+}
+```
+
+Use the absolute path to `loomem-cli` (e.g. `/Users/you/.loomem/bin/loomem-cli`) — the desktop app doesn't inherit your shell `PATH`. Add `"--token", "<your token>"` to `args`, or set `LOOMEM_AUTH_TOKEN` in an `"env"` block, if you enabled auth.
+
+**Alternative — `mcp-remote`** (works with any version, needs Node 18+ / `npx`):
 
 ```json
 {
@@ -137,7 +156,7 @@ The Claude **desktop app** (and Cowork) connect to *local* MCP servers over **st
 }
 ```
 
-`--allow-http` is required because the endpoint is plain HTTP on localhost. If you enabled an auth token, append `"--header", "Authorization: Bearer ${LOOMEM_AUTH_TOKEN}"` to `args` and add an `"env": { "LOOMEM_AUTH_TOKEN": "<your token>" }` block. This same stdio-bridge config works for any other desktop client that only speaks stdio. (Claude **Code** is the exception — it speaks HTTP natively, so use the `claude mcp add` recipe above instead of a bridge.)
+`--allow-http` is required because the endpoint is plain HTTP on localhost. For auth, append `"--header", "Authorization: Bearer ${LOOMEM_AUTH_TOKEN}"` to `args` and add `"env": { "LOOMEM_AUTH_TOKEN": "<your token>" }`. Either block also works for any other stdio-only desktop client. (Claude **Code** is the exception — it speaks HTTP natively, so use the `claude mcp add` recipe above instead of a bridge.)
 
 ### Claude — remote connector (HTTPS, hosted elsewhere)
 

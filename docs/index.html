@@ -735,8 +735,9 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
           <h4>Connect Claude Code</h4>
           <p>Add the MCP server over streamable HTTP.</p>
           <div class="code">claude mcp add --transport http loomem http://localhost:3030/mcp</div>
-          <p>Using the Claude <strong>desktop app</strong> (or Cowork) instead? It speaks stdio, not HTTP — bridge it with <code>mcp-remote</code> in <code>claude_desktop_config.json</code>, then restart Claude:</p>
-          <div class="code">"loomem": { "command": "npx",<br>&nbsp;&nbsp;"args": ["-y", "mcp-remote",<br>&nbsp;&nbsp;&nbsp;&nbsp;"http://127.0.0.1:3030/mcp", "--allow-http"] }</div>
+          <p>Using the Claude <strong>desktop app</strong> (or Cowork) instead? It speaks stdio, not HTTP — bridge it in <code>claude_desktop_config.json</code>, then restart Claude. Native, no Node (Loomem ≥ v0.2.1):</p>
+          <div class="code">"loomem": {<br>&nbsp;&nbsp;"command": "/…/.loomem/bin/loomem-cli",<br>&nbsp;&nbsp;"args": ["mcp-stdio", "--url", "http://127.0.0.1:3030"]<br>}</div>
+          <p>Or with Node: <code>"command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"]</code>.</p>
         </div>
       </div>
       <div class="step">
@@ -765,9 +766,9 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       </div>
       <div class="client">
         <h4><span class="d"></span>Claude desktop app &amp; Cowork</h4>
-        <p>The desktop app connects to local servers over <strong>stdio</strong>, and its custom-connector box only takes an <code>https://</code> URL — so <code>http://localhost</code> won't paste in. Bridge it with <code>mcp-remote</code> in <code>claude_desktop_config.json</code>, then restart Claude:</p>
-        <div class="code">"loomem": {<br>&nbsp;&nbsp;"command": "npx",<br>&nbsp;&nbsp;"args": ["-y", "mcp-remote",<br>&nbsp;&nbsp;&nbsp;&nbsp;"http://127.0.0.1:3030/mcp", "--allow-http"]<br>}</div>
-        <p>Running Loomem on another machine? Front it with TLS, set <code>SERVER_ORIGIN</code>, and add it as a remote <code>https://your-domain/mcp</code> connector instead (OAuth DCR works out of the box).</p>
+        <p>The desktop app connects to local servers over <strong>stdio</strong>, and its custom-connector box only takes an <code>https://</code> URL — so <code>http://localhost</code> won't paste in. Bridge it in <code>claude_desktop_config.json</code>, then restart Claude. Native, no Node (Loomem ≥ v0.2.1):</p>
+        <div class="code">"loomem": {<br>&nbsp;&nbsp;"command": "/…/.loomem/bin/loomem-cli",<br>&nbsp;&nbsp;"args": ["mcp-stdio", "--url",<br>&nbsp;&nbsp;&nbsp;&nbsp;"http://127.0.0.1:3030"]<br>}</div>
+        <p>Or, with Node, the universal <code>mcp-remote</code> fallback: <code>"command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"]</code>. Running Loomem on another machine? Front it with TLS, set <code>SERVER_ORIGIN</code>, and add a remote <code>https://your-domain/mcp</code> connector instead.</p>
       </div>
       <div class="client">
         <h4><span class="d"></span>ChatGPT</h4>

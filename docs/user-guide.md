@@ -28,7 +28,24 @@ You need two things from whoever runs your Loomem server (possibly you — see t
 
 Open Claude Desktop → **Settings** → **Developer** → **Edit Config**, edit `claude_desktop_config.json`, then **fully restart** Claude Desktop. Which block you add depends on where Loomem runs.
 
-**Loomem running locally on this machine** (the usual case). The desktop app connects to local servers over **stdio**, not HTTP, and its custom-connector box only accepts an `https://` URL — so you cannot point it at `http://localhost`. Bridge the local HTTP endpoint to stdio with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node 18+):
+**Loomem running locally on this machine** (the usual case). The desktop app connects to local servers over **stdio**, not HTTP, and its custom-connector box only accepts an `https://` URL — so you cannot point it at `http://localhost`. Bridge the local HTTP endpoint to stdio. Two ways:
+
+*Recommended — native bridge, no Node* (Loomem ≥ v0.2.1; built into `loomem-cli`):
+
+```json
+{
+  "mcpServers": {
+    "loomem": {
+      "command": "/Users/you/.loomem/bin/loomem-cli",
+      "args": ["mcp-stdio", "--url", "http://127.0.0.1:3030"]
+    }
+  }
+}
+```
+
+Use the **absolute** path to `loomem-cli` — the desktop app doesn't inherit your shell `PATH`. For auth, add `"--token", "loom_your_api_key_here"` to `args` (or set `LOOMEM_AUTH_TOKEN` in an `"env"` block).
+
+*Alternative — `mcp-remote`* (works with any version, needs Node 18+):
 
 ```json
 {
@@ -41,7 +58,7 @@ Open Claude Desktop → **Settings** → **Developer** → **Edit Config**, edit
 }
 ```
 
-`--allow-http` is required for the plain-HTTP localhost endpoint. If you enabled an auth token, add it as a header: `"args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http", "--header", "Authorization: Bearer ${LOOMEM_AUTH_TOKEN}"]` plus `"env": { "LOOMEM_AUTH_TOKEN": "loom_your_api_key_here" }`.
+`--allow-http` is required for the plain-HTTP localhost endpoint. For auth: `"args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http", "--header", "Authorization: Bearer ${LOOMEM_AUTH_TOKEN}"]` plus `"env": { "LOOMEM_AUTH_TOKEN": "loom_your_api_key_here" }`.
 
 **Loomem hosted elsewhere over HTTPS.** Point the connector straight at the remote URL — no bridge needed:
 

@@ -10,7 +10,7 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    #[arg(long, default_value = "http://localhost:3030")]
+    #[arg(long, default_value = "http://localhost:3030", global = true)]
     url: String,
 }
 
@@ -168,6 +168,16 @@ enum Commands {
         /// Maximum chain length
         #[arg(long, default_value = "20")]
         limit: usize,
+    },
+
+    /// Bridge a stdio MCP client (the Claude desktop app, Cowork, Cursor, …) to
+    /// the server's HTTP `/mcp` endpoint. Reads newline-delimited JSON-RPC on
+    /// stdin, forwards each message to `<url>/mcp`, and writes replies to stdout.
+    /// This is a native replacement for `npx mcp-remote` — no Node required.
+    McpStdio {
+        /// Bearer token for the server (falls back to $LOOMEM_AUTH_TOKEN).
+        #[arg(long)]
+        token: Option<String>,
     },
 }
 
@@ -330,6 +340,120 @@ struct PurgeNamespaceResponse {
     dry_run: bool,
     deleted_count: usize,
     deleted_ids: Option<Vec<String>>,
+}
+
+/// Native stdio <-> HTTP MCP bridge. Mirrors what `npx mcp-remote --allow-http`
+/// does, but as a single Rust binary so desktop clients need no Node toolchain.
+///
+/// loomem-server's `/mcp` transport is plain request/response JSON over POST
+/// (no server-initiated SSE, no GET stream), so this is a faithful proxy:
+///   stdin line (one JSON-RPC message) -> POST <url>/mcp -> stdout line (reply).
+/// The `mcp-session-id` header returned on `initialize` is captured and echoed
+/// on every subsequent request. Notifications (no `id`) get no reply.
+async fn run_mcp_stdio(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: Option<String>,
+) -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let endpoint = format!("{}/mcp", base_url.trim_end_matches('/'));
+    let token = token.or_else(|| std::env::var("LOOMEM_AUTH_TOKEN").ok());
+    let session_header = reqwest::header::HeaderName::from_static("mcp-session-id");
+    let mut session_id: Option<String> = None;
+
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut stdout = tokio::io::stdout();
+
+    while let Some(line) = lines.next_line().await.context("reading stdin")? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Inspect the JSON-RPC envelope: requests carry a non-null `id` and expect
+        // a reply; notifications don't. A batch (array) is assumed to expect one.
+        let parsed: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("loomem mcp-stdio: skipping invalid JSON on stdin: {e}");
+                continue;
+            }
+        };
+        let req_id = parsed.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        let expects_reply = parsed.is_array() || !req_id.is_null();
+
+        let mut req = client
+            .post(&endpoint)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(
+                reqwest::header::ACCEPT,
+                "application/json, text/event-stream",
+            )
+            .body(trimmed.to_owned());
+        if let Some(ref sid) = session_id {
+            req = req.header(session_header.clone(), sid.clone());
+        }
+        if let Some(ref t) = token {
+            req = req.bearer_auth(t);
+        }
+
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("loomem mcp-stdio: request to {endpoint} failed: {e}");
+                if expects_reply {
+                    let err = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": { "code": -32000, "message": format!("loomem bridge: {e}") }
+                    });
+                    write_line(&mut stdout, &err.to_string()).await?;
+                }
+                continue;
+            }
+        };
+
+        if let Some(sid) = resp
+            .headers()
+            .get(&session_header)
+            .and_then(|v| v.to_str().ok())
+        {
+            session_id = Some(sid.to_string());
+        }
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+
+        if !expects_reply {
+            continue; // notification: server returns an empty body, nothing to deliver
+        }
+
+        // Re-serialize compactly so each reply is exactly one newline-delimited line.
+        let out = match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(v) => v.to_string(),
+            Err(_) => serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {
+                    "code": -32000,
+                    "message": format!("loomem bridge: HTTP {status}: {text}")
+                }
+            })
+            .to_string(),
+        };
+        write_line(&mut stdout, &out).await?;
+    }
+
+    Ok(())
+}
+
+async fn write_line(stdout: &mut tokio::io::Stdout, s: &str) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    stdout.write_all(s.as_bytes()).await?;
+    stdout.write_all(b"\n").await?;
+    stdout.flush().await?;
+    Ok(())
 }
 
 #[tokio::main]
@@ -771,6 +895,10 @@ async fn main() -> Result<()> {
             } else {
                 println!("No version chain found for {}", id);
             }
+        }
+
+        Commands::McpStdio { token } => {
+            run_mcp_stdio(&client, &cli.url, token).await?;
         }
 
         Commands::Status => {
