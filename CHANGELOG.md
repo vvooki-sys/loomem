@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-17
+
+### Added
+
+- **Custom extraction topics are filterable** — operator-configured `[knowledge_extraction].topics` keys (e.g. `risk_item`, `contact`) are preserved in the new `ExtractionMeta.topic` field instead of silently collapsing to `fact`, and the `/v1/search` `fact_type` filter matches them. (Greptile P1)
+
+### Fixed
+
+- **Consolidation prompt** now advertises the `experience` type, so procedural lessons keep `FactType::Experience` through L1 consolidation instead of being relabeled `event`/`fact`/`preference`. (Greptile P1)
+- **Docs** — added Codex to the "Which LLM clients" FAQ (README + landing page, visible and JSON-LD) to match the hero/persona/architecture lists; made the installation guide public-first and demoted the private-fork `gh`/`GH_TOKEN` flow to an optional note. (Greptile P2)
+
 ## [0.2.1] - 2026-06-17
 
 ### Added
