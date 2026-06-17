@@ -11,6 +11,17 @@ use tracing::{debug, warn};
 
 use crate::config::LlmConfig;
 
+/// /153: an operator-defined extraction category. `fact_type` is the wire key
+/// used in the `## Types` list and the JSON `fact_type` enum; when absent,
+/// `name` is used as the key. `description` is the LLM-facing definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractionTopic {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub fact_type: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeExtractionConfig {
     pub enabled: bool,
@@ -25,6 +36,11 @@ pub struct KnowledgeExtractionConfig {
     /// without this field producing a byte-identical request.
     #[serde(default = "default_extraction_max_tokens")]
     pub max_tokens: u32,
+    /// /153: operator-defined extraction categories. `None`/empty preserves
+    /// the built-in [`EXTRACTION_PROMPT`] byte-for-byte (serde default keeps
+    /// a config without this field deserializing unchanged).
+    #[serde(default)]
+    pub topics: Option<Vec<ExtractionTopic>>,
 }
 
 fn default_extraction_max_tokens() -> u32 {
@@ -42,6 +58,7 @@ impl Default for KnowledgeExtractionConfig {
             contradiction_cosine_min: 0.5,
             max_facts_per_transcript: 20,
             max_tokens: default_extraction_max_tokens(),
+            topics: None,
         }
     }
 }
@@ -71,6 +88,66 @@ The conversation_date is: {conversation_date}
 
 Return ONLY valid JSON (no markdown, no code blocks):
 {"facts": [{"content": "...", "fact_type": "preference_or_decision"|"project_state"|"fact"|"experience", "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "confidence": 0.9}]}"#;
+
+/// /153: build the extraction system prompt for one request.
+///
+/// With no (or empty) `config.topics` the result is **byte-identical** to
+/// [`EXTRACTION_PROMPT`] with `{conversation_date}` substituted — the pre-/153
+/// behavior (AC-2). With operator-defined topics, the `## Types` list and the
+/// JSON `fact_type` enum are rebuilt from them (each topic's `fact_type` field,
+/// or `name` as the wire key); every other prompt section is preserved.
+pub fn build_extraction_prompt(
+    config: &KnowledgeExtractionConfig,
+    conversation_date: &str,
+) -> String {
+    let topics = match config.topics.as_ref() {
+        Some(t) if !t.is_empty() => t,
+        _ => return EXTRACTION_PROMPT.replace("{conversation_date}", conversation_date),
+    };
+
+    let type_lines = topics
+        .iter()
+        .map(|t| {
+            let key = t.fact_type.as_deref().unwrap_or(t.name.as_str());
+            format!("- \"{key}\": {}", t.description)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let enum_values = topics
+        .iter()
+        .map(|t| {
+            let key = t.fact_type.as_deref().unwrap_or(t.name.as_str());
+            format!("\"{key}\"")
+        })
+        .collect::<Vec<_>>()
+        .join("|");
+
+    format!(
+        r#"Extract factual knowledge from this conversation. Each fact is a self-contained sentence.
+
+## Types (exactly one per fact):
+{type_lines}
+
+## Rules:
+1. Each fact must be a single, self-contained sentence in natural language
+2. Extract: preferences, decisions, facts about people, project states, deadlines, contacts, technical decisions, procedural lessons
+3. SKIP: greetings, small talk, questions without answers, uncertain statements, action items, temporary debugging states, summaries
+4. CHANGE RULE: When something changed, always record before→after. E.g. "Anna switched from VS Code to Neovim" (not just "Anna uses Neovim")
+5. THREE DATES MODEL: For each fact, provide:
+   - "event_date": absolute ISO date if determinable (e.g. "2026-03-15"), null otherwise
+   - "event_date_context": original relative expression if any (e.g. "yesterday", "two weeks ago"), null otherwise
+6. "subject": The main entity this fact is about (person name, project name, etc.), null if unclear
+7. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
+8. Preserve original language and diacritics
+9. Maximum 20 facts per conversation
+
+The conversation_date is: {conversation_date}
+
+Return ONLY valid JSON (no markdown, no code blocks):
+{{"facts": [{{"content": "...", "fact_type": {enum_values}, "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "confidence": 0.9}}]}}"#,
+    )
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedFact {
@@ -406,7 +483,7 @@ pub async fn extract_knowledge_with(
     conversation_text: &str,
     conversation_date: &str,
 ) -> Result<ExtractionOutcome, ExtractionError> {
-    let system_prompt = EXTRACTION_PROMPT.replace("{conversation_date}", conversation_date);
+    let system_prompt = build_extraction_prompt(extraction_config, conversation_date);
 
     // Split into chunks if too long (rough estimate: 4 chars ≈ 1 token)
     let max_chars = extraction_config.max_transcript_tokens * 4;
@@ -783,5 +860,90 @@ mod tests {
         let back: crate::storage::FactType =
             serde_json::from_str(&json).expect("deserialize Experience");
         assert_eq!(back, crate::storage::FactType::Experience);
+    }
+
+    /// /153 AC-2: no topics ⇒ byte-identical to the inline EXTRACTION_PROMPT.
+    #[test]
+    fn build_prompt_no_topics_is_byte_identical() {
+        let date = "2026-06-11";
+        assert_eq!(
+            build_extraction_prompt(&cfg(), date),
+            EXTRACTION_PROMPT.replace("{conversation_date}", date)
+        );
+    }
+
+    /// /153 AC-2: an explicitly empty topics list is also byte-identical.
+    #[test]
+    fn build_prompt_empty_topics_is_byte_identical() {
+        let date = "2026-06-11";
+        let mut config = cfg();
+        config.topics = Some(vec![]);
+        assert_eq!(
+            build_extraction_prompt(&config, date),
+            EXTRACTION_PROMPT.replace("{conversation_date}", date)
+        );
+    }
+
+    /// /153: operator topics surface their descriptions and wire keys, and
+    /// replace the built-in default type list.
+    #[test]
+    fn build_prompt_with_topics_includes_descriptions() {
+        let mut config = cfg();
+        config.topics = Some(vec![
+            ExtractionTopic {
+                name: "risk".to_string(),
+                description: "A project risk worth tracking.".to_string(),
+                fact_type: Some("risk_item".to_string()),
+            },
+            ExtractionTopic {
+                name: "contact".to_string(),
+                description: "A person and how to reach them.".to_string(),
+                fact_type: None,
+            },
+        ]);
+        let prompt = build_extraction_prompt(&config, "2026-06-11");
+        assert!(prompt.contains("A project risk worth tracking."));
+        assert!(prompt.contains("A person and how to reach them."));
+        // fact_type key wins when present; name is the fallback wire key.
+        assert!(prompt.contains("\"risk_item\""));
+        assert!(prompt.contains("\"contact\""));
+        // built-in default types are gone when topics are operator-defined.
+        assert!(!prompt.contains("Biographical, permanent facts"));
+    }
+
+    /// /153: a config carrying topics round-trips through TOML.
+    #[test]
+    fn config_topics_toml_roundtrip() {
+        let mut config = cfg();
+        config.topics = Some(vec![ExtractionTopic {
+            name: "risk".to_string(),
+            description: "desc".to_string(),
+            fact_type: Some("risk_item".to_string()),
+        }]);
+        let toml_str = toml::to_string(&config).expect("serialize config to toml");
+        let back: KnowledgeExtractionConfig =
+            toml::from_str(&toml_str).expect("deserialize config from toml");
+        let topics = back.topics.expect("topics survive roundtrip");
+        assert_eq!(topics.len(), 1);
+        assert_eq!(topics[0].name, "risk");
+        assert_eq!(topics[0].description, "desc");
+        assert_eq!(topics[0].fact_type.as_deref(), Some("risk_item"));
+    }
+
+    /// /153 AC-6: a config TOML without the topics field deserializes to None.
+    #[test]
+    fn config_without_topics_field_is_none() {
+        let toml_str = r#"
+            enabled = true
+            model = "gpt-4.1-mini"
+            max_transcript_tokens = 20000
+            dedup_cosine_threshold = 0.92
+            contradiction_check = true
+            contradiction_cosine_min = 0.5
+            max_facts_per_transcript = 20
+        "#;
+        let config: KnowledgeExtractionConfig =
+            toml::from_str(toml_str).expect("config without topics parses");
+        assert!(config.topics.is_none());
     }
 }
