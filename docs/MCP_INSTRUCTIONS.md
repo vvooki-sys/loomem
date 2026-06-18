@@ -41,7 +41,7 @@ single confirmed facts.
 - memory_feedback — rate how useful a specific chunk was for a task.
 
 ### Info
-- memory_status — engine health (chunk count, index status, uptime)
+- memory_status — engine health (per-stream memory count, embedding readiness, associator state, error counters)
 - memory_graph — explore entity connections (people, projects, tech)
 ```
 

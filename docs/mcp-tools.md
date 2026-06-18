@@ -113,6 +113,7 @@ memory_search(query: "What IDE does the user prefer?")
 - Deduplicates near-identical results
 - Marks superseded facts with `[UPDATED]`
 - For aggregation queries ("how many..."), boosts `top_k` to 30
+- Each result line ends with its `chunk_id` — usable directly for `memory_history`, `memory_delete`, or `memory_feedback`
 
 ---
 
@@ -298,7 +299,7 @@ Rate the usefulness of a memory chunk after a task, providing a reinforcement si
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `chunk_id` | string | yes | Chunk to rate (from the id returned by `memory_store` / `memory_ingest`) |
+| `chunk_id` | string | yes | Chunk to rate (from a `memory_search` result line, or the id returned by `memory_store` / `memory_ingest`) |
 | `usefulness` | int | yes | 0 (not useful) – 4 (crucial) |
 | `harmful` | bool | no | Set only when the chunk contained incorrect or misleading information |
 

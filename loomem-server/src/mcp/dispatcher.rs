@@ -574,14 +574,20 @@ async fn tool_search(
                 // (sidecar hit). Band/source dropped in /143 (ADR-017 Amd v2).
                 let content_type_tag = content_type_tag(r.content_type.as_deref());
 
+                // Emit the chunk_id on each result line so callers can recover
+                // it after a search alone — needed for memory_delete,
+                // memory_history and memory_feedback, which all key on
+                // chunk_id. Previously only memory_store/_ingest surfaced ids,
+                // forcing callers to capture them at write time.
                 text.push_str(&format!(
-                    "{}. [{}]{} {}{} (score: {:.2})\n",
+                    "{}. [{}]{} {}{} (score: {:.2}, id: {})\n",
                     i + 1,
                     ts,
                     content_type_tag,
                     r.content,
                     supersedes_note,
-                    r.score
+                    r.score,
+                    r.id
                 ));
             }
             text.push_str("\nNote: When facts have dates, ALWAYS prefer the most recent version. Items marked [UPDATED] supersede older versions.");
@@ -707,21 +713,40 @@ async fn tool_status(
     stream_id: &str,
 ) -> Result<ToolResult, JsonRpcError> {
     let _args: StatusArgs = serde_json::from_value(args).unwrap_or(StatusArgs { stream: None });
-    // Count chunks across all levels for this stream
+    // Count chunks across all levels for this stream, and how many of those
+    // live chunks already carry a vector. The global embedding count is
+    // misleading right after a write (it can read 0 while this stream is
+    // already partially indexed, or non-zero from other streams), so we report
+    // per-stream embedded/pending instead.
     let mut chunk_count = 0usize;
+    let mut embedded_count = 0usize;
     for level in 0..=2 {
         let prefix = format!("chunk:L{}:", level);
         for (_key, value) in state.store.prefix_scan(prefix.as_bytes()) {
             if let Ok(chunk) = state.store.decode_chunk(&value) {
                 if chunk.stream == stream_id && chunk.is_latest && chunk.deleted_at.is_none() {
                     chunk_count += 1;
+                    if matches!(state.store.get_embedding(&chunk.id), Ok(Some(_))) {
+                        embedded_count += 1;
+                    }
                 }
             }
         }
     }
 
-    // Count embeddings
-    let embedding_count = state.store.count_embeddings().unwrap_or(0);
+    // Per-stream embedding readiness. pending > 0 means vector search is still
+    // warming up and queries fall back to BM25 only until it reaches 0.
+    let embeddings_pending = chunk_count.saturating_sub(embedded_count);
+    let embedding_status = if chunk_count == 0 {
+        "ready (no memories yet)".to_string()
+    } else if embeddings_pending == 0 {
+        format!("ready ({embedded_count}/{chunk_count} indexed)")
+    } else {
+        let indexed_pct = embedded_count * 100 / chunk_count;
+        format!(
+            "warming up ({embedded_count}/{chunk_count} indexed, {embeddings_pending} pending, {indexed_pct}%)"
+        )
+    };
 
     // Count clusters
     let cluster_count = state.store.prefix_scan(b"assoc:centroid:").count();
@@ -750,7 +775,7 @@ async fn tool_status(
     let llm_fail = loomem_core::llm_failures::global().recent();
 
     let text = format!(
-        "Loomem Status: ok\nYour stream: {stream_id}\nYour memories: {chunk_count}\nEmbeddings (global): {embedding_count}\nAssociator: {assoc_status}\nEvent log drops: {event_log_drops}\nAudit write failures: {audit_write_failures}\nUndecodable chunks (last full scan): {undecodable}\nLLM failures (last {}m): extraction={}, ner={}, embedding={}, consolidation={}",
+        "Loomem Status: ok\nYour stream: {stream_id}\nYour memories: {chunk_count}\nEmbeddings (this stream): {embedding_status}\nAssociator: {assoc_status}\nEvent log drops: {event_log_drops}\nAudit write failures: {audit_write_failures}\nUndecodable chunks (last full scan): {undecodable}\nLLM failures (last {}m): extraction={}, ner={}, embedding={}, consolidation={}",
         llm_fail.window_secs / 60,
         llm_fail.extraction,
         llm_fail.ner,
