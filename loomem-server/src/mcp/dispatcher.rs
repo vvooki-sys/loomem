@@ -580,7 +580,7 @@ async fn tool_search(
                 // chunk_id. Previously only memory_store/_ingest surfaced ids,
                 // forcing callers to capture them at write time.
                 text.push_str(&format!(
-                    "{}. [{}]{} {}{} (score: {:.2}, id: {})\n",
+                    "{}. [{}]{} {}{} (score: {:.2}) (id: {})\n",
                     i + 1,
                     ts,
                     content_type_tag,
@@ -726,7 +726,7 @@ async fn tool_status(
             if let Ok(chunk) = state.store.decode_chunk(&value) {
                 if chunk.stream == stream_id && chunk.is_latest && chunk.deleted_at.is_none() {
                     chunk_count += 1;
-                    if matches!(state.store.get_embedding(&chunk.id), Ok(Some(_))) {
+                    if state.store.has_embedding(&chunk.id).unwrap_or(false) {
                         embedded_count += 1;
                     }
                 }
