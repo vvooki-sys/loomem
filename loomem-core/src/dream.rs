@@ -36,11 +36,14 @@ pub struct DreamConfig {
     pub auto_cooldown_secs: u64,
 }
 
-/// Default auto-trigger threshold. Matches `batch_size` (50) so a single dream
-/// run can consume the whole accumulated backlog — dream truncates its working
-/// set to `batch_size`, so a larger threshold would leave chunks unprocessed.
+/// Default auto-trigger threshold: `0` (disabled), so auto-triggering is strictly
+/// opt-in. A config that enables the dream worker (`enabled = true`) but predates
+/// this field must NOT silently start firing automatic `dream_run`s (LLM cost) —
+/// the user opts in by setting `auto_trigger_threshold` explicitly. The shipped
+/// `config.toml` sets `50`, matching `batch_size` (dream truncates its working
+/// set to `batch_size`, so a larger value would leave chunks unprocessed).
 fn default_auto_trigger_threshold() -> usize {
-    50
+    0
 }
 
 /// Default cooldown between automatic dream runs on the same stream (15 min).
