@@ -62,6 +62,28 @@ pub struct AppState {
     /// — see `loomem_core::ambient::cache_ttl`). Distributed cache deferred
     /// to /103a-full per `cycles/cycle-103a-layer1-endpoint-brief.md` AC-9.
     pub ambient_cache: Arc<loomem_core::ambient::AmbientCache>,
+    /// Count-based auto-trigger for background dream consolidation. Records every
+    /// newly-persisted chunk per stream and signals when a dream run should fire
+    /// (private streams only; see `handlers::ingest::persist_chunk`). Disabled
+    /// when `[dream].enabled = false` or `auto_trigger_threshold = 0`.
+    pub dream_auto: Arc<loomem_core::dream_auto::DreamAutoTrigger>,
+}
+
+/// Build the auto-dream trigger from `[dream]` config. Auto-firing is gated on
+/// `enabled`: when the dream worker is off, the threshold collapses to `0`
+/// (fully disabled) regardless of the configured `auto_trigger_threshold`.
+fn build_dream_auto(
+    cfg: &loomem_core::dream::DreamConfig,
+) -> Arc<loomem_core::dream_auto::DreamAutoTrigger> {
+    let threshold = if cfg.enabled {
+        cfg.auto_trigger_threshold
+    } else {
+        0
+    };
+    Arc::new(loomem_core::dream_auto::DreamAutoTrigger::new(
+        threshold,
+        cfg.auto_cooldown_secs,
+    ))
 }
 
 /// Env var gating encryption fail-fast (cycle /144). When `true`, a missing
@@ -579,6 +601,7 @@ async fn main() -> Result<()> {
     };
 
     let state = Arc::new(AppState {
+        dream_auto: build_dream_auto(&config.dream),
         config: config.clone(),
         graph: graph_store.clone(),
         store: store_arc,
@@ -1175,6 +1198,7 @@ mod tests {
         );
 
         let state = Arc::new(AppState {
+            dream_auto: build_dream_auto(&config.dream),
             config,
             store: store.clone(),
             tantivy: Arc::new(tokio::sync::Mutex::new(tantivy)),

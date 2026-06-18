@@ -280,7 +280,72 @@ pub async fn persist_chunk(
         }
     }
 
+    // Count this write toward the per-stream auto-dream threshold (private
+    // streams only) and fire a background dream run when armed. No-op when
+    // auto-triggering is disabled.
+    maybe_trigger_auto_dream(state, stream);
+
     Ok(id)
+}
+
+/// Record one persisted chunk against the per-stream auto-dream counter and, when
+/// the threshold + cooldown are satisfied, spawn a single detached `dream_run`.
+///
+/// Restricted to **private** streams on purpose: shared/project streams gate
+/// `memory_dream` behind an Admin role (see `mcp::dispatcher`), and an automatic
+/// trigger must not bypass that human gate. The spawned run is best-effort —
+/// failures are logged, never propagated onto the persist hot path.
+fn maybe_trigger_auto_dream(state: &Arc<AppState>, stream: &str) {
+    if !state.dream_auto.is_enabled() {
+        return;
+    }
+    if loomem_core::manifest::classify_stream(stream) != loomem_core::manifest::StreamKind::Private
+    {
+        return;
+    }
+    if !state
+        .dream_auto
+        .record(stream, 1, std::time::Instant::now())
+    {
+        return;
+    }
+
+    let state = state.clone();
+    let stream = stream.to_string();
+    tokio::spawn(async move {
+        let cost_tracker = loomem_core::CostTracker::new(
+            state.store.clone(),
+            state.config.cost.clone(),
+            state.http_client.clone(),
+        );
+        tracing::info!(
+            "auto-dream: threshold reached for stream '{}', running consolidation",
+            stream
+        );
+        match loomem_core::dream::dream_run(
+            &state.store,
+            &state.tantivy,
+            &state.http_client,
+            loomem_core::dream::DreamRunContext {
+                llm_config: &state.config.llm,
+                dream_config: &state.config.dream,
+                intent_log: state.intent_log.as_deref(),
+            },
+            &cost_tracker,
+            &stream,
+        )
+        .await
+        {
+            Ok(r) => tracing::info!(
+                "auto-dream done on '{}': {} facts merged, {} contradictions resolved, ${:.3}",
+                stream,
+                r.facts_merged,
+                r.contradictions_resolved,
+                r.cost_usd
+            ),
+            Err(e) => tracing::warn!("auto-dream failed on '{}': {}", stream, e),
+        }
+    });
 }
 
 /// /142 + /143: classify a chunk's content *form* via the LLM (the sole
