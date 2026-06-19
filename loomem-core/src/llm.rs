@@ -66,6 +66,34 @@ impl LlmConfig {
         }
         std::env::var(&self.api_key_env).ok()
     }
+
+    /// Per-instance env overrides for embeddings, so a cloud/Docker deployment
+    /// can switch provider/dim without editing `config.toml` (local stays the
+    /// keyless default). `LOOMEM_EMBEDDING_PROVIDER` (local|openai) and
+    /// `LOOMEM_EMBEDDING_DIM` (positive integer). Unknown values are ignored
+    /// with a WARN to avoid a silent regression on a typo.
+    pub fn apply_env_overrides(&mut self) {
+        if let Ok(v) = std::env::var("LOOMEM_EMBEDDING_PROVIDER") {
+            match v.as_str() {
+                "local" | "openai" => self.embedding_provider = v,
+                other => tracing::warn!(
+                    "LOOMEM_EMBEDDING_PROVIDER={:?} not recognized (expected local/openai), keeping current value {}",
+                    other,
+                    self.embedding_provider
+                ),
+            }
+        }
+        if let Ok(v) = std::env::var("LOOMEM_EMBEDDING_DIM") {
+            match v.parse::<usize>() {
+                Ok(d) if d > 0 => self.embedding_dim = d,
+                _ => tracing::warn!(
+                    "LOOMEM_EMBEDDING_DIM={:?} not a positive integer, keeping current value {}",
+                    v,
+                    self.embedding_dim
+                ),
+            }
+        }
+    }
 }
 
 pub const PROMPT_VERSION: u32 = 3;
@@ -696,5 +724,43 @@ mod tests {
         assert!(limiter.check_and_increment().await.is_ok());
         assert!(limiter.check_and_increment().await.is_ok());
         assert!(limiter.check_and_increment().await.is_err());
+    }
+
+    // Env-var tests mutate process-global state and race the multi-threaded
+    // cargo test runner; `serial_test` is not a dependency (CLAUDE.md §7), so
+    // they are #[ignore]d and run manually — mirrors `access_audit::config::tests`.
+    //   cargo test -p loomem-core --lib -- --ignored --test-threads=1 apply_env
+
+    #[test]
+    #[ignore = "env-var race; manually verified (serial_test not in deps)"]
+    fn env_overrides_embedding_provider_and_dim() {
+        let mut cfg = LlmConfig::default();
+        cfg.embedding_provider = "local".to_string();
+        cfg.embedding_dim = 384;
+        std::env::set_var("LOOMEM_EMBEDDING_PROVIDER", "openai");
+        std::env::set_var("LOOMEM_EMBEDDING_DIM", "1536");
+        cfg.apply_env_overrides();
+        std::env::remove_var("LOOMEM_EMBEDDING_PROVIDER");
+        std::env::remove_var("LOOMEM_EMBEDDING_DIM");
+        assert_eq!(cfg.embedding_provider, "openai");
+        assert_eq!(cfg.embedding_dim, 1536);
+    }
+
+    #[test]
+    #[ignore = "env-var race; manually verified (serial_test not in deps)"]
+    fn env_unknown_embedding_values_keep_current() {
+        let mut cfg = LlmConfig::default();
+        cfg.embedding_provider = "local".to_string();
+        cfg.embedding_dim = 384;
+        std::env::set_var("LOOMEM_EMBEDDING_PROVIDER", "bogus");
+        std::env::set_var("LOOMEM_EMBEDDING_DIM", "-1");
+        cfg.apply_env_overrides();
+        std::env::remove_var("LOOMEM_EMBEDDING_PROVIDER");
+        std::env::remove_var("LOOMEM_EMBEDDING_DIM");
+        assert_eq!(
+            cfg.embedding_provider, "local",
+            "unknown provider must not change value"
+        );
+        assert_eq!(cfg.embedding_dim, 384, "invalid dim must not change value");
     }
 }

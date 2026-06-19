@@ -50,6 +50,25 @@ fn default_quality_gate_threshold() -> f64 {
     0.5
 }
 
+impl ConsolidationConfig {
+    /// Per-instance env override for the background consolidation interval, so a
+    /// cloud deployment can run "dreaming" rarely (keeping instances asleep
+    /// between runs) while self-host keeps the config.toml default.
+    /// `LOOMEM_CONSOLIDATION_INTERVAL_SECS` (positive integer of seconds).
+    pub fn apply_env_overrides(&mut self) {
+        if let Ok(v) = std::env::var("LOOMEM_CONSOLIDATION_INTERVAL_SECS") {
+            match v.parse::<u64>() {
+                Ok(s) if s > 0 => self.interval_secs = s,
+                _ => tracing::warn!(
+                    "LOOMEM_CONSOLIDATION_INTERVAL_SECS={:?} not a positive integer, keeping current value {}",
+                    v,
+                    self.interval_secs
+                ),
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsolidationReport {
     pub consolidated_count: usize,
@@ -872,5 +891,28 @@ mod tests {
         assert_eq!(streams.get("100").map(|v| v.len()), Some(2));
         assert_eq!(streams.get("200").map(|v| v.len()), Some(1));
         assert_ne!(streams.get("100"), streams.get("200"));
+    }
+
+    // Env-var test mutates process-global state; #[ignore]d like other env cases
+    // (serial_test not in deps — CLAUDE.md §7). Run: --ignored --test-threads=1
+    #[test]
+    #[ignore = "env-var race; manually verified (serial_test not in deps)"]
+    fn env_overrides_consolidation_interval() {
+        let mut cfg = ConsolidationConfig {
+            interval_secs: 300,
+            batch_size: 200,
+            concurrency: 1,
+            timeout_secs: 30,
+            min_chunks_to_consolidate: 3,
+            min_age_secs: 60,
+            prompt_version: 1,
+            consolidation_style: "observation".to_string(),
+            similarity_threshold: 0.3,
+            quality_gate_threshold: 0.5,
+        };
+        std::env::set_var("LOOMEM_CONSOLIDATION_INTERVAL_SECS", "21600");
+        cfg.apply_env_overrides();
+        std::env::remove_var("LOOMEM_CONSOLIDATION_INTERVAL_SECS");
+        assert_eq!(cfg.interval_secs, 21600);
     }
 }

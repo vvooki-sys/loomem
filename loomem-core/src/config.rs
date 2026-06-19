@@ -212,6 +212,8 @@ impl Config {
         config.manifest.apply_env_overrides(); // Env override for manifest governance (per-instance; ADR-015)
         config.content_type.apply_env_overrides(); // LOOMEM_CONTENT_TYPE_ENABLED per-instance typing toggle (/143)
         config.access_audit.apply_env_overrides(); // LOOMEM_ACCESS_AUDIT_ENABLED per-instance access-audit toggle (ADR-018, /150e)
+        config.llm.apply_env_overrides(); // LOOMEM_EMBEDDING_PROVIDER / _DIM per-instance embedding override (cloud/Docker)
+        config.worker.consolidation.apply_env_overrides(); // LOOMEM_CONSOLIDATION_INTERVAL_SECS per-instance (cloud)
 
         config.validate()?;
         Ok(config)
