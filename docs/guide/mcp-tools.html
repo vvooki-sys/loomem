@@ -269,7 +269,8 @@ a:hover{text-decoration:underline}
 - Applies time decay (recent memories score higher)
 - Deduplicates near-identical results
 - Marks superseded facts with <code>[UPDATED]</code>
-- For aggregation queries ("how many..."), boosts <code>top_k</code> to 30</p>
+- For aggregation queries ("how many..."), boosts <code>top_k</code> to 30
+- Each result line ends with its <code>chunk_id</code> — usable directly for <code>memory_history</code>, <code>memory_delete</code>, or <code>memory_feedback</code></p>
 <hr />
 <h3 id="memory_context">memory_context</h3>
 <p>Load relevant background at the start of a task. Token-budgeted — won't overwhelm the context window.</p>
@@ -504,7 +505,7 @@ v2 (2026-04-01): &quot;User uses Cursor&quot;         ← current
 <td><code>chunk_id</code></td>
 <td>string</td>
 <td>yes</td>
-<td>Chunk to rate (from the id returned by <code>memory_store</code> / <code>memory_ingest</code>)</td>
+<td>Chunk to rate (from a <code>memory_search</code> result line, or the id returned by <code>memory_store</code> / <code>memory_ingest</code>)</td>
 </tr>
 <tr>
 <td><code>usefulness</code></td>

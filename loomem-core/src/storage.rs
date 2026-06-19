@@ -488,6 +488,23 @@ impl RocksDbStore {
         }
     }
 
+    /// Cheap existence check for an embedding: reads the raw bytes but skips the
+    /// `bincode` deserialize (and `Vec<f32>` allocation) that `get_embedding`
+    /// pays. Used by status reporting, which only needs "is it embedded?" across
+    /// a full-stream scan.
+    pub fn has_embedding(&self, id: &str) -> Result<bool> {
+        let cf = self
+            .db
+            .cf_handle(CF_EMBEDDINGS)
+            .context("Embeddings column family not found")?;
+
+        Ok(self
+            .db
+            .get_cf(&cf, id.as_bytes())
+            .context("Failed to probe embedding")?
+            .is_some())
+    }
+
     /// Get all embeddings from the store
     pub fn get_all_embeddings(&self) -> Result<Vec<(String, Vec<f32>)>> {
         let cf = self
