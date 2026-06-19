@@ -320,25 +320,26 @@ Engine health and statistics. Use to verify the engine is running, check capacit
 - User asks about memory health or capacity
 - Before a complex operation (bulk ingest, dream) to verify readiness
 
-**Returns:**
+**Returns** a plain-text health block scoped to your stream, e.g.:
 
 ```
-{
-  "status": "ok",
-  "uptime_secs": 86400,
-  "rocksdb_keys": 311,
-  "tantivy_docs": 115,
-  "embeddings_count": 112,
-  "vector": true,
-  "tantivy": true,
-  "scheduler": true
-}
+Loomem Status: ok
+Your stream: __user_default__
+Your memories: 142
+Embeddings (this stream): warming up (118/142 indexed, 24 pending, 83%)
+Associator: active (7 clusters)
+Event log drops: 0
+Audit write failures: 0
+Undecodable chunks (last full scan): 0
+LLM failures (last 60m): extraction=0, ner=0, embedding=0, consolidation=0
 ```
 
 Key indicators:
-- `vector: false` means semantic search is degraded (BM25 only)
-- `scheduler: false` means background workers (consolidation, decay, dream) are not running
-- Large gap between `rocksdb_keys` and `embeddings_count` suggests embedding backfill needed
+- `Embeddings (this stream)` reads `ready` once every chunk is indexed; `warming up (... pending ...)` means vector search is still backfilling and falls back to BM25 until pending reaches 0.
+- `Associator: enabled, awaiting clustering` means `memory_associate` has nothing to return until `memory_dream` runs.
+- Non-zero `Event log drops`, `Audit write failures`, or `Undecodable chunks` signal data-integrity issues worth investigating.
+
+(The JSON object with `uptime_secs` / `rocksdb_keys` / `vector` / `scheduler` is the HTTP admin stats endpoint — see the API reference — not this MCP tool.)
 
 ---
 

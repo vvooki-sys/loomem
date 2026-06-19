@@ -531,22 +531,22 @@ v2 (2026-04-01): &quot;User uses Cursor&quot;         ← current
 - Tools return unexpected errors or empty results
 - User asks about memory health or capacity
 - Before a complex operation (bulk ingest, dream) to verify readiness</p>
-<p><strong>Returns:</strong></p>
-<pre><code>{
-  &quot;status&quot;: &quot;ok&quot;,
-  &quot;uptime_secs&quot;: 86400,
-  &quot;rocksdb_keys&quot;: 311,
-  &quot;tantivy_docs&quot;: 115,
-  &quot;embeddings_count&quot;: 112,
-  &quot;vector&quot;: true,
-  &quot;tantivy&quot;: true,
-  &quot;scheduler&quot;: true
-}
+<p><strong>Returns</strong> a plain-text health block scoped to your stream, e.g.:</p>
+<pre><code>Loomem Status: ok
+Your stream: __user_default__
+Your memories: 142
+Embeddings (this stream): warming up (118/142 indexed, 24 pending, 83%)
+Associator: active (7 clusters)
+Event log drops: 0
+Audit write failures: 0
+Undecodable chunks (last full scan): 0
+LLM failures (last 60m): extraction=0, ner=0, embedding=0, consolidation=0
 </code></pre>
 <p>Key indicators:
-- <code>vector: false</code> means semantic search is degraded (BM25 only)
-- <code>scheduler: false</code> means background workers (consolidation, decay, dream) are not running
-- Large gap between <code>rocksdb_keys</code> and <code>embeddings_count</code> suggests embedding backfill needed</p>
+- <code>Embeddings (this stream)</code> reads <code>ready</code> once every chunk is indexed; <code>warming up (... pending ...)</code> means vector search is still backfilling and falls back to BM25 until pending reaches 0.
+- <code>Associator: enabled, awaiting clustering</code> means <code>memory_associate</code> has nothing to return until <code>memory_dream</code> runs.
+- Non-zero <code>Event log drops</code>, <code>Audit write failures</code>, or <code>Undecodable chunks</code> signal data-integrity issues worth investigating.</p>
+<p>(The JSON object with <code>uptime_secs</code> / <code>rocksdb_keys</code> / <code>vector</code> / <code>scheduler</code> is the HTTP admin stats endpoint — see the API reference — not this MCP tool.)</p>
 <hr />
 <h3 id="memory_namespaces">memory_namespaces</h3>
 <p>List available memory spaces.</p>
