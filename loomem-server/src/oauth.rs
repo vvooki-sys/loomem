@@ -218,49 +218,67 @@ pub async fn authorize_page(
 /// Render the API key authorization form.
 fn authorize_page_html(q: AuthorizeQuery) -> impl IntoResponse {
     let html = format!(
-        r#"<!DOCTYPE html>
+        r##"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Loomem — Authorize</title>
+<title>Loomem — Connect</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         background: #0a0a0a; color: #e0e0e0; display: flex; align-items: center;
-         justify-content: center; min-height: 100vh; }}
-  .card {{ background: #1a1a1a; border: 1px solid #333; border-radius: 12px;
-           padding: 2rem; max-width: 420px; width: 100%; }}
-  h1 {{ font-size: 1.4rem; margin-bottom: 0.5rem; }}
-  p {{ font-size: 0.9rem; color: #999; margin-bottom: 1.5rem; }}
-  label {{ font-size: 0.85rem; color: #bbb; display: block; margin-bottom: 0.4rem; }}
-  input[type="password"] {{ width: 100%; padding: 0.7rem; border: 1px solid #444;
-         border-radius: 8px; background: #111; color: #fff; font-size: 0.95rem;
-         margin-bottom: 1rem; }}
-  input[type="password"]:focus {{ outline: none; border-color: #6366f1; }}
-  button {{ width: 100%; padding: 0.7rem; border: none; border-radius: 8px;
-            background: #6366f1; color: white; font-size: 1rem; cursor: pointer; }}
-  button:hover {{ background: #5558e6; }}
-  .brand {{ color: #6366f1; }}
+  body {{ font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif; background: #FBF8F1;
+          color: #1F1B16; display: flex; align-items: center; justify-content: center;
+          min-height: 100vh; padding: 20px; }}
+  .card {{ background: #fff; border: 1px solid #DED7C8; border-radius: 16px; max-width: 440px;
+           width: 100%; overflow: hidden; box-shadow: 0 8px 24px rgba(31,27,22,.09); }}
+  .bar {{ height: 5px; background: linear-gradient(120deg, #EE9913 0%, #1684DC 100%); }}
+  .inner {{ padding: 32px 34px; }}
+  .brand {{ display: flex; align-items: center; gap: 10px; font-family: 'Fraunces', Georgia, serif;
+            font-weight: 600; font-size: 24px; letter-spacing: -.02em; margin-bottom: 22px; }}
+  .brand svg {{ width: 38px; height: 38px; }}
+  h1 {{ font-family: 'Fraunces', Georgia, serif; font-size: 1.45rem; font-weight: 600;
+        letter-spacing: -.01em; margin-bottom: 8px; }}
+  p {{ font-size: .95rem; color: #564D40; line-height: 1.55; margin-bottom: 22px; }}
+  label {{ font-size: .85rem; font-weight: 600; color: #423B31; display: block; margin-bottom: 8px; }}
+  input[type="password"] {{ width: 100%; padding: 13px 16px; border: 1.5px solid #B7AE9E;
+         border-radius: 999px; background: #fff; color: #1F1B16; font-size: 15px;
+         font-family: inherit; margin-bottom: 18px; }}
+  input[type="password"]:focus {{ outline: none; border-color: #1684DC; box-shadow: 0 0 0 3px rgba(22,132,220,.25); }}
+  button {{ width: 100%; padding: 14px; border: none; border-radius: 999px;
+            background: linear-gradient(120deg, #EE9913 0%, #1684DC 100%); color: #fff;
+            font-size: 16px; font-weight: 600; cursor: pointer; font-family: inherit; }}
+  button:hover {{ filter: brightness(1.05); }}
+  .fine {{ font-size: 12.5px; color: #8E8474; margin-top: 16px; text-align: center; }}
 </style>
 </head>
 <body>
 <div class="card">
-  <h1><span class="brand">Loomem</span> Memory</h1>
-  <p>Enter your API key to connect Claude to your Loomem memory.</p>
-  <form method="POST" action="/oauth/authorize">
-    <input type="hidden" name="client_id" value="{client_id}">
-    <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-    <input type="hidden" name="state" value="{state}">
-    <input type="hidden" name="code_challenge" value="{code_challenge}">
-    <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
-    <label for="api_key">API Key</label>
-    <input type="password" id="api_key" name="api_key" placeholder="loom_..." required autofocus>
-    <button type="submit">Authorize</button>
-  </form>
+  <div class="bar"></div>
+  <div class="inner">
+    <div class="brand">
+      <svg viewBox="27 27 146 146" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg>
+      Loomem
+    </div>
+    <h1>Connect your context</h1>
+    <p>Paste your key to connect Claude to your private Loomem. You'll find it in the email we sent you.</p>
+    <form method="POST" action="/oauth/authorize">
+      <input type="hidden" name="client_id" value="{client_id}">
+      <input type="hidden" name="redirect_uri" value="{redirect_uri}">
+      <input type="hidden" name="state" value="{state}">
+      <input type="hidden" name="code_challenge" value="{code_challenge}">
+      <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
+      <label for="api_key">Your key</label>
+      <input type="password" id="api_key" name="api_key" placeholder="Paste your key here" required autofocus>
+      <button type="submit">Authorize</button>
+    </form>
+    <div class="fine">Your data stays private — only you can access it.</div>
+  </div>
 </div>
 </body>
-</html>"#,
+</html>"##,
         client_id = html_escape(&q.client_id),
         redirect_uri = html_escape(&q.redirect_uri),
         state = html_escape(&q.state.unwrap_or_default()),
