@@ -24,6 +24,31 @@ pub struct DreamConfig {
     pub min_group_size: usize,
     pub model: String,
     pub cost_cap_usd_per_run: f64,
+    /// Count of newly-persisted chunks (per stream) that arms an automatic dream
+    /// run. `0` disables auto-triggering (dream stays purely on-demand). Carried
+    /// with `#[serde(default)]` so configs predating this field still parse.
+    #[serde(default = "default_auto_trigger_threshold")]
+    pub auto_trigger_threshold: usize,
+    /// Minimum seconds between two automatic dream runs on the same stream.
+    /// Debounces bursty ingests (e.g. bulk imports) so they don't fire runs
+    /// back-to-back.
+    #[serde(default = "default_auto_cooldown_secs")]
+    pub auto_cooldown_secs: u64,
+}
+
+/// Default auto-trigger threshold: `0` (disabled), so auto-triggering is strictly
+/// opt-in. A config that enables the dream worker (`enabled = true`) but predates
+/// this field must NOT silently start firing automatic `dream_run`s (LLM cost) —
+/// the user opts in by setting `auto_trigger_threshold` explicitly. The shipped
+/// `config.toml` sets `50`, matching `batch_size` (dream truncates its working
+/// set to `batch_size`, so a larger value would leave chunks unprocessed).
+fn default_auto_trigger_threshold() -> usize {
+    0
+}
+
+/// Default cooldown between automatic dream runs on the same stream (15 min).
+fn default_auto_cooldown_secs() -> u64 {
+    900
 }
 
 impl Default for DreamConfig {
@@ -34,6 +59,8 @@ impl Default for DreamConfig {
             min_group_size: 2,
             model: "gpt-4.1-mini".to_string(),
             cost_cap_usd_per_run: 0.10,
+            auto_trigger_threshold: default_auto_trigger_threshold(),
+            auto_cooldown_secs: default_auto_cooldown_secs(),
         }
     }
 }

@@ -247,13 +247,18 @@ max_iterations = 100
 min_serendipity = 0.1
 max_associations = 3
 
-# autoDream: background consolidation worker
+# Dream: on-demand consolidation (merge facts per subject, resolve contradictions).
+# Triggered manually via the memory_dream MCP tool or POST /v1/dream — NOT
+# auto-scheduled (scheduler.rs has no dream ticker; see [worker.*] for the
+# workers that do run on a timer).
 [dream]
 enabled = true
 batch_size = 50                   # chunks per run
 min_group_size = 2                # min chunks per subject to trigger merge
 model = "gpt-4.1-mini"
 cost_cap_usd_per_run = 0.10      # safety: stop if exceeded
+auto_trigger_threshold = 50      # fire a dream run after N new chunks per stream (0 = off, private streams only)
+auto_cooldown_secs = 900         # min 15 min between auto-runs on the same stream (debounces bulk imports)
 
 # Cycle/112: POST /v1/feedback — agent-supplied chunk ratings (write-only in v1).
 [feedback]

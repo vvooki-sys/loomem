@@ -13,6 +13,7 @@ pub mod crypto;
 pub mod date_resolver;
 pub mod decay;
 pub mod dream;
+pub mod dream_auto;
 pub mod embedding_queue;
 pub mod embeddings;
 pub mod encrypt_backfill;
