@@ -571,6 +571,7 @@ mod tests {
                 host: "127.0.0.1".into(),
                 port: 3030,
                 auth_token_env: String::new(),
+                honor_caller_trust_source: false,
             },
             resource_guards: crate::config::ResourceGuardsConfig::default(),
             streams: crate::config::StreamsConfig::default(),

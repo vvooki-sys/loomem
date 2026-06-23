@@ -152,6 +152,13 @@ pub struct ServerConfig {
     pub port: u16,
     #[serde(default = "default_auth_token_env")]
     pub auth_token_env: String,
+    /// Cycle /001 (MemIR): when true, MCP `memory_store` honors the caller's
+    /// `source` for the trust tier (allowing `a1`). When false (default), MCP
+    /// writes are clamped to at most `a2`, so an untrusted or prompt-injected
+    /// client cannot self-elevate to full-trust `a1`. Single-user/dogfood
+    /// instances may enable it; multi-client/cloud should leave it off.
+    #[serde(default)]
+    pub honor_caller_trust_source: bool,
 }
 
 fn default_auth_token_env() -> String {

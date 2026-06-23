@@ -1305,6 +1305,7 @@ mod tests {
                 host: "127.0.0.1".into(),
                 port: 3030,
                 auth_token_env: String::new(),
+                honor_caller_trust_source: false,
             },
             resource_guards: cfg::ResourceGuardsConfig::default(),
             streams: cfg::StreamsConfig::default(),
