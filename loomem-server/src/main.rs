@@ -1560,6 +1560,7 @@ mod tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: loomem_core::storage::ProvenanceRole::Claim,
         }
     }
 
@@ -1957,6 +1958,7 @@ mod tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: loomem_core::storage::ProvenanceRole::Claim,
         }
     }
 

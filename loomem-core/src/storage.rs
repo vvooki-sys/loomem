@@ -117,6 +117,26 @@ impl ExtractionMeta {
     }
 }
 
+/// Cycle /001 (MemIR): provenance role of a chunk — how authoritative its
+/// content is as a retrieval signal. Combined with `trust_level` into a
+/// multiplier applied to the fused score in `hybrid_search`, so equally
+/// relevant chunks are ordered by authority rather than tied.
+///
+/// `Claim` is the default so existing chunks (and every current write path)
+/// deserialize and construct as first-class asserted memories. `Evidence`
+/// and `Cue` are defined for future producers (e.g. entity-derived chunks);
+/// no current write path emits them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ProvenanceRole {
+    /// A first-class asserted fact/memory. Highest retrieval weight (1.00).
+    #[default]
+    Claim,
+    /// Supporting evidence derived from other content. Lowest retrieval weight (0.50).
+    Evidence,
+    /// A weak associative cue (e.g. graph/entity link). Reduced retrieval weight (0.80).
+    Cue,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
     pub id: String,
@@ -199,6 +219,12 @@ pub struct Chunk {
     /// Cycle/112: unix ms timestamp of most recent rating event. None = never rated.
     #[serde(default)]
     pub last_rated_at: Option<i64>,
+
+    /// Cycle /001 (MemIR): provenance role — retrieval-weight tier.
+    /// `#[serde(default)]` → existing chunks deserialize as `Claim`, so the
+    /// field is backward-compatible with databases written before this cycle.
+    #[serde(default)]
+    pub provenance_role: ProvenanceRole,
 }
 
 /// /138 phase 2: storage-layer envelope for a chunk written with field-level
@@ -1993,6 +2019,7 @@ mod tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: crate::storage::ProvenanceRole::Claim,
         };
         store.store_chunk(&chunk)?;
 
@@ -2263,6 +2290,7 @@ mod tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: crate::storage::ProvenanceRole::Claim,
         };
         let orphan2 = Chunk {
             id: "orphan-2".to_string(),
@@ -2302,6 +2330,7 @@ mod tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: crate::storage::ProvenanceRole::Claim,
         };
         let normal = Chunk {
             id: "normal-1".to_string(),
@@ -2341,6 +2370,7 @@ mod tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: crate::storage::ProvenanceRole::Claim,
         };
 
         store.store_chunk(&orphan1)?;
@@ -2415,7 +2445,25 @@ mod tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: crate::storage::ProvenanceRole::Claim,
         }
+    }
+
+    /// Cycle /001 (MemIR): a chunk persisted before this cycle has no
+    /// `provenance_role` key on disk. `#[serde(default)]` must reconstitute it
+    /// as `Claim` so existing databases deserialize unchanged.
+    #[test]
+    fn test_provenance_role_serde_default_backward_compat() {
+        let chunk = make_chunk("c-prov", "s", 0);
+        let mut value = serde_json::to_value(&chunk).expect("serialize chunk");
+        value
+            .as_object_mut()
+            .expect("chunk serializes to a JSON object")
+            .remove("provenance_role");
+        assert!(value.get("provenance_role").is_none());
+
+        let restored: Chunk = serde_json::from_value(value).expect("deserialize legacy chunk");
+        assert_eq!(restored.provenance_role, ProvenanceRole::Claim);
     }
 
     // /138 phase 2: field-level encryption write path under MasterKeyEnvProvider.
@@ -2839,6 +2887,7 @@ mod tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: crate::storage::ProvenanceRole::Claim,
         };
 
         store.store_chunk(&chunk)?;
@@ -2919,6 +2968,7 @@ mod tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: crate::storage::ProvenanceRole::Claim,
         };
 
         let chunk2 = Chunk {
@@ -2959,6 +3009,7 @@ mod tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: crate::storage::ProvenanceRole::Claim,
         };
 
         let chunk3 = Chunk {
@@ -2999,6 +3050,7 @@ mod tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: crate::storage::ProvenanceRole::Claim,
         };
 
         store.store_chunk(&chunk1)?;

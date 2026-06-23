@@ -1904,6 +1904,7 @@ fn build_extracted_fact_chunk(
         harmful_count: 0,
         n_ratings: 0,
         last_rated_at: None,
+        provenance_role: loomem_core::storage::ProvenanceRole::Claim,
     }
 }
 
@@ -2629,6 +2630,7 @@ mod reprocess_handler_tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: loomem_core::storage::ProvenanceRole::Claim,
         }
     }
 
@@ -2860,6 +2862,7 @@ mod api_get_memory_handler_tests {
             harmful_count: 0,
             n_ratings: 0,
             last_rated_at: None,
+            provenance_role: loomem_core::storage::ProvenanceRole::Claim,
         }
     }
 

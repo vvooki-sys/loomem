@@ -149,7 +149,15 @@ impl HybridSearchEngine {
         decay
     }
 
-    /// Fuse BM25 and vector scores using vector_search results
+    /// Fuse BM25 and vector scores using vector_search results.
+    ///
+    /// Contract note (Cycle /001): when `store` is `Some`, every fused id is
+    /// fetched once via `get_chunk` to read its trust tier + provenance role
+    /// for the retrieval multiplier. For stream-filtered searches this means a
+    /// known double-read of stream-filtered vector hits — `search_with_vector`
+    /// already fetched those chunks for namespace isolation. The pool is small
+    /// (`top_k * 3`) and reads are block-cache-backed, so this is accepted;
+    /// threading the stream-filter chunks in as a prefetched map would remove it.
     pub fn fuse_with_vector(
         &self,
         bm25_results: Vec<SearchResult>,
@@ -208,7 +216,11 @@ impl HybridSearchEngine {
             let fusion_score =
                 weights.bm25 * bm25_score as f64 + weights.vector * vector_score as f64;
 
-            // Get document details from BM25 results or fetch from store for vector-only hits
+            // Cycle /001 (MemIR): fetch the chunk once for trust/provenance
+            // weighting; it also supplies metadata for vector-only hits.
+            let chunk_opt = store.and_then(|s| s.get_chunk(&id).ok().flatten());
+
+            // Get document details from BM25 results or the fetched chunk for vector-only hits
             let doc_data: Option<(String, String, String, i32, i64)> = if let Some(doc) = doc {
                 Some((
                     doc.content.clone(),
@@ -217,26 +229,29 @@ impl HybridSearchEngine {
                     doc.level,
                     doc.timestamp,
                 ))
-            } else if let Some(s) = store {
-                // Vector-only hit — fetch from RocksDB
-                if let Ok(Some(chunk)) = s.get_chunk(&id) {
-                    Some((
-                        chunk.content,
+            } else {
+                // Vector-only hit — use the chunk fetched above
+                chunk_opt.as_ref().map(|chunk| {
+                    (
+                        chunk.content.clone(),
                         "default".to_string(),
                         "default".to_string(),
                         chunk.level,
                         chunk.timestamp as i64,
-                    ))
-                } else {
-                    None
-                }
-            } else {
-                None
+                    )
+                })
             };
 
             if let Some((content, user_id, app_id, level, timestamp)) = doc_data {
                 let time_decay = self.compute_time_decay(timestamp, level, decay_config);
-                let final_score = fusion_score * time_decay;
+                // Cycle /001 (MemIR): weight equally-relevant chunks by authority
+                // (trust tier + provenance role) before the final sort. Hits with
+                // no chunk loaded (e.g. store=None) get a neutral 1.0 multiplier.
+                let trust_prov = chunk_opt
+                    .as_ref()
+                    .map(trust_provenance_multiplier)
+                    .unwrap_or(1.0);
+                let final_score = fusion_score * time_decay * trust_prov;
 
                 fused_results.push(HybridSearchResult {
                     id: id.clone(),
@@ -478,6 +493,27 @@ impl HybridSearchEngine {
     }
 }
 
+/// Cycle /001 (MemIR): retrieval-weight multiplier combining a chunk's trust
+/// tier (`trust_level`) and provenance role (`provenance_role`). Multiplied
+/// into the fused score before the final sort so equally relevant chunks are
+/// ordered by authority — the fix for the a1/a2 collapse where `trust_level`
+/// was ignored at retrieval. Returns a factor in (0, 1]; 1.0 == full trust +
+/// `Claim`, leaving the most authoritative chunks unchanged.
+pub fn trust_provenance_multiplier(chunk: &crate::storage::Chunk) -> f64 {
+    let role_factor = match chunk.provenance_role {
+        crate::storage::ProvenanceRole::Claim => 1.00,
+        crate::storage::ProvenanceRole::Cue => 0.80,
+        crate::storage::ProvenanceRole::Evidence => 0.50,
+    };
+    // None == "a1" for backward compat (see `Chunk::trust_level` docs).
+    let trust_factor = match chunk.trust_level.as_deref() {
+        Some("a1") | None => 1.00,
+        Some("a2") => 0.92,
+        _ => 0.80, // "b" or unknown == least trusted
+    };
+    role_factor * trust_factor
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,5 +605,100 @@ mod tests {
         let decay_l0_1d = engine.compute_time_decay(now - 86400, 0, &config.search.decay);
         assert!(decay_l0_1d < 1.0);
         assert!(decay_l0_1d > 0.9); // L0 lambda=0.10, so e^(-0.1) ≈ 0.905
+    }
+
+    /// Minimal `Chunk` with neutral fields; tests clone + mutate the one field
+    /// under test so they isolate the multiplier from every other input.
+    fn base_chunk() -> crate::storage::Chunk {
+        crate::storage::Chunk {
+            id: "c1".to_string(),
+            content: "identical content".to_string(),
+            stream: "s".to_string(),
+            level: 0,
+            score: 1.0,
+            timestamp: 0,
+            consolidated: false,
+            dormant: false,
+            in_progress: false,
+            prompt_version: None,
+            source_ids: None,
+            last_decay: None,
+            metadata: None,
+            importance: None,
+            persistent: false,
+            last_implicit_boost: None,
+            access_count: 0,
+            source: None,
+            created_by: None,
+            updated_at: None,
+            valid_from: None,
+            valid_until: None,
+            is_latest: true,
+            superseded_by: None,
+            supersedes_id: None,
+            root_memory_id: None,
+            version: 1,
+            memory_type: None,
+            extraction_meta: None,
+            deleted_at: None,
+            trust_level: None,
+            ingester_user_id: None,
+            alpha: 1.0,
+            beta: 1.0,
+            harmful_count: 0,
+            n_ratings: 0,
+            last_rated_at: None,
+            provenance_role: crate::storage::ProvenanceRole::Claim,
+        }
+    }
+
+    #[test]
+    fn test_trust_provenance_multiplier_a1_outranks_a2() {
+        // AC: a1 (full trust) must rank above a2 (derived) for identical content.
+        let mut a1 = base_chunk();
+        a1.trust_level = Some("a1".to_string());
+        let mut a2 = base_chunk();
+        a2.trust_level = Some("a2".to_string());
+
+        let m_a1 = trust_provenance_multiplier(&a1);
+        let m_a2 = trust_provenance_multiplier(&a2);
+
+        assert!(m_a1 > m_a2, "a1 ({m_a1}) should outrank a2 ({m_a2})");
+        assert!((m_a1 - 1.00).abs() < 1e-9);
+        assert!((m_a2 - 0.92).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_trust_provenance_multiplier_none_equals_a1() {
+        // None trust_level is backward-compat for "a1" — identical multiplier.
+        let none = base_chunk();
+        let mut a1 = base_chunk();
+        a1.trust_level = Some("a1".to_string());
+        assert!(
+            (trust_provenance_multiplier(&none) - trust_provenance_multiplier(&a1)).abs() < 1e-9
+        );
+    }
+
+    #[test]
+    fn test_trust_provenance_multiplier_claim_outranks_cue_and_evidence() {
+        // AC: Claim > Cue for an identical pre-sort score; Evidence lowest.
+        let claim = base_chunk(); // provenance_role defaults to Claim
+        let mut cue = base_chunk();
+        cue.provenance_role = crate::storage::ProvenanceRole::Cue;
+        let mut evidence = base_chunk();
+        evidence.provenance_role = crate::storage::ProvenanceRole::Evidence;
+
+        let m_claim = trust_provenance_multiplier(&claim);
+        let m_cue = trust_provenance_multiplier(&cue);
+        let m_evidence = trust_provenance_multiplier(&evidence);
+
+        assert!(
+            m_claim > m_cue,
+            "Claim ({m_claim}) should outrank Cue ({m_cue})"
+        );
+        assert!(
+            m_cue > m_evidence,
+            "Cue ({m_cue}) should outrank Evidence ({m_evidence})"
+        );
     }
 }
