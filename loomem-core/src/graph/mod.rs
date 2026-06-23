@@ -581,14 +581,27 @@ impl GraphStore {
     }
 
     /// Remove all graph references for a deleted chunk.
+    ///
+    /// Entities that lose their last chunk are pruned outright (entity +
+    /// edges + indexes), not left behind with an empty `chunk_ids`. A ghost
+    /// entity with `Linked chunks: 0` surviving `memory_delete` is a
+    /// GDPR/erasure correctness bug — the deletion contract promises the graph
+    /// is cleaned too.
     pub fn remove_chunk_references(&self, chunk_id: &str) -> Result<()> {
         let entity_ids = self.get_entities_for_chunk(chunk_id)?;
+        let mut to_prune: Vec<String> = Vec::new();
 
         for entity_id in &entity_ids {
             if let Some(mut entity) = self.get_entity_by_id(entity_id)? {
                 entity.chunk_ids.retain(|c| c != chunk_id);
-                entity.updated_at = now_secs();
-                self.store_entity(&entity)?;
+                if entity.chunk_ids.is_empty() {
+                    // Orphaned: defer to delete_entity below (which also tears
+                    // down edges/indexes). Skip store_entity — pointless write.
+                    to_prune.push(entity_id.clone());
+                } else {
+                    entity.updated_at = now_secs();
+                    self.store_entity(&entity)?;
+                }
             }
         }
 
@@ -596,7 +609,23 @@ impl GraphStore {
         let key = format!("graph:chunk:{}", chunk_id);
         self.store.delete(key.as_bytes())?;
 
-        debug!("Removed graph references for chunk {}", chunk_id);
+        // Prune orphaned entities (best-effort: a failure here leaves an
+        // orphan that a later delete can retry, but must not abort the rest).
+        for entity_id in &to_prune {
+            if let Err(err) = self.delete_entity(entity_id) {
+                tracing::error!(
+                    entity_id = %entity_id,
+                    error = %err,
+                    "graph: delete_entity failed during chunk reference cleanup — orphan entity may remain, retry required"
+                );
+            }
+        }
+
+        debug!(
+            "Removed graph references for chunk {} (pruned {} orphan entities)",
+            chunk_id,
+            to_prune.len()
+        );
         Ok(())
     }
 
@@ -1560,11 +1589,161 @@ mod tests {
 
         graph.remove_chunk_references("chunk-1").unwrap();
 
-        let updated = graph.get_entity_by_id(&entity.id).unwrap().unwrap();
-        assert!(updated.chunk_ids.is_empty(), "chunk-1 should be removed");
+        // Singleton entity loses its last chunk → pruned, not left as a ghost.
+        assert!(
+            graph.get_entity_by_id(&entity.id).unwrap().is_none(),
+            "orphaned entity must be pruned, not retained with empty chunk_ids"
+        );
 
         let reverse = graph.get_entities_for_chunk("chunk-1").unwrap();
         assert!(reverse.is_empty());
+    }
+
+    /// GDPR/erasure: deleting the only chunk of an entity must prune the
+    /// entity entirely — no ghost entity, no surviving edges/indexes.
+    /// (Smoke-test repro: `memory_graph` for a deleted Person still returned
+    /// the entity with `Linked chunks: 0`.)
+    #[test]
+    fn remove_chunk_references_prunes_singleton_entity() {
+        let (store, _tmp) = test_store();
+        let graph = GraphStore::new(store.clone());
+        let stream = "stream-prune-singleton";
+
+        // Person with one chunk, linked by an edge to an Org (also 1 chunk).
+        let person = graph
+            .get_or_create_entity("Zenozar Qwybbleton", "Person", &["ZQ".to_string()], stream)
+            .unwrap();
+        let org = graph
+            .get_or_create_entity("Wibblecorp", "Organization", &[], stream)
+            .unwrap();
+        graph.add_chunk_to_entity(&person.id, "chunk-z").unwrap();
+        graph.add_chunk_to_entity(&org.id, "chunk-o").unwrap();
+        graph
+            .get_or_create_edge(&person.id, &org.id, "works_at", stream)
+            .unwrap();
+
+        graph.remove_chunk_references("chunk-z").unwrap();
+
+        // Entity itself is gone.
+        assert!(
+            graph.get_entity_by_id(&person.id).unwrap().is_none(),
+            "orphaned Person must be pruned"
+        );
+
+        // No edges reference the pruned entity (outgoing adjacency).
+        let adj_prefix = format!("graph:adj:{}:", person.id);
+        assert_eq!(
+            store.prefix_scan(adj_prefix.as_bytes()).count(),
+            0,
+            "outgoing adjacency for pruned entity must be gone"
+        );
+        // Incoming adjacency (reverse) for the pruned entity is gone too.
+        let radj_prefix = format!("graph:radj:{}:", person.id);
+        assert_eq!(
+            store.prefix_scan(radj_prefix.as_bytes()).count(),
+            0,
+            "reverse adjacency for pruned entity must be gone"
+        );
+        // The edge row itself is gone (only the Org's chunk-bearing entity
+        // remains, with no edges).
+        assert_eq!(
+            store.prefix_scan(b"graph:edge:").count(),
+            0,
+            "edge involving pruned entity must be removed"
+        );
+
+        // Name/alias index rows for the pruned entity are gone.
+        let sp = format!("graph:s:{}:", stream);
+        let name_orphans = store
+            .prefix_scan(format!("{}name:", sp).as_bytes())
+            .filter(|(_, v)| v.as_ref() == person.id.as_bytes())
+            .count();
+        let alias_orphans = store
+            .prefix_scan(format!("{}alias:", sp).as_bytes())
+            .filter(|(_, v)| v.as_ref() == person.id.as_bytes())
+            .count();
+        assert_eq!(name_orphans, 0, "name index for pruned entity must be gone");
+        assert_eq!(
+            alias_orphans, 0,
+            "alias index for pruned entity must be gone"
+        );
+
+        // The Org (still chunk-bearing) survives untouched.
+        assert!(
+            graph.get_entity_by_id(&org.id).unwrap().is_some(),
+            "chunk-bearing Org entity must survive"
+        );
+    }
+
+    /// An entity sharing more than one chunk must NOT be pruned when only one
+    /// of its chunks is removed — its remaining chunk and edges stay intact.
+    #[test]
+    fn remove_chunk_references_keeps_shared_entity() {
+        let (store, _tmp) = test_store();
+        let graph = GraphStore::new(store.clone());
+        let stream = "stream-keep-shared";
+
+        let person = graph
+            .get_or_create_entity("Multi Chunk", "Person", &[], stream)
+            .unwrap();
+        let org = graph
+            .get_or_create_entity("ShareCorp", "Organization", &[], stream)
+            .unwrap();
+        graph.add_chunk_to_entity(&person.id, "chunk-1").unwrap();
+        graph.add_chunk_to_entity(&person.id, "chunk-2").unwrap();
+        let edge = graph
+            .get_or_create_edge(&person.id, &org.id, "works_at", stream)
+            .unwrap();
+
+        graph.remove_chunk_references("chunk-1").unwrap();
+
+        let updated = graph
+            .get_entity_by_id(&person.id)
+            .unwrap()
+            .expect("shared entity must survive losing one of two chunks");
+        assert_eq!(
+            updated.chunk_ids,
+            vec!["chunk-2".to_string()],
+            "only the removed chunk should be dropped"
+        );
+
+        // Edge untouched.
+        assert!(
+            graph.get_edge_by_id(&edge.id).unwrap().is_some(),
+            "edge must remain when neither endpoint is pruned"
+        );
+        let adj_prefix = format!("graph:adj:{}:", person.id);
+        assert_eq!(
+            store.prefix_scan(adj_prefix.as_bytes()).count(),
+            1,
+            "outgoing adjacency must be untouched for a surviving entity"
+        );
+    }
+
+    /// Calling `remove_chunk_references` twice for the same chunk must not
+    /// error — the second call is a no-op (entity already pruned, reverse
+    /// index already gone).
+    #[test]
+    fn remove_chunk_references_idempotent() {
+        let (store, _tmp) = test_store();
+        let graph = GraphStore::new(store);
+        let stream = "stream-idempotent";
+
+        let person = graph
+            .get_or_create_entity("Once Only", "Person", &[], stream)
+            .unwrap();
+        graph.add_chunk_to_entity(&person.id, "chunk-x").unwrap();
+
+        graph.remove_chunk_references("chunk-x").unwrap();
+        // Second call must not panic or return Err.
+        graph
+            .remove_chunk_references("chunk-x")
+            .expect("second remove_chunk_references must be a no-op, not an error");
+
+        assert!(
+            graph.get_entity_by_id(&person.id).unwrap().is_none(),
+            "entity stays pruned after a repeated removal"
+        );
     }
 
     // --- Cycle/123 strict-existence guard tests ---
