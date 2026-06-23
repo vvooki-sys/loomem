@@ -149,7 +149,15 @@ impl HybridSearchEngine {
         decay
     }
 
-    /// Fuse BM25 and vector scores using vector_search results
+    /// Fuse BM25 and vector scores using vector_search results.
+    ///
+    /// Contract note (Cycle /001): when `store` is `Some`, every fused id is
+    /// fetched once via `get_chunk` to read its trust tier + provenance role
+    /// for the retrieval multiplier. For stream-filtered searches this means a
+    /// known double-read of stream-filtered vector hits — `search_with_vector`
+    /// already fetched those chunks for namespace isolation. The pool is small
+    /// (`top_k * 3`) and reads are block-cache-backed, so this is accepted;
+    /// threading the stream-filter chunks in as a prefetched map would remove it.
     pub fn fuse_with_vector(
         &self,
         bm25_results: Vec<SearchResult>,

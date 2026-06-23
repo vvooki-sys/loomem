@@ -128,12 +128,12 @@ impl ExtractionMeta {
 /// no current write path emits them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ProvenanceRole {
-    /// A first-class asserted fact/memory. Highest retrieval weight.
+    /// A first-class asserted fact/memory. Highest retrieval weight (1.00).
     #[default]
     Claim,
-    /// Supporting evidence derived from other content. Reduced weight.
+    /// Supporting evidence derived from other content. Lowest retrieval weight (0.50).
     Evidence,
-    /// A weak associative cue (e.g. graph/entity link). Lowest weight.
+    /// A weak associative cue (e.g. graph/entity link). Reduced retrieval weight (0.80).
     Cue,
 }
 
