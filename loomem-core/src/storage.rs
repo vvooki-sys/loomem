@@ -2466,6 +2466,19 @@ mod tests {
         assert_eq!(restored.provenance_role, ProvenanceRole::Claim);
     }
 
+    /// Cycle /001 (MemIR): the MCP write path maps the caller-supplied `source`
+    /// to a trust tier via this fn, so these buckets must hold for ranking to
+    /// differentiate a1 vs b (used by the observability/demo path).
+    #[test]
+    fn test_derive_trust_level_buckets() {
+        assert_eq!(derive_trust_level(Some("user_direct")), "a1");
+        assert_eq!(derive_trust_level(Some("api")), "a1");
+        assert_eq!(derive_trust_level(Some("mcp")), "a2"); // default MCP source
+        assert_eq!(derive_trust_level(Some("external_web")), "b");
+        assert_eq!(derive_trust_level(None), "a1"); // legacy = user-generated
+        assert_eq!(derive_trust_level(Some("totally-unknown")), "b");
+    }
+
     // /138 phase 2: field-level encryption write path under MasterKeyEnvProvider.
     // Verifies the envelope is plaintext, the content-bearing fields are cleared,
     // and the encrypted_payload round-trips back to the original tuple.
