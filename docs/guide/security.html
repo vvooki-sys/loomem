@@ -49,6 +49,7 @@ a:hover{text-decoration:underline}
 .doc-side a.active{background:var(--lm-surface-cool);color:var(--lm-blue-700);font-weight:600}
 .doc-main{min-width:0;max-width:760px;padding:48px 0 96px}
 .doc-eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-gold-700);margin-bottom:10px}
+.doc-updated{font-size:13px;color:var(--lm-ink-400);margin:-12px 0 24px}
 .doc-content h1{font-family:var(--lm-font-display);font-size:2.5rem;font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 22px}
 .doc-content h2{font-family:var(--lm-font-display);font-size:1.6rem;font-weight:600;letter-spacing:-.01em;line-height:1.25;margin:44px 0 14px}
 .doc-content h3{font-size:1.22rem;font-weight:600;margin:30px 0 10px;letter-spacing:-.01em}
@@ -90,6 +91,7 @@ a:hover{text-decoration:underline}
 <nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
 </div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html" class="active">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Project</div><article class="doc-content"><h1 id="security-overview">Security overview</h1>
+<p class="doc-updated">Last updated: 2026-06-16</p>
 <p>This document describes Loomem's security model: authentication, encryption at rest, data in transit, PII handling, and logging. Where Loomem does not have a control in place, the gap is named explicitly under <a href="#known-limitations">Known limitations</a>.</p>
 <hr />
 <h2 id="threat-model-summary">Threat model summary</h2>
