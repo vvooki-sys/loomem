@@ -149,6 +149,11 @@ fallback_to_regex = true  # Graceful degradation if LLM unavailable
 host = "127.0.0.1"
 port = 3030
 auth_token_env = "LOOMEM_AUTH_TOKEN"  # Set env var to enable Bearer auth; empty/unset = no auth
+# Cycle /001 (MemIR): when true, MCP memory_store honors the caller's `source`
+# for the trust tier (allowing a1). When false (default), MCP writes are clamped
+# to at most a2 so an untrusted/prompt-injected client cannot self-elevate to
+# full-trust a1. Enable only on single-user/dogfood instances.
+honor_caller_trust_source = false
 
 [resource_guards]
 max_cpu_cores = 1.0

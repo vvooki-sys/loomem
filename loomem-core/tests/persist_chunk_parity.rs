@@ -90,6 +90,7 @@ fn make_chunk(id: &str, content: &str, stream: &str, level: i32) -> Chunk {
         harmful_count: 0,
         n_ratings: 0,
         last_rated_at: None,
+        provenance_role: loomem_core::storage::ProvenanceRole::Claim,
     }
 }
 

@@ -460,6 +460,22 @@ async fn store_extraction_meta(
     (meta, valid_from_ts)
 }
 
+/// Cycle /001 (MemIR): resolve the trust tier for an MCP write from the
+/// caller-supplied `source`. By default an MCP client cannot self-elevate to
+/// full-trust `a1` (security: a prompt-injected client could otherwise forge
+/// `source: "user_direct"`), so a derived `a1` is clamped down to `a2`. When
+/// the instance opts in via `server.honor_caller_trust_source` (single-user /
+/// dogfood), the caller's source is honored verbatim. `a2`/`b` pass through
+/// unchanged either way.
+pub fn mcp_write_trust_level(source: &str, honor_caller: bool) -> String {
+    let tier = loomem_core::storage::derive_trust_level(Some(source));
+    if !honor_caller && tier == "a1" {
+        "a2".to_string()
+    } else {
+        tier
+    }
+}
+
 async fn tool_store(
     state: &Arc<AppState>,
     args: Value,
@@ -493,13 +509,13 @@ async fn tool_store(
     let (extraction_meta, valid_from_ts) =
         store_extraction_meta(state, &args.content, subject, fact_type, timestamp).await;
 
-    // Cycle /001 (MemIR): derive the trust tier from the caller-supplied
-    // `source` instead of hardcoding a2. Default `source` is "mcp" →
-    // derive_trust_level("mcp") = "a2", so ordinary assistant writes are
-    // unchanged; an explicit trusted source (e.g. "user_direct"/"api" → a1)
-    // or untrusted one ("external_web" → b) now sets the tier, which the
-    // hybrid_search trust_provenance_multiplier consumes for ranking.
-    let trust_level = loomem_core::storage::derive_trust_level(Some(&source));
+    // Cycle /001 (MemIR): resolve the trust tier from the caller `source`
+    // (was hardcoded "a2"). Clamped to at most a2 unless the instance opts in
+    // via `server.honor_caller_trust_source`, so an untrusted or prompt-injected
+    // MCP client cannot self-elevate to full-trust a1. Default `source` "mcp"
+    // → a2 (unchanged). The hybrid_search trust_provenance_multiplier consumes
+    // the resulting tier for ranking.
+    let trust_level = mcp_write_trust_level(&source, state.config.server.honor_caller_trust_source);
 
     let chunk = loomem_core::storage::Chunk {
         id: id.clone(),
@@ -729,6 +745,9 @@ async fn tool_search(
                 // Cycle /001 (MemIR) observability: surface the trust tier and the
                 // applied trust×provenance multiplier so the ranking effect is
                 // visible (black-box testing + demos). None trust_level == "a1".
+                // A `[trust:?]` sentinel marks a result whose chunk could not be
+                // loaded (read error / index-vs-store desync) so it is not
+                // confused with a chunk that legitimately has no trust metadata.
                 let trust_tag = chunk_opt
                     .as_ref()
                     .map(|c| {
@@ -738,7 +757,7 @@ async fn tool_search(
                             loomem_core::hybrid_search::trust_provenance_multiplier(c)
                         )
                     })
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| " [trust:?]".to_string());
 
                 // Emit the chunk_id on each result line so callers can recover
                 // it after a search alone — needed for memory_delete,
@@ -1812,6 +1831,25 @@ mod tests {
     use crate::auth::{AuthContext, KeyScope, StreamMembership};
     use loomem_core::storage::{UserRole, DEFAULT_STREAM_ID};
     use serde_json::json;
+
+    #[test]
+    fn test_mcp_write_trust_level_clamps_a1_by_default() {
+        // Default (honor_caller = false): a1-mapping sources clamp to a2, so an
+        // MCP client cannot self-elevate to full trust; a2/b pass through.
+        assert_eq!(mcp_write_trust_level("user_direct", false), "a2");
+        assert_eq!(mcp_write_trust_level("api", false), "a2");
+        assert_eq!(mcp_write_trust_level("mcp", false), "a2");
+        assert_eq!(mcp_write_trust_level("external_web", false), "b");
+    }
+
+    #[test]
+    fn test_mcp_write_trust_level_honors_source_when_opted_in() {
+        // Opt-in (honor_caller = true): the caller's source sets the tier.
+        assert_eq!(mcp_write_trust_level("user_direct", true), "a1");
+        assert_eq!(mcp_write_trust_level("api", true), "a1");
+        assert_eq!(mcp_write_trust_level("mcp", true), "a2");
+        assert_eq!(mcp_write_trust_level("external_web", true), "b");
+    }
 
     /// Build an AuthContext with a single membership matching the default.
     /// Matches the pre-/32 ctx() helper's semantics for the gate tests.
