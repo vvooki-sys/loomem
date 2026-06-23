@@ -649,7 +649,15 @@ pub async fn consolidate(
                     // permanently "pending" in memory_status. Using the configured
                     // embedder also guarantees the vector dim matches the index.
                     let embed_result = if let Some(ref embedder) = local_embedder {
-                        embedder.embed(&summary_for_index)
+                        // ONNX inference (tokenization + graph execution) is
+                        // synchronous and CPU-bound; run it on the blocking pool
+                        // so it doesn't park the async worker thread under load.
+                        let embedder = Arc::clone(embedder);
+                        let text = summary_for_index.clone();
+                        match tokio::task::spawn_blocking(move || embedder.embed(&text)).await {
+                            Ok(res) => res,
+                            Err(e) => Err(anyhow::anyhow!("embedding task failed to join: {e}")),
+                        }
                     } else {
                         llm::embed(llm_client, llm_config, &summary_for_index).await
                     };
