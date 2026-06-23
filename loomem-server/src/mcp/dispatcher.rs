@@ -493,12 +493,18 @@ async fn tool_store(
         )));
     }
 
+    // Ingress PII boundary (security brief A): redact once, before the gated
+    // event-date probe or persistence touch the content. Raw `args.content`
+    // must never reach a provider; `persist_chunk` re-applies the same
+    // idempotent sanitizer + PII pipeline as defense in depth.
+    let content = state.pii_filter.redact_for_sink(&args.content);
+
     let id = uuid::Uuid::new_v4().to_string();
     let timestamp = Utc::now().timestamp() as u64;
     let stream = stream_id.to_string();
     let subject = args.subject.unwrap_or_else(|| "user".into());
     let source = args.source.unwrap_or_else(|| "mcp".into());
-    let fact_type = classify_fact_type(&args.content);
+    let fact_type = classify_fact_type(&content);
     let is_preference = matches!(
         fact_type,
         loomem_core::storage::FactType::PreferenceOrDecision
@@ -507,7 +513,7 @@ async fn tool_store(
     // /151 (port of /114b2) — gated LLM event_date probe + valid_from
     // routing; see store_extraction_meta.
     let (extraction_meta, valid_from_ts) =
-        store_extraction_meta(state, &args.content, subject, fact_type, timestamp).await;
+        store_extraction_meta(state, &content, subject, fact_type, timestamp).await;
 
     // Cycle /001 (MemIR): resolve the trust tier from the caller `source`
     // (was hardcoded "a2"). Clamped to at most a2 unless the instance opts in
@@ -519,7 +525,7 @@ async fn tool_store(
 
     let chunk = loomem_core::storage::Chunk {
         id: id.clone(),
-        content: args.content.clone(),
+        content: content.clone(),
         stream: stream.clone(),
         level: 0,
         score: 1.0,
@@ -563,7 +569,6 @@ async fn tool_store(
         provenance_role: loomem_core::storage::ProvenanceRole::Claim,
     };
 
-    let content = args.content.clone();
     match handlers::ingest::persist_chunk(
         state,
         chunk,
@@ -1370,6 +1375,13 @@ async fn tool_ingest(
         .conversation_date
         .unwrap_or_else(|| Utc::now().format("%Y-%m-%d").to_string());
 
+    // Ingress PII boundary (security brief A): redact the transcript once,
+    // before it reaches the LLM extraction request (csf_16092cf6). Both the
+    // extraction and raw branches consume the redacted copy; extracted facts
+    // are therefore derived from redacted text, and persist_chunk re-applies
+    // the same idempotent pipeline as defense in depth.
+    let content = state.pii_filter.redact_for_sink(&args.content);
+
     // Use knowledge extraction if enabled
     if state.config.knowledge_extraction.enabled {
         // /157 S1: missing key is a loud config error, not "Extracted 0".
@@ -1380,9 +1392,9 @@ async fn tool_ingest(
         };
         let chat =
             loomem_core::memory_extractor::HttpExtractionChat::new(&state.http_client, api_key);
-        tool_ingest_extract(&chat, state, &args.content, &today, stream_id, user_id).await
+        tool_ingest_extract(&chat, state, &content, &today, stream_id, user_id).await
     } else {
-        tool_ingest_raw(state, &args.content, stream_id, user_id).await
+        tool_ingest_raw(state, &content, stream_id, user_id).await
     }
 }
 
