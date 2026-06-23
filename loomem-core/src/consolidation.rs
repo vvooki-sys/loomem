@@ -351,6 +351,47 @@ fn quality_gate(
 }
 
 /// L0 → L1 compression pipeline
+/// RAII guard for the `in_progress` lease on a sub-group's source chunks.
+///
+/// `mark_in_progress` is set before several `.await` points (LLM compress, the
+/// embedder, `persist_chunk_with_index`). The scheduler wraps `consolidate()`
+/// in `tokio::time::timeout`; when it fires, Tokio drops the future at whatever
+/// await it is parked on and none of the explicit cleanup paths run. Those L0
+/// chunks would then stay `in_progress` and be skipped by
+/// `scan_l0_unconsolidated` forever. `clear_in_progress` is synchronous, so
+/// clearing in `Drop` runs on cancellation too.
+struct InProgressGuard {
+    storage: Arc<RocksDbStore>,
+    chunk_ids: Vec<String>,
+    armed: bool,
+}
+
+impl InProgressGuard {
+    fn new(storage: Arc<RocksDbStore>, chunk_ids: Vec<String>) -> Self {
+        Self {
+            storage,
+            chunk_ids,
+            armed: true,
+        }
+    }
+
+    /// Disarm once `mark_consolidated` has run (it already clears `in_progress`),
+    /// so `Drop` doesn't issue a redundant write.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for InProgressGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            if let Err(e) = self.storage.clear_in_progress(&self.chunk_ids) {
+                warn!("Failed to clear in_progress on guard drop: {}", e);
+            }
+        }
+    }
+}
+
 pub async fn consolidate(
     storage: Arc<RocksDbStore>,
     tantivy: Arc<tokio::sync::Mutex<TantivyIndex>>,
@@ -482,6 +523,12 @@ pub async fn consolidate(
                 continue;
             }
 
+            // Lease guard: clears in_progress on every exit path — continue,
+            // break, and the consolidation future being dropped by the
+            // scheduler's timeout mid-await. Disarmed once chunks are consolidated.
+            let mut in_progress_guard =
+                InProgressGuard::new(Arc::clone(&storage), chunk_ids.clone());
+
             // Concatenate content
             let texts: Vec<String> = sub_group.iter().map(|c| c.content.clone()).collect();
             let combined = texts.join("\n\n---\n\n");
@@ -499,9 +546,6 @@ pub async fn consolidate(
             // Check budget
             if let Err(e) = cost_tracker.check_budget() {
                 warn!("Budget exceeded, stopping consolidation: {}", e);
-                if let Err(clear_err) = storage.clear_in_progress(&chunk_ids) {
-                    warn!("Failed to clear in_progress: {}", clear_err);
-                }
                 break;
             }
 
@@ -694,9 +738,6 @@ pub async fn consolidate(
                                     stream, sub_group.len()
                                 );
                                 skipped_count += sub_group.len();
-                                if let Err(clear_err) = storage.clear_in_progress(&chunk_ids) {
-                                    warn!("Failed to clear in_progress: {}", clear_err);
-                                }
                                 continue;
                             }
                         }
@@ -781,9 +822,6 @@ pub async fn consolidate(
                     {
                         warn!("Failed to persist L1 chunk {}: {}", l1_id, e);
                         errors += sub_group.len();
-                        if let Err(clear_err) = storage.clear_in_progress(&chunk_ids) {
-                            warn!("Failed to clear in_progress: {}", clear_err);
-                        }
                         continue;
                     }
 
@@ -856,7 +894,10 @@ pub async fn consolidate(
                     if let Err(e) = storage.mark_consolidated(&chunk_ids) {
                         warn!("Failed to mark chunks as consolidated: {}", e);
                         errors += sub_group.len();
+                        // Leave guard armed: in_progress is cleared on drop so the
+                        // chunks are retried next cycle instead of being stranded.
                     } else {
+                        in_progress_guard.disarm();
                         consolidated_count += sub_group.len();
                         info!(
                             "Consolidated {} chunks from stream {} into L1:{} (sub-group)",
@@ -869,10 +910,7 @@ pub async fn consolidate(
                 Err(e) => {
                     warn!("LLM compression failed for stream {}: {}", stream, e);
                     errors += sub_group.len();
-
-                    if let Err(clear_err) = storage.clear_in_progress(&chunk_ids) {
-                        warn!("Failed to clear in_progress: {}", clear_err);
-                    }
+                    // in_progress cleared by the guard on drop.
                 }
             }
         } // end sub_groups loop
