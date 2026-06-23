@@ -209,10 +209,29 @@ struct CallerRelation {
     subject: String,
     relation: String,
     object: String,
-    #[serde(default)]
+    // serde deserializes a missing/null field as None for Option<T>, so no
+    // #[serde(default)] is needed here.
     subject_type: Option<String>,
-    #[serde(default)]
     object_type: Option<String>,
+}
+
+/// Hard cap on caller-declared relations processed per `memory_store` call.
+/// Each relation does synchronous graph I/O on the request thread (same inline
+/// pattern as `persist_chunk`'s dictionary loop); the cap bounds that work so a
+/// caller or a hallucinating client cannot starve the executor with an
+/// arbitrarily long array. Over-cap relations are dropped with a warning.
+const MAX_CALLER_RELATIONS: usize = 64;
+
+/// Link a chunk to a graph entity, warning (not failing) on error so the
+/// behaviour matches `inject_caller_relations`' "warn and swallow" contract.
+fn link_chunk_to_entity(state: &Arc<AppState>, entity_id: &str, chunk_id: &str, name: &str) {
+    if let Err(e) = state.graph.add_chunk_to_entity(entity_id, chunk_id) {
+        tracing::warn!(
+            "caller-relation: failed to link chunk to entity {:?}: {}",
+            name,
+            e
+        );
+    }
 }
 
 /// Inject caller-declared graph relations (memory_store `relations` param).
@@ -236,7 +255,15 @@ fn inject_caller_relations(
     stream: &str,
     relations: &[CallerRelation],
 ) {
-    for rel in relations {
+    if relations.len() > MAX_CALLER_RELATIONS {
+        tracing::warn!(
+            "caller-relation: {} relations exceeds cap {}; processing first {} only",
+            relations.len(),
+            MAX_CALLER_RELATIONS,
+            MAX_CALLER_RELATIONS
+        );
+    }
+    for rel in relations.iter().take(MAX_CALLER_RELATIONS) {
         let subject_type = rel.subject_type.as_deref().unwrap_or("Concept");
         let object_type = rel.object_type.as_deref().unwrap_or("Concept");
         let subject_aliases = state.entity_extractor.get_aliases_for(&rel.subject);
@@ -274,14 +301,22 @@ fn inject_caller_relations(
                 continue;
             }
         };
-        let _ = state.graph.add_chunk_to_entity(&subject.id, chunk_id);
-        let _ = state.graph.add_chunk_to_entity(&object.id, chunk_id);
+        link_chunk_to_entity(state, &subject.id, chunk_id, &rel.subject);
+        link_chunk_to_entity(state, &object.id, chunk_id, &rel.object);
         match state
             .graph
             .get_or_create_edge(&subject.id, &object.id, &rel.relation, stream)
         {
             Ok(edge) => {
-                let _ = state.graph.add_chunk_to_edge(&edge.id, chunk_id);
+                if let Err(e) = state.graph.add_chunk_to_edge(&edge.id, chunk_id) {
+                    tracing::warn!(
+                        "caller-relation: failed to link chunk to edge {} -{}-> {}: {}",
+                        rel.subject,
+                        rel.relation,
+                        rel.object,
+                        e
+                    );
+                }
             }
             Err(e) => tracing::warn!(
                 "caller-relation: failed to create edge {} -{}-> {}: {}",
