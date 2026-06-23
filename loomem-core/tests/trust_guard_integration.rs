@@ -418,6 +418,7 @@ async fn test_dream_run_e2e_blocks_a1_supersede() -> Result<()> {
             chunks: &chunks_in_group,
             model: "gpt-4.1-mini",
             intent_log: None,
+            embedding_queue: None,
         },
         dream_resp,
     )

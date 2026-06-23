@@ -352,6 +352,7 @@ fn maybe_trigger_auto_dream(state: &Arc<AppState>, stream: &str) {
                 llm_config: &state.config.llm,
                 dream_config: &state.config.dream,
                 intent_log: state.intent_log.as_deref(),
+                embedding_queue: state.embedding_queue.clone(),
             },
             &cost_tracker,
             &stream,

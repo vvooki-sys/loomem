@@ -1416,6 +1416,7 @@ async fn tool_dream(
             llm_config: &state.config.llm,
             dream_config: &state.config.dream,
             intent_log: state.intent_log.as_deref(),
+            embedding_queue: state.embedding_queue.clone(),
         },
         &cost_tracker,
         stream_id,
