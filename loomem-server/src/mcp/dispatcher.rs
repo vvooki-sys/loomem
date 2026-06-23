@@ -183,6 +183,14 @@ struct StoreArgs {
     source: Option<String>,
     subject: Option<String>,
     metadata: Option<Value>,
+    // Caller-declared graph relations. Lets a caller that already knows a
+    // relation inject it deterministically + synchronously, instead of relying
+    // on dictionary coverage (entities.toml) or the async LLM extraction queue.
+    // Graph-store only (see inject_caller_relations): edges reach search via the
+    // graph signal, not the Tantivy relations field. `relation` is coerced to a
+    // known RelationType by get_or_create_edge (unknown -> related_to).
+    #[serde(default)]
+    relations: Option<Vec<CallerRelation>>,
     // /32: stream is extracted upstream by resolve_stream_for_call before
     // deserialization, so this field is never read via StoreArgs — it exists
     // to document the LLM-facing contract and to stay tolerant of serde's
@@ -191,6 +199,99 @@ struct StoreArgs {
     #[allow(dead_code)]
     #[serde(default)]
     stream: Option<String>,
+}
+
+/// One caller-declared graph relation for `memory_store`'s `relations` param.
+/// `subject_type` / `object_type` are free-form entity-type hints (e.g.
+/// "Person", "Project"); when omitted the node is created as "Concept".
+#[derive(Deserialize)]
+struct CallerRelation {
+    subject: String,
+    relation: String,
+    object: String,
+    #[serde(default)]
+    subject_type: Option<String>,
+    #[serde(default)]
+    object_type: Option<String>,
+}
+
+/// Inject caller-declared graph relations (memory_store `relations` param).
+///
+/// Graph-store only by design: each subject/object is resolved through
+/// `get_or_create_entity` — reusing dictionary aliases (`entities.toml`) so
+/// caller name variants converge onto one node instead of fragmenting — and an
+/// idempotent edge is created via `get_or_create_edge` (dedup on
+/// subject/relation/object, so a later LLM-extracted edge for the same triple
+/// will not double).
+///
+/// Deliberately does NOT write the `rel:`/`entity:` RocksDB rows that
+/// `persist_chunk` already populated for this chunk (`store_relations`
+/// overwrites per chunk_id, which would clobber dictionary-derived rows), nor
+/// the Tantivy `relations` field. Caller edges reach retrieval via the graph
+/// signal in hybrid search. Per-relation failures warn and are swallowed: a
+/// malformed relation must never fail the store itself.
+fn inject_caller_relations(
+    state: &Arc<AppState>,
+    chunk_id: &str,
+    stream: &str,
+    relations: &[CallerRelation],
+) {
+    for rel in relations {
+        let subject_type = rel.subject_type.as_deref().unwrap_or("Concept");
+        let object_type = rel.object_type.as_deref().unwrap_or("Concept");
+        let subject_aliases = state.entity_extractor.get_aliases_for(&rel.subject);
+        let object_aliases = state.entity_extractor.get_aliases_for(&rel.object);
+
+        let subject = match state.graph.get_or_create_entity(
+            &rel.subject,
+            subject_type,
+            &subject_aliases,
+            stream,
+        ) {
+            Ok(node) => node,
+            Err(e) => {
+                tracing::warn!(
+                    "caller-relation: failed to resolve subject {:?}: {}",
+                    rel.subject,
+                    e
+                );
+                continue;
+            }
+        };
+        let object = match state.graph.get_or_create_entity(
+            &rel.object,
+            object_type,
+            &object_aliases,
+            stream,
+        ) {
+            Ok(node) => node,
+            Err(e) => {
+                tracing::warn!(
+                    "caller-relation: failed to resolve object {:?}: {}",
+                    rel.object,
+                    e
+                );
+                continue;
+            }
+        };
+        let _ = state.graph.add_chunk_to_entity(&subject.id, chunk_id);
+        let _ = state.graph.add_chunk_to_entity(&object.id, chunk_id);
+        match state
+            .graph
+            .get_or_create_edge(&subject.id, &object.id, &rel.relation, stream)
+        {
+            Ok(edge) => {
+                let _ = state.graph.add_chunk_to_edge(&edge.id, chunk_id);
+            }
+            Err(e) => tracing::warn!(
+                "caller-relation: failed to create edge {} -{}-> {}: {}",
+                rel.subject,
+                rel.relation,
+                rel.object,
+                e
+            ),
+        }
+    }
 }
 
 /// Lightweight fact_type classification via keyword matching.
@@ -419,6 +520,13 @@ async fn tool_store(
     .await
     {
         Ok(stored_id) => {
+            // Inject caller-declared graph relations synchronously (graph store
+            // only). Done after persist_chunk so the chunk id exists to link.
+            if let Some(ref relations) = args.relations {
+                if !relations.is_empty() {
+                    inject_caller_relations(state, &stored_id, &stream, relations);
+                }
+            }
             let preview: String = args.content.chars().take(80).collect();
             Ok(ToolResult::text(format!(
                 "Stored: \"{}...\" (id: {})",
