@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-23
+
+### Security
+
+- **MCP callers can no longer self-elevate trust.** `memory_store` derived the trust tier from the caller-supplied `source` with no authority check (introduced in 0.4.0, #9), so any client — including a prompt-injected LLM — could request full-trust `a1`. MCP writes are now clamped to at most `a2` unless the instance opts in via the new `server.honor_caller_trust_source` setting (default `false`). Single-user/dogfood instances can enable it; cloud/multi-client stays safe by default. (#12)
+
+### Fixed
+
+- `memory_search` now emits a `[trust:?]` sentinel when a result's chunk cannot be loaded (read error / index-vs-store desync), instead of silently dropping the trust tag. (#12)
+- Filled `provenance_role` in integration-test fixtures missed by #6, so `cargo test -p <crate>` compiles cleanly. (#12)
+
 ## [0.4.0] - 2026-06-23
 
 ### Added
