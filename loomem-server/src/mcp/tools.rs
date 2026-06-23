@@ -24,6 +24,21 @@ pub fn tool_definitions() -> Vec<Value> {
                         "type": "object",
                         "description": "Optional key-value metadata to attach to the memory."
                     },
+                    "relations": {
+                        "type": "array",
+                        "description": "Optional caller-declared graph relations. Use this when you already know a relation between two entities and want it in the knowledge graph deterministically and synchronously, instead of relying on dictionary coverage or async LLM extraction. Each edge is deduplicated; 'relation' is mapped to a known relation type (an unrecognized value becomes 'related_to'). Names converge onto existing graph nodes via dictionary aliases — names not in the dictionary become their own node.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "subject": { "type": "string", "description": "Source entity name." },
+                                "relation": { "type": "string", "description": "Relation type (mapped to a known type; unknown -> 'related_to')." },
+                                "object": { "type": "string", "description": "Target entity name." },
+                                "subject_type": { "type": "string", "description": "Optional entity-type hint for subject (e.g. 'Person', 'Project'). Default 'Concept'." },
+                                "object_type": { "type": "string", "description": "Optional entity-type hint for object. Default 'Concept'." }
+                            },
+                            "required": ["subject", "relation", "object"]
+                        }
+                    },
                     "stream": {
                         "type": "string",
                         "description": "Optional stream_id. Omit to use your default stream. Call memory_namespaces to discover accessible streams."
