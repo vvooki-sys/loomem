@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::LlmConfig;
 use crate::cost_tracker::CostTracker;
+use crate::embedding_queue::EmbeddingQueue;
 use crate::intent_log::{IntentLog, OpType};
 use crate::source_tag::SourceTag;
 use crate::storage::{persist_chunk_with_index, Chunk, PersistChunkArgs, RocksDbStore};
@@ -173,6 +174,10 @@ pub struct DreamRunContext<'a> {
     pub llm_config: &'a LlmConfig,
     pub dream_config: &'a DreamConfig,
     pub intent_log: Option<&'a tokio::sync::Mutex<IntentLog>>,
+    /// Shared embedding queue. The merged L1 chunk is enqueued here after persist
+    /// so it gets a vector via the configured embedder; `None` disables embedding
+    /// (e.g. in tests). See `apply_dream_response_for_subject`.
+    pub embedding_queue: Option<EmbeddingQueue>,
 }
 
 /// Run dream consolidation on a single stream.
@@ -187,6 +192,7 @@ pub async fn dream_run(
     let llm_config = run_ctx.llm_config;
     let dream_config = run_ctx.dream_config;
     let intent_log = run_ctx.intent_log;
+    let embedding_queue = run_ctx.embedding_queue;
 
     let start = std::time::Instant::now();
     let mut total_cost = 0.0;
@@ -386,6 +392,7 @@ pub async fn dream_run(
                 chunks,
                 model: &dream_config.model,
                 intent_log,
+                embedding_queue: embedding_queue.clone(),
             },
             dream_resp,
         )
@@ -419,6 +426,8 @@ pub struct DreamApplyContext<'a> {
     pub chunks: &'a [Chunk],
     pub model: &'a str,
     pub intent_log: Option<&'a tokio::sync::Mutex<IntentLog>>,
+    /// Shared embedding queue for the merged chunk (see `DreamRunContext`).
+    pub embedding_queue: Option<EmbeddingQueue>,
 }
 
 /// Walk `dream_resp.contradictions` through the trust guard for one subject.
@@ -629,6 +638,21 @@ pub async fn apply_dream_response_for_subject(
         },
     )
     .await?;
+
+    // Enqueue the merged L1 chunk for embedding via the shared queue (which uses
+    // the configured local/OpenAI embedder). Without this, dream-consolidated
+    // chunks persist to RocksDB + Tantivy but never receive a vector, so they
+    // stay permanently "pending" in memory_status and never participate in
+    // vector retrieval (BM25 only). warn-skip on a full/closed queue, mirroring
+    // the ingest path.
+    if let Some(ref queue) = ctx.embedding_queue {
+        if let Err(e) = queue.enqueue(new_id.clone(), new_chunk.content.clone()) {
+            warn!(
+                "Failed to enqueue dream chunk {} for embedding: {}",
+                new_id, e
+            );
+        }
+    }
 
     info!(
         "Dream: merged {} chunks for '{}' → {}",

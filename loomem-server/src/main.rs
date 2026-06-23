@@ -566,6 +566,7 @@ async fn main() -> Result<()> {
             entity_extractor.clone(),
             graph_store.clone(),
             entity_extraction_queue.clone(),
+            local_embedder.clone(),
             event_tx.clone(),
             workers_registry.clone(),
         );

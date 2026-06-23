@@ -11,6 +11,7 @@ use crate::entity_extractor::EntityExtractor;
 use crate::graph::GraphStore;
 use crate::intent_log::{IntentLog, OpType};
 use crate::llm::{self, PROMPT_VERSION};
+use crate::local_embeddings::LocalEmbedder;
 use crate::pii_filter::PiiFilter;
 use crate::source_tag::SourceTag;
 use crate::storage::{
@@ -363,6 +364,7 @@ pub async fn consolidate(
     entity_extractor: Option<Arc<EntityExtractor>>,
     graph: Option<Arc<GraphStore>>,
     entity_extraction_queue: Option<crate::entity_extraction_queue::EntityExtractionQueue>,
+    local_embedder: Option<Arc<LocalEmbedder>>,
 ) -> Result<ConsolidationReport> {
     let mut consolidated_count = 0;
     let mut skipped_count = 0;
@@ -638,16 +640,32 @@ pub async fn consolidate(
                         summary.clone()
                     };
 
-                    // Generate embedding for L1 BEFORE storing (needed for quality gate)
-                    let l1_embedding = match llm::embed(llm_client, llm_config, &summary_for_index)
-                        .await
-                    {
+                    // Generate embedding for L1 BEFORE storing (needed for quality gate).
+                    // Route through the SAME embedder the rest of the system uses: the
+                    // local ONNX model when configured (keyless default, 384-dim), else
+                    // the OpenAI API. The previous unconditional `llm::embed` silently
+                    // failed on keyless/local instances (no API key) — the L1 chunk then
+                    // persisted without a vector and was never enqueued, so it stayed
+                    // permanently "pending" in memory_status. Using the configured
+                    // embedder also guarantees the vector dim matches the index.
+                    let embed_result = if let Some(ref embedder) = local_embedder {
+                        embedder.embed(&summary_for_index)
+                    } else {
+                        llm::embed(llm_client, llm_config, &summary_for_index).await
+                    };
+                    let l1_embedding = match embed_result {
                         Ok(embedding) => {
-                            let approx_tokens = (summary.len() / 4) as u64;
-                            if let Err(e) =
-                                cost_tracker.record(approx_tokens, 0, &llm_config.embedding_model)
-                            {
-                                warn!("Failed to record embedding cost: {}", e);
+                            // Cost tracking is only meaningful for the metered OpenAI path;
+                            // the local embedder is free.
+                            if local_embedder.is_none() {
+                                let approx_tokens = (summary.len() / 4) as u64;
+                                if let Err(e) = cost_tracker.record(
+                                    approx_tokens,
+                                    0,
+                                    &llm_config.embedding_model,
+                                ) {
+                                    warn!("Failed to record embedding cost: {}", e);
+                                }
                             }
                             Some(embedding)
                         }

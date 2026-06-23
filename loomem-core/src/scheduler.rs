@@ -75,6 +75,7 @@ use crate::entity_extractor::EntityExtractor;
 use crate::event_log::{self, EventSender, MemoryEvent};
 use crate::graph::GraphStore;
 use crate::intent_log::IntentLog;
+use crate::local_embeddings::LocalEmbedder;
 use crate::pii_filter::PiiFilter;
 use crate::stats_aggregator::StatsAggregator;
 use crate::storage::RocksDbStore;
@@ -92,6 +93,7 @@ pub struct Scheduler {
     entity_extractor: Arc<EntityExtractor>,
     graph: Arc<GraphStore>,
     entity_extraction_queue: Option<crate::entity_extraction_queue::EntityExtractionQueue>,
+    local_embedder: Option<Arc<LocalEmbedder>>,
     event_tx: Option<EventSender>,
     pub workers: WorkerRegistry,
 
@@ -123,6 +125,7 @@ impl Scheduler {
         entity_extractor: Arc<EntityExtractor>,
         graph: Arc<GraphStore>,
         entity_extraction_queue: Option<crate::entity_extraction_queue::EntityExtractionQueue>,
+        local_embedder: Option<Arc<LocalEmbedder>>,
         event_tx: Option<EventSender>,
         workers: WorkerRegistry,
     ) -> Self {
@@ -138,6 +141,7 @@ impl Scheduler {
             entity_extractor,
             graph,
             entity_extraction_queue,
+            local_embedder,
             event_tx,
             workers,
             consolidation_running: Arc::new(AtomicBool::new(false)),
@@ -356,6 +360,7 @@ impl Scheduler {
         let entity_extractor = self.entity_extractor.clone();
         let graph = self.graph.clone();
         let entity_extraction_queue = self.entity_extraction_queue.clone();
+        let local_embedder = self.local_embedder.clone();
         let event_tx = self.event_tx.clone();
         let workers = self.workers.clone();
 
@@ -386,6 +391,7 @@ impl Scheduler {
                     Some(entity_extractor),
                     Some(graph),
                     entity_extraction_queue,
+                    local_embedder,
                 ),
             )
             .await;
