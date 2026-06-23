@@ -1,5 +1,7 @@
 # Security overview
 
+*Last updated: 2026-06-16*
+
 This document describes Loomem's security model: authentication, encryption at rest, data in transit, PII handling, and logging. Where Loomem does not have a control in place, the gap is named explicitly under [Known limitations](#known-limitations).
 
 ---
