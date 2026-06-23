@@ -439,17 +439,25 @@ pub async fn store_handler(
         }
     }
 
+    // Ingress PII boundary (security brief A): redact once, here, before
+    // content reaches any embedding / contradiction / content-type request.
+    // Raw `payload.content` must never flow to a provider; `persist_chunk`
+    // re-applies the same (idempotent) sanitizer + PII pipeline as defense in
+    // depth. Surprise-scoring now embeds the redacted text, matching what is
+    // persisted and re-embedded by the queue.
+    let content = state.pii_filter.redact_for_sink(&payload.content);
+
     // Calculate surprise score (importance) via embedding similarity
     // Also capture the embedding for contradiction detection
     let (importance, new_embedding_opt) = if state.config.storage.vector_enabled {
         let embed_result = if let Some(ref embedder) = state.local_embedder {
-            embedder.embed(&payload.content)
+            embedder.embed(&content)
         } else if let Some(api_key) = state.config.llm.get_api_key() {
             embeddings::embed(
                 &state.http_client,
                 &api_key,
                 &state.config.llm.embedding_model,
-                &payload.content,
+                &content,
             )
             .await
         } else {
@@ -536,7 +544,7 @@ pub async fn store_handler(
 
     let chunk = Chunk {
         id: id.clone(),
-        content: payload.content.clone(),
+        content: content.clone(),
         stream: stream.clone(),
         level,
         score: 1.0,
@@ -748,7 +756,7 @@ pub async fn store_handler(
 
     // /142: content-type classification → sidecar (additive, best-effort).
     // Chunk row is untouched; det runs always, LLM only when enabled + ambiguous.
-    classify_and_store_content_type(&state, &id, &payload.content).await;
+    classify_and_store_content_type(&state, &id, &content).await;
 
     // Emit store event
     if let Some(ref tx) = state.event_tx {

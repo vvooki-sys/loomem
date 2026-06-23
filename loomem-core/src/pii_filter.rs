@@ -179,6 +179,20 @@ impl PiiFilter {
 
         (sanitized, redactions)
     }
+
+    /// Ingress redaction for any third-party / persistence sink: HTML &
+    /// prompt-injection strip ([`crate::sanitizer::sanitize`]) followed by PII
+    /// redaction ([`Self::sanitize`]). Returns only the redacted string,
+    /// dropping the redaction list (callers that need it call `sanitize`
+    /// directly). Idempotent: running it on already-redacted text is a no-op,
+    /// so `persist_chunk` re-applying the same pipeline is safe.
+    ///
+    /// Use this at every write ingress (REST/MCP) before content reaches an
+    /// embedding, contradiction, event-date, content-type, or extraction
+    /// request, so raw caller text never leaves the process unredacted.
+    pub fn redact_for_sink(&self, raw: &str) -> String {
+        self.sanitize(&crate::sanitizer::sanitize(raw).content).0
+    }
 }
 
 #[cfg(test)]
@@ -259,5 +273,28 @@ mod tests {
         assert!(redactions.iter().any(|r| r.redaction_type == "blocklist"));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_redact_for_sink_redacts_and_is_idempotent() {
+        let config = PiiConfig {
+            enabled: true,
+            blocklist_file: "nonexistent.txt".to_string(),
+            ..Default::default()
+        };
+        let filter = PiiFilter::new(config).expect("Failed to create filter");
+
+        let raw = "Reach me at test@example.com or +48 600 000 000";
+        let redacted = filter.redact_for_sink(raw);
+
+        // No raw PII survives to a third-party / persistence sink.
+        assert!(!redacted.contains("test@example.com"));
+        assert!(!redacted.contains("600 000 000"));
+        assert!(redacted.contains("[EMAIL]"));
+        assert!(redacted.contains("[PHONE]"));
+
+        // Idempotent: re-running over already-redacted text is a no-op, so
+        // `persist_chunk` re-applying the same pipeline cannot corrupt content.
+        assert_eq!(filter.redact_for_sink(&redacted), redacted);
     }
 }
