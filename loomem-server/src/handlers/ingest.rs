@@ -790,20 +790,14 @@ pub async fn embed_missing_handler(
         ));
     }
     // Local embedder takes precedence (keyless local default, 384-dim) and needs
-    // no API key; fall back to the OpenAI API otherwise. Require a key only when
-    // there is no local embedder — previously this handler unconditionally
-    // demanded one, returning 500 on keyless instances so chunks left without a
-    // vector (e.g. consolidated chunks stuck "pending") could never be backfilled.
+    // no API key; otherwise fall back to the OpenAI API. Fail fast if neither is
+    // available — previously this handler unconditionally demanded a key,
+    // returning 500 on keyless instances so chunks left without a vector (e.g.
+    // consolidated chunks stuck "pending") could never be back-filled.
     let local_embedder = state.local_embedder.clone();
-    let api_key = match &local_embedder {
-        // Placeholder, unused on the local path (the OpenAI branch is never taken).
-        Some(_) => String::new(),
-        None => state
-            .config
-            .llm
-            .get_api_key()
-            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?,
-    };
+    if local_embedder.is_none() && state.config.llm.get_api_key().is_none() {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     let all_chunks = state
         .store
@@ -828,7 +822,7 @@ pub async fn embed_missing_handler(
     for chunk in missing {
         let embed_result = if let Some(ref embedder) = local_embedder {
             embedder.embed(&chunk.content)
-        } else {
+        } else if let Some(api_key) = state.config.llm.get_api_key() {
             embeddings::embed(
                 &state.http_client,
                 &api_key,
@@ -836,6 +830,8 @@ pub async fn embed_missing_handler(
                 &chunk.content,
             )
             .await
+        } else {
+            Err(anyhow::anyhow!("No embedding provider"))
         };
         match embed_result {
             Ok(embedding) => {
