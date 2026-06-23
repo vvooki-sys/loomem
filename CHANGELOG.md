@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-23
+
+### Added
+
+- **MemIR trust-provenance scoring** — chunks now carry a `ProvenanceRole` (`Claim`/`Evidence`/`Cue`, default `Claim`), and hybrid retrieval applies a trust + provenance multiplier to the fused score before ranking, so full-trust (`a1`) memories outrank derived (`a2`) ones for equally relevant content. Backward-compatible: existing databases deserialize unchanged via `#[serde(default)]`, no migration. (#6)
+- **Auto-dream consolidation trigger** — opt-in background consolidation fires after a configurable number of new chunks per stream; the configured shared stream is excluded and a cooldown prevents thrashing. (#3)
+- **`chunk_id` exposed in search results** plus per-stream embedding readiness in `memory_status`, so callers can trace, rate, and inspect specific chunks. (#4)
+- **Environment overrides** for the embedding provider/dimension and the consolidation interval, easing per-deployment configuration.
+- **Branded OAuth authorize page** rendered in the Loomem layout.
+
+### Fixed
+
+- Orphan entity nodes are pruned on `memory_delete`, keeping the entity graph GDPR-correct.
+- Auto-dream is opt-in and excludes the configured shared stream.
+- Cheaper embedding-existence probe and a standalone id suffix in search results.
+
+### Changed
+
+- Bumped `quinn-proto` and `memmap2` to address RUSTSEC-2026-0185 and -0186.
+- Added `CLAUDE.md` + agent-conventions for AI code generators; refreshed landing/Quickstart/ChatGPT-Apps documentation.
+
 ## [0.2.2] - 2026-06-17
 
 ### Added
