@@ -143,7 +143,13 @@ async fn flush_batch(
 
     // Use local embedder if available, otherwise OpenAI API
     let embed_result = if let Some(ref embedder) = local_embedder {
-        embedder.embed_batch(&texts)
+        // ONNX inference is synchronous and CPU-bound; run it on the blocking
+        // pool so it doesn't park the async worker thread under load.
+        let embedder = Arc::clone(embedder);
+        match tokio::task::spawn_blocking(move || embedder.embed_batch(&texts)).await {
+            Ok(res) => res,
+            Err(e) => Err(anyhow::anyhow!("embedding batch task failed to join: {e}")),
+        }
     } else {
         llm::embed_batch(http_client, llm_config, &texts).await
     };
