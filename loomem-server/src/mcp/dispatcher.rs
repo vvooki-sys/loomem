@@ -493,6 +493,14 @@ async fn tool_store(
     let (extraction_meta, valid_from_ts) =
         store_extraction_meta(state, &args.content, subject, fact_type, timestamp).await;
 
+    // Cycle /001 (MemIR): derive the trust tier from the caller-supplied
+    // `source` instead of hardcoding a2. Default `source` is "mcp" →
+    // derive_trust_level("mcp") = "a2", so ordinary assistant writes are
+    // unchanged; an explicit trusted source (e.g. "user_direct"/"api" → a1)
+    // or untrusted one ("external_web" → b) now sets the tier, which the
+    // hybrid_search trust_provenance_multiplier consumes for ranking.
+    let trust_level = loomem_core::storage::derive_trust_level(Some(&source));
+
     let chunk = loomem_core::storage::Chunk {
         id: id.clone(),
         content: args.content.clone(),
@@ -528,7 +536,7 @@ async fn tool_store(
         },
         extraction_meta: Some(extraction_meta),
         deleted_at: None,
-        trust_level: Some("a2".to_string()), // MCP = assistant-generated
+        trust_level: Some(trust_level), // Cycle /001: derived from `source` (default mcp→a2)
         ingester_user_id: user_id,
 
         alpha: 1.0,
@@ -718,16 +726,31 @@ async fn tool_search(
                 // (sidecar hit). Band/source dropped in /143 (ADR-017 Amd v2).
                 let content_type_tag = content_type_tag(r.content_type.as_deref());
 
+                // Cycle /001 (MemIR) observability: surface the trust tier and the
+                // applied trust×provenance multiplier so the ranking effect is
+                // visible (black-box testing + demos). None trust_level == "a1".
+                let trust_tag = chunk_opt
+                    .as_ref()
+                    .map(|c| {
+                        format!(
+                            " [trust:{} ×{:.2}]",
+                            c.trust_level.as_deref().unwrap_or("a1"),
+                            loomem_core::hybrid_search::trust_provenance_multiplier(c)
+                        )
+                    })
+                    .unwrap_or_default();
+
                 // Emit the chunk_id on each result line so callers can recover
                 // it after a search alone — needed for memory_delete,
                 // memory_history and memory_feedback, which all key on
                 // chunk_id. Previously only memory_store/_ingest surfaced ids,
                 // forcing callers to capture them at write time.
                 text.push_str(&format!(
-                    "{}. [{}]{} {}{} (score: {:.2}) (id: {})\n",
+                    "{}. [{}]{}{} {}{} (score: {:.2}) (id: {})\n",
                     i + 1,
                     ts,
                     content_type_tag,
+                    trust_tag,
                     r.content,
                     supersedes_note,
                     r.score,
