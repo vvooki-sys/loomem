@@ -400,6 +400,7 @@ async fn tool_store(
         harmful_count: 0,
         n_ratings: 0,
         last_rated_at: None,
+        provenance_role: loomem_core::storage::ProvenanceRole::Claim,
     };
 
     let content = args.content.clone();
@@ -1279,6 +1280,7 @@ async fn tool_ingest_extract(
                     harmful_count: 0,
                     n_ratings: 0,
                     last_rated_at: None,
+                    provenance_role: loomem_core::storage::ProvenanceRole::Claim,
                 };
 
                 match handlers::ingest::persist_chunk(
@@ -1355,6 +1357,7 @@ async fn tool_ingest_raw(
         harmful_count: 0,
         n_ratings: 0,
         last_rated_at: None,
+        provenance_role: loomem_core::storage::ProvenanceRole::Claim,
     };
     match handlers::ingest::persist_chunk(
         state,
