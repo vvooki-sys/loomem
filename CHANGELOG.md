@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-23
+
+### Added
+
+- **`relations` parameter on `memory_store`** — callers can supply explicit subject/relation/object triples that are injected as deterministic graph edges (graph-only, capped, aliases resolved from `entities.toml`), instead of relying solely on extraction. (#10)
+- **MCP trust tier derived from source** — `memory_store` now derives the trust level from the write source rather than hardcoding it, and `memory_search` surfaces each result's trust tier and score multiplier, so full-trust memories visibly outrank derived ones. (#9)
+
+### Fixed
+
+- **Consolidated chunks are now embedded** — both background consolidation (`L1:` chunks) and `memory_dream` (`dream:` chunks) route the merged chunk through the configured embedder / shared embedding queue, so consolidated facts receive a vector instead of being stuck permanently "pending" in `memory_status` (retrievable by BM25 only). The embedder is selected the same way as everywhere else (local-first, OpenAI fallback), keeping the vector dimension consistent with the index. (#7)
+- **`/v1/embed-missing` back-fill works without an OpenAI key** — the back-fill now embeds through the configured embedder and requires an API key only when no local embedder is available, so chunks left without a vector (e.g. previously-stuck consolidated chunks) can be recovered on keyless/local instances. (#8, #11)
+
 ## [0.3.0] - 2026-06-23
 
 ### Added
