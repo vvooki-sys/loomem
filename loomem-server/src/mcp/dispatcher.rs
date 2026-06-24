@@ -493,6 +493,19 @@ async fn tool_store(
         )));
     }
 
+    // Metadata size limit — parity with REST /v1/store's MAX_METADATA_BYTES
+    // (Greptile). Bound the payload before the recursive `sanitize_json` pass
+    // below so an MCP caller cannot submit an oversized metadata blob.
+    if let Some(ref meta) = args.metadata {
+        let meta_size = serde_json::to_string(meta).map(|s| s.len()).unwrap_or(0);
+        if meta_size > 10_240 {
+            return Ok(ToolResult::error(format!(
+                "Metadata too large: {} bytes (max 10240)",
+                meta_size
+            )));
+        }
+    }
+
     // Ingress PII boundary (security brief A): redact once, before the gated
     // event-date probe or persistence touch the content. Raw `args.content`
     // must never reach a provider; `persist_chunk` re-applies the same
