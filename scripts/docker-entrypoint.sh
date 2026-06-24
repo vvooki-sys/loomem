@@ -12,6 +12,10 @@
 #
 # After a successful migration, operators should unset the ON_START flag
 # and redeploy so subsequent container restarts take the no-op fast path.
+#
+# If LOOMEM_PURGE_PLAINTEXT_EVENTS_ON_START=1, also purge legacy plaintext
+# `event:` records before the server starts (set ..._COMMIT=1 to delete).
+# See the dedicated block below.
 set -e
 
 if [ "${LOOMEM_MIGRATE_GRAPH_STREAMS_ON_START}" = "1" ]; then
@@ -31,6 +35,26 @@ if [ "${LOOMEM_MIGRATE_GRAPH_STREAMS_ON_START}" = "1" ]; then
   echo ">>> Graph entity stream migration done."
 else
   echo ">>> Skipping graph-entity-stream migration (LOOMEM_MIGRATE_GRAPH_STREAMS_ON_START not set)."
+fi
+
+# If LOOMEM_PURGE_PLAINTEXT_EVENTS_ON_START=1, delete legacy plaintext `event:`
+# records (removed from the write path in handlers/ingest.rs; security brief C /
+# csf_a9e04eb1). Dry-run by default; set LOOMEM_PURGE_PLAINTEXT_EVENTS_COMMIT=1
+# to actually delete. Idempotent — after a successful purge, subsequent boots
+# find zero rows (fast no-op, no backup taken). Runs here, before the server
+# opens the DB, because RocksDB is single-process: loomem-migrate cannot open
+# /data/rocksdb while loomem-server holds the lock. Same `--db /data/rocksdb`
+# rationale as above. After purging, unset the ON_START flag and redeploy.
+if [ "${LOOMEM_PURGE_PLAINTEXT_EVENTS_ON_START}" = "1" ]; then
+  PURGE_COMMIT_FLAG=""
+  if [ "${LOOMEM_PURGE_PLAINTEXT_EVENTS_COMMIT}" = "1" ]; then
+    PURGE_COMMIT_FLAG="--commit"
+  fi
+  echo ">>> Running loomem-migrate --purge-plaintext-events (commit=${LOOMEM_PURGE_PLAINTEXT_EVENTS_COMMIT:-0})"
+  ./loomem-migrate --purge-plaintext-events --db /data/rocksdb ${PURGE_COMMIT_FLAG}
+  echo ">>> Plaintext event purge done."
+else
+  echo ">>> Skipping plaintext-event purge (LOOMEM_PURGE_PLAINTEXT_EVENTS_ON_START not set)."
 fi
 
 exec ./loomem-server
