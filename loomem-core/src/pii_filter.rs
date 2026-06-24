@@ -194,17 +194,21 @@ impl PiiFilter {
         self.sanitize(&crate::sanitizer::sanitize(raw).content).0
     }
 
-    /// Recursively redact every string leaf of a JSON value via
-    /// [`Self::redact_for_sink`], preserving structure (object keys, array
-    /// order) and non-string scalars (numbers, bools, null carry no free-text
-    /// PII). Use on caller-supplied `metadata` before it is persisted into a
-    /// `Chunk` or the legacy `event:` record, so PII in metadata is redacted
-    /// the same way `content` is — not just the visible content field.
+    /// Recursively redact every string position of a JSON value via
+    /// [`Self::redact_for_sink`] — both object **keys** and string values, at
+    /// every depth — preserving array order and non-string scalars (numbers,
+    /// bools, null carry no free-text PII). Use on caller-supplied `metadata`
+    /// before it is persisted into a `Chunk` or the legacy `event:` record, so
+    /// PII in metadata is redacted the same way `content` is — not just the
+    /// visible content field.
     ///
     /// `serde_json::Value` is a closed set of six variants, all handled here,
     /// so there is no "unsupported shape" to reject: redaction is total and
-    /// cannot be silently bypassed. Depth is bounded in practice by the
-    /// caller's metadata size limit.
+    /// cannot be silently bypassed. Note that two distinct PII keys can redact
+    /// to the same placeholder and collide (last wins) — acceptable, since
+    /// PII-in-keys is already pathological and the goal is non-disclosure, not
+    /// preservation. Depth is bounded in practice by the caller's metadata size
+    /// limit.
     pub fn sanitize_json(&self, value: &serde_json::Value) -> serde_json::Value {
         use serde_json::Value;
         match value {
@@ -214,7 +218,7 @@ impl PiiFilter {
             }
             Value::Object(map) => Value::Object(
                 map.iter()
-                    .map(|(k, v)| (k.clone(), self.sanitize_json(v)))
+                    .map(|(k, v)| (self.redact_for_sink(k), self.sanitize_json(v)))
                     .collect(),
             ),
             // Number / Bool / Null: no free-text to redact.
@@ -340,20 +344,27 @@ mod tests {
             "note": "ping test@example.com",
             "nested": { "phone": "+48 600 000 000" },
             "tags": ["plain", "id 12345678901"],
+            "owner@example.com": "last seen",
             "count": 42,
             "active": true,
             "missing": null
         });
         let out = filter.sanitize_json(&input);
 
-        // String leaves at every depth are redacted; raw PII never survives.
+        // String leaves at every depth are redacted; raw PII never survives —
+        // including PII embedded in object keys.
         let s = out.to_string();
         assert!(!s.contains("test@example.com"));
         assert!(!s.contains("600 000 000"));
         assert!(!s.contains("12345678901"));
+        assert!(!s.contains("owner@example.com"));
         assert_eq!(out["note"], serde_json::json!("ping [EMAIL]"));
         assert_eq!(out["nested"]["phone"], serde_json::json!("[PHONE]"));
         assert_eq!(out["tags"][0], serde_json::json!("plain"));
+
+        // The PII key is redacted to a placeholder; the raw key is gone.
+        assert!(out.get("owner@example.com").is_none());
+        assert_eq!(out["[EMAIL]"], serde_json::json!("last seen"));
 
         // Structure and non-string scalars are preserved.
         assert_eq!(out["created_by"], serde_json::json!("agent-7"));
