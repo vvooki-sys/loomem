@@ -899,10 +899,13 @@ fn collect_event_keys(db: &DB) -> Result<Vec<Box<[u8]>>> {
 }
 
 fn delete_keys(db: &DB, keys: &[Box<[u8]>]) -> Result<()> {
+    // Single atomic batch (Greptile): a mid-purge SIGKILL cannot leave a
+    // partially deleted set, and it is faster for large key counts.
+    let mut batch = rocksdb::WriteBatch::default();
     for key in keys {
-        db.delete(key.as_ref())
-            .with_context(|| format!("delete {}", String::from_utf8_lossy(key)))?;
+        batch.delete(key.as_ref());
     }
+    db.write(batch).context("write event: delete batch")?;
     Ok(())
 }
 
@@ -939,7 +942,11 @@ fn cmd_purge_plaintext_events(args: &[String]) -> Result<()> {
 
         delete_keys(&db, &keys)?;
         println!("  deleted           : {}", keys.len());
-    } else if !commit {
+    } else if commit {
+        // keys.is_empty(): idempotent rerun on an already-clean DB. Print a
+        // clear completion line so the operator isn't left with a silent exit.
+        println!("  Nothing to delete — already clean.");
+    } else {
         println!();
         println!("Run with --commit to delete these rows.");
     }
