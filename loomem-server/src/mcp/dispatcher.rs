@@ -499,6 +499,14 @@ async fn tool_store(
     // idempotent sanitizer + PII pipeline as defense in depth.
     let content = state.pii_filter.redact_for_sink(&args.content);
 
+    // Ingress PII boundary (security brief B): redact metadata string leaves
+    // before they are persisted into the Chunk and the legacy event record
+    // (csf_618ef188) — the PII filter otherwise only covers `content`.
+    let metadata = args
+        .metadata
+        .as_ref()
+        .map(|m| state.pii_filter.sanitize_json(m));
+
     let id = uuid::Uuid::new_v4().to_string();
     let timestamp = Utc::now().timestamp() as u64;
     let stream = stream_id.to_string();
@@ -536,7 +544,7 @@ async fn tool_store(
         prompt_version: None,
         source_ids: None,
         last_decay: None,
-        metadata: args.metadata.clone(),
+        metadata: metadata.clone(),
         importance: Some(if is_preference { 2.0 } else { 1.0 }),
         persistent: true,
         last_implicit_boost: None,
@@ -579,7 +587,7 @@ async fn tool_store(
         0,
         timestamp as i64,
         None,
-        args.metadata.as_ref(),
+        metadata.as_ref(),
     )
     .await
     {

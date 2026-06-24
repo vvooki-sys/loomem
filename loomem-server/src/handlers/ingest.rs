@@ -447,6 +447,16 @@ pub async fn store_handler(
     // persisted and re-embedded by the queue.
     let content = state.pii_filter.redact_for_sink(&payload.content);
 
+    // Ingress PII boundary (security brief B): metadata is caller-controlled
+    // user data persisted into both the Chunk and the legacy event record, so
+    // its string leaves must be redacted too (csf_618ef188) — the PII filter
+    // otherwise only covers `content`. Used for the Chunk, the derived
+    // `created_by`, and the persist_chunk event value below.
+    let metadata = payload
+        .metadata
+        .as_ref()
+        .map(|m| state.pii_filter.sanitize_json(m));
+
     // Calculate surprise score (importance) via embedding similarity
     // Also capture the embedding for contradiction detection
     let (importance, new_embedding_opt) = if state.config.storage.vector_enabled {
@@ -555,14 +565,13 @@ pub async fn store_handler(
         prompt_version: None,
         source_ids: None,
         last_decay: None,
-        metadata: payload.metadata.clone(),
+        metadata: metadata.clone(),
         importance,
         persistent: payload.persistent.unwrap_or(false),
         last_implicit_boost: None,
         access_count: 0,
         source: source_tag.clone(),
-        created_by: payload
-            .metadata
+        created_by: metadata
             .as_ref()
             .and_then(|m| m.get("created_by"))
             .and_then(|v| v.as_str())
@@ -750,7 +759,7 @@ pub async fn store_handler(
         level,
         timestamp,
         payload.stream_id.as_deref(),
-        payload.metadata.as_ref(),
+        metadata.as_ref(),
     )
     .await?;
 
