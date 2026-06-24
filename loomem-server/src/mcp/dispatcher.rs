@@ -1338,14 +1338,42 @@ struct IngestArgs {
 /// /151 (port of /114b1): per-fact `ExtractionMeta` + `valid_from` routing
 /// for the extract_knowledge branch of `tool_ingest` (parity with
 /// workspace.rs `ingest_conversation`). Meta is built once and reused for
-/// both `valid_from` and the chunk's `extraction_meta` field; facts without
-/// an extracted event_date fall back to the ingest timestamp.
+/// both `valid_from` and the chunk's `extraction_meta` field.
+///
+/// Temporal anchoring: extraction only emits an `event_date` when the turn
+/// carries a resolvable cue ("today", "two weeks ago"). A plainly-stated event
+/// ("I bought a red mountain bike") returns `event_date: null` and would
+/// otherwise collapse onto the ingestion timestamp, corrupting later
+/// "how long ago / days between" reasoning. So when no date was resolved and
+/// the caller supplied a `conversation_date` (`anchor`, validated ISO), the
+/// fact inherits that session date as its `event_date` — which then flows to
+/// `valid_from`, the Tantivy temporal key, and the search `[date]` prefix.
+/// An explicitly resolved date always wins; with no anchor the behavior is
+/// unchanged (fall back to the ingest timestamp).
+///
+/// The anchor is only stamped when it is representable as the persisted
+/// `valid_from` key (`event_date_unix()` is `Some`). This rejects both
+/// unparseable anchors and pre-1970 dates (which cannot fit the `u64`
+/// `valid_from`), so `event_date` and `valid_from` never disagree — without
+/// the guard a valid pre-1970 anchor would be indexed/displayed while
+/// `valid_from` silently fell back to the ingest timestamp (split state).
 fn ingest_fact_meta(
     fact: &loomem_core::memory_extractor::ExtractedFact,
     model: &str,
     timestamp: u64,
+    anchor: Option<&str>,
 ) -> (loomem_core::storage::ExtractionMeta, u64) {
-    let meta = fact.to_extraction_meta(None, model);
+    let mut meta = fact.to_extraction_meta(None, model);
+    if meta.event_date.is_none() {
+        if let Some(date) = anchor {
+            meta.event_date = Some(date.to_string());
+            // Not representable as the u64 valid_from key (unparseable or
+            // pre-1970) → revert so both fields stay on the fallback path.
+            if meta.event_date_unix().is_none() {
+                meta.event_date = None;
+            }
+        }
+    }
     let valid_from = meta.event_date_unix().unwrap_or(timestamp);
     (meta, valid_from)
 }
@@ -1392,8 +1420,12 @@ async fn tool_ingest(
     let args: IngestArgs =
         serde_json::from_value(args).map_err(|e| JsonRpcError::invalid_params(&e.to_string()))?;
 
-    let today = args
-        .conversation_date
+    // Keep the explicit conversation_date (if any) as the temporal anchor for
+    // dateless facts; `today` is the prompt's relative-resolution reference and
+    // still falls back to now when the caller omitted a date.
+    let anchor = args.conversation_date.clone();
+    let today = anchor
+        .clone()
         .unwrap_or_else(|| Utc::now().format("%Y-%m-%d").to_string());
 
     // Ingress PII boundary (security brief A): redact the transcript once,
@@ -1413,7 +1445,16 @@ async fn tool_ingest(
         };
         let chat =
             loomem_core::memory_extractor::HttpExtractionChat::new(&state.http_client, api_key);
-        tool_ingest_extract(&chat, state, &content, &today, stream_id, user_id).await
+        tool_ingest_extract(
+            &chat,
+            state,
+            &content,
+            &today,
+            anchor.as_deref(),
+            stream_id,
+            user_id,
+        )
+        .await
     } else {
         tool_ingest_raw(state, &content, stream_id, user_id).await
     }
@@ -1427,6 +1468,7 @@ async fn tool_ingest_extract(
     state: &Arc<AppState>,
     content: &str,
     today: &str,
+    anchor: Option<&str>,
     stream_id: &str,
     user_id: Option<String>,
 ) -> Result<ToolResult, JsonRpcError> {
@@ -1446,8 +1488,12 @@ async fn tool_ingest_extract(
                 let timestamp = Utc::now().timestamp() as u64;
                 // /151 (port of /114b1) — event_date → valid_from
                 // routing; see ingest_fact_meta.
-                let (extraction_meta_for_chunk, valid_from_ts) =
-                    ingest_fact_meta(fact, &state.config.knowledge_extraction.model, timestamp);
+                let (extraction_meta_for_chunk, valid_from_ts) = ingest_fact_meta(
+                    fact,
+                    &state.config.knowledge_extraction.model,
+                    timestamp,
+                    anchor,
+                );
 
                 let chunk = loomem_core::storage::Chunk {
                     id: id.clone(),
@@ -2624,6 +2670,7 @@ mod tests {
             &state,
             "transcript text",
             "2026-06-11",
+            None,
             "test_stream",
             None,
         )
@@ -2647,6 +2694,7 @@ mod tests {
             &state,
             "smalltalk only",
             "2026-06-11",
+            None,
             "test_stream",
             None,
         )
@@ -2656,6 +2704,140 @@ mod tests {
         assert_eq!(
             result.content[0].text,
             "Extracted 0 facts from conversation, stored 0, skipped 0."
+        );
+    }
+
+    // ── temporal anchoring: dateless facts inherit conversation_date ──
+
+    fn dateless_fact() -> loomem_core::memory_extractor::ExtractedFact {
+        loomem_core::memory_extractor::ExtractedFact {
+            content: "Bought a red mountain bike.".to_string(),
+            fact_type: "fact".to_string(),
+            subject: None,
+            event_date: None,
+            event_date_context: None,
+            confidence: 0.9,
+        }
+    }
+
+    /// AC-1 (unit): a dateless fact with a supplied conversation_date anchors
+    /// its event_date to that session date; valid_from derives from it, not the
+    /// ingest timestamp.
+    #[test]
+    fn anchor_applied_when_event_date_absent() {
+        let (meta, valid_from) = ingest_fact_meta(&dateless_fact(), "m", 9_999, Some("2023-02-10"));
+        assert_eq!(meta.event_date.as_deref(), Some("2023-02-10"));
+        assert_eq!(valid_from, meta.event_date_unix().expect("anchored date"));
+        assert_ne!(valid_from, 9_999, "must not fall back to ingest timestamp");
+    }
+
+    /// AC-2 (unit): an explicitly resolved event_date always wins over the
+    /// conversation_date anchor.
+    #[test]
+    fn explicit_event_date_wins_over_anchor() {
+        let mut fact = dateless_fact();
+        fact.event_date = Some("2023-03-15".to_string());
+        let (meta, _) = ingest_fact_meta(&fact, "m", 9_999, Some("2023-02-10"));
+        assert_eq!(meta.event_date.as_deref(), Some("2023-03-15"));
+    }
+
+    /// AC-3 (unit) REGRESSION: with no anchor (conversation_date omitted) a
+    /// dateless fact keeps the pre-fix behavior — no event_date, valid_from
+    /// falls back to the ingest timestamp.
+    #[test]
+    fn no_anchor_falls_back_to_timestamp() {
+        let (meta, valid_from) = ingest_fact_meta(&dateless_fact(), "m", 9_999, None);
+        assert_eq!(meta.event_date, None);
+        assert_eq!(valid_from, 9_999);
+    }
+
+    /// AC (unit): a malformed anchor is ignored (no event_date stamped), and
+    /// valid_from falls back to the ingest timestamp.
+    #[test]
+    fn malformed_anchor_is_ignored() {
+        let (meta, valid_from) = ingest_fact_meta(&dateless_fact(), "m", 9_999, Some("not-a-date"));
+        assert_eq!(meta.event_date, None);
+        assert_eq!(valid_from, 9_999);
+    }
+
+    /// AC (unit) NO SPLIT STATE: a valid but pre-1970 anchor cannot be
+    /// represented in the `u64` valid_from key, so it is not stamped at all —
+    /// event_date and valid_from stay consistent on the fallback path instead
+    /// of disagreeing (Greptile P2, PR #20).
+    #[test]
+    fn pre_1970_anchor_does_not_split_temporal_state() {
+        let (meta, valid_from) = ingest_fact_meta(&dateless_fact(), "m", 9_999, Some("1956-06-15"));
+        assert_eq!(meta.event_date, None, "pre-1970 anchor must not be stamped");
+        assert_eq!(valid_from, 9_999);
+    }
+
+    /// Success stub: one fact with NO resolved event_date — the common case of
+    /// a plainly-stated event with no temporal cue.
+    struct OneDatelessFact;
+
+    impl loomem_core::memory_extractor::ExtractionChat for OneDatelessFact {
+        async fn chat(
+            &self,
+            _request_body: &serde_json::Value,
+        ) -> anyhow::Result<loomem_core::memory_extractor::ChatHttpReply> {
+            let facts = serde_json::json!({
+                "facts": [{
+                    "content": "Bought a red mountain bike.",
+                    "fact_type": "fact",
+                    "subject": null,
+                    "event_date": null,
+                    "event_date_context": null,
+                    "confidence": 0.9
+                }]
+            })
+            .to_string();
+            Ok(loomem_core::memory_extractor::ChatHttpReply {
+                status: 200,
+                body: serde_json::json!({
+                    "choices": [{"message": {"content": facts}}]
+                })
+                .to_string(),
+            })
+        }
+    }
+
+    /// AC-1 (integration): a dateless fact ingested with a past
+    /// conversation_date persists with event_date == that date (not the
+    /// ingestion date), so the search `[date]` prefix and temporal index anchor
+    /// correctly end-to-end.
+    #[tokio::test]
+    async fn anchored_dateless_fact_persists_conversation_date() {
+        let (_app, state) = crate::tests::make_test_app();
+        let result = tool_ingest_extract(
+            &OneDatelessFact,
+            &state,
+            "Bought a red mountain bike.",
+            "2023-02-10",
+            Some("2023-02-10"),
+            "anchor_stream",
+            None,
+        )
+        .await
+        .expect("dispatcher returns a ToolResult");
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "got: {}",
+            result.content[0].text
+        );
+
+        let chunk = state
+            .store
+            .prefix_scan(b"chunk:L1:")
+            .filter_map(|(_k, v)| state.store.decode_chunk(&v).ok())
+            .find(|c| c.stream == "anchor_stream")
+            .expect("ingested chunk present in store");
+        assert_eq!(
+            chunk
+                .extraction_meta
+                .as_ref()
+                .and_then(|m| m.event_date.as_deref()),
+            Some("2023-02-10")
         );
     }
 
