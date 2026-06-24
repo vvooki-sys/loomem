@@ -1350,6 +1350,13 @@ struct IngestArgs {
 /// `valid_from`, the Tantivy temporal key, and the search `[date]` prefix.
 /// An explicitly resolved date always wins; with no anchor the behavior is
 /// unchanged (fall back to the ingest timestamp).
+///
+/// The anchor is only stamped when it is representable as the persisted
+/// `valid_from` key (`event_date_unix()` is `Some`). This rejects both
+/// unparseable anchors and pre-1970 dates (which cannot fit the `u64`
+/// `valid_from`), so `event_date` and `valid_from` never disagree — without
+/// the guard a valid pre-1970 anchor would be indexed/displayed while
+/// `valid_from` silently fell back to the ingest timestamp (split state).
 fn ingest_fact_meta(
     fact: &loomem_core::memory_extractor::ExtractedFact,
     model: &str,
@@ -1359,8 +1366,11 @@ fn ingest_fact_meta(
     let mut meta = fact.to_extraction_meta(None, model);
     if meta.event_date.is_none() {
         if let Some(date) = anchor {
-            if chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok() {
-                meta.event_date = Some(date.to_string());
+            meta.event_date = Some(date.to_string());
+            // Not representable as the u64 valid_from key (unparseable or
+            // pre-1970) → revert so both fields stay on the fallback path.
+            if meta.event_date_unix().is_none() {
+                meta.event_date = None;
             }
         }
     }
@@ -2747,6 +2757,17 @@ mod tests {
     fn malformed_anchor_is_ignored() {
         let (meta, valid_from) = ingest_fact_meta(&dateless_fact(), "m", 9_999, Some("not-a-date"));
         assert_eq!(meta.event_date, None);
+        assert_eq!(valid_from, 9_999);
+    }
+
+    /// AC (unit) NO SPLIT STATE: a valid but pre-1970 anchor cannot be
+    /// represented in the `u64` valid_from key, so it is not stamped at all —
+    /// event_date and valid_from stay consistent on the fallback path instead
+    /// of disagreeing (Greptile P2, PR #20).
+    #[test]
+    fn pre_1970_anchor_does_not_split_temporal_state() {
+        let (meta, valid_from) = ingest_fact_meta(&dateless_fact(), "m", 9_999, Some("1956-06-15"));
+        assert_eq!(meta.event_date, None, "pre-1970 anchor must not be stamped");
         assert_eq!(valid_from, 9_999);
     }
 
