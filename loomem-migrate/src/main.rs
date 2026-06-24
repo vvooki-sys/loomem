@@ -34,6 +34,12 @@ fn main() -> Result<()> {
     if args.iter().any(|a| a == "--validate-graph-entity-streams") {
         return cmd_validate_graph_entity_streams(&args);
     }
+    if args
+        .iter()
+        .any(|a| a == "--purge-plaintext-events" || a == "purge-plaintext-events")
+    {
+        return cmd_purge_plaintext_events(&args);
+    }
 
     // Cycle A1: read-only embedding sampler for anisotropy diagnostic.
     // Accept both flag-style (`--sample-embeddings`) and subcommand-style
@@ -49,7 +55,7 @@ fn main() -> Result<()> {
     // No subcommand matched — print usage hint
     eprintln!("loomem-migrate: no subcommand specified. Use --help or pass a migration flag.");
     eprintln!("  Available: --migrate-graph-entity-streams, --validate-graph-entity-streams,");
-    eprintln!("             --sample-embeddings");
+    eprintln!("             --purge-plaintext-events, --sample-embeddings");
     std::process::exit(1);
 }
 
@@ -868,6 +874,86 @@ fn cmd_validate_graph_entity_streams(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+// ── security brief C — purge legacy plaintext `event:` records ───────────────
+//
+// The legacy `event:{id}` record (removed from the write path in
+// handlers/ingest.rs) duplicated every memory as unencrypted JSON outside the
+// encrypted Chunk envelope, and its only reader (`get_all_events`) was dead
+// code. This one-time, idempotent migration deletes any pre-existing `event:`
+// rows so the plaintext residue does not linger in the DB or its backups.
+// Re-running after a successful purge finds zero rows and is a no-op.
+
+/// Collect all keys under the legacy `event:` prefix. `event:` keys sort
+/// contiguously, so iteration stops at the first non-matching key.
+fn collect_event_keys(db: &DB) -> Result<Vec<Box<[u8]>>> {
+    let prefix: &[u8] = b"event:";
+    let mut keys = Vec::new();
+    for item in db.iterator(IteratorMode::From(prefix, rocksdb::Direction::Forward)) {
+        let (key, _value) = item.context("iterate event: keys")?;
+        if !key.starts_with(prefix) {
+            break;
+        }
+        keys.push(key);
+    }
+    Ok(keys)
+}
+
+fn delete_keys(db: &DB, keys: &[Box<[u8]>]) -> Result<()> {
+    // Single atomic batch (Greptile): a mid-purge SIGKILL cannot leave a
+    // partially deleted set, and it is faster for large key counts.
+    let mut batch = rocksdb::WriteBatch::default();
+    for key in keys {
+        batch.delete(key.as_ref());
+    }
+    db.write(batch).context("write event: delete batch")?;
+    Ok(())
+}
+
+fn cmd_purge_plaintext_events(args: &[String]) -> Result<()> {
+    let commit = args.iter().any(|a| a == "--commit");
+    let db_path = resolve_db_path(args);
+
+    println!("loomem-migrate --purge-plaintext-events");
+    println!("  db_path : {db_path}");
+    println!(
+        "  mode    : {}",
+        if commit {
+            "COMMIT"
+        } else {
+            "DRY RUN (no writes)"
+        }
+    );
+
+    let db = open_db(&db_path)?;
+    let keys = collect_event_keys(&db)?;
+
+    println!();
+    println!("  event: rows found : {}", keys.len());
+
+    if commit && !keys.is_empty() {
+        // Backup checkpoint BEFORE any mutation.
+        let backup_dir_name = format!("data-backup-pre-event-purge-{}", now_ts_readable());
+        let backup_path = Path::new(&db_path)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(&backup_dir_name);
+        println!("Creating RocksDB checkpoint at {}", backup_path.display());
+        checkpoint_backup(&db, &backup_path)?;
+
+        delete_keys(&db, &keys)?;
+        println!("  deleted           : {}", keys.len());
+    } else if commit {
+        // keys.is_empty(): idempotent rerun on an already-clean DB. Print a
+        // clear completion line so the operator isn't left with a silent exit.
+        println!("  Nothing to delete — already clean.");
+    } else {
+        println!();
+        println!("Run with --commit to delete these rows.");
+    }
+
+    Ok(())
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────────
 
 fn resolve_db_path(args: &[String]) -> String {
@@ -923,6 +1009,34 @@ mod tests {
         ];
         let path = resolve_db_path(&args);
         assert_eq!(path, "/tmp/custom-db");
+    }
+
+    #[test]
+    fn test_purge_plaintext_events_removes_event_rows_idempotently() {
+        let dir = unique_test_dir("purge-events");
+        let db_path = dir.join("rocksdb");
+        let db = open_db(db_path.to_str().unwrap()).unwrap();
+
+        // Seed two chunks (must survive) and two legacy event: rows (must go).
+        seed_chunk_33b(&db, "c1", "s", 0);
+        seed_chunk_33b(&db, "c2", "s", 0);
+        db.put(b"event:c1", b"{}").unwrap();
+        db.put(b"event:c2", b"{}").unwrap();
+
+        let keys = collect_event_keys(&db).unwrap();
+        assert_eq!(keys.len(), 2, "should find both event: rows");
+
+        delete_keys(&db, &keys).unwrap();
+
+        // event: rows gone, chunks intact.
+        assert!(collect_event_keys(&db).unwrap().is_empty());
+        assert!(db.get(b"chunk:L0:c1").unwrap().is_some());
+        assert!(db.get(b"chunk:L0:c2").unwrap().is_some());
+
+        // Idempotent: a second collect/delete is a no-op.
+        let again = collect_event_keys(&db).unwrap();
+        assert!(again.is_empty());
+        delete_keys(&db, &again).unwrap();
     }
 
     // ── cycle/33b — graph entity stream_id migration ────────────────────
