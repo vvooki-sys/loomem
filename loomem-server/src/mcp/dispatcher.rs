@@ -493,11 +493,32 @@ async fn tool_store(
         )));
     }
 
+    // Metadata size limit — parity with REST /v1/store's MAX_METADATA_BYTES
+    // (Greptile). Bound the payload before the recursive `sanitize_json` pass
+    // below so an MCP caller cannot submit an oversized metadata blob.
+    if let Some(ref meta) = args.metadata {
+        let meta_size = serde_json::to_string(meta).map(|s| s.len()).unwrap_or(0);
+        if meta_size > 10_240 {
+            return Ok(ToolResult::error(format!(
+                "Metadata too large: {} bytes (max 10240)",
+                meta_size
+            )));
+        }
+    }
+
     // Ingress PII boundary (security brief A): redact once, before the gated
     // event-date probe or persistence touch the content. Raw `args.content`
     // must never reach a provider; `persist_chunk` re-applies the same
     // idempotent sanitizer + PII pipeline as defense in depth.
     let content = state.pii_filter.redact_for_sink(&args.content);
+
+    // Ingress PII boundary (security brief B): redact metadata string leaves
+    // before they are persisted into the Chunk and the legacy event record
+    // (csf_618ef188) — the PII filter otherwise only covers `content`.
+    let metadata = args
+        .metadata
+        .as_ref()
+        .map(|m| state.pii_filter.sanitize_json(m));
 
     let id = uuid::Uuid::new_v4().to_string();
     let timestamp = Utc::now().timestamp() as u64;
@@ -536,7 +557,7 @@ async fn tool_store(
         prompt_version: None,
         source_ids: None,
         last_decay: None,
-        metadata: args.metadata.clone(),
+        metadata: metadata.clone(),
         importance: Some(if is_preference { 2.0 } else { 1.0 }),
         persistent: true,
         last_implicit_boost: None,
@@ -579,7 +600,7 @@ async fn tool_store(
         0,
         timestamp as i64,
         None,
-        args.metadata.as_ref(),
+        metadata.as_ref(),
     )
     .await
     {
