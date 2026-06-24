@@ -5,6 +5,7 @@ target/
 data/
 wal/
 *.log
+loomem-server/memory/ # test/runtime memory artifacts (audit jsonl etc.)
 
 # Personal configuration (contains names/entities)
 entities.toml
