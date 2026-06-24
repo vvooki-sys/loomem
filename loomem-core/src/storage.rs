@@ -1307,25 +1307,6 @@ impl RocksDbStore {
         Ok(())
     }
 
-    /// Get all event keys for rebuilding index
-    pub fn get_all_events(&self) -> Result<Vec<(String, serde_json::Value)>> {
-        let prefix = b"event:";
-        let mut events = Vec::new();
-
-        for (key, value) in self.prefix_scan(prefix) {
-            let key_str = String::from_utf8_lossy(&key);
-            match serde_json::from_slice::<serde_json::Value>(&value) {
-                Ok(event) => events.push((key_str.to_string(), event)),
-                Err(e) => {
-                    warn!("Failed to deserialize event {}: {}", key_str, e);
-                }
-            }
-        }
-
-        debug!("Retrieved {} events for rebuild", events.len());
-        Ok(events)
-    }
-
     /// Soft-delete a memory — sets deleted_at timestamp, keeps data for recovery window.
     /// Callers should also remove from Tantivy (no soft-delete in FTS) and clean graph refs.
     pub fn delete_by_id(&self, id: &str) -> Result<bool> {

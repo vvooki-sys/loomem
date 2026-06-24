@@ -27,9 +27,9 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     (dot / (norm_a * norm_b)) as f64
 }
 
-/// Shared persistence logic: RocksDB store → legacy event key → entity extraction →
-/// graph population → Tantivy index → intent log commit → embedding queue →
-/// entity extraction queue → cache invalidation → audit log.
+/// Shared persistence logic: entity extraction → graph population → Tantivy
+/// index → intent log commit → embedding queue → entity extraction queue →
+/// cache invalidation → audit log.
 pub async fn persist_chunk(
     state: &Arc<AppState>,
     chunk: Chunk,
@@ -39,8 +39,12 @@ pub async fn persist_chunk(
     stream: &str,
     level: i32,
     timestamp: i64,
-    stream_id: Option<&str>,
-    metadata: Option<&serde_json::Value>,
+    // Retained for call-site signature stability but unused: their only
+    // consumer was the legacy plaintext `event:` record, removed here
+    // (security brief C / csf_a9e04eb1). The Chunk carries the canonical
+    // stream + metadata via `persist_chunk_with_index`.
+    _stream_id: Option<&str>,
+    _metadata: Option<&serde_json::Value>,
 ) -> Result<String, AppError> {
     // Pre-ingestion sanitization: HTML strip + injection detection
     let sanitize_result = loomem_core::sanitizer::sanitize(content);
@@ -80,21 +84,11 @@ pub async fn persist_chunk(
         let _ = loomem_core::manifest::mark_manifest_dirty(&state.store, stream);
     }
 
-    // Also store legacy event key for backward compatibility
-    let key = format!("event:{}", id);
-    let value = json!({
-        "id": id,
-        "content": content,
-        "user_id": user_id,
-        "app_id": app_id,
-        "level": level,
-        "timestamp": timestamp,
-        "stream": stream,
-        "stream_id": stream_id,
-        "metadata": metadata,
-    });
-    let value_bytes = serde_json::to_vec(&value)?;
-    state.store.put(key.as_bytes(), &value_bytes)?;
+    // Legacy plaintext `event:` record removed (security brief C /
+    // csf_a9e04eb1): it duplicated every memory as unencrypted JSON outside the
+    // encrypted Chunk envelope, and its only reader (`get_all_events`) was dead
+    // code. The canonical chunk is persisted via `persist_chunk_with_index`
+    // below; existing rows are purged by `loomem-migrate --purge-plaintext-events`.
 
     // Extract entities
     let entities = state.entity_extractor.extract(content);
@@ -240,7 +234,7 @@ pub async fn persist_chunk(
         }
     }
 
-    tracing::debug!("Stored event: id={}", id);
+    tracing::debug!("Persisted chunk: id={}", id);
 
     // Invalidate search cache
     {
