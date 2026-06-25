@@ -29,15 +29,71 @@ fn default_drift_warn_pct() -> f64 {
     5.0
 }
 
-/// Sanitize query text for Tantivy's QueryParser.
-/// Strips apostrophes and other special chars that cause parse failures.
+/// Sanitize query text for Tantivy's `QueryParser`.
+///
+/// A natural-language query is never DSL, but any unescaped Tantivy operator
+/// metacharacter makes `QueryParser::parse_query` return
+/// `QueryParserError::SyntaxError`, which fails the whole `memory_search`
+/// (zero hits) instead of degrading to the vector leg. Mapping every operator
+/// metacharacter to a space guarantees arbitrary input always parses. Lossy by
+/// design (terms are split, not interpreted); the vector leg keeps full recall
+/// on the raw text. Covers the full Tantivy set
+/// `+ - && || ! ( ) { } [ ] ^ " ~ * ? : \ / < > =` plus apostrophes/smart quotes.
 fn sanitize_query(q: &str) -> String {
     q.chars()
         .map(|c| match c {
             '\'' | '\u{2019}' | '\u{2018}' | '"' | '\u{201d}' | '/' | '\\' => ' ',
+            // Tantivy DSL operators; `&` / `|` also cover the `&&` / `||`
+            // digraphs. Mapping to space stops `parse_query` erroring on
+            // natural-language input.
+            '+' | '-' | '!' | '(' | ')' | '{' | '}' | '[' | ']' | '^' | '~' | '*' | '?' | ':'
+            | '<' | '>' | '=' | '&' | '|' => ' ',
             _ => c,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod sanitize_query_tests {
+    //! Sanitization must be total: no input may reach `QueryParser::parse_query`
+    //! carrying a Tantivy operator, or the whole `memory_search` errors with
+    //! `SyntaxError` instead of returning hits. See the query-sanitization brief.
+    use super::sanitize_query;
+
+    /// Every Tantivy DSL metacharacter is neutralised to whitespace, so the
+    /// sanitized output can never be parsed as operators.
+    #[test]
+    fn strips_all_tantivy_operators() {
+        let metachars = "+-&|!(){}[]^\"~*?:\\/<>=";
+        let out = sanitize_query(metachars);
+        for c in metachars.chars() {
+            assert!(
+                !out.contains(c),
+                "metacharacter {c:?} survived sanitization: {out:?}"
+            );
+        }
+    }
+
+    /// The verbatim question that crashed retrieval (dash, colon, question
+    /// mark) is reduced to plain words; alphanumeric terms survive so recall
+    /// on them is preserved.
+    #[test]
+    fn neutralises_natural_language_question() {
+        let q = "you mentioned 6S, MAJA, and Sen2Cor - which is implemented in SIAC_GEE?";
+        let out = sanitize_query(q);
+        assert!(!out.contains('-'));
+        assert!(!out.contains('?'));
+        assert!(out.contains("Sen2Cor"));
+        assert!(out.contains("SIAC_GEE"));
+    }
+
+    /// A query with no special characters is returned unchanged, so existing
+    /// clean queries keep their exact behaviour (no regression).
+    #[test]
+    fn leaves_clean_query_unchanged() {
+        let clean = "atmospheric correction methods for Sentinel imagery";
+        assert_eq!(sanitize_query(clean), clean);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
