@@ -68,26 +68,28 @@ const EXTRACTION_PROMPT: &str = r#"Extract factual knowledge from this conversat
 ## Types (exactly one per fact):
 - "preference_or_decision": Choices, preferences, decisions, opinions. E.g. "Anna prefers dark mode", "Team decided to use Rust for the backend".
 - "project_state": Current state of work, ongoing projects, deadlines, statuses. E.g. "Auth migration is blocked by legal review", "Sprint ends on 2026-03-15".
-- "fact": Biographical, permanent facts. E.g. "Anna is a senior engineer at Acme", "The main repo is github.com/acme/core".
+- "fact": Biographical or timeless facts with no specific date. E.g. "Anna is a senior engineer at Acme", "The main repo is github.com/acme/core".
+- "event": A dated personal experience — something the user (or a person) did, attended, experienced, discovered, or that happened to them at a specific time. E.g. "The user attended a bluegrass concert on 2023-03-19", "Anna adopted a rescue dog on 2023-03-01". Prefer this over "fact" whenever there is a personal action with a time; always set event_date (a resolved date, else the conversation_date).
 - "experience": Transferable lesson about how to act — proven procedure, lesson from a mistake, effective strategy, anti-pattern. E.g. "When dispatching long tasks to Claude Code, the full brief must be in the first message — drip-feeding instructions degrades output quality", "Running cargo clippy before cargo test catches most issues earlier and saves CI time".
 
 ## Rules:
 1. Each fact must be a single, self-contained sentence in natural language
-2. Extract: preferences, decisions, facts about people, project states, deadlines, contacts, technical decisions, procedural lessons
+2. Extract: preferences, decisions, facts about people, project states, deadlines, contacts, technical decisions, procedural lessons, and the user's dated personal experiences
 3. SKIP: greetings, small talk, questions without answers, uncertain statements, action items, temporary debugging states, summaries
 4. CHANGE RULE: When something changed, always record before→after. E.g. "Anna switched from VS Code to Neovim" (not just "Anna uses Neovim")
-5. THREE DATES MODEL: For each fact, provide:
+5. PERSONAL EVENTS: When the user (or a person) did, attended, experienced, or discovered something at a point in time, capture it as an "event" with its date — do NOT flatten it into a timeless "fact". The assistant's encyclopedic explanations are background, not facts: never extract "X is a …" in place of the user's dated action (e.g. extract "The user attended a bluegrass show on 2023-03-19", not "The Infamous Stringdusters is a bluegrass band")
+6. THREE DATES MODEL: For each fact, provide:
    - "event_date": absolute ISO date if determinable (e.g. "2026-03-15"), null otherwise
    - "event_date_context": original relative expression if any (e.g. "yesterday", "two weeks ago"), null otherwise
-6. "subject": The main entity this fact is about (person name, project name, etc.), null if unclear
-7. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
-8. Preserve original language and diacritics
-9. Maximum 20 facts per conversation
+7. "subject": The main entity this fact is about (person name, project name, etc.), null if unclear
+8. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
+9. Preserve original language and diacritics
+10. Maximum 20 facts per conversation
 
 The conversation_date is: {conversation_date}
 
 Return ONLY valid JSON (no markdown, no code blocks):
-{"facts": [{"content": "...", "fact_type": "preference_or_decision"|"project_state"|"fact"|"experience", "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "confidence": 0.9}]}"#;
+{"facts": [{"content": "...", "fact_type": "preference_or_decision"|"project_state"|"fact"|"event"|"experience", "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "confidence": 0.9}]}"#;
 
 /// /153: build the extraction system prompt for one request.
 ///
@@ -902,6 +904,26 @@ mod tests {
     fn extraction_prompt_contains_experience_type() {
         assert!(EXTRACTION_PROMPT.contains("\"experience\""));
         assert!(EXTRACTION_PROMPT.contains("Transferable lesson"));
+    }
+
+    /// The extraction prompt advertises the "event" type (dated personal
+    /// experience) and the anti-flattening rule, so the user's dated actions
+    /// are captured as events instead of being lost as timeless facts.
+    #[test]
+    fn extraction_prompt_contains_event_type() {
+        assert!(EXTRACTION_PROMPT.contains("\"event\""));
+        assert!(EXTRACTION_PROMPT.contains("dated personal experience"));
+        assert!(EXTRACTION_PROMPT.contains("PERSONAL EVENTS"));
+    }
+
+    /// "event" maps to FactType::Event (the type already existed in storage and
+    /// the consolidation pipeline; this exposes it to memory_ingest extraction).
+    #[test]
+    fn to_fact_type_event() {
+        assert_eq!(
+            fact_with_type("event").to_fact_type(),
+            crate::storage::FactType::Event
+        );
     }
 
     /// /154: FactType::Experience round-trips as the wire value "experience".
