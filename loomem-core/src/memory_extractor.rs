@@ -65,6 +65,8 @@ impl Default for KnowledgeExtractionConfig {
 
 const EXTRACTION_PROMPT: &str = r#"Extract factual knowledge from this conversation. Each fact is a self-contained sentence.
 
+Facts may be authored by any party in the conversation. Extract them from the user's statements AND from the assistant's (or agent's) recommendations, plans, schedules, and researched answers — assistant-authored content carries first-class facts that the user is likely to reference later.
+
 ## Types (exactly one per fact):
 - "preference_or_decision": Choices, preferences, decisions, opinions. E.g. "Anna prefers dark mode", "Team decided to use Rust for the backend".
 - "project_state": Current state of work, ongoing projects, deadlines, statuses. E.g. "Auth migration is blocked by legal review", "Sprint ends on 2026-03-15".
@@ -74,10 +76,10 @@ const EXTRACTION_PROMPT: &str = r#"Extract factual knowledge from this conversat
 
 ## Rules:
 1. Each fact must be a single, self-contained sentence in natural language
-2. Extract: preferences, decisions, facts about people, project states, deadlines, contacts, technical decisions, procedural lessons, and the user's dated personal experiences
+2. Extract: preferences, decisions, facts about people, project states, deadlines, contacts, technical decisions, procedural lessons, the user's dated personal experiences, and the assistant's recommendations, plans, schedules, and researched answers (see rule 11)
 3. SKIP: greetings, small talk, questions without answers, uncertain statements, action items, temporary debugging states, summaries
 4. CHANGE RULE: When something changed, always record before→after. E.g. "Anna switched from VS Code to Neovim" (not just "Anna uses Neovim")
-5. PERSONAL EVENTS: When the user (or a person) did, attended, experienced, or discovered something at a point in time, capture it as an "event" with its date — do NOT flatten it into a timeless "fact". The assistant's encyclopedic explanations are background, not facts: never extract "X is a …" in place of the user's dated action (e.g. extract "The user attended a bluegrass show on 2023-03-19", not "The Infamous Stringdusters is a bluegrass band")
+5. PERSONAL EVENTS: When the user (or a person) did, attended, experienced, or discovered something at a point in time, capture it as an "event" with its date — do NOT flatten it into a timeless "fact". Do not substitute an encyclopedic definition for the person's dated action (e.g. extract "The user attended a bluegrass show on 2023-03-19", not "The Infamous Stringdusters is a bluegrass band"). This guards the action against being lost; it does NOT make assistant-authored content unextractable — see rule 11.
 6. THREE DATES MODEL: For each fact, provide:
    - "event_date": absolute ISO date if determinable (e.g. "2026-03-15"), null otherwise
    - "event_date_context": original relative expression if any (e.g. "yesterday", "two weeks ago"), null otherwise
@@ -85,11 +87,13 @@ const EXTRACTION_PROMPT: &str = r#"Extract factual knowledge from this conversat
 8. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
 9. Preserve original language and diacritics
 10. Maximum 20 facts per conversation
+11. AUTHORED CONTENT: Extract recommendations, plans, schedules, and researched solutions regardless of which party authored them. When the assistant provides a specific recommendation, creates a plan or schedule, or supplies a researched answer the user did not already state, capture it as a first-class fact (e.g. "The user was recommended the books 'Project Hail Mary' and 'Children of Time'", "A weekly meal plan was created starting Monday with overnight oats"). Do NOT extract pure echoes, acknowledgements, or restatements of what the user already said, nor the assistant's generic encyclopedic background (rule 5).
+12. ATTRIBUTION: When the transcript carries role markers (e.g. lines prefixed "user:" or "assistant:"), set "attributed_to" to the speaker of the source statement ("user" or "assistant"). When the transcript is unlabeled, set it to null.
 
 The conversation_date is: {conversation_date}
 
 Return ONLY valid JSON (no markdown, no code blocks):
-{"facts": [{"content": "...", "fact_type": "preference_or_decision"|"project_state"|"fact"|"event"|"experience", "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "confidence": 0.9}]}"#;
+{"facts": [{"content": "...", "fact_type": "preference_or_decision"|"project_state"|"fact"|"event"|"experience", "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "attributed_to": "user"|"assistant"|null, "confidence": 0.9}]}"#;
 
 /// /153: build the extraction system prompt for one request.
 ///
@@ -128,12 +132,14 @@ pub fn build_extraction_prompt(
     format!(
         r#"Extract factual knowledge from this conversation. Each fact is a self-contained sentence.
 
+Facts may be authored by any party in the conversation. Extract them from the user's statements AND from the assistant's (or agent's) recommendations, plans, schedules, and researched answers — assistant-authored content carries first-class facts that the user is likely to reference later.
+
 ## Types (exactly one per fact):
 {type_lines}
 
 ## Rules:
 1. Each fact must be a single, self-contained sentence in natural language
-2. Extract: preferences, decisions, facts about people, project states, deadlines, contacts, technical decisions, procedural lessons
+2. Extract: preferences, decisions, facts about people, project states, deadlines, contacts, technical decisions, procedural lessons, and the assistant's recommendations, plans, schedules, and researched answers (see rule 10)
 3. SKIP: greetings, small talk, questions without answers, uncertain statements, action items, temporary debugging states, summaries
 4. CHANGE RULE: When something changed, always record before→after. E.g. "Anna switched from VS Code to Neovim" (not just "Anna uses Neovim")
 5. THREE DATES MODEL: For each fact, provide:
@@ -143,11 +149,13 @@ pub fn build_extraction_prompt(
 7. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
 8. Preserve original language and diacritics
 9. Maximum 20 facts per conversation
+10. AUTHORED CONTENT: Extract recommendations, plans, schedules, and researched solutions regardless of which party authored them. When the assistant provides a specific recommendation, creates a plan or schedule, or supplies a researched answer the user did not already state, capture it as a first-class fact. Do NOT extract pure echoes, acknowledgements, or restatements of what the user already said.
+11. ATTRIBUTION: When the transcript carries role markers (e.g. lines prefixed "user:" or "assistant:"), set "attributed_to" to the speaker of the source statement ("user" or "assistant"). When the transcript is unlabeled, set it to null.
 
 The conversation_date is: {conversation_date}
 
 Return ONLY valid JSON (no markdown, no code blocks):
-{{"facts": [{{"content": "...", "fact_type": {enum_values}, "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "confidence": 0.9}}]}}"#,
+{{"facts": [{{"content": "...", "fact_type": {enum_values}, "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "attributed_to": "user"|"assistant"|null, "confidence": 0.9}}]}}"#,
     )
 }
 
@@ -159,6 +167,13 @@ pub struct ExtractedFact {
     pub event_date: Option<String>,
     pub event_date_context: Option<String>,
     pub confidence: f64,
+    /// Optional speaker attribution for the source statement, when the
+    /// conversation transcript carries role markers (e.g. "user" or
+    /// "assistant"). Useful for downstream retrieval scoring and contradiction
+    /// detection. `None` when the transcript is unlabeled (serde default keeps
+    /// LLM replies that omit the field parsing unchanged).
+    #[serde(default)]
+    pub attributed_to: Option<String>,
 }
 
 /// Legacy alias for backward compatibility with ingest_conversation_handler
@@ -207,6 +222,7 @@ impl ExtractedFact {
             extraction_model: Some(model.to_string()),
             original_content: None,
             topic: self.custom_topic(),
+            attributed_to: self.attributed_to.clone(),
         }
     }
 }
@@ -840,6 +856,7 @@ mod tests {
             event_date: None,
             event_date_context: None,
             confidence: 0.9,
+            attributed_to: None,
         }
     }
 
@@ -1020,5 +1037,71 @@ mod tests {
         let config: KnowledgeExtractionConfig =
             toml::from_str(toml_str).expect("config without topics parses");
         assert!(config.topics.is_none());
+    }
+
+    /// The extraction prompt advertises that recommendations, plans, and
+    /// researched answers are extractable regardless of which party authored
+    /// them, so assistant-authored facts are not silently dropped.
+    #[test]
+    fn extraction_prompt_extracts_authored_content() {
+        assert!(EXTRACTION_PROMPT.contains("regardless of which party authored them"));
+        assert!(EXTRACTION_PROMPT.contains("AUTHORED CONTENT"));
+        assert!(EXTRACTION_PROMPT.contains("assistant-authored content carries first-class facts"));
+    }
+
+    /// The prompt asks for, and the JSON schema exposes, the optional
+    /// `attributed_to` speaker field. Operator-defined topics get the same
+    /// guidance so the two prompt paths stay in sync.
+    #[test]
+    fn extraction_prompt_includes_attribution_field() {
+        assert!(EXTRACTION_PROMPT.contains("\"attributed_to\""));
+        assert!(EXTRACTION_PROMPT.contains("ATTRIBUTION"));
+        let mut config = cfg();
+        config.topics = Some(vec![ExtractionTopic {
+            name: "risk".to_string(),
+            description: "A project risk worth tracking.".to_string(),
+            fact_type: Some("risk_item".to_string()),
+        }]);
+        let prompt = build_extraction_prompt(&config, "2026-06-11");
+        assert!(prompt.contains("\"attributed_to\""));
+        assert!(prompt.contains("AUTHORED CONTENT"));
+    }
+
+    /// An LLM reply that attributes a recommendation to the assistant keeps the
+    /// fact (it is first-class, not background) and preserves the speaker role.
+    #[tokio::test]
+    async fn extracts_assistant_recommendations() {
+        let facts = r#"{"facts": [
+            {"content": "The user was recommended the book 'Project Hail Mary'", "fact_type": "fact", "subject": "Project Hail Mary", "event_date": null, "event_date_context": null, "attributed_to": "assistant", "confidence": 0.9}
+        ]}"#;
+        let chat = FixedReply {
+            status: 200,
+            body: envelope(facts),
+        };
+        let outcome = extract_knowledge_with(&chat, &cfg(), "transcript", "2026-06-11")
+            .await
+            .expect("success");
+        assert_eq!(outcome.facts.len(), 1);
+        assert_eq!(outcome.facts[0].attributed_to.as_deref(), Some("assistant"));
+    }
+
+    /// Speaker attribution survives the LLM fact -> stored `ExtractionMeta`
+    /// mapping, so downstream retrieval/contradiction can use it.
+    #[test]
+    fn attribution_field_preserves_speaker_role() {
+        let mut fact = fact_with_type("fact");
+        fact.attributed_to = Some("assistant".to_string());
+        let meta = fact.to_extraction_meta(None, "test-model");
+        assert_eq!(meta.attributed_to.as_deref(), Some("assistant"));
+    }
+
+    /// An LLM reply that omits `attributed_to` deserializes to `None` (serde
+    /// default), so older/unlabeled replies parse unchanged.
+    #[test]
+    fn attributed_to_serde_default_is_none() {
+        let json = r#"{"content": "c", "fact_type": "fact", "subject": null, "event_date": null, "event_date_context": null, "confidence": 0.9}"#;
+        let fact: ExtractedFact =
+            serde_json::from_str(json).expect("fact without attributed_to parses");
+        assert!(fact.attributed_to.is_none());
     }
 }

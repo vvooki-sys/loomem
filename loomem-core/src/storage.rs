@@ -98,6 +98,14 @@ pub struct ExtractionMeta {
     /// existed (serde default keeps old chunks deserializing unchanged).
     #[serde(default)]
     pub topic: Option<String>,
+    /// Optional speaker attribution for the source statement, when the
+    /// conversation transcript carried role markers (e.g. "user" or
+    /// "assistant"). Useful for downstream retrieval scoring and contradiction
+    /// detection. `None` when the transcript was unlabeled, or for chunks
+    /// written before this field existed (serde default keeps old chunks
+    /// deserializing unchanged).
+    #[serde(default)]
+    pub attributed_to: Option<String>,
 }
 
 impl ExtractionMeta {
@@ -1916,6 +1924,7 @@ mod tests {
             extraction_model: None,
             original_content: None,
             topic: None,
+            attributed_to: None,
         }
     }
 
@@ -2489,6 +2498,7 @@ mod tests {
             extraction_model: None,
             original_content: None,
             topic: None,
+            attributed_to: None,
         });
         store.store_chunk(&chunk).expect("store_chunk");
 
@@ -2593,6 +2603,7 @@ mod tests {
             extraction_model: None,
             original_content: None,
             topic: None,
+            attributed_to: None,
         });
         store.store_chunk(&chunk).expect("store_chunk");
 

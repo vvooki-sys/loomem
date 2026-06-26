@@ -456,6 +456,8 @@ async fn store_extraction_meta(
         extraction_model: probe_enabled.then(|| state.config.knowledge_extraction.model.clone()),
         original_content: None,
         topic: None,
+        // Date-probe path does not carry per-statement speaker attribution.
+        attributed_to: None,
     };
     (meta, valid_from_ts)
 }
@@ -2717,6 +2719,7 @@ mod tests {
             event_date: None,
             event_date_context: None,
             confidence: 0.9,
+            attributed_to: None,
         }
     }
 
