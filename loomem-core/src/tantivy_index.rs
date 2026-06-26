@@ -42,7 +42,7 @@ fn default_drift_warn_pct() -> f64 {
 fn sanitize_query(q: &str) -> String {
     q.chars()
         .map(|c| match c {
-            '\'' | '\u{2019}' | '\u{2018}' | '"' | '\u{201d}' | '/' | '\\' => ' ',
+            '\'' | '\u{2019}' | '\u{2018}' | '"' | '\u{201c}' | '\u{201d}' | '/' | '\\' => ' ',
             // Tantivy DSL operators; `&` / `|` also cover the `&&` / `||`
             // digraphs. Mapping to space stops `parse_query` erroring on
             // natural-language input.
@@ -85,6 +85,18 @@ mod sanitize_query_tests {
         assert!(!out.contains('?'));
         assert!(out.contains("Sen2Cor"));
         assert!(out.contains("SIAC_GEE"));
+    }
+
+    /// The left smart double quote (U+201C) is neutralised like its closing
+    /// counterpart, so a curly-quoted query can never reach the parser as an
+    /// unterminated phrase operator.
+    #[test]
+    fn sanitize_query_handles_left_smart_double_quote() {
+        let q = "what did \u{201c}atmospheric correction\u{201d} mean";
+        let out = sanitize_query(q);
+        assert!(!out.contains('\u{201c}'));
+        assert!(!out.contains('\u{201d}'));
+        assert!(out.contains("atmospheric correction"));
     }
 
     /// A query with no special characters is returned unchanged, so existing
