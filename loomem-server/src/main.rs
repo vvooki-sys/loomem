@@ -1794,6 +1794,7 @@ mod tests {
             extraction_model: None,
             original_content: None,
             topic: None,
+            attributed_to: None,
         });
         chunk
     }

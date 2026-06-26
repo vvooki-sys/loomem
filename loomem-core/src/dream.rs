@@ -532,6 +532,9 @@ fn build_dream_chunk(
             extraction_model: Some(ctx.model.to_string()),
             original_content: None,
             topic: None,
+            // attributed_to tracks the source statement's speaker; this
+            // synthesized chunk has no single source statement, so leave it None.
+            attributed_to: None,
         }),
         deleted_at: None,
         // Cycle /40: dream output is assistant_generated -> A2 (derived

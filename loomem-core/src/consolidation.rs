@@ -292,6 +292,9 @@ fn parse_structured_response(
         extraction_model: Some(model.to_string()),
         original_content: None,
         topic: None,
+        // attributed_to tracks the source statement's speaker; a consolidated
+        // chunk merges several sources, so leave it None.
+        attributed_to: None,
     };
 
     Some(Enrichment {

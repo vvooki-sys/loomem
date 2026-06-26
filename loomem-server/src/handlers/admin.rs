@@ -2708,6 +2708,7 @@ mod reprocess_handler_tests {
             event_date: None,
             event_date_context: None,
             confidence: 0.95,
+            attributed_to: None,
         };
         let result = build_extracted_fact_chunk(&src, &fact, "gpt-4.1-mini");
         assert_eq!(result.level, 1, "extracted fact must be level=1");
@@ -2854,6 +2855,7 @@ mod api_get_memory_handler_tests {
                 extraction_model: None,
                 original_content: None,
                 topic: None,
+                attributed_to: None,
             }),
             deleted_at: None,
             trust_level: None,
