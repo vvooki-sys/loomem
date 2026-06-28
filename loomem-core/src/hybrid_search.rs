@@ -46,6 +46,22 @@ pub struct SearchConfig {
     /// Enable by setting to 0.3-0.5 in config.toml [search] section.
     #[serde(default = "default_implicit_access_boost_weight")]
     pub implicit_access_boost_weight: f64,
+    /// Retrieval boost for user-authored state facts (`attributed_to == "user"`
+    /// with a state-bearing `fact_type`: `PreferenceOrDecision` / `ProjectState`).
+    /// 1.0 == disabled, byte-identical to pre-cycle. Raise to ~1.3-1.5 to lift the
+    /// most recent user statement above agent-authored facts that flood `top_k`
+    /// (knowledge-update relies on retrieving the latest user-state). See
+    /// `attribution_multiplier`.
+    #[serde(default = "default_attribution_neutral")]
+    pub user_state_boost: f64,
+    /// Retrieval damp for agent-authored facts (`attributed_to == "assistant"`).
+    /// 1.0 == neutral (default; no penalty — agent-authored facts must still
+    /// reach `top_k`, that is what they were extracted for). Set <1.0 only with
+    /// A/B evidence that the user-state boost alone does not resolve
+    /// knowledge-update flooding, and only after confirming no regression on the
+    /// assistant/preference categories.
+    #[serde(default = "default_attribution_neutral")]
+    pub agent_fact_damp: f64,
 }
 
 fn default_rerank_candidates() -> usize {
@@ -54,6 +70,10 @@ fn default_rerank_candidates() -> usize {
 
 fn default_implicit_access_boost_weight() -> f64 {
     0.0
+}
+
+fn default_attribution_neutral() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,7 +271,23 @@ impl HybridSearchEngine {
                     .as_ref()
                     .map(trust_provenance_multiplier)
                     .unwrap_or(1.0);
-                let final_score = fusion_score * time_decay * trust_prov;
+                // Boost user-authored state facts (and optionally damp
+                // agent-authored ones) so the latest user statement is not
+                // pushed out of top_k by agent-authored facts on the same
+                // topic. Neutral (1.0) when no chunk/extraction_meta is loaded
+                // or with the default config.
+                let attrib = chunk_opt
+                    .as_ref()
+                    .and_then(|c| c.extraction_meta.as_ref())
+                    .map(|m| {
+                        attribution_multiplier(
+                            m.attributed_to.as_deref(),
+                            Some(&m.fact_type),
+                            &self.config.search,
+                        )
+                    })
+                    .unwrap_or(1.0);
+                let final_score = fusion_score * time_decay * trust_prov * attrib;
 
                 fused_results.push(HybridSearchResult {
                     id: id.clone(),
@@ -514,6 +550,45 @@ pub fn trust_provenance_multiplier(chunk: &crate::storage::Chunk) -> f64 {
     role_factor * trust_factor
 }
 
+/// True for the `fact_type` variants that carry mutable *user state* — the
+/// preferences, decisions and project status that knowledge-update questions
+/// query and that get superseded over time. Encyclopedic `Fact`/`Event`/
+/// `Experience` are excluded: those are the typical agent-authored material
+/// whose flooding of `top_k` this boost counteracts.
+fn is_user_state_fact_type(fact_type: Option<&crate::storage::FactType>) -> bool {
+    matches!(
+        fact_type,
+        Some(crate::storage::FactType::PreferenceOrDecision)
+            | Some(crate::storage::FactType::ProjectState)
+    )
+}
+
+/// Retrieval-weight multiplier from a chunk's *attribution* — who authored the
+/// source statement (`attributed_to`) and what kind of fact it is (`fact_type`).
+/// Multiplied into the fused score alongside [`trust_provenance_multiplier`]
+/// before the final sort, so a freshly stated user preference/state is not
+/// pushed out of `top_k` by agent-authored facts on the same topic.
+///
+/// - `attributed_to == Some("user")` with a state-bearing `fact_type` →
+///   `cfg.user_state_boost`.
+/// - `attributed_to == Some("assistant")` → `cfg.agent_fact_damp`.
+/// - everything else — including `None` (legacy chunks, unlabeled transcripts)
+///   and user facts that are not state-bearing — → `1.0`, hard-neutral.
+///
+/// With the default config (`user_state_boost == agent_fact_damp == 1.0`) every
+/// branch returns `1.0`, so the fused score is byte-identical to pre-cycle.
+pub fn attribution_multiplier(
+    attributed_to: Option<&str>,
+    fact_type: Option<&crate::storage::FactType>,
+    cfg: &SearchConfig,
+) -> f64 {
+    match attributed_to {
+        Some("user") if is_user_state_fact_type(fact_type) => cfg.user_state_boost,
+        Some("assistant") => cfg.agent_fact_damp,
+        _ => 1.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,6 +637,8 @@ mod tests {
                 graph: crate::config::GraphSearchConfig::default(),
                 complexity: crate::config::ComplexityConfig::default(),
                 implicit_access_boost_weight: 0.0,
+                user_state_boost: 1.0,
+                agent_fact_damp: 1.0,
             },
             advisor: crate::config::AdvisorConfig::default(),
             worker: crate::config::WorkerConfig::default(),
@@ -700,6 +777,197 @@ mod tests {
         assert!(
             m_cue > m_evidence,
             "Cue ({m_cue}) should outrank Evidence ({m_evidence})"
+        );
+    }
+
+    use crate::storage::FactType;
+
+    /// SearchConfig with the attribution knobs enabled — mirrors the
+    /// eval/production calibration the brief recommends (boost 1.4).
+    fn boosted_search_config() -> SearchConfig {
+        let mut cfg = test_config().search;
+        cfg.user_state_boost = 1.4;
+        cfg.agent_fact_damp = 1.0; // conservative start: no damp on assistant
+        cfg
+    }
+
+    #[test]
+    fn test_attribution_multiplier_none_is_neutral() {
+        // Legacy chunks / unlabeled transcripts (attributed_to == None) must
+        // never be penalised or boosted — hard 1.0 regardless of fact_type.
+        let cfg = boosted_search_config();
+        assert!((attribution_multiplier(None, None, &cfg) - 1.0).abs() < 1e-9);
+        assert!(
+            (attribution_multiplier(None, Some(&FactType::PreferenceOrDecision), &cfg) - 1.0).abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn test_attribution_multiplier_user_state_is_boosted() {
+        // attributed_to == "user" with a state-bearing fact_type gets the boost.
+        let cfg = boosted_search_config();
+        let pref =
+            attribution_multiplier(Some("user"), Some(&FactType::PreferenceOrDecision), &cfg);
+        let state = attribution_multiplier(Some("user"), Some(&FactType::ProjectState), &cfg);
+        assert!(
+            pref > 1.0,
+            "user PreferenceOrDecision ({pref}) should be > 1.0"
+        );
+        assert!(state > 1.0, "user ProjectState ({state}) should be > 1.0");
+        assert!((pref - 1.4).abs() < 1e-9);
+        assert!((state - 1.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_attribution_multiplier_user_non_state_is_neutral() {
+        // A user-authored *encyclopedic* fact is not state — stays neutral so we
+        // boost mutable state, not every user utterance.
+        let cfg = boosted_search_config();
+        let m = attribution_multiplier(Some("user"), Some(&FactType::Fact), &cfg);
+        assert!(
+            (m - 1.0).abs() < 1e-9,
+            "user Fact should be neutral, got {m}"
+        );
+    }
+
+    #[test]
+    fn test_attribution_multiplier_assistant_is_neutral_by_default() {
+        // attributed_to == "assistant" is NOT penalised by default (agent_fact_damp
+        // == 1.0): agent-authored facts must still reach top_k.
+        let cfg = boosted_search_config();
+        let m = attribution_multiplier(Some("assistant"), Some(&FactType::Fact), &cfg);
+        assert!(
+            (m - 1.0).abs() < 1e-9,
+            "assistant should be neutral, got {m}"
+        );
+    }
+
+    #[test]
+    fn test_attribution_multiplier_assistant_damp_when_configured() {
+        // When the operator opts into damping, assistant facts are scaled down.
+        let mut cfg = boosted_search_config();
+        cfg.agent_fact_damp = 0.85;
+        let m = attribution_multiplier(Some("assistant"), Some(&FactType::Fact), &cfg);
+        assert!(
+            (m - 0.85).abs() < 1e-9,
+            "assistant damp expected 0.85, got {m}"
+        );
+    }
+
+    #[test]
+    fn test_attribution_multiplier_default_config_byte_identical() {
+        // With the shipped default config every branch returns 1.0 — the fused
+        // score is unchanged for existing databases.
+        let cfg = test_config().search;
+        for attr in [None, Some("user"), Some("assistant"), Some("other")] {
+            for ft in [
+                None,
+                Some(&FactType::PreferenceOrDecision),
+                Some(&FactType::ProjectState),
+                Some(&FactType::Fact),
+            ] {
+                let m = attribution_multiplier(attr, ft, &cfg);
+                assert!(
+                    (m - 1.0).abs() < 1e-9,
+                    "default config must be neutral for attr={attr:?} ft={ft:?}, got {m}"
+                );
+            }
+        }
+    }
+
+    /// Integration-style simulation of the fusion ranking: 1 updated user-state
+    /// fact competing against 15 agent-authored facts that are lexically closer
+    /// to the query (higher raw fusion_score) plus 4 other user facts. Mirrors
+    /// the knowledge-update flooding case (eggs / National Geographic) where the
+    /// latest user statement is pushed out of top_k.
+    ///
+    /// Reproduces `fuse_with_vector`'s scoring shape (final = fusion * attrib,
+    /// sort desc) without RocksDB so it runs under `--lib`.
+    fn rank_ids(
+        items: &[(&str, f64, Option<&str>, Option<FactType>)],
+        cfg: &SearchConfig,
+    ) -> Vec<String> {
+        let mut scored: Vec<(String, f64)> = items
+            .iter()
+            .map(|(id, fusion, attr, ft)| {
+                let attrib = attribution_multiplier(*attr, ft.as_ref(), cfg);
+                ((*id).to_string(), *fusion * attrib)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.into_iter().map(|(id, _)| id).collect()
+    }
+
+    #[test]
+    fn test_paired_retrieval_user_state_reaches_top5() {
+        // 15 agent-authored facts, each lexically closer to the query than the
+        // updated user-state fact (higher raw fusion).
+        let mut items: Vec<(&str, f64, Option<&str>, Option<FactType>)> = Vec::new();
+        let agent_ids: Vec<String> = (0..15).map(|i| format!("agent_{i}")).collect();
+        for (i, id) in agent_ids.iter().enumerate() {
+            // 0.500..0.514 — all above the user-state fusion of 0.45.
+            items.push((
+                id.as_str(),
+                0.500 + i as f64 * 0.001,
+                Some("assistant"),
+                Some(FactType::Fact),
+            ));
+        }
+        // 4 unrelated user facts (low fusion) + the critical updated user-state fact.
+        items.push((
+            "user_other_0",
+            0.20,
+            Some("user"),
+            Some(FactType::PreferenceOrDecision),
+        ));
+        items.push((
+            "user_other_1",
+            0.21,
+            Some("user"),
+            Some(FactType::PreferenceOrDecision),
+        ));
+        items.push((
+            "user_other_2",
+            0.22,
+            Some("user"),
+            Some(FactType::ProjectState),
+        ));
+        items.push((
+            "user_other_3",
+            0.23,
+            Some("user"),
+            Some(FactType::ProjectState),
+        ));
+        items.push((
+            "user_state_latest",
+            0.45,
+            Some("user"),
+            Some(FactType::PreferenceOrDecision),
+        ));
+
+        // Default config: flooding pushes the user-state fact below top_k.
+        let neutral = test_config().search;
+        let ranked_neutral = rank_ids(&items, &neutral);
+        let pos_neutral = ranked_neutral
+            .iter()
+            .position(|id| id == "user_state_latest")
+            .expect("present");
+        assert!(
+            pos_neutral >= 5,
+            "without boost the user-state fact should be flooded out of top-5, got pos {pos_neutral}"
+        );
+
+        // Boosted config: 0.45 * 1.4 = 0.63 > all agent fusion (<=0.514) → top-1.
+        let boosted = boosted_search_config();
+        let ranked_boosted = rank_ids(&items, &boosted);
+        let pos_boosted = ranked_boosted
+            .iter()
+            .position(|id| id == "user_state_latest")
+            .expect("present");
+        assert!(
+            pos_boosted < 5,
+            "with boost the user-state fact must reach top-5, got pos {pos_boosted}"
         );
     }
 }
