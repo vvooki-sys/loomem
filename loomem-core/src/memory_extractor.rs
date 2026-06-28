@@ -588,6 +588,14 @@ pub async fn extract_knowledge_with(
         });
     }
 
+    // At least one chunk returned a 2xx response yet produced no usable facts:
+    // the "Extracted 0 facts" success shape. Count it separately from real
+    // failures (server-degradation brief A2) so silent ingest degradation is
+    // visible in llm_failures_recent without masquerading as a transport error.
+    if succeeded_chunks > 0 && outcome.facts.is_empty() {
+        crate::llm_failures::global().record(crate::llm_failures::LlmFailureKind::ExtractionEmpty);
+    }
+
     Ok(outcome)
 }
 

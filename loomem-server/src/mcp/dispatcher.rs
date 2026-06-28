@@ -989,12 +989,14 @@ async fn tool_status(
     let llm_fail = loomem_core::llm_failures::global().recent();
 
     let text = format!(
-        "Loomem Status: ok\nYour stream: {stream_id}\nYour memories: {chunk_count}\nEmbeddings (this stream): {embedding_status}\nAssociator: {assoc_status}\nEvent log drops: {event_log_drops}\nAudit write failures: {audit_write_failures}\nUndecodable chunks (last full scan): {undecodable}\nLLM failures (last {}m): extraction={}, ner={}, embedding={}, consolidation={}",
+        "Loomem Status: ok\nYour stream: {stream_id}\nYour memories: {chunk_count}\nEmbeddings (this stream): {embedding_status}\nAssociator: {assoc_status}\nEvent log drops: {event_log_drops}\nAudit write failures: {audit_write_failures}\nUndecodable chunks (last full scan): {undecodable}\nLLM failures (last {}m): extraction={}, ner={}, embedding={}, consolidation={}\nEmpty extractions (last {}m): {}",
         llm_fail.window_secs / 60,
         llm_fail.extraction,
         llm_fail.ner,
         llm_fail.embedding,
         llm_fail.consolidation,
+        llm_fail.window_secs / 60,
+        llm_fail.extraction_empty,
     );
     Ok(ToolResult::text(text))
 }

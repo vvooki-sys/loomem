@@ -372,9 +372,17 @@ async fn main() -> Result<()> {
     // Initialize hybrid search engine
     let hybrid_search = HybridSearchEngine::new(config.clone());
 
-    // Create HTTP client for embeddings
+    // Shared HTTP client for all OpenAI-bound calls (extraction, embeddings,
+    // rerank, consolidation, …). Long-running instances degrade silently when
+    // the keep-alive pool goes stale over hours (server-degradation brief,
+    // hypothesis A): without an idle timeout, half-open/zombie connections live
+    // forever and new requests hang or return bodies that parse to zero facts.
+    // Bound the idle pool and actively recycle it so connections stay healthy.
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(config.llm.timeout_secs))
+        .pool_max_idle_per_host(16)
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .tcp_keepalive(std::time::Duration::from_secs(60))
         .build()
         .context("Failed to create HTTP client")?;
 
