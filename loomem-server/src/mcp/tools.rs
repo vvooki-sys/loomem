@@ -133,7 +133,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "memory_status",
-            "description": "Return engine health metrics for the caller's stream.\n\nWhen to use vs siblings: use memory_status to check whether the stream is reachable and to see chunk counts before deciding whether to run memory_reflect. Not a retrieval tool — returns no memory content.\n\nReturns: plain text with fields: engine status (\"ok\"), stream_id, memory count for the stream, global embedding count, associator status (active/enabled/disabled with cluster count), and log-loss counters — plus undecodable-chunk count from the last full scan and recent LLM-failure counters (extraction/ner/embedding/consolidation, 1h window).",
+            "description": "Return engine health metrics for the caller's stream.\n\nWhen to use vs siblings: use memory_status to check whether the stream is reachable and to see chunk counts before deciding whether to run memory_reflect. Not a retrieval tool — returns no memory content.\n\nReturns: plain text with fields: engine status (\"ok\"), stream_id, memory count for the stream, global embedding count, associator status (active/enabled/disabled with cluster count), and log-loss counters — plus undecodable-chunk count from the last full scan and recent LLM-failure counters (extraction/ner/embedding/consolidation, 1h window), plus a separate empty-extraction counter (successful 2xx responses that produced zero facts) over the same window.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

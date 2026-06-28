@@ -24,6 +24,11 @@ const MAX_EVENTS_PER_KIND: usize = 10_000;
 pub enum LlmFailureKind {
     /// Knowledge extraction (`memory_extractor`).
     Extraction,
+    /// Knowledge extraction returned a successful (2xx) response that yielded
+    /// zero usable facts — not a transport/parse error. Tracked separately so
+    /// silent degradation ("Extracted 0 facts" success shape, server-degradation
+    /// brief A2) is distinguishable from real extraction failures.
+    ExtractionEmpty,
     /// Entity extraction / NER queue (`llm_ner` via `entity_extraction_queue`).
     Ner,
     /// Embedding API (`llm::embed` / `llm::embed_batch`).
@@ -36,6 +41,9 @@ pub enum LlmFailureKind {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct LlmFailureCounts {
     pub extraction: usize,
+    /// Successful-but-empty extractions (2xx, zero facts) — a degradation
+    /// signal, NOT a failure, so it is excluded from [`Self::total`].
+    pub extraction_empty: usize,
     pub ner: usize,
     pub embedding: usize,
     pub consolidation: usize,
@@ -44,6 +52,8 @@ pub struct LlmFailureCounts {
 }
 
 impl LlmFailureCounts {
+    /// Total *failures* in the window. `extraction_empty` is deliberately
+    /// excluded — an empty 2xx extraction is a success shape, not an error.
     pub fn total(&self) -> usize {
         self.extraction + self.ner + self.embedding + self.consolidation
     }
@@ -52,6 +62,7 @@ impl LlmFailureCounts {
 #[derive(Default)]
 struct Inner {
     extraction: VecDeque<Instant>,
+    extraction_empty: VecDeque<Instant>,
     ner: VecDeque<Instant>,
     embedding: VecDeque<Instant>,
     consolidation: VecDeque<Instant>,
@@ -61,6 +72,7 @@ impl Inner {
     fn deque_mut(&mut self, kind: LlmFailureKind) -> &mut VecDeque<Instant> {
         match kind {
             LlmFailureKind::Extraction => &mut self.extraction,
+            LlmFailureKind::ExtractionEmpty => &mut self.extraction_empty,
             LlmFailureKind::Ner => &mut self.ner,
             LlmFailureKind::Embedding => &mut self.embedding,
             LlmFailureKind::Consolidation => &mut self.consolidation,
@@ -120,6 +132,7 @@ impl LlmFailureTracker {
         let mut inner = self.lock();
         for kind in [
             LlmFailureKind::Extraction,
+            LlmFailureKind::ExtractionEmpty,
             LlmFailureKind::Ner,
             LlmFailureKind::Embedding,
             LlmFailureKind::Consolidation,
@@ -128,6 +141,7 @@ impl LlmFailureTracker {
         }
         LlmFailureCounts {
             extraction: inner.extraction.len(),
+            extraction_empty: inner.extraction_empty.len(),
             ner: inner.ner.len(),
             embedding: inner.embedding.len(),
             consolidation: inner.consolidation.len(),
@@ -161,6 +175,21 @@ mod tests {
         assert_eq!(counts.consolidation, 0);
         assert_eq!(counts.total(), 3);
         assert_eq!(counts.window_secs, 3600);
+    }
+
+    /// Empty extractions count in their own bucket and are excluded from the
+    /// failure total — distinguishing silent degradation from real errors.
+    #[test]
+    fn empty_extraction_is_separate_from_failures() {
+        let t = LlmFailureTracker::default();
+        let now = Instant::now();
+        t.record_at(LlmFailureKind::Extraction, now);
+        t.record_at(LlmFailureKind::ExtractionEmpty, now);
+        t.record_at(LlmFailureKind::ExtractionEmpty, now);
+        let counts = t.counts_at(now);
+        assert_eq!(counts.extraction, 1);
+        assert_eq!(counts.extraction_empty, 2);
+        assert_eq!(counts.total(), 1, "empty is not a failure");
     }
 
     /// Events older than the window are pruned from the counts.
