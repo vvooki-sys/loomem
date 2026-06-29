@@ -584,6 +584,11 @@ pub fn attribution_multiplier(
 ) -> f64 {
     match attributed_to {
         Some("user") if is_user_state_fact_type(fact_type) => cfg.user_state_boost,
+        // NOTE: damp is intentionally broad — applies to all assistant fact types,
+        // not just state-bearing ones. Set <1.0 only with A/B evidence that damping
+        // non-state assistant facts (Fact/Event/Experience) does not regress
+        // knowledge-update retrieval. A tighter guard would mirror the user-side
+        // `is_user_state_fact_type` check here.
         Some("assistant") => cfg.agent_fact_damp,
         _ => 1.0,
     }
