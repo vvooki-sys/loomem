@@ -643,6 +643,7 @@ struct SearchArgs {
     /// estimated token count (of result content) stays within this budget.
     /// Opt-in — omit to return all `top_k` results unchanged. Always keeps at
     /// least one result so a tight budget never empties a non-empty result set.
+    /// Not applied to enumeration/aggregation queries (those must stay complete).
     #[serde(default)]
     max_context_tokens: Option<usize>,
     #[allow(dead_code)]
@@ -660,6 +661,12 @@ fn content_type_tag(content_type: Option<&str>) -> String {
         None => String::new(),
     }
 }
+
+/// Approximate per-result formatting overhead (line number, date tag, score,
+/// id, optional content-type/trust tags) added to each kept result's token
+/// cost so the budget reflects the rendered output, not just raw content
+/// (Greptile #26 P2).
+const RESULT_FORMAT_TOKEN_OVERHEAD: usize = 24;
 
 /// MEM1-inspired read-path budgeting (no RL; tribunal 2026-06-28). Given
 /// per-result estimated token costs in descending-score order, return how many
@@ -760,11 +767,16 @@ async fn tool_search(
             // MEM1-inspired read-path context budgeting (no RL): trim the
             // score-sorted results to the highest-scoring prefix that fits the
             // caller's token budget, reducing distractor noise. Opt-in.
-            if let Some(max_tokens) = args.max_context_tokens {
+            //
+            // Skipped for aggregation/enumeration queries: those boost top_k and
+            // instruct the model to count ALL items, so truncating them would
+            // cause silent undercounts (Greptile #26 P1).
+            if let (Some(max_tokens), false) = (args.max_context_tokens, is_aggregation) {
                 let keep = budget_keep_count(
-                    resp.results
-                        .iter()
-                        .map(|r| loomem_core::llm_ner::estimate_tokens(&r.content)),
+                    resp.results.iter().map(|r| {
+                        loomem_core::llm_ner::estimate_tokens(&r.content)
+                            + RESULT_FORMAT_TOKEN_OVERHEAD
+                    }),
                     max_tokens,
                 );
                 resp.results.truncate(keep);

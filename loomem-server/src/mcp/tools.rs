@@ -75,7 +75,8 @@ pub fn tool_definitions() -> Vec<Value> {
                     },
                     "max_context_tokens": {
                         "type": "integer",
-                        "description": "Optional read-path context budget: keep only the highest-scoring results whose cumulative content fits within this many tokens (~4 chars/token). Reduces distractor noise. Omit to return all top_k results. Always keeps at least one result."
+                        "minimum": 1,
+                        "description": "Optional read-path context budget: keep only the highest-scoring results whose cumulative content fits within this many tokens (~4 chars/token). Reduces distractor noise. Omit to return all top_k results. Always keeps at least one result. Not applied to enumeration/aggregation queries (e.g. 'how many', 'list all')."
                     },
                     "stream": {
                         "type": "string",
