@@ -638,6 +638,13 @@ struct SearchArgs {
     /// Include superseded chunks in results (default false). Cycle /42 D3.
     #[serde(default)]
     include_superseded: Option<bool>,
+    /// MEM1-inspired read-path context budgeting (no RL; tribunal 2026-06-28):
+    /// when set, keep only the highest-scoring leading results whose cumulative
+    /// estimated token count (of result content) stays within this budget.
+    /// Opt-in — omit to return all `top_k` results unchanged. Always keeps at
+    /// least one result so a tight budget never empties a non-empty result set.
+    #[serde(default)]
+    max_context_tokens: Option<usize>,
     #[allow(dead_code)]
     #[serde(default)]
     stream: Option<String>,
@@ -652,6 +659,23 @@ fn content_type_tag(content_type: Option<&str>) -> String {
         Some(ct) => format!(" [{ct}]"),
         None => String::new(),
     }
+}
+
+/// MEM1-inspired read-path budgeting (no RL; tribunal 2026-06-28). Given
+/// per-result estimated token costs in descending-score order, return how many
+/// leading results fit within `max_tokens`. Always keeps at least one result so
+/// a tight budget never empties an otherwise non-empty result set.
+fn budget_keep_count(costs: impl Iterator<Item = usize>, max_tokens: usize) -> usize {
+    let mut used = 0usize;
+    let mut keep = 0usize;
+    for cost in costs {
+        if keep > 0 && used.saturating_add(cost) > max_tokens {
+            break;
+        }
+        used = used.saturating_add(cost);
+        keep += 1;
+    }
+    keep
 }
 
 async fn tool_search(
@@ -729,9 +753,21 @@ async fn tool_search(
     match handlers::search::search_handler(State(state.clone()), axum::Extension(auth), Json(req))
         .await
     {
-        Ok(Json(resp)) => {
+        Ok(Json(mut resp)) => {
             if resp.results.is_empty() {
                 return Ok(ToolResult::text("No relevant memories found."));
+            }
+            // MEM1-inspired read-path context budgeting (no RL): trim the
+            // score-sorted results to the highest-scoring prefix that fits the
+            // caller's token budget, reducing distractor noise. Opt-in.
+            if let Some(max_tokens) = args.max_context_tokens {
+                let keep = budget_keep_count(
+                    resp.results
+                        .iter()
+                        .map(|r| loomem_core::llm_ner::estimate_tokens(&r.content)),
+                    max_tokens,
+                );
+                resp.results.truncate(keep);
             }
             let mut text = if is_aggregation {
                 format!("ENUMERATION QUERY: Carefully count ALL unique items below. Do not estimate — enumerate each one.\n\nFound {} relevant memories:\n\n", resp.results.len())
@@ -1914,6 +1950,31 @@ mod tests {
     use crate::auth::{AuthContext, KeyScope, StreamMembership};
     use loomem_core::storage::{UserRole, DEFAULT_STREAM_ID};
     use serde_json::json;
+
+    #[test]
+    fn budget_keep_count_keeps_scoring_prefix_within_budget() {
+        // Costs are in descending-score order; budget fits the leading prefix.
+        let costs = [10usize, 10, 10, 10, 10];
+        assert_eq!(budget_keep_count(costs.iter().copied(), 30), 3);
+        // 4th result (cumulative 40) exceeds 35, so it is dropped.
+        assert_eq!(budget_keep_count(costs.iter().copied(), 35), 3);
+        assert_eq!(budget_keep_count(costs.iter().copied(), 40), 4);
+        // Budget large enough for all keeps every result.
+        assert_eq!(budget_keep_count(costs.iter().copied(), 1000), 5);
+    }
+
+    #[test]
+    fn budget_keep_count_keeps_at_least_one_when_first_exceeds_budget() {
+        // Even when the top result alone blows the budget, never return empty.
+        let costs = [100usize, 10];
+        assert_eq!(budget_keep_count(costs.iter().copied(), 5), 1);
+    }
+
+    #[test]
+    fn budget_keep_count_empty_input_is_zero() {
+        let costs: [usize; 0] = [];
+        assert_eq!(budget_keep_count(costs.iter().copied(), 100), 0);
+    }
 
     #[test]
     fn test_mcp_write_trust_level_clamps_a1_by_default() {
