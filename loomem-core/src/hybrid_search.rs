@@ -571,9 +571,10 @@ fn is_user_state_fact_type(fact_type: Option<&crate::storage::FactType>) -> bool
 ///
 /// - `attributed_to == Some("user")` with a state-bearing `fact_type` →
 ///   `cfg.user_state_boost`.
-/// - `attributed_to == Some("assistant")` → `cfg.agent_fact_damp`.
+/// - `attributed_to == Some("assistant")` with a state-bearing `fact_type` →
+///   `cfg.agent_fact_damp`.
 /// - everything else — including `None` (legacy chunks, unlabeled transcripts)
-///   and user facts that are not state-bearing — → `1.0`, hard-neutral.
+///   and non-state-bearing facts from either side — → `1.0`, hard-neutral.
 ///
 /// With the default config (`user_state_boost == agent_fact_damp == 1.0`) every
 /// branch returns `1.0`, so the fused score is byte-identical to pre-cycle.
@@ -584,12 +585,12 @@ pub fn attribution_multiplier(
 ) -> f64 {
     match attributed_to {
         Some("user") if is_user_state_fact_type(fact_type) => cfg.user_state_boost,
-        // NOTE: damp is intentionally broad — applies to all assistant fact types,
-        // not just state-bearing ones. Set <1.0 only with A/B evidence that damping
-        // non-state assistant facts (Fact/Event/Experience) does not regress
-        // knowledge-update retrieval. A tighter guard would mirror the user-side
-        // `is_user_state_fact_type` check here.
-        Some("assistant") => cfg.agent_fact_damp,
+        // Damp is gated on the same state-bearing fact types as the user-side
+        // boost: only assistant-authored state facts compete with user state, so
+        // only those are damped. Encyclopedic assistant Fact/Event/Experience stay
+        // neutral (1.0) — damping them would regress knowledge-update retrieval
+        // (Greptile #25 P2).
+        Some("assistant") if is_user_state_fact_type(fact_type) => cfg.agent_fact_damp,
         _ => 1.0,
     }
 }
@@ -850,13 +851,25 @@ mod tests {
 
     #[test]
     fn test_attribution_multiplier_assistant_damp_when_configured() {
-        // When the operator opts into damping, assistant facts are scaled down.
+        // When the operator opts into damping, assistant-authored *state* facts
+        // (those that compete with user state) are scaled down.
         let mut cfg = boosted_search_config();
         cfg.agent_fact_damp = 0.85;
-        let m = attribution_multiplier(Some("assistant"), Some(&FactType::Fact), &cfg);
+        let state = attribution_multiplier(
+            Some("assistant"),
+            Some(&FactType::PreferenceOrDecision),
+            &cfg,
+        );
         assert!(
-            (m - 0.85).abs() < 1e-9,
-            "assistant damp expected 0.85, got {m}"
+            (state - 0.85).abs() < 1e-9,
+            "assistant state-fact damp expected 0.85, got {state}"
+        );
+        // Encyclopedic assistant facts (Fact/Event/Experience) stay neutral —
+        // damping them would regress knowledge-update retrieval (Greptile #25 P2).
+        let encyclopedic = attribution_multiplier(Some("assistant"), Some(&FactType::Fact), &cfg);
+        assert!(
+            (encyclopedic - 1.0).abs() < 1e-9,
+            "assistant encyclopedic Fact must stay neutral, got {encyclopedic}"
         );
     }
 
