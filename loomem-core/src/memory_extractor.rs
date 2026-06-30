@@ -480,7 +480,20 @@ async fn extract_chunk(
         });
     }
 
-    parse_extraction_reply(&reply, chunk_index)
+    let facts = parse_extraction_reply(&reply, chunk_index)?;
+    // Diagnostic for the silent-degradation signature (server-degradation brief
+    // §4.1): a 2xx that parses to zero facts. `body_len` separates a healthy
+    // "model legitimately found nothing" (full body) from a degraded transport
+    // returning a near-empty body. Pairs with the windowed extraction_empty
+    // counter; kept at debug so normal empty ingests don't spam logs.
+    if facts.is_empty() {
+        debug!(
+            "Extraction chunk {chunk_index} returned 2xx with zero facts (status={}, body_len={})",
+            reply.status,
+            reply.body.len()
+        );
+    }
+    Ok(facts)
 }
 
 /// Extract knowledge facts from conversation text using LLM.

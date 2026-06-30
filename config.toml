@@ -145,6 +145,14 @@ compression_model = "gpt-4.1-mini"
 timeout_secs = 10
 fallback_to_regex = true  # Graceful degradation if LLM unavailable
 
+# HTTP connection-pool tuning for the shared OpenAI client. Long-running
+# instances degrade silently when keep-alive sockets go stale over hours
+# (half-open/zombie connections that hang or return zero-fact bodies). Bound
+# the idle pool and actively recycle it so connections stay healthy.
+pool_max_idle_per_host = 16   # max idle keep-alive connections kept per host
+pool_idle_timeout_secs = 30   # recycle an idle connection after this many seconds
+tcp_keepalive_secs = 30       # TCP keep-alive probe interval for pooled connections
+
 [server]
 host = "127.0.0.1"
 port = 3030
