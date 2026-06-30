@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **HTTP connection-pool settings for the shared OpenAI client are now config-driven** (`[llm].pool_max_idle_per_host`, `pool_idle_timeout_secs`, `tcp_keepalive_secs`) instead of hardcoded, and a single `LlmConfig::build_http_client` is used by both the server and the CLI re-embed path. The idle pool is bounded and actively recycled so long-running instances don't accumulate stale keep-alive sockets (silent ingest degradation). **Note:** the idle-timeout/keep-alive defaults are 30s/30s — more aggressive recycling than the previous hardcoded 90s/60s (#24); deployments upgrading without the new config keys will pick up the shorter intervals via `#[serde(default)]`. (#29)
+- Extraction now separates a successful-but-empty result (2xx, zero facts) from a real transport/parse failure: a windowed `extraction_empty` counter (surfaced in `memory_status` / `llm_failures_recent`, excluded from the failure total) plus a debug log carrying HTTP status and response body length, so silent "Extracted 0 facts" degradation is visible. (#29)
+
 ## [0.4.1] - 2026-06-23
 
 ### Security

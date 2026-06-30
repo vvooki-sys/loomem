@@ -542,6 +542,11 @@ pub async fn extract_knowledge_with(
 
     let mut outcome = ExtractionOutcome::default();
     let mut succeeded_chunks = 0usize;
+    // Raw facts parsed across all chunks, before the confidence filter below.
+    // Lets the empty-extraction log distinguish "no facts in the response body"
+    // (transport degradation — cross-reference the per-chunk body_len log) from
+    // "facts present but all filtered below the confidence threshold".
+    let mut raw_facts_seen = 0usize;
 
     for (i, chunk_text) in chunks.iter().enumerate() {
         debug!(
@@ -561,6 +566,7 @@ pub async fn extract_knowledge_with(
         match extract_chunk(chat, &request_body, i).await {
             Ok(facts) => {
                 succeeded_chunks += 1;
+                raw_facts_seen += facts.len();
                 let before = outcome.facts.len();
                 outcome
                     .facts
@@ -606,6 +612,19 @@ pub async fn extract_knowledge_with(
     // failures (server-degradation brief A2) so silent ingest degradation is
     // visible in llm_failures_recent without masquerading as a transport error.
     if succeeded_chunks > 0 && outcome.facts.is_empty() {
+        // Coherent with the counter: every increment leaves a log naming the
+        // cause. raw_facts_seen == 0 → nothing in the response body (pair with
+        // the per-chunk body_len log to spot degraded transport); > 0 → facts
+        // were returned but all scored below the confidence threshold.
+        if raw_facts_seen == 0 {
+            debug!(
+                "Extraction empty: {succeeded_chunks} chunk(s) succeeded with no facts in the response body (see per-chunk body_len logs)"
+            );
+        } else {
+            debug!(
+                "Extraction empty: {succeeded_chunks} chunk(s) succeeded, {raw_facts_seen} raw fact(s) all filtered below confidence 0.5"
+            );
+        }
         crate::llm_failures::global().record(crate::llm_failures::LlmFailureKind::ExtractionEmpty);
     }
 
