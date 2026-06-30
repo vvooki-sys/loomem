@@ -49,7 +49,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "memory_search",
-            "description": "Search long-term memory using hybrid BM25 + vector + knowledge-graph retrieval with reranking.\n\nWhen to use vs siblings: use memory_search when you need specific facts matching a query. Use memory_context instead at the start of a session or complex task to get a single pre-formatted context block. Use memory_graph when you need to explore entity relationships rather than retrieve text facts. Use memory_associate to surface non-obvious connections. The response includes a chunk_id for each hit (`(id: <uuid>)`), usable directly with memory_history, memory_delete, or memory_feedback.\n\nReturns: numbered plain-text list — each entry: \"N. [YYYY-MM-DD] <content> (score: X.XX) (id: <uuid>)\". Items superseding older versions are annotated \"[UPDATED — supersedes older version]\". Returns \"No relevant memories found.\" when empty. Note: supports time_filter (ISO date lower bound), valid_at (unix timestamp for bitemporal time-travel), and include_superseded to see historical versions.",
+            "description": "Search long-term memory using hybrid BM25 + vector + knowledge-graph retrieval with reranking.\n\nWhen to use vs siblings: use memory_search when you need specific facts matching a query. Use memory_context instead at the start of a session or complex task to get a single pre-formatted context block. Use memory_graph when you need to explore entity relationships rather than retrieve text facts. Use memory_associate to surface non-obvious connections. The response includes a chunk_id for each hit (`(id: <uuid>)`), usable directly with memory_history, memory_delete, or memory_feedback.\n\nReturns: numbered plain-text list — each entry: \"N. [YYYY-MM-DD] <content> (score: X.XX) (id: <uuid>)\". Items superseding older versions are annotated \"[UPDATED — supersedes older version]\". Returns \"No relevant memories found.\" when empty. Note: supports time_filter (ISO date lower bound), valid_at (unix timestamp for bitemporal time-travel), and include_superseded to see historical versions. Set max_context_tokens to cap the returned context by a token budget (keeps the highest-scoring results that fit).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -72,6 +72,11 @@ pub fn tool_definitions() -> Vec<Value> {
                     "include_superseded": {
                         "type": "boolean",
                         "description": "Optional. If true, include older/superseded versions in results. Default false (latest-only)."
+                    },
+                    "max_context_tokens": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional read-path context budget: keep only the highest-scoring results whose cumulative content fits within this many tokens (~4 chars/token). Reduces distractor noise. Omit to return all top_k results. Always keeps at least one result. Not applied to enumeration/aggregation queries (e.g. 'how many', 'list all')."
                     },
                     "stream": {
                         "type": "string",
