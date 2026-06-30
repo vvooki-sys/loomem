@@ -41,6 +41,8 @@ counting_l0_preference = false
 vector_multi_query = true
 stem_polish = true
 implicit_access_boost_weight = 0.0  # Cycle/118: log-frequency boost for access_count. 0.0=disabled (default, byte-identical to pre-cycle); 0.3-0.5 for eval/production.
+user_state_boost = 1.0  # Retrieval boost for user-authored state facts (attributed_to=="user" + PreferenceOrDecision/ProjectState). 1.0=disabled (byte-identical); 1.3-1.5 lifts latest user-state above agent-authored flooding for eval/production.
+agent_fact_damp = 1.0  # Retrieval damp for agent-authored facts (attributed_to=="assistant"). 1.0=neutral (default; no penalty). <1.0 only with A/B evidence the boost alone is insufficient and no regression on assistant/preference.
 
 [search.cache]
 enabled = true

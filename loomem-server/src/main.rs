@@ -1304,6 +1304,8 @@ mod tests {
                 graph: cfg::GraphSearchConfig::default(),
                 complexity: cfg::ComplexityConfig::default(),
                 implicit_access_boost_weight: 0.0,
+                user_state_boost: 1.0,
+                agent_fact_damp: 1.0,
             },
             advisor: cfg::AdvisorConfig::default(),
             worker: cfg::WorkerConfig::default(),

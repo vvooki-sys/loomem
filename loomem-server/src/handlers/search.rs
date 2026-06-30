@@ -3593,6 +3593,8 @@ mod tests {
                 complexity: loomem_core::config::ComplexityConfig::default(),
                 // access_count=0 disables access boost regardless of weight
                 implicit_access_boost_weight: 0.0,
+                user_state_boost: 1.0,
+                agent_fact_damp: 1.0,
             }
         }
 
