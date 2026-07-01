@@ -198,11 +198,14 @@ curl http://localhost:3030/health
   -v loomem-data:/data \
   -e OPENAI_API_KEY=&quot;sk-...&quot; \
   -e LOOMEM_AUTH_TOKEN=&quot;your-secret-token&quot; \
+  -e LOOMEM_AT_REST_MASTER_KEY=&quot;base64-encoded-32-bytes&quot; \
   loomem
 </code></pre>
 <p>The Dockerfile automatically:
 - Binds to <code>0.0.0.0</code> (accessible from outside container)
-- Sets data directory to <code>/data</code> (mount a volume here)</p>
+- Sets data directory to <code>/data</code> (mount a volume here)
+- Requires <code>LOOMEM_AUTH_TOKEN</code> and <code>LOOMEM_AT_REST_MASTER_KEY</code> at startup — the server refuses to start without them (deliberate opt-outs: <code>LOOMEM_ALLOW_UNAUTH=1</code>, <code>LOOMEM_AT_REST_EXPECT_ENABLED=0</code>)
+- Enables per-stream rate limiting (<code>[rate_limit]</code>; over-limit requests get HTTP 429 with <code>Retry-After</code>)</p>
 <h3 id="docker-compose">Docker Compose</h3>
 <pre><code class="language-yaml">version: '3.8'
 services:
@@ -215,6 +218,7 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOOMEM_AUTH_TOKEN=${LOOMEM_AUTH_TOKEN}
+      - LOOMEM_AT_REST_MASTER_KEY=${LOOMEM_AT_REST_MASTER_KEY}
     restart: unless-stopped
     healthcheck:
       test: [&quot;CMD&quot;, &quot;curl&quot;, &quot;-f&quot;, &quot;http://localhost:3030/health&quot;]

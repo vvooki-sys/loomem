@@ -1,4 +1,13 @@
-use tracing::debug;
+use tracing::{debug, warn};
+
+/// Count embeddings whose dimension differs from `query_dim`. Split out so
+/// the mismatch alarm (audit 2026-07-01 item 7) is unit-testable.
+fn count_dim_mismatches(embeddings: &[(String, Vec<f32>)], query_dim: usize) -> usize {
+    embeddings
+        .iter()
+        .filter(|(_, e)| e.len() != query_dim)
+        .count()
+}
 
 /// Compute cosine similarity between two vectors
 /// Returns a value between -1.0 and 1.0 (higher is more similar)
@@ -27,6 +36,22 @@ pub fn vector_search(
 ) -> Vec<(String, f32)> {
     if embeddings.is_empty() || query_embedding.is_empty() {
         return Vec::new();
+    }
+
+    // Audit 2026-07-01 item 7: `cosine_similarity` scores mismatched
+    // dimensions as 0.0, which silently degrades retrieval to BM25-only
+    // (e.g. [llm].embedding_dim flipped between 384/local and 1536/openai
+    // without re-embedding). Make the misconfiguration loud instead.
+    let mismatched = count_dim_mismatches(embeddings, query_embedding.len());
+    if mismatched > 0 {
+        warn!(
+            query_dim = query_embedding.len(),
+            mismatched,
+            total = embeddings.len(),
+            "embedding dimension mismatch: {mismatched}/{} stored vectors will score 0.0 — \
+             check [llm].embedding_dim against the stored index (run `loomem-server --reembed`)",
+            embeddings.len()
+        );
     }
 
     debug!(
@@ -107,5 +132,41 @@ mod tests {
         let query = vec![1.0, 0.0];
         let results = vector_search(&embeddings, &query, 10);
         assert_eq!(results.len(), 0);
+    }
+
+    // Audit 2026-07-01 item 7: dimension-mismatch counting.
+    #[test]
+    fn count_dim_mismatches_flags_wrong_dims() {
+        let embeddings = vec![
+            ("ok".to_string(), vec![1.0, 0.0, 0.0]),
+            ("short".to_string(), vec![1.0, 0.0]),
+            ("long".to_string(), vec![1.0, 0.0, 0.0, 0.0]),
+        ];
+        assert_eq!(count_dim_mismatches(&embeddings, 3), 2);
+        assert_eq!(count_dim_mismatches(&embeddings, 2), 2);
+    }
+
+    #[test]
+    fn count_dim_mismatches_zero_when_consistent() {
+        let embeddings = vec![
+            ("a".to_string(), vec![1.0, 0.0]),
+            ("b".to_string(), vec![0.0, 1.0]),
+        ];
+        assert_eq!(count_dim_mismatches(&embeddings, 2), 0);
+    }
+
+    // Mismatched vectors keep scoring 0.0 (existing contract) — the warn!
+    // added by audit item 7 must not change ranking behavior.
+    #[test]
+    fn mismatched_dims_score_zero_and_rank_last() {
+        let embeddings = vec![
+            ("match".to_string(), vec![1.0, 0.0, 0.0]),
+            ("mismatch".to_string(), vec![1.0, 0.0]),
+        ];
+        let results = vector_search(&embeddings, &[1.0, 0.0, 0.0], 2);
+        assert_eq!(results[0].0, "match");
+        assert!(results[0].1 > 0.9);
+        assert_eq!(results[1].0, "mismatch");
+        assert_eq!(results[1].1, 0.0);
     }
 }

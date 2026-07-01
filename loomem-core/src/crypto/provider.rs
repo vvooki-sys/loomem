@@ -21,6 +21,7 @@ use rocksdb::{IteratorMode, DB};
 use hmac::{Hmac, Mac};
 use serde::Serialize;
 use sha2::Sha256;
+use zeroize::Zeroize;
 
 use crate::crypto::at_rest::{self, CryptoError, WrappedStreamDek};
 use crate::storage::CF_KEYS;
@@ -154,6 +155,16 @@ struct DekCache {
     order: VecDeque<String>,
 }
 
+/// Audit 2026-07-01 item 5: overwrite cached DEKs on teardown instead of
+/// leaving key material readable in freed memory (coredump/swap hygiene).
+impl Drop for DekCache {
+    fn drop(&mut self) {
+        for (dek, _) in self.map.values_mut() {
+            dek.zeroize();
+        }
+    }
+}
+
 /// Real envelope-encryption provider. See module docs.
 pub struct MasterKeyEnvProvider {
     master_key: [u8; 32],
@@ -162,6 +173,18 @@ pub struct MasterKeyEnvProvider {
     /// Serializes the lazy-generation slow path so a cold scope hit by N
     /// concurrent writers produces exactly one `keys` row (brief §B AC-B4).
     create_lock: Mutex<()>,
+}
+
+/// Audit 2026-07-01 item 5: overwrite long-lived key material on drop. This
+/// covers the process-lifetime master key; cached DEKs are handled by
+/// `DekCache::drop` and the eviction path in `cache_put`. Transient stack
+/// copies handed out by `load_dek`/`cache_get` are out of scope — the
+/// documented boundary "runtime compromise reveals the master key" still
+/// applies; this is defense-in-depth for after-teardown memory.
+impl Drop for MasterKeyEnvProvider {
+    fn drop(&mut self) {
+        self.master_key.zeroize();
+    }
 }
 
 impl MasterKeyEnvProvider {
@@ -193,6 +216,10 @@ impl MasterKeyEnvProvider {
     /// `encrypt`/`decrypt` reloads wrapped DEKs from the `keys` CF.
     pub fn flush_cache(&self) {
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        // Audit 2026-07-01 item 5: zeroize before releasing the slots.
+        for (dek, _) in cache.map.values_mut() {
+            dek.zeroize();
+        }
         cache.map.clear();
         cache.order.clear();
     }
@@ -241,6 +268,13 @@ impl MasterKeyEnvProvider {
         while cache.map.len() >= CACHE_CAP {
             match cache.order.pop_front() {
                 Some(evicted) => {
+                    // Audit 2026-07-01 item 5: overwrite the evicted DEK
+                    // in place BEFORE removal — the tuple is Copy, so
+                    // zeroizing a moved-out copy would leave the map's
+                    // buffer holding the stale key bytes.
+                    if let Some(slot) = cache.map.get_mut(&evicted) {
+                        slot.0.zeroize();
+                    }
                     cache.map.remove(&evicted);
                 }
                 None => break,
@@ -695,6 +729,30 @@ mod tests {
             keys_row_count(&store),
             0,
             "decrypt must not create a DEK row for a missing scope"
+        );
+    }
+
+    // Audit 2026-07-01 item 5 regression: FIFO eviction (now with
+    // zeroize-on-evict) must not break reload — an evicted scope's DEK
+    // reloads from the keys CF and still decrypts.
+    #[test]
+    fn evicted_dek_reloads_from_keys_cf() {
+        let (_tmp, store) = test_store();
+        let provider = MasterKeyEnvProvider::new([4u8; 32], store.db_arc());
+        let blob = provider
+            .encrypt("scope_first", b"survives eviction")
+            .expect("encrypt");
+        for i in 0..CACHE_CAP {
+            let _ = provider
+                .encrypt(&format!("filler_{i}"), b"x")
+                .expect("encrypt filler");
+        }
+        // "scope_first" has been evicted (CACHE_CAP fillers pushed it out).
+        assert_eq!(
+            provider
+                .decrypt("scope_first", &blob)
+                .expect("decrypt after eviction"),
+            b"survives eviction"
         );
     }
 

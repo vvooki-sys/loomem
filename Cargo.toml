@@ -39,6 +39,13 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace"] }
 
+# Security primitives (audit 2026-07-01): constant-time token comparison
+# (item 4) + key-material zeroization on drop (item 5). Both were already in
+# the dependency tree transitively via the crypto stack; pinned here to use
+# them directly instead of hand-rolling the primitives.
+subtle = "2.6"
+zeroize = "1.8"
+
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 blake3 = "1"

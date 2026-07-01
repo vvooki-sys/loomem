@@ -301,9 +301,12 @@ cargo build --release -p loomem-server -p loomem-cli -p loomem-migrate
 <p>Requires Rust (stable) and libclang for the RocksDB build: <code>apt install libclang-dev</code> on Debian/Ubuntu; on macOS it ships with the Xcode Command Line Tools.</p>
 <h2 id="docker">Docker</h2>
 <pre><code class="language-bash">docker build -t loomem .
-docker run -p 3030:3030 -v loomem-data:/data loomem
+export LOOMEM_AUTH_TOKEN=$(openssl rand -hex 32)
+export LOOMEM_AT_REST_MASTER_KEY=$(openssl rand -base64 32)
+docker run -p 3030:3030 -v loomem-data:/data \
+  -e LOOMEM_AUTH_TOKEN -e LOOMEM_AT_REST_MASTER_KEY loomem
 </code></pre>
-<p>See <a href="deployment.html">deployment.md</a> for reverse-proxy, TLS, and cloud options.</p>
+<p>The image binds <code>0.0.0.0</code> and therefore requires an auth token and (by default) an at-rest master key — the server refuses to start without them. Deliberate opt-outs: <code>LOOMEM_ALLOW_UNAUTH=1</code>, <code>LOOMEM_AT_REST_EXPECT_ENABLED=0</code>. See <a href="deployment.html">deployment.md</a> for reverse-proxy, TLS, and cloud options, and <a href="security.html">SECURITY.md</a> for the security model.</p>
 <h2 id="troubleshooting">Troubleshooting</h2>
 <table>
 <thead>

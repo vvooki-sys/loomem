@@ -67,6 +67,10 @@ pub struct AppState {
     /// (private streams only; see `handlers::ingest::persist_chunk`). Disabled
     /// when `[dream].enabled = false` or `auto_trigger_threshold = 0`.
     pub dream_auto: Arc<loomem_core::dream_auto::DreamAutoTrigger>,
+    /// Per-stream token-bucket rate limiter for hot paths (audit 2026-07-01
+    /// item 3). Enforced in the `/v1` middleware and the MCP dispatcher;
+    /// no-op unless `[rate_limit].enabled`.
+    pub rate_limiter: Arc<rate_limiter::RateLimiter>,
 }
 
 /// Build the auto-dream trigger from `[dream]` config. Auto-firing is gated on
@@ -109,6 +113,75 @@ fn at_rest_expect_enabled() -> bool {
     }
 }
 
+/// Env var that lets an operator deliberately run an unauthenticated,
+/// non-loopback instance (e.g. behind an authenticating reverse proxy).
+const ALLOW_UNAUTH_ENV: &str = "LOOMEM_ALLOW_UNAUTH";
+
+/// Parse `LOOMEM_ALLOW_UNAUTH` with the same truthiness rules as
+/// [`at_rest_expect_enabled`]: `true|1` → on, `false|0` → off, anything else
+/// → `warn!` and keep the default `false`.
+fn allow_unauth_env() -> bool {
+    match std::env::var(ALLOW_UNAUTH_ENV) {
+        Ok(v) => match v.as_str() {
+            "true" | "1" => true,
+            "false" | "0" => false,
+            other => {
+                warn!(
+                    "{ALLOW_UNAUTH_ENV}={other:?} not recognized (expected true/false/1/0), defaulting to false"
+                );
+                false
+            }
+        },
+        Err(_) => false,
+    }
+}
+
+/// True when `host` can only be reached from the local machine: `localhost`
+/// or any loopback IP (127.0.0.0/8, `::1`).
+fn is_loopback_host(host: &str) -> bool {
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+}
+
+/// Startup fail-safe (audit 2026-07-01 item 1): a non-loopback bind with
+/// auth disabled exposes the full admin API (search/purge/delete/backfill)
+/// to the network — the Docker image binds `0.0.0.0`, so a container started
+/// without a token used to do exactly that, guarded only by an `info!` line.
+/// Refuse to start unless the operator explicitly opts in via
+/// `LOOMEM_ALLOW_UNAUTH=1`.
+///
+/// Pure (no env reads) so the policy is unit-tested without env-var races —
+/// same pattern as [`select_encryption_provider`].
+fn enforce_network_auth_policy(
+    host: &str,
+    token_configured: bool,
+    allow_unauth: bool,
+    token_env: &str,
+) -> Result<()> {
+    if token_configured || is_loopback_host(host) {
+        return Ok(());
+    }
+    if allow_unauth {
+        warn!(
+            "{ALLOW_UNAUTH_ENV} set — serving an UNAUTHENTICATED admin API on non-loopback host {host}"
+        );
+        return Ok(());
+    }
+    let token_hint = if token_env.is_empty() {
+        "set server.auth_token_env in config.toml and export that variable".to_string()
+    } else {
+        format!("set ${token_env}")
+    };
+    Err(anyhow::anyhow!(
+        "refusing to start: server.host = {host} is not loopback and no auth token is configured — \
+         the full admin API would be exposed unauthenticated. Either {token_hint}, \
+         or set {ALLOW_UNAUTH_ENV}=1 to opt in deliberately (e.g. behind an authenticating reverse proxy)."
+    ))
+}
+
 /// Choose the encryption provider, applying the cycle /144 fail-fast gate.
 /// Pure (no env read) so the gate is unit-tested without env-var races: the
 /// caller resolves `LOOMEM_AT_REST_MASTER_KEY` via `from_env` and passes the
@@ -134,7 +207,13 @@ fn select_encryption_provider(
             loomem_core::MASTER_KEY_ENV
         )),
         None => {
-            info!("Encryption at-rest: disabled");
+            // Audit 2026-07-01 item 2: this used to be a quiet `info!` — an
+            // operator who forgot the key got a silently-plaintext database.
+            warn!(
+                "Encryption at-rest: DISABLED — memory content is persisted in PLAINTEXT. \
+                 Set {} to enable envelope encryption, or {EXPECT_ENABLED_ENV}=true to make this fatal.",
+                loomem_core::MASTER_KEY_ENV
+            );
             Ok(Arc::new(loomem_core::NoopProvider))
         }
     }
@@ -607,7 +686,12 @@ async fn main() -> Result<()> {
         )
     };
 
+    // Audit 2026-07-01 item 3: one shared limiter — the /v1 middleware gets
+    // it via RouteParams, the MCP dispatcher via AppState.
+    let rate_limiter = Arc::new(rate_limiter::RateLimiter::new(config.rate_limit.clone()));
+
     let state = Arc::new(AppState {
+        rate_limiter: rate_limiter.clone(),
         dream_auto: build_dream_auto(&config.dream),
         config: config.clone(),
         graph: graph_store.clone(),
@@ -643,14 +727,28 @@ async fn main() -> Result<()> {
                 Some(token)
             }
             _ => {
-                info!("Auth disabled (${} not set)", config.server.auth_token_env);
+                warn!(
+                    "Auth disabled (${} not set) — every request is accepted with admin privileges",
+                    config.server.auth_token_env
+                );
                 None
             }
         }
     } else {
-        info!("Auth disabled (no auth_token_env configured)");
+        warn!("Auth disabled (no auth_token_env configured) — every request is accepted with admin privileges");
         None
     };
+
+    // Audit 2026-07-01 item 1: refuse an unauthenticated non-loopback bind
+    // (the Docker image binds 0.0.0.0 — see Dockerfile) unless the operator
+    // opted in via LOOMEM_ALLOW_UNAUTH=1.
+    enforce_network_auth_policy(
+        &config.server.host,
+        admin_token.is_some(),
+        allow_unauth_env(),
+        &config.server.auth_token_env,
+    )?;
+
     let auth_config = auth::AuthConfig {
         admin_token: admin_token.clone(),
     };
@@ -669,6 +767,7 @@ async fn main() -> Result<()> {
     let app = build_routes(RouteParams {
         auth_config,
         oauth_state,
+        rate_limiter,
     })
     .layer(TraceLayer::new_for_http())
     .with_state(state);
@@ -885,6 +984,7 @@ where
 pub(crate) struct RouteParams {
     pub(crate) auth_config: auth::AuthConfig,
     pub(crate) oauth_state: Arc<oauth::OAuthState>,
+    pub(crate) rate_limiter: Arc<rate_limiter::RateLimiter>,
 }
 
 /// Assemble the production axum `Router` from all three route groups.
@@ -1092,6 +1192,16 @@ fn protected_routes(p: &RouteParams) -> Router<Arc<AppState>> {
         // Cycle/107: PAM-inspired temporal co-occurrence POC endpoint.
         // Read-only, stream-scoped, ZERO integration with retrieval pipeline.
         .route("/v1/co_occur", get(handlers::co_occur_handler))
+        // Audit 2026-07-01 item 3: per-stream rate limiting. Registered
+        // BEFORE the auth layer — axum runs the last-added route_layer
+        // outermost, so auth executes first and this layer can read the
+        // AuthContext it inserts. Unmapped paths pass through untouched.
+        .route_layer({
+            let limiter = p.rate_limiter.clone();
+            middleware::from_fn(move |req: axum::extract::Request, next: middleware::Next| {
+                rate_limiter::rate_limit_middleware(limiter.clone(), req, next)
+            })
+        })
         .route_layer({
             let ac = p.auth_config.clone();
             middleware::from_fn(
@@ -1144,7 +1254,59 @@ mod tests {
         RouteParams {
             auth_config,
             oauth_state,
+            rate_limiter: Arc::new(rate_limiter::RateLimiter::new(Default::default())),
         }
+    }
+
+    // ── Audit 2026-07-01 item 1: network auth fail-safe ──
+
+    #[test]
+    fn loopback_hosts_recognized() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("127.1.2.3"));
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("localhost"));
+        assert!(!is_loopback_host("0.0.0.0"));
+        assert!(!is_loopback_host("::"));
+        assert!(!is_loopback_host("192.168.1.10"));
+        assert!(!is_loopback_host("example.com"));
+    }
+
+    #[test]
+    fn network_auth_policy_allows_loopback_without_token() {
+        assert!(
+            enforce_network_auth_policy("127.0.0.1", false, false, "LOOMEM_AUTH_TOKEN").is_ok()
+        );
+    }
+
+    #[test]
+    fn network_auth_policy_allows_any_host_with_token() {
+        assert!(enforce_network_auth_policy("0.0.0.0", true, false, "LOOMEM_AUTH_TOKEN").is_ok());
+    }
+
+    #[test]
+    fn network_auth_policy_refuses_unauth_non_loopback() {
+        let err = enforce_network_auth_policy("0.0.0.0", false, false, "LOOMEM_AUTH_TOKEN")
+            .expect_err("non-loopback bind without token must refuse to start");
+        let msg = err.to_string();
+        assert!(msg.contains("refusing to start"), "got: {msg}");
+        assert!(msg.contains("LOOMEM_AUTH_TOKEN"), "got: {msg}");
+        assert!(msg.contains("LOOMEM_ALLOW_UNAUTH"), "got: {msg}");
+    }
+
+    #[test]
+    fn network_auth_policy_honors_explicit_override() {
+        assert!(enforce_network_auth_policy("0.0.0.0", false, true, "LOOMEM_AUTH_TOKEN").is_ok());
+    }
+
+    #[test]
+    fn network_auth_policy_hint_when_no_token_env_configured() {
+        let err =
+            enforce_network_auth_policy("0.0.0.0", false, false, "").expect_err("must refuse");
+        assert!(
+            err.to_string().contains("server.auth_token_env"),
+            "got: {err}"
+        );
     }
 
     /// Build a fully-wired axum app + state for HTTP-level integration tests.
@@ -1205,6 +1367,7 @@ mod tests {
         );
 
         let state = Arc::new(AppState {
+            rate_limiter: Arc::new(rate_limiter::RateLimiter::new(Default::default())),
             dream_auto: build_dream_auto(&config.dream),
             config,
             store: store.clone(),
@@ -1246,6 +1409,7 @@ mod tests {
         let params = RouteParams {
             auth_config,
             oauth_state,
+            rate_limiter: Arc::new(rate_limiter::RateLimiter::new(Default::default())),
         };
 
         let app = build_routes(params)
@@ -1333,6 +1497,7 @@ mod tests {
             feedback: cfg::FeedbackConfig::default(),
             content_type: cfg::ContentTypeConfig::default(),
             access_audit: cfg::AccessAuditConfig::default(),
+            rate_limit: cfg::RateLimitConfig::default(),
         }
     }
 

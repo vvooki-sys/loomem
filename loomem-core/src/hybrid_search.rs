@@ -675,6 +675,7 @@ mod tests {
             feedback: crate::config::FeedbackConfig::default(),
             content_type: crate::config::ContentTypeConfig::default(),
             access_audit: crate::config::AccessAuditConfig::default(),
+            rate_limit: crate::config::RateLimitConfig::default(),
         }
     }
 

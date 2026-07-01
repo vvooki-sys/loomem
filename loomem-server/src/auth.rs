@@ -6,6 +6,7 @@ use axum::{
 };
 pub use loomem_core::storage::UserRole;
 use loomem_core::storage::DEFAULT_STREAM_ID;
+use subtle::ConstantTimeEq;
 
 /// Which API-key scope resolved the caller. Single-user deployments always
 /// authenticate as `Shared` (the one API key); `Private` is kept for the
@@ -119,7 +120,10 @@ pub async fn auth_middleware(mut request: Request, next: Next) -> Result<Respons
     };
 
     match bearer {
-        Some(token) if token == *admin_token => {
+        // Audit 2026-07-01 item 4: constant-time comparison so the token
+        // cannot be probed byte-by-byte via response timing. `ct_eq` on
+        // slices short-circuits only on length, which is not secret here.
+        Some(token) if bool::from(token.as_bytes().ct_eq(admin_token.as_bytes())) => {
             request.extensions_mut().insert(admin_ctx());
             Ok(next.run(request).await)
         }
@@ -222,6 +226,17 @@ mod tests {
             admin_token: Some("secret".into()),
         });
         let resp = app.oneshot(req("/probe", Some("wrong"))).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // Audit 2026-07-01 item 4: comparison is constant-time; a same-length
+    // wrong token must still be rejected (401), same as before.
+    #[tokio::test]
+    async fn same_length_wrong_token_rejected() {
+        let app = app(AuthConfig {
+            admin_token: Some("secret".into()),
+        });
+        let resp = app.oneshot(req("/probe", Some("secreX"))).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 

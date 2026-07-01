@@ -152,6 +152,19 @@ pub async fn dispatch_tool(
     }
 
     let stream = resolved.stream_id.as_str();
+
+    // Per-stream rate limiting at the single MCP choke point (audit
+    // 2026-07-01 item 3). Uses the resolved stream so shared/project calls
+    // draw from their own bucket; unmapped tools (memory_status,
+    // memory_namespaces) stay unlimited. No-op unless [rate_limit].enabled.
+    if let Some(op) = crate::rate_limiter::categorize_mcp_tool(name) {
+        if let Err(retry_secs) = state.rate_limiter.check(stream, op).await {
+            return Ok(ToolResult::error(format!(
+                "Rate limit exceeded for {name} on stream {stream}; retry in {retry_secs}s."
+            )));
+        }
+    }
+
     match name {
         "memory_store" => tool_store(state, args, stream, auth.user_id.clone()).await,
         "memory_search" => tool_search(state, args, stream).await,

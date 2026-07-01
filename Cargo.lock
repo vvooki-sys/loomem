@@ -1878,6 +1878,7 @@ dependencies = [
  "tract-onnx",
  "unicode-normalization",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -1907,6 +1908,7 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "signal-hook-tokio",
+ "subtle",
  "tempfile",
  "tokio",
  "tower",
