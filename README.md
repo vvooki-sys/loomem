@@ -109,10 +109,13 @@ Requires Rust (stable) and libclang (for the RocksDB build): `apt install libcla
 
 ```bash
 docker build -t loomem .
-docker run -p 3030:3030 -v loomem-data:/data loomem
+export LOOMEM_AUTH_TOKEN=$(openssl rand -hex 32)
+export LOOMEM_AT_REST_MASTER_KEY=$(openssl rand -base64 32)
+docker run -p 3030:3030 -v loomem-data:/data \
+  -e LOOMEM_AUTH_TOKEN -e LOOMEM_AT_REST_MASTER_KEY loomem
 ```
 
-Authentication is off by default for local use. To require an API key, set the env var named in `config.toml` (`server.auth_token_env`, default `LOOMEM_AUTH_TOKEN`) and pass it as `Authorization: Bearer <key>`. **If the server is reachable by anyone but you, set the token.**
+Authentication is off by default only for **local** (loopback) runs. The Docker image binds `0.0.0.0`, so the server requires `LOOMEM_AUTH_TOKEN` (refusing to start without it) and, by image default, an at-rest master key. Pass the key as `Authorization: Bearer <key>`. Deliberate opt-outs: `LOOMEM_ALLOW_UNAUTH=1` (no auth) and `LOOMEM_AT_REST_EXPECT_ENABLED=0` (plaintext at rest) — see [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Connect an MCP client
 

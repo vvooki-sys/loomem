@@ -146,10 +146,13 @@ Requires Rust (stable) and libclang for the RocksDB build: `apt install libclang
 
 ```bash
 docker build -t loomem .
-docker run -p 3030:3030 -v loomem-data:/data loomem
+export LOOMEM_AUTH_TOKEN=$(openssl rand -hex 32)
+export LOOMEM_AT_REST_MASTER_KEY=$(openssl rand -base64 32)
+docker run -p 3030:3030 -v loomem-data:/data \
+  -e LOOMEM_AUTH_TOKEN -e LOOMEM_AT_REST_MASTER_KEY loomem
 ```
 
-See [deployment.md](deployment.md) for reverse-proxy, TLS, and cloud options.
+The image binds `0.0.0.0` and therefore requires an auth token and (by default) an at-rest master key — the server refuses to start without them. Deliberate opt-outs: `LOOMEM_ALLOW_UNAUTH=1`, `LOOMEM_AT_REST_EXPECT_ENABLED=0`. See [deployment.md](deployment.md) for reverse-proxy, TLS, and cloud options, and [SECURITY.md](SECURITY.md) for the security model.
 
 ## Troubleshooting
 

@@ -62,12 +62,15 @@ docker run -d \
   -v loomem-data:/data \
   -e OPENAI_API_KEY="sk-..." \
   -e LOOMEM_AUTH_TOKEN="your-secret-token" \
+  -e LOOMEM_AT_REST_MASTER_KEY="base64-encoded-32-bytes" \
   loomem
 ```
 
 The Dockerfile automatically:
 - Binds to `0.0.0.0` (accessible from outside container)
 - Sets data directory to `/data` (mount a volume here)
+- Requires `LOOMEM_AUTH_TOKEN` and `LOOMEM_AT_REST_MASTER_KEY` at startup — the server refuses to start without them (deliberate opt-outs: `LOOMEM_ALLOW_UNAUTH=1`, `LOOMEM_AT_REST_EXPECT_ENABLED=0`)
+- Enables per-stream rate limiting (`[rate_limit]`; over-limit requests get HTTP 429 with `Retry-After`)
 
 ### Docker Compose
 
@@ -83,6 +86,7 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOOMEM_AUTH_TOKEN=${LOOMEM_AUTH_TOKEN}
+      - LOOMEM_AT_REST_MASTER_KEY=${LOOMEM_AT_REST_MASTER_KEY}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3030/health"]

@@ -1,6 +1,6 @@
 # Security overview
 
-*Last updated: 2026-06-16*
+*Last updated: 2026-07-01*
 
 This document describes Loomem's security model: authentication, encryption at rest, data in transit, PII handling, and logging. Where Loomem does not have a control in place, the gap is named explicitly under [Known limitations](#known-limitations).
 
@@ -30,6 +30,7 @@ Loomem uses a single API key:
 - Set the environment variable named by `server.auth_token_env` in `config.toml` (default: `LOOMEM_AUTH_TOKEN`).
 - All requests except `GET /health` must carry `Authorization: Bearer <key>`.
 - If no key is configured, the server runs in **local passthrough mode**: every request is accepted with admin privileges. Only use this for local development on a trusted machine — never expose an unauthenticated instance to a network.
+- **Startup fail-safe:** when `server.host` is not a loopback address and no key is configured, the server **refuses to start** instead of exposing an unauthenticated admin API (this covers the Docker image, which binds `0.0.0.0`). Set `LOOMEM_ALLOW_UNAUTH=1` to opt out deliberately, e.g. behind an authenticating reverse proxy.
 
 MCP clients that cannot send custom headers can use the built-in OAuth 2.0 flow (`/oauth/register`, `/oauth/authorize`, `/oauth/token`): the user enters the API key once during authorization, and the resulting access token is equivalent to the key.
 
@@ -38,6 +39,8 @@ Recommendations:
 - Generate a long random key (64+ hex characters).
 - Store it only in environment variables — never in `config.toml` or version control.
 - Rotate it if you suspect exposure; rotation is just changing the env var and restarting.
+
+Abuse controls: optional per-stream rate limiting covers the hot paths (`[rate_limit]` in `config.toml`, off by default; the official Docker image enables it). Over-limit requests receive HTTP `429` with a `Retry-After` header on `/v1`, and a tool-level error over MCP.
 
 ---
 
@@ -68,13 +71,13 @@ Set `LOOMEM_AT_REST_MASTER_KEY` (32-byte, base64-encoded) to enable application-
           └─ encrypts → chunk content, entity names, relation data
   ```
 
-  Per-stream DEKs are generated lazily on first encrypted write and persisted as wrapped blobs in a dedicated RocksDB column family. Master-key rotation re-wraps the DEKs (fast), not every chunk.
+  Per-stream DEKs are generated lazily on first encrypted write and persisted as wrapped blobs in a dedicated RocksDB column family. Master-key rotation (re-wrapping the DEKs under a new master key) is **planned but not yet implemented** — changing `LOOMEM_AT_REST_MASTER_KEY` today does *not* re-wrap anything, and data written under the old key becomes undecryptable.
 
 - **Encrypted:** chunk content and metadata, entity/relation value blobs, graph entity names and aliases.
 - **Not encrypted (by design):** embedding vectors and the Tantivy index (functional requirements for search), and routing metadata (chunk id, level, stream id, timestamps, supersede chain) needed for filtering, retention, and decay.
 - **Legacy data:** plaintext rows written before encryption was enabled are recognized by the absence of a magic prefix and remain readable. `POST /v1/admin/backfill/encrypt-at-rest` walks existing records and encrypts them idempotently; check progress at `GET /v1/admin/backfill/encrypt-at-rest/status`.
 - **Status endpoint:** `GET /v1/encryption/status` reports whether encryption is active and the master-key fingerprint (a one-way digest, safe to record alongside backups).
-- **Fail-closed expectation:** set `LOOMEM_AT_REST_EXPECT_ENABLED=1` to make the server refuse to start without a master key — protects against accidentally booting an encrypted dataset in plaintext mode.
+- **Fail-closed expectation:** set `LOOMEM_AT_REST_EXPECT_ENABLED=1` to make the server refuse to start without a master key — protects against accidentally booting an encrypted dataset in plaintext mode. The official Docker image sets this by default (`LOOMEM_AT_REST_EXPECT_ENABLED=0` to opt out); outside Docker, running without a key logs a prominent plaintext warning at startup.
 
 **Back up the master key separately from the data.** An encrypted checkpoint without the matching master key is unrecoverable. See [Backup and Restore](backup-and-restore.md).
 
@@ -128,6 +131,7 @@ Loomem logs to **stdout** (12-factor); it does not ship, store, or alert on logs
 3. **Embedding vectors are plaintext.** Functional requirement for vector search; embeddings are partially invertible.
 4. **LLM provider sees plaintext** at ingest and consolidation time.
 5. **Backup encryption is inherited, not added.** RocksDB checkpoints rely on the at-rest row encryption above (when enabled) plus whatever volume encryption your host provides; Loomem does not add a separate backup encryption layer.
+6. **No master-key rotation tooling yet.** Re-wrapping DEKs under a new master key is planned; today a master-key change makes previously encrypted data undecryptable.
 
 Loomem ships no compliance attestations (SOC 2, HIPAA, ISO 27001). If you need them, they are properties of your deployment and organization, not of this software.
 
