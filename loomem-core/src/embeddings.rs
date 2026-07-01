@@ -22,6 +22,7 @@ pub async fn embed(
         compression_model: "gpt-4o-mini".to_string(),
         timeout_secs: 30,
         fallback_to_regex: true,
+        ..Default::default()
     };
 
     llm::embed(client, &config, text).await

@@ -38,6 +38,35 @@ pub struct LlmConfig {
     pub compression_model: String,
     pub timeout_secs: u64,
     pub fallback_to_regex: bool,
+    /// Max idle keep-alive connections retained per host in the shared HTTP
+    /// client pool. Bounds the pool so long-running instances don't accumulate
+    /// stale sockets to `api.openai.com` over hours. `#[serde(default)]` keeps
+    /// configs that predate the field loadable.
+    #[serde(default = "default_pool_max_idle_per_host")]
+    pub pool_max_idle_per_host: usize,
+    /// How long an idle keep-alive connection may live before the pool recycles
+    /// it (seconds). Without this, half-open/zombie connections survive for the
+    /// life of the process and new requests hang or return zero-fact bodies
+    /// (server-degradation hypothesis A). Actively recycling keeps the pool
+    /// healthy.
+    #[serde(default = "default_pool_idle_timeout_secs")]
+    pub pool_idle_timeout_secs: u64,
+    /// TCP keep-alive probe interval (seconds) for pooled connections, so dead
+    /// peers are detected instead of lingering as zombies.
+    #[serde(default = "default_tcp_keepalive_secs")]
+    pub tcp_keepalive_secs: u64,
+}
+
+fn default_pool_max_idle_per_host() -> usize {
+    16
+}
+
+fn default_pool_idle_timeout_secs() -> u64 {
+    30
+}
+
+fn default_tcp_keepalive_secs() -> u64 {
+    30
 }
 
 impl Default for LlmConfig {
@@ -53,11 +82,30 @@ impl Default for LlmConfig {
             compression_model: "gpt-4o-mini".to_string(),
             timeout_secs: 30,
             fallback_to_regex: true,
+            pool_max_idle_per_host: default_pool_max_idle_per_host(),
+            pool_idle_timeout_secs: default_pool_idle_timeout_secs(),
+            tcp_keepalive_secs: default_tcp_keepalive_secs(),
         }
     }
 }
 
 impl LlmConfig {
+    /// Build the shared HTTP client for all OpenAI-bound calls (extraction,
+    /// embeddings, rerank, consolidation). Pool settings come from config so
+    /// long-running deployments stay healthy: the idle pool is bounded and
+    /// actively recycled instead of letting keep-alive sockets zombie over
+    /// hours (server-degradation hypothesis A). One builder, one source of
+    /// truth — both server and CLI re-embed paths go through here.
+    pub fn build_http_client(&self) -> Result<Client> {
+        Client::builder()
+            .timeout(Duration::from_secs(self.timeout_secs))
+            .pool_max_idle_per_host(self.pool_max_idle_per_host)
+            .pool_idle_timeout(Duration::from_secs(self.pool_idle_timeout_secs))
+            .tcp_keepalive(Duration::from_secs(self.tcp_keepalive_secs))
+            .build()
+            .context("Failed to build HTTP client")
+    }
+
     pub fn get_api_key(&self) -> Option<String> {
         if let Some(ref key) = self.api_key {
             if !key.is_empty() {
@@ -694,6 +742,19 @@ fn regex_compress(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared client builds from config pool settings without panicking,
+    /// for both custom and defaulted values (server-degradation fix A1).
+    #[test]
+    fn build_http_client_succeeds_with_pool_settings() {
+        let mut config = LlmConfig::default();
+        config.pool_max_idle_per_host = 8;
+        config.pool_idle_timeout_secs = 45;
+        config.tcp_keepalive_secs = 15;
+        assert!(config.build_http_client().is_ok());
+        // Defaults are also valid (configs that predate the pool fields).
+        assert!(LlmConfig::default().build_http_client().is_ok());
+    }
 
     #[test]
     fn test_regex_fallback() {

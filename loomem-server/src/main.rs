@@ -173,9 +173,9 @@ async fn run_reembed(config: &Config, store: &RocksDbStore) -> Result<()> {
                 .llm
                 .get_api_key()
                 .context("OPENAI_API_KEY required to re-embed with the openai provider")?;
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(config.llm.timeout_secs))
-                .build()
+            let client = config
+                .llm
+                .build_http_client()
                 .context("build HTTP client")?;
             Backend::Openai {
                 client,
@@ -377,13 +377,11 @@ async fn main() -> Result<()> {
     // the keep-alive pool goes stale over hours (server-degradation brief,
     // hypothesis A): without an idle timeout, half-open/zombie connections live
     // forever and new requests hang or return bodies that parse to zero facts.
-    // Bound the idle pool and actively recycle it so connections stay healthy.
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(config.llm.timeout_secs))
-        .pool_max_idle_per_host(16)
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .tcp_keepalive(std::time::Duration::from_secs(60))
-        .build()
+    // The pool is bounded and actively recycled via config-driven settings —
+    // see LlmConfig::build_http_client.
+    let http_client = config
+        .llm
+        .build_http_client()
         .context("Failed to create HTTP client")?;
 
     info!("Storage initialized successfully");
