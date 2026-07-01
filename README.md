@@ -20,7 +20,7 @@ Loomem is the open-source context layer for your LLM agents — a single Rust bi
 
 Loomem stores structured knowledge extracted from conversations, and serves it back to any MCP-capable client (Claude, ChatGPT, Codex, Cursor, your own agents) through hybrid retrieval:
 
-- **Hybrid search** — BM25 (Tantivy) + vector embeddings + entity graph signals, fused with reciprocal-rank fusion.
+- **Hybrid search** — BM25 (Tantivy) + vector embeddings + entity graph signals, fused with a weighted hybrid score (vector 0.6 / BM25 0.4).
 - **Consolidation** — background workers merge related facts, resolve contradictions, and let stale ones decay ("dreaming").
 - **Bitemporal model** — facts carry both ingestion time and event time (`valid_from` / `valid_until`), so "what did I know in March" and "what happened in March" are different queries.
 - **Entity graph** — people, projects, and technologies are extracted into a graph with aliases and relations, used both for retrieval and exploration.
@@ -58,7 +58,7 @@ cd ~/.loomem && loomem-server
 
 ```bash
 curl http://localhost:3030/health
-# {"status":"ok","version":"0.2.0"}
+# {"status":"ok","version":"0.4.1"}
 ```
 
 > The installer uses port **3030** by default and asks for an alternative if it's already taken (set `LOOMEM_PORT` to skip the prompt). If you picked a different port, use it in the commands below.
