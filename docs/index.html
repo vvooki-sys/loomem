@@ -3,22 +3,22 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Loomem — the context layer for your AI agents</title>
+<title>Loomem — one memory for every AI tool</title>
 <link rel="canonical" href="https://loomem.ai/" />
-<meta name="description" content="Loomem is the open-source context layer for your LLM agents — one Rust binary on your laptop, served over MCP, that feeds Claude, ChatGPT, Codex, or any MCP client the facts, decisions, and history they need to do real work for you. Local-first, Apache-2.0." />
+<meta name="description" content="One memory. Every AI tool. Loomem is the open-source context layer for your AI agents — it keeps the facts, decisions, and history they need and serves them to Claude, ChatGPT, Codex, or any MCP client. Local-first, Apache-2.0." />
 
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Loomem" />
 <meta property="og:url" content="https://loomem.ai/" />
-<meta property="og:title" content="Loomem — the open-source context layer for your AI agents" />
-<meta property="og:description" content="The open-source context layer for your LLM agents. One Rust binary, served over MCP, feeding any model the context it needs to work. Swap the model, switch the tool — your context follows. Local-first, Apache-2.0." />
+<meta property="og:title" content="Loomem — one memory. Every AI tool." />
+<meta property="og:description" content="The open-source context layer for your AI agents: one memory, shared by Claude, ChatGPT, Codex, or any MCP client. Swap the model, switch the tool — your context follows. Local-first, Apache-2.0." />
 <meta property="og:image" content="https://loomem.ai/og-image.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Loomem — the context layer for your AI agents" />
-<meta name="twitter:description" content="Open-source context layer for your LLM agents. One Rust binary over MCP. Swap the model, switch the tool — your context follows." />
+<meta name="twitter:title" content="Loomem — one memory. Every AI tool." />
+<meta name="twitter:description" content="One memory. Every AI tool. The open-source, local-first context layer for AI agents, served over MCP. Swap the model — your context follows." />
 <meta name="twitter:image" content="https://loomem.ai/og-image.png" />
 
 <script type="application/ld+json">
@@ -191,8 +191,12 @@ code,.mono{font-family:var(--lm-font-mono)}
 .hero h1{font-family:var(--lm-font-display);font-size:clamp(2.7rem,5.4vw,4.25rem);font-weight:500;
   line-height:1.04;letter-spacing:-0.03em;margin-bottom:20px}
 .hero h1 em{font-style:italic;background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.hero-sub{font-family:var(--lm-font-display);font-style:italic;font-size:clamp(1.15rem,2vw,1.4rem);color:var(--lm-ink-700);letter-spacing:-0.01em;margin:-6px 0 16px}
 .hero p.lead{font-size:1.1875rem;color:var(--lm-ink-600);max-width:48ch;margin-bottom:28px;line-height:1.6}
 .hero .cta{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:30px}
+.hero-alt{margin:-18px 0 30px;font-size:14px;color:var(--lm-ink-500)}
+.hero-alt a{color:var(--lm-blue-700);font-weight:600}
+.hero-alt a:hover{text-decoration:underline}
 .hero .meta{display:flex;gap:26px;flex-wrap:wrap;font-size:13px;color:var(--lm-ink-500)}
 .hero .meta b{display:block;color:var(--lm-ink-900);font-weight:600;margin-bottom:2px}
 .hero-fine{margin-top:20px;font-size:12.5px;color:var(--lm-ink-400);max-width:56ch;line-height:1.5}
@@ -213,6 +217,16 @@ h2.sec{font-family:var(--lm-font-display);font-size:clamp(1.9rem,3.5vw,2.5rem);f
 .sec-lead{color:var(--lm-ink-500);font-size:1.0625rem;line-height:1.6}
 .alt{background:var(--lm-surface)}
 .alt-sunk{background:var(--lm-surface-sunk)}
+
+/* ---------- editions ladder ---------- */
+.editions{padding:clamp(36px,5vw,56px) 0;background:var(--lm-surface);border-top:1px solid var(--lm-ink-200)}
+.ed-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.ed-card{display:block;background:var(--lm-canvas);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:20px 22px;color:inherit;transition:all var(--lm-dur-base) var(--lm-ease)}
+.ed-card:hover{border-color:var(--lm-ink-400);box-shadow:var(--lm-shadow-sm);transform:translateY(-2px)}
+.ed-card h4{font-size:15.5px;font-weight:700;margin-bottom:6px;color:var(--lm-ink-900)}
+.ed-card p{font-size:13.5px;color:var(--lm-ink-500);line-height:1.5;margin-bottom:10px}
+.ed-go{font-size:13px;font-weight:600;color:var(--lm-gold-700)}
+@media(max-width:680px){.ed-grid{grid-template-columns:1fr}}
 
 /* ---------- feature cards ---------- */
 .pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px}
@@ -469,14 +483,16 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 <div class="hero">
   <div class="wrap hero-inner">
     <div>
-      <div class="eyebrow">The open-source context layer your <b>AI agents</b> work from — wherever they run.</div>
-      <h1>Swap the model, switch the tool —<br><em>your context follows.</em></h1>
-      <p class="lead">Loomem is the open-source context layer for your <b>AI agents</b> — one Rust binary on your laptop, served over MCP. It feeds Claude, ChatGPT, Codex, or any MCP client the facts, decisions, and history they need to do real work for you. Own your context once; it follows you across every model and tool.</p>
+      <div class="eyebrow">The open-source context layer for your <b>AI agents</b></div>
+      <h1>One memory.<br><em>Every AI tool.</em></h1>
+      <p class="hero-sub">Swap the model, switch the tool — your context follows.</p>
+      <p class="lead">Loomem keeps the facts, decisions, and history your agents need — and serves them to Claude, ChatGPT, Codex, or any MCP client you use. Own your context once; stop re-explaining yourself every session.</p>
         <p class="hero-badges">Local-first · Offline embeddings · Apache-2.0 · One binary</p>
       <div class="cta">
         <a class="btn btn-weave btn-lg" href="#quickstart">Get started →</a>
         <a class="btn btn-secondary btn-lg" href="https://github.com/vvooki-sys/loomem/releases/latest">Download for macOS</a>
       </div>
+      <p class="hero-alt">Don't want to run a binary? <a href="https://try.loomem.ai">Try the hosted version — free, ready in a minute →</a></p>
       <div class="meta">
         <div><b>Lives on your laptop</b>Single binary, RocksDB + Tantivy, offline embeddings via ONNX — your first entry needs no internet.</div>
         <div><b>Knows when, not just what</b>Bitemporal: when a fact was learned vs when it actually happened.</div>
@@ -790,6 +806,29 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
         <h4>Keep it local unless fronted by TLS</h4>
         <p>Authentication is off by default for local use. Keep the bind address <code>127.0.0.1</code> unless you front it with TLS + auth; never expose the bare HTTP port to the internet.</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ EDITIONS LADDER ============ -->
+<section id="editions" class="editions" aria-label="Ways to run Loomem">
+  <div class="wrap">
+    <div class="ed-grid">
+      <a class="ed-card" href="#quickstart">
+        <h4>Loomem</h4>
+        <p>Self-hosted, open source, free. Your laptop, your data.</p>
+        <span class="ed-go">Get started →</span>
+      </a>
+      <a class="ed-card" href="https://try.loomem.ai">
+        <h4>Loomem Cloud</h4>
+        <p>Hosted trial at try.loomem.ai. Nothing to install.</p>
+        <span class="ed-go">Try it free →</span>
+      </a>
+      <a class="ed-card" href="#business">
+        <h4>Loomem&nbsp;T</h4>
+        <p>The managed team edition, in development. Join the pilot.</p>
+        <span class="ed-go">Join the pilot →</span>
+      </a>
     </div>
   </div>
 </section>
