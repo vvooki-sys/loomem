@@ -29,5 +29,10 @@
 - Deployment: https://loomem.ai/guide/deployment.html
 - Security model: https://loomem.ai/guide/security.html
 
+## Reference
+- Loomem vs Mem0 / Zep / Letta / cognee: https://loomem.ai/compare.html
+- Benchmarks (LongMemEval 75.0%): https://loomem.ai/benchmarks.html
+- Full brief for LLMs: https://loomem.ai/llms-full.txt
+
 ## Source
 - GitHub: https://github.com/vvooki-sys/loomem

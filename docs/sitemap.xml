@@ -1,58 +1,60 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://loomem.ai/</loc>
+    <loc>https://loomem.ai/</loc><lastmod>2026-07-01</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://loomem.ai/guide/</loc>
+    <loc>https://loomem.ai/guide/</loc><lastmod>2026-07-01</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://loomem.ai/guide/quick-start.html</loc>
+    <loc>https://loomem.ai/guide/quick-start.html</loc><lastmod>2026-07-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://loomem.ai/guide/installation.html</loc>
+    <loc>https://loomem.ai/guide/installation.html</loc><lastmod>2026-07-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://loomem.ai/guide/configuration.html</loc>
+    <loc>https://loomem.ai/guide/configuration.html</loc><lastmod>2026-07-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://loomem.ai/guide/api-reference.html</loc>
+    <loc>https://loomem.ai/guide/api-reference.html</loc><lastmod>2026-07-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://loomem.ai/guide/mcp-tools.html</loc>
+    <loc>https://loomem.ai/guide/mcp-tools.html</loc><lastmod>2026-07-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://loomem.ai/guide/architecture.html</loc>
+    <loc>https://loomem.ai/guide/architecture.html</loc><lastmod>2026-07-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://loomem.ai/guide/deployment.html</loc>
+    <loc>https://loomem.ai/guide/deployment.html</loc><lastmod>2026-07-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://loomem.ai/guide/security.html</loc>
+    <loc>https://loomem.ai/guide/security.html</loc><lastmod>2026-07-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://loomem.ai/guide/backup-and-restore.html</loc>
+    <loc>https://loomem.ai/guide/backup-and-restore.html</loc><lastmod>2026-07-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
+  <url><loc>https://loomem.ai/compare.html</loc><lastmod>2026-07-01</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://loomem.ai/benchmarks.html</loc><lastmod>2026-07-01</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>
 </urlset>

@@ -1,11 +1,21 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+<head><meta property="og:type" content="article"/>
+<meta property="og:site_name" content="Loomem"/>
+<meta property="og:url" content="https://loomem.ai/benchmarks.html"/>
+<meta property="og:title" content="Loomem benchmarks — LongMemEval results"/>
+<meta property="og:description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration so the result is reproducible."/>
+<meta property="og:image" content="https://loomem.ai/og-image.png"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="Loomem benchmarks — LongMemEval results"/>
+<meta name="twitter:description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration so the result is reproducible."/>
+<meta name="twitter:image" content="https://loomem.ai/og-image.png"/>
+
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Documentation — Loomem docs</title>
-<meta name="description" content="Loomem documentation: install, configure, run, and operate the open-source context layer for your AI agents, served over MCP from a single Rust binary."/>
-<link rel="canonical" href="https://loomem.ai/guide/"/>
+<title>Loomem benchmarks — LongMemEval results</title>
+<meta name="description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration so the result is reproducible."/>
+<link rel="canonical" href="https://loomem.ai/benchmarks.html"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -90,10 +100,10 @@ a:hover{text-decoration:underline}
   "@graph": [
     {
       "@type": "TechArticle",
-      "headline": "Documentation",
-      "name": "Documentation",
-      "description": "Loomem documentation: install, configure, run, and operate the open-source context layer for your AI agents, served over MCP from a single Rust binary.",
-      "url": "https://loomem.ai/guide/",
+      "headline": "Loomem benchmarks",
+      "name": "Loomem benchmarks",
+      "description": "Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration so the result is reproducible.",
+      "url": "https://loomem.ai/benchmarks.html",
       "inLanguage": "en",
       "isPartOf": {
         "@type": "WebSite",
@@ -118,7 +128,8 @@ a:hover{text-decoration:underline}
           "@type": "ImageObject",
           "url": "https://loomem.ai/logo.png"
         }
-      }
+      },
+      "datePublished": "2026-06-26"
     },
     {
       "@type": "BreadcrumbList",
@@ -132,8 +143,8 @@ a:hover{text-decoration:underline}
         {
           "@type": "ListItem",
           "position": 2,
-          "name": "Documentation",
-          "item": "https://loomem.ai/guide/"
+          "name": "Loomem benchmarks",
+          "item": "https://loomem.ai/benchmarks.html"
         }
       ]
     }
@@ -142,9 +153,49 @@ a:hover{text-decoration:underline}
 </script>
 </head>
 <body>
-<header class="topbar"><div class="wrap inner">
-<a class="brand" href="../"><svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
-<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
-</div></header>
-<div class="wrap"><div class="hub-head"><h1>Documentation</h1><p>Everything to install, configure, run, and operate Loomem — your context layer. Same content as the repo docs, in one place.</p></div><div class="hub-grp">Docs</div><div class="hub-grid"><a class="hub-card" href="quick-start.html"><h3>Quick start</h3><span>From zero to your agent remembering things.</span></a><a class="hub-card" href="installation.html"><h3>Installation</h3><span>Prebuilt binaries, from source, Docker.</span></a><a class="hub-card" href="configuration.html"><h3>Configuration</h3><span>Every option, env var, and default.</span></a><a class="hub-card" href="api-reference.html"><h3>API reference</h3><span>HTTP + MCP endpoints and payloads.</span></a><a class="hub-card" href="mcp-tools.html"><h3>MCP tools</h3><span>The memory_* tool surface, explained.</span></a></div><div class="hub-grp">Project</div><div class="hub-grid"><a class="hub-card" href="architecture.html"><h3>Architecture</h3><span>How the engine fits together.</span></a><a class="hub-card" href="deployment.html"><h3>Deployment</h3><span>Run it locally or behind TLS.</span></a><a class="hub-card" href="security.html"><h3>Security model</h3><span>Threat model, encryption, hardening.</span></a><a class="hub-card" href="backup-and-restore.html"><h3>Backup & restore</h3><span>Keep your context safe.</span></a></div><div class="doc-foot" style="max-width:none"><span>Loomem · Apache-2.0</span><span><a href="../">← Back to loomem.ai</a></span></div></div>  <script defer src="/_vercel/insights/script.js"></script>
-</body></html>
+<header class="topbar"><div class="wrap inner"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Loomem</a><nav class="topnav"><a href="/">Home</a><a href="/guide/">Docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav></div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="/" style="font-weight:600;margin-bottom:6px;display:block">← Home</a><div class="grp">Reference</div><a href="/compare.html">Loomem vs alternatives</a><a href="/benchmarks.html" class="active">Benchmarks</a><div class="grp">Docs</div><a href="/guide/">All documentation</a><a href="/guide/architecture.html">Architecture</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></aside><main class="doc-main"><div class="doc-eyebrow">Reference</div><article class="doc-content">
+<h1 id="loomem-benchmarks">Loomem benchmarks</h1>
+<p><strong>Loomem scores 75.0% (375 / 500) on LongMemEval-S</strong>, a public long-term-memory question-answering benchmark — running fully self-hosted, with on-device embeddings and no external database. This page documents the exact setup so the result is reproducible rather than a headline number.</p>
+
+<h2 id="what-is-longmemeval">What LongMemEval measures</h2>
+<p>LongMemEval is a public benchmark for long-term memory in chat assistants: across long, multi-session histories it tests information extraction, multi-session reasoning, temporal reasoning, knowledge updates, and abstention. We evaluate on <strong>LongMemEval-S (cleaned)</strong> — the <code>xiaowu0162/longmemeval-cleaned</code> variant — so the questions match, one-to-one, the set used in published Mem0 and Letta write-ups.</p>
+
+<h2 id="result">The result</h2>
+<div style="overflow-x:auto">
+<table>
+<thead><tr><th>Benchmark</th><th>Metric</th><th>Loomem</th></tr></thead>
+<tbody>
+<tr><td>LongMemEval-S (cleaned)</td><td>QA accuracy (judge-scored)</td><td><strong>75.0% — 375 / 500</strong></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="configuration">Configuration (for reproducibility)</h2>
+<div style="overflow-x:auto">
+<table>
+<thead><tr><th>Setting</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Loomem engine</td><td>commit <code>caaccd1</code>, single local instance</td></tr>
+<tr><td>Embeddings</td><td>local <code>multilingual-e5-small</code> (384-dim, ONNX) — no OpenAI embeddings</td></tr>
+<tr><td>Retrieval</td><td>hybrid BM25 + vector + graph, <code>top_k = 20</code></td></tr>
+<tr><td>Reranking</td><td>off</td></tr>
+<tr><td>Reader &amp; judge model</td><td>GPT-4.1 (same reader and judge as the reference runs)</td></tr>
+<tr><td>Dataset</td><td>LongMemEval-S (cleaned), 500 questions</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="honesty">How to read this</h2>
+<ul>
+<li><strong>Self-run, single configuration.</strong> This is our own run, not a third-party leaderboard. The config above is everything needed to reproduce it against the public dataset.</li>
+<li><strong>The reader model matters.</strong> LongMemEval scores blend retrieval quality with the reader model and its prompt. We report the reader/judge (GPT-4.1) so the comparison is apples-to-apples; a terse reader prompt in particular can penalise preference-style questions where the answer must be <em>applied</em>, not just stated.</li>
+<li><strong>Embeddings were fully local.</strong> The 75.0% is with on-device e5-small embeddings, so it reflects the default offline setup rather than a cloud-embedding best case.</li>
+<li><strong>LongMemEval is saturating.</strong> Top systems now cluster near the ceiling, so we are also evaluating on newer suites (LongMemEval-V2, MemoryArena) and will publish those as they stabilise.</li>
+</ul>
+
+<p>Loomem is <a href="https://github.com/vvooki-sys/loomem">open source (Apache-2.0)</a>; see how it compares to other memory layers on the <a href="/compare.html">comparison page</a>.</p>
+<p style="color:var(--lm-ink-500);font-size:0.9em">Benchmark run 2026-06-26. LongMemEval: Wu et al., “LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory”. Dataset: <a href="https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned">xiaowu0162/longmemeval-cleaned</a>.</p>
+</article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/benchmarks.md">Edit on GitHub</a></span></div></main></div>  <script defer src="/_vercel/insights/script.js"></script>
+</body>
+</html>

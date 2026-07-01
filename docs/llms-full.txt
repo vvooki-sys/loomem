@@ -1,0 +1,51 @@
+# Loomem — full context for LLMs
+
+> Loomem is the open-source context layer for LLM agents. It is a single Rust binary on RocksDB + Tantivy, served over the Model Context Protocol (MCP), that captures the facts, decisions, and preferences worth keeping from your conversations and feeds them back to any model — Claude, ChatGPT, Codex, Cursor, or your own agent — so the agent has the context it needs to do real work. Swap the model, switch the tool; your context follows. Apache-2.0 licensed, local-first, with no external services to run.
+
+This file is a fuller, self-contained brief intended for language models and AI agents. For the short version see https://loomem.ai/llms.txt.
+
+## Definition
+- Loomem is a **context layer** (not a RAG document store, not an agent-fleet coordination graph, not a hosted SaaS memory add-on).
+- It is **memory-only** and **single-user** by design: streams organise one person's context; there are no accounts, RBAC, or multi-tenancy in the open-source engine.
+- License: Apache-2.0. Language: Rust. Repository: https://github.com/vvooki-sys/loomem
+
+## What runs
+- A single static binary. Storage is embedded: RocksDB (chunks, entity graph, vector embeddings) + Tantivy (full-text / BM25). No separate vector database, graph database, or queue.
+- Embeddings run on-device by default via a local ONNX model (multilingual-e5-small, 384-dim), so storing and searching context works fully offline. An OpenAI API key is optional and only sharpens LLM-based extraction and consolidation; without it those steps fall back to regex.
+- Interface: MCP over streamable HTTP, plus plain HTTP (/v1, /api). It exposes the memory_* tool set (memory_search, memory_store, memory_ingest, memory_context, memory_profile, memory_namespaces, memory_graph, memory_history, memory_dream, memory_reflect, memory_feedback, memory_delete, memory_associate, memory_status). OAuth dynamic client registration is supported for remote connectors.
+
+## How it works
+- Hybrid retrieval: BM25 (Tantivy) + vector embeddings + entity-graph signals, fused with a weighted hybrid score (vector 0.6 / BM25 0.4).
+- Bitemporal: every fact carries both ingestion time and event time, so "what did I know in March" and "what happened in March" are distinct queries.
+- Consolidation ("dreaming"): background workers merge related facts, resolve contradictions, and let unused facts decay on an ACT-R-inspired curve. Context sharpens instead of bloating.
+- Entity graph: people, projects, and tools are linked with aliases and relations, used for both retrieval and exploration.
+- Optional field-level AES-GCM at-rest encryption, with a master key supplied from the environment.
+
+## How it compares
+Loomem is the only one of the common open-source memory layers that runs as a single binary with no external datastore. Mem0 (Apache-2.0) orchestrates an external vector store (Qdrant) plus Postgres. Zep is built on Graphiti and needs a graph database (Neo4j, FalkorDB, or Kuzu); the Zep Community Edition is deprecated. Letta / MemGPT (Apache-2.0) stores everything in Postgres + pgvector. cognee (Apache-2.0) combines graph, vector, and relational stores. Full side-by-side: https://loomem.ai/compare.html
+
+## Benchmarks
+- Loomem scores 75.0% (375/500) on LongMemEval-S (cleaned, xiaowu0162/longmemeval-cleaned), fully self-hosted.
+- Configuration: engine commit caaccd1; local multilingual-e5-small embeddings (384-dim); retrieval top_k=20; reranking off; reader and judge model GPT-4.1.
+- Caveat: self-run, single configuration; LongMemEval scores blend retrieval quality with the reader model/prompt. LongMemEval is saturating industry-wide; newer suites (LongMemEval-V2, MemoryArena) are in progress. Details: https://loomem.ai/benchmarks.html
+
+## Quickstart
+1. Install: curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/install.sh | sh
+2. Add ~/.loomem/bin to PATH.
+3. Start: cd ~/.loomem && loomem-server (default port 3030).
+4. Connect Claude Code: claude mcp add --transport http loomem http://localhost:3030/mcp
+   Desktop app / Cowork connect over stdio via the loomem-cli bridge.
+
+## Links
+- Home: https://loomem.ai/
+- Compare: https://loomem.ai/compare.html
+- Benchmarks: https://loomem.ai/benchmarks.html
+- Quick start: https://loomem.ai/guide/quick-start.html
+- Installation: https://loomem.ai/guide/installation.html
+- Configuration: https://loomem.ai/guide/configuration.html
+- API reference: https://loomem.ai/guide/api-reference.html
+- MCP tools: https://loomem.ai/guide/mcp-tools.html
+- Architecture: https://loomem.ai/guide/architecture.html
+- Deployment: https://loomem.ai/guide/deployment.html
+- Security model: https://loomem.ai/guide/security.html
+- GitHub: https://github.com/vvooki-sys/loomem

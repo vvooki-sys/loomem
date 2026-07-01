@@ -1,11 +1,21 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+<head><meta property="og:type" content="article"/>
+<meta property="og:site_name" content="Loomem"/>
+<meta property="og:url" content="https://loomem.ai/compare.html"/>
+<meta property="og:title" content="Loomem vs Mem0, Zep, Letta, and cognee — comparison"/>
+<meta property="og:description" content="How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem is the only one that runs as a single Rust binary with no external database."/>
+<meta property="og:image" content="https://loomem.ai/og-image.png"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="Loomem vs Mem0, Zep, Letta, and cognee — comparison"/>
+<meta name="twitter:description" content="How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem is the only one that runs as a single Rust binary with no external database."/>
+<meta name="twitter:image" content="https://loomem.ai/og-image.png"/>
+
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Documentation — Loomem docs</title>
-<meta name="description" content="Loomem documentation: install, configure, run, and operate the open-source context layer for your AI agents, served over MCP from a single Rust binary."/>
-<link rel="canonical" href="https://loomem.ai/guide/"/>
+<title>Loomem vs Mem0, Zep, Letta, and cognee — comparison</title>
+<meta name="description" content="How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem is the only one that runs as a single Rust binary with no external database."/>
+<link rel="canonical" href="https://loomem.ai/compare.html"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -90,10 +100,10 @@ a:hover{text-decoration:underline}
   "@graph": [
     {
       "@type": "TechArticle",
-      "headline": "Documentation",
-      "name": "Documentation",
-      "description": "Loomem documentation: install, configure, run, and operate the open-source context layer for your AI agents, served over MCP from a single Rust binary.",
-      "url": "https://loomem.ai/guide/",
+      "headline": "Loomem vs Mem0, Zep, Letta, and cognee",
+      "name": "Loomem vs Mem0, Zep, Letta, and cognee",
+      "description": "How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem is the only one that runs as a single Rust binary with no external database.",
+      "url": "https://loomem.ai/compare.html",
       "inLanguage": "en",
       "isPartOf": {
         "@type": "WebSite",
@@ -132,8 +142,8 @@ a:hover{text-decoration:underline}
         {
           "@type": "ListItem",
           "position": 2,
-          "name": "Documentation",
-          "item": "https://loomem.ai/guide/"
+          "name": "Loomem vs Mem0, Zep, Letta, and cognee",
+          "item": "https://loomem.ai/compare.html"
         }
       ]
     }
@@ -142,9 +152,44 @@ a:hover{text-decoration:underline}
 </script>
 </head>
 <body>
-<header class="topbar"><div class="wrap inner">
-<a class="brand" href="../"><svg viewBox="0 0 200 200" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
-<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
-</div></header>
-<div class="wrap"><div class="hub-head"><h1>Documentation</h1><p>Everything to install, configure, run, and operate Loomem — your context layer. Same content as the repo docs, in one place.</p></div><div class="hub-grp">Docs</div><div class="hub-grid"><a class="hub-card" href="quick-start.html"><h3>Quick start</h3><span>From zero to your agent remembering things.</span></a><a class="hub-card" href="installation.html"><h3>Installation</h3><span>Prebuilt binaries, from source, Docker.</span></a><a class="hub-card" href="configuration.html"><h3>Configuration</h3><span>Every option, env var, and default.</span></a><a class="hub-card" href="api-reference.html"><h3>API reference</h3><span>HTTP + MCP endpoints and payloads.</span></a><a class="hub-card" href="mcp-tools.html"><h3>MCP tools</h3><span>The memory_* tool surface, explained.</span></a></div><div class="hub-grp">Project</div><div class="hub-grid"><a class="hub-card" href="architecture.html"><h3>Architecture</h3><span>How the engine fits together.</span></a><a class="hub-card" href="deployment.html"><h3>Deployment</h3><span>Run it locally or behind TLS.</span></a><a class="hub-card" href="security.html"><h3>Security model</h3><span>Threat model, encryption, hardening.</span></a><a class="hub-card" href="backup-and-restore.html"><h3>Backup & restore</h3><span>Keep your context safe.</span></a></div><div class="doc-foot" style="max-width:none"><span>Loomem · Apache-2.0</span><span><a href="../">← Back to loomem.ai</a></span></div></div>  <script defer src="/_vercel/insights/script.js"></script>
-</body></html>
+<header class="topbar"><div class="wrap inner"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Loomem</a><nav class="topnav"><a href="/">Home</a><a href="/guide/">Docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav></div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="/" style="font-weight:600;margin-bottom:6px;display:block">← Home</a><div class="grp">Reference</div><a href="/compare.html" class="active">Loomem vs alternatives</a><a href="/benchmarks.html">Benchmarks</a><div class="grp">Docs</div><a href="/guide/">All documentation</a><a href="/guide/architecture.html">Architecture</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></aside><main class="doc-main"><div class="doc-eyebrow">Reference</div><article class="doc-content">
+<h1 id="loomem-vs-alternatives">Loomem vs Mem0, Zep, Letta, and cognee</h1>
+<p><strong>Loomem is the open-source context layer for AI agents that runs as a single Rust binary with no external services.</strong> The other open-source memory layers are strong tools, but every one of them needs at least one external datastore to run. This page lays them side by side on the axes that matter when you self-host: runtime dependencies, interface, licensing, and portability. Facts are current as of July 2026 — verify against each project's own docs before quoting.</p>
+
+<h2 id="at-a-glance">At a glance</h2>
+<div style="overflow-x:auto">
+<table>
+<thead><tr><th>&nbsp;</th><th>Loomem</th><th>Mem0</th><th>Zep / Graphiti</th><th>Letta (MemGPT)</th><th>cognee</th></tr></thead>
+<tbody>
+<tr><td><strong>What it is</strong></td><td>Context layer for LLM agents</td><td>Memory layer (library + server)</td><td>Temporal knowledge-graph memory</td><td>Stateful-agent framework with memory</td><td>Memory / GraphRAG platform</td></tr>
+<tr><td><strong>License</strong></td><td>Apache-2.0</td><td>Apache-2.0</td><td>Graphiti core Apache-2.0 (Zep Community Edition deprecated)</td><td>Apache-2.0</td><td>Apache-2.0</td></tr>
+<tr><td><strong>Language</strong></td><td>Rust</td><td>Python / Node</td><td>Python</td><td>Python</td><td>Python (+ new Rust core)</td></tr>
+<tr><td><strong>External services to run</strong></td><td><strong>None</strong> — embedded</td><td>Vector store (Qdrant by default) + Postgres for history</td><td>A graph database (Neo4j, FalkorDB, or Kuzu)</td><td>Postgres + pgvector</td><td>Graph + vector + relational stores</td></tr>
+<tr><td><strong>Storage engine</strong></td><td>RocksDB + Tantivy, one binary</td><td>Pluggable (20+ vector DBs)</td><td>Graph DB</td><td>Postgres / pgvector</td><td>Pluggable graph + vector</td></tr>
+<tr><td><strong>MCP-native</strong></td><td>Yes — <code>memory_*</code> tools out of the box</td><td>Primarily SDK / REST</td><td>Primarily SDK / API</td><td>Primarily SDK / API</td><td>Primarily SDK / API</td></tr>
+<tr><td><strong>Local-first &amp; offline</strong></td><td>Yes — local ONNX embeddings</td><td>Depends on the stack you wire up</td><td>Needs a graph DB running</td><td>Needs Postgres running</td><td>Self-host, heavier stack</td></tr>
+<tr><td><strong>Bitemporal facts</strong></td><td>Yes (ingestion + event time)</td><td>Partial</td><td>Yes (bi-temporal edges)</td><td>No (context hierarchy)</td><td>Evolving graph</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="the-projects">The projects, briefly</h2>
+<h3>Mem0</h3>
+<p>Apache-2.0, self-hostable as a library or a server. Mem0 is not itself a database — it orchestrates a vector store (Qdrant by default) plus Postgres for history, and supports 20+ vector backends. Great if you want broad framework and vector-store integrations and are happy running that infrastructure.</p>
+<h3>Zep / Graphiti</h3>
+<p>Zep is built on Graphiti, a temporal knowledge-graph engine with bi-temporal edges (valid-from / valid-until). The Graphiti core is open source; the Zep Community Edition has been deprecated, so self-hosting means running Graphiti directly against your own graph database (Neo4j, FalkorDB, or Kuzu). The right pick if graph-first temporal reasoning at team scale is the point.</p>
+<h3>Letta (MemGPT)</h3>
+<p>Apache-2.0, the framework formerly known as MemGPT. It gives agents an OS-inspired memory hierarchy (core / recall / archival) that the model edits in its own loop, and stores everything in Postgres + pgvector. Strong when you want self-editing stateful agents rather than a standalone context store.</p>
+<h3>cognee</h3>
+<p>Apache-2.0 memory platform that combines vector embeddings, graph reasoning, and ontology generation for GraphRAG over documents. Self-hostable via Docker or on-prem, with a newer Rust core for lighter deployments. Fits ontology-heavy, document-centric knowledge work.</p>
+
+<h2 id="where-loomem-fits">Where Loomem fits</h2>
+<p><strong>Choose Loomem</strong> when you want one person's context to follow them across every model and tool with zero ops: one Rust binary, no external database to run or secure, MCP-native so Claude, ChatGPT, Codex, or Cursor connect directly, and local ONNX embeddings so your first entry needs no internet. Retrieval is a weighted hybrid of BM25 (Tantivy) + vector + entity-graph signals, facts are bitemporal, and a background consolidation loop keeps context sharp instead of bloated.</p>
+<p><strong>Choose another</strong> when your need is a different shape: Mem0 for broad vector-store / framework breadth, Zep/Graphiti for team-scale graph-temporal reasoning, Letta for self-editing agent memory, cognee for ontology/GraphRAG over large document sets. Loomem is deliberately memory-only and single-user — it is not an agent framework or a multi-tenant platform.</p>
+
+<p>See the numbers on the <a href="/benchmarks.html">benchmarks page</a>, or get started from the <a href="/">home page</a>.</p>
+<p style="color:var(--lm-ink-500);font-size:0.9em">Sources: project documentation and repositories for <a href="https://github.com/mem0ai/mem0">Mem0</a>, <a href="https://github.com/getzep/graphiti">Zep / Graphiti</a>, <a href="https://github.com/letta-ai/letta">Letta</a>, and <a href="https://github.com/topoteretes/cognee">cognee</a> (accessed July 2026).</p>
+</article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/compare.md">Edit on GitHub</a></span></div></main></div>  <script defer src="/_vercel/insights/script.js"></script>
+</body>
+</html>
