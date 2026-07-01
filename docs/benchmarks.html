@@ -4,17 +4,17 @@
 <meta property="og:site_name" content="Loomem"/>
 <meta property="og:url" content="https://loomem.ai/benchmarks.html"/>
 <meta property="og:title" content="Loomem benchmarks — LongMemEval results"/>
-<meta property="og:description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration so the result is reproducible."/>
+<meta property="og:description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration behind the number."/>
 <meta property="og:image" content="https://loomem.ai/og-image.png"/>
 <meta name="twitter:card" content="summary_large_image"/>
 <meta name="twitter:title" content="Loomem benchmarks — LongMemEval results"/>
-<meta name="twitter:description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration so the result is reproducible."/>
+<meta name="twitter:description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration behind the number."/>
 <meta name="twitter:image" content="https://loomem.ai/og-image.png"/>
 
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Loomem benchmarks — LongMemEval results</title>
-<meta name="description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration so the result is reproducible."/>
+<meta name="description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration behind the number."/>
 <link rel="canonical" href="https://loomem.ai/benchmarks.html"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -102,7 +102,7 @@ a:hover{text-decoration:underline}
       "@type": "TechArticle",
       "headline": "Loomem benchmarks",
       "name": "Loomem benchmarks",
-      "description": "Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration so the result is reproducible.",
+      "description": "Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration behind the number.",
       "url": "https://loomem.ai/benchmarks.html",
       "inLanguage": "en",
       "isPartOf": {
@@ -156,7 +156,7 @@ a:hover{text-decoration:underline}
 <header class="topbar"><div class="wrap inner"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Loomem</a><nav class="topnav"><a href="/">Home</a><a href="/guide/">Docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav></div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="/" style="font-weight:600;margin-bottom:6px;display:block">← Home</a><div class="grp">Reference</div><a href="/compare.html">Loomem vs alternatives</a><a href="/benchmarks.html" class="active">Benchmarks</a><div class="grp">Docs</div><a href="/guide/">All documentation</a><a href="/guide/architecture.html">Architecture</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></aside><main class="doc-main"><div class="doc-eyebrow">Reference</div><article class="doc-content">
 <h1 id="loomem-benchmarks">Loomem benchmarks</h1>
-<p><strong>Loomem scores 75.0% (375 / 500) on LongMemEval-S</strong>, a public long-term-memory question-answering benchmark — running fully self-hosted, with on-device embeddings and no external database. This page documents the exact setup so the result is reproducible rather than a headline number.</p>
+<p><strong>Loomem scores 75.0% (375 / 500) on LongMemEval-S</strong>, a public long-term-memory question-answering benchmark — running fully self-hosted, with on-device embeddings and no external database. This page documents the exact setup behind the number; the full harness, prompts, dataset pin, and raw per-question results are being prepared for publication so the run can be independently reproduced.</p>
 
 <h2 id="what-is-longmemeval">What LongMemEval measures</h2>
 <p>LongMemEval is a public benchmark for long-term memory in chat assistants: across long, multi-session histories it tests information extraction, multi-session reasoning, temporal reasoning, knowledge updates, and abstention. We evaluate on <strong>LongMemEval-S (cleaned)</strong> — the <code>xiaowu0162/longmemeval-cleaned</code> variant — so the questions match, one-to-one, the set used in published Mem0 and Letta write-ups.</p>
@@ -188,7 +188,7 @@ a:hover{text-decoration:underline}
 
 <h2 id="honesty">How to read this</h2>
 <ul>
-<li><strong>Self-run, single configuration.</strong> This is our own run, not a third-party leaderboard. The config above is everything needed to reproduce it against the public dataset.</li>
+<li><strong>Self-run, single configuration.</strong> This is our own run, not a third-party leaderboard. The config above is the full setup; the harness, exact prompts, dataset pin, and raw per-question results are being prepared for publication so the run can be independently reproduced.</li>
 <li><strong>The reader model matters.</strong> LongMemEval scores blend retrieval quality with the reader model and its prompt. We report the reader/judge (GPT-4.1) so the comparison is apples-to-apples; a terse reader prompt in particular can penalise preference-style questions where the answer must be <em>applied</em>, not just stated.</li>
 <li><strong>Embeddings were fully local.</strong> The 75.0% is with on-device e5-small embeddings, so it reflects the default offline setup rather than a cloud-embedding best case.</li>
 <li><strong>LongMemEval is saturating.</strong> Top systems now cluster near the ceiling, so we are also evaluating on newer suites (LongMemEval-V2, MemoryArena) and will publish those as they stabilise.</li>

@@ -26,3 +26,12 @@ Sources: project documentation and repositories for Mem0, Zep / Graphiti, Letta,
 ## Not the same as "Loom" or "OpenMemory"
 
 Because of the name, Loomem is sometimes confused with two unrelated projects. Loom is a separate local-memory tool for LLMs (a different codebase and author). OpenMemory is Mem0's MCP memory server. Loomem is unrelated to both: it is Loomem — a single Rust binary with no external database, MCP-native, and built as a portable context layer for AI agents. This page is about Loomem (https://loomem.ai/).
+
+## References
+
+1. Mem0 — self-hosted Docker stack uses Postgres + pgvector (plus Neo4j for entities); library default is local Qdrant + SQLite; 20+ vector backends pluggable. https://docs.mem0.ai/open-source/overview , https://github.com/mem0ai/mem0
+2. Zep / Graphiti — requires a graph database (Neo4j, FalkorDB, Kuzu, or Amazon Neptune). https://github.com/getzep/graphiti , https://help.getzep.com/graphiti/getting-started/quick-start
+3. Letta (MemGPT) — self-host uses Postgres with the pgvector extension (LETTA_PG_URI). https://docs.letta.com/guides/selfhosting/postgres
+4. cognee — relational (Postgres/SQLite) + graph (Kuzu/Neo4j/FalkorDB) + vector (LanceDB default, Qdrant, others). https://docs.cognee.ai/setup-configuration/relational-databases
+
+All four are Apache-2.0. Facts accessed July 2026.
