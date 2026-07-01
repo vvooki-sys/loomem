@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/loomem-banner.svg" alt="Loomem — Your context, woven. The context layer your AI agents work from." width="100%">
+<img src="docs/assets/loomem-banner.svg" alt="Loomem — the open-source context layer for your AI agents. Swap the model, switch the tool; your context follows." width="100%">
 
 <br>
 
