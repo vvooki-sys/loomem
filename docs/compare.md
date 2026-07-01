@@ -23,3 +23,6 @@ Choose another when your need is a different shape: Mem0 for broad vector-store 
 
 See the numbers on the benchmarks page, or get started from the home page.
 Sources: project documentation and repositories for Mem0, Zep / Graphiti, Letta, and cognee (accessed July 2026).
+## Not the same as "Loom" or "OpenMemory"
+
+Because of the name, Loomem is sometimes confused with two unrelated projects. Loom is a separate local-memory tool for LLMs (a different codebase and author). OpenMemory is Mem0's MCP memory server. Loomem is unrelated to both: it is Loomem — a single Rust binary with no external database, MCP-native, and built as a portable context layer for AI agents. This page is about Loomem (https://loomem.ai/).
