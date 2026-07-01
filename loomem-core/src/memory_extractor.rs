@@ -87,7 +87,7 @@ Facts may be authored by any party in the conversation. Extract them from the us
 8. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
 9. Preserve original language and diacritics
 10. Maximum 20 facts per conversation
-11. AUTHORED CONTENT: Extract recommendations, plans, schedules, and researched solutions regardless of which party authored them. When the assistant provides a specific recommendation, creates a plan or schedule, or supplies a researched answer the user did not already state, capture it as a first-class fact (e.g. "The user was recommended the books 'Project Hail Mary' and 'Children of Time'", "A weekly meal plan was created starting Monday with overnight oats"). Do NOT extract pure echoes, acknowledgements, or restatements of what the user already said, nor the assistant's generic encyclopedic background (rule 5).
+11. AUTHORED CONTENT: Recommendations, plans, schedules, and researched answers are extractable regardless of which party authored them — but extract an assistant-authored fact only when it records a concrete commitment or action for this user: a specific recommendation the assistant actually made, a plan or schedule it created, an action it took or confirmed ("the assistant scheduled the dentist for 2026-03-15", "the assistant booked the campsite"), or a researched answer to the user's specific question. Capture that as a first-class fact (e.g. "The user was recommended the books 'Project Hail Mary' and 'Children of Time'", "A weekly meal plan was created starting Monday with overnight oats"). Do NOT extract generic assistant output that carries no such commitment: open-ended menus of options ("you could try A, B, C, D, or E", "you might enjoy…"), how-to or storage tips, general advice, or encyclopedic background ("Halloween Time offers themed events and dining") — these are not facts about the user. Do NOT extract pure echoes, acknowledgements, or restatements of what the user already said (rule 5).
 12. ATTRIBUTION: When the transcript carries role markers (e.g. lines prefixed "user:" or "assistant:"), set "attributed_to" to the speaker of the source statement ("user" or "assistant"). When the transcript is unlabeled, set it to null.
 
 The conversation_date is: {conversation_date}
@@ -149,7 +149,7 @@ Facts may be authored by any party in the conversation. Extract them from the us
 7. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
 8. Preserve original language and diacritics
 9. Maximum 20 facts per conversation
-10. AUTHORED CONTENT: Extract recommendations, plans, schedules, and researched solutions regardless of which party authored them. When the assistant provides a specific recommendation, creates a plan or schedule, or supplies a researched answer the user did not already state, capture it as a first-class fact. Do NOT extract pure echoes, acknowledgements, or restatements of what the user already said.
+10. AUTHORED CONTENT: Extract an assistant-authored fact only when it records a concrete commitment or action for this user — a specific recommendation the assistant actually made, a plan or schedule it created, an action it took or confirmed, or a researched answer to the user's specific question. Do NOT extract generic assistant output that carries no such commitment: open-ended menus of options ("you could try A, B, C, D, or E"), how-to or storage tips, general advice, or encyclopedic background — these are not facts about the user. Do NOT extract pure echoes, acknowledgements, or restatements of what the user already said.
 11. ATTRIBUTION: When the transcript carries role markers (e.g. lines prefixed "user:" or "assistant:"), set "attributed_to" to the speaker of the source statement ("user" or "assistant"). When the transcript is unlabeled, set it to null.
 
 The conversation_date is: {conversation_date}
@@ -1105,6 +1105,30 @@ mod tests {
         let prompt = build_extraction_prompt(&config, "2026-06-11");
         assert!(prompt.contains("\"attributed_to\""));
         assert!(prompt.contains("AUTHORED CONTENT"));
+    }
+
+    /// The AUTHORED CONTENT rule must reject generic assistant output —
+    /// open-ended option menus (e.g. "Assistant: You could try Disneyland,
+    /// Universal Studios, Knott's Berry Farm…"), how-to/storage tips, and
+    /// encyclopedic background — so low-value multi-option recommendations are
+    /// not extracted as first-class facts and crowd out rare answer-bearing
+    /// facts at retrieval time. Both prompt paths carry the guard.
+    #[test]
+    fn extraction_prompt_rejects_generic_assistant_lists() {
+        assert!(EXTRACTION_PROMPT.contains("concrete commitment or action for this user"));
+        assert!(EXTRACTION_PROMPT.contains("open-ended menus of options"));
+        assert!(EXTRACTION_PROMPT.contains("how-to or storage tips"));
+        assert!(EXTRACTION_PROMPT.contains("encyclopedic background"));
+
+        let mut config = cfg();
+        config.topics = Some(vec![ExtractionTopic {
+            name: "risk".to_string(),
+            description: "A project risk worth tracking.".to_string(),
+            fact_type: Some("risk_item".to_string()),
+        }]);
+        let prompt = build_extraction_prompt(&config, "2026-06-11");
+        assert!(prompt.contains("concrete commitment or action for this user"));
+        assert!(prompt.contains("open-ended menus of options"));
     }
 
     /// An LLM reply that attributes a recommendation to the assistant keeps the
