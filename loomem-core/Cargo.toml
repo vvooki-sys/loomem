@@ -35,6 +35,7 @@ tiktoken-rs = "0.11.0"
 aes-gcm = "0.10"
 hmac = "0.12"
 sha2 = "0.10"
+zeroize.workspace = true
 
 [features]
 # Local ONNX embeddings ship in the default build so a fresh install runs
