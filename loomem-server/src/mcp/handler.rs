@@ -136,13 +136,20 @@ pub async fn mcp_post_handler(
         }
     }
 
-    let body = if responses.len() == 1 {
-        serde_json::to_value(&responses[0]).unwrap()
+    // MCP Streamable HTTP: a POST carrying only notifications/responses (no
+    // requests needing a reply) must be answered with 202 Accepted and no body.
+    // Returning 200 with an empty JSON array `[]` breaks strict clients
+    // (e.g. Codex) that reject `[]` as an invalid JSON-RPC message.
+    let mut response = if responses.is_empty() {
+        StatusCode::ACCEPTED.into_response()
     } else {
-        serde_json::to_value(&responses).unwrap()
+        let body = if responses.len() == 1 {
+            serde_json::to_value(&responses[0]).unwrap()
+        } else {
+            serde_json::to_value(&responses).unwrap()
+        };
+        (StatusCode::OK, Json(body)).into_response()
     };
-
-    let mut response = (StatusCode::OK, Json(body)).into_response();
     if let Some(sid) = new_session_id.or(session_id) {
         response.headers_mut().insert(
             axum::http::header::HeaderName::from_static("mcp-session-id"),
