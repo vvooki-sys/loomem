@@ -165,6 +165,17 @@ auth_token_env = "LOOMEM_AUTH_TOKEN"  # Set env var to enable Bearer auth; empty
 # full-trust a1. Enable only on single-user/dogfood instances.
 honor_caller_trust_source = false
 
+# Per-stream token-bucket rate limiting on hot request paths (HTTP /v1 + MCP
+# tools) — audit 2026-07-01 item 3. Applies to every caller, admin included:
+# in the single-user model the realistic abuser is a runaway agent loop with
+# the one valid key. Burst = one minute's worth of tokens per category.
+# Off by default for local use; the Docker image flips it on.
+[rate_limit]
+enabled = false
+search_rpm = 120   # memory_search/context/graph/profile/history/reflect + /v1/search|ambient|context-pack
+store_rpm = 60     # memory_store/ingest/associate/feedback + /v1/store|associate|feedback
+delete_rpm = 10    # memory_delete/dream + /v1/delete|purge*|dream*
+
 [resource_guards]
 max_cpu_cores = 1.0
 max_memory_mb = 512

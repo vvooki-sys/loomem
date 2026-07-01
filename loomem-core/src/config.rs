@@ -84,6 +84,10 @@ pub struct Config {
     /// configs without `[access_audit]` load and degrade to off (no records).
     #[serde(default)]
     pub access_audit: AccessAuditConfig,
+    /// Per-stream rate limiting (audit 2026-07-01 item 3). `#[serde(default)]`
+    /// so configs without `[rate_limit]` load and degrade to off.
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +167,53 @@ pub struct ServerConfig {
 
 fn default_auth_token_env() -> String {
     "LOOMEM_AUTH_TOKEN".to_string()
+}
+
+/// Per-stream token-bucket rate limiting for the hot request paths (HTTP
+/// `/v1`/`/api` + MCP tools) — audit 2026-07-01 item 3.
+///
+/// Declared here rather than next to `loomem-server/src/rate_limiter.rs`
+/// because the root [`Config`] composes it and `loomem-core` cannot depend on
+/// server types — same precedent as [`ServerConfig`]. Enforcement lives in
+/// `loomem-server`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    #[serde(default = "default_rate_limit_enabled")]
+    pub enabled: bool,
+    /// Max requests per minute for search/read operations (per stream).
+    #[serde(default = "default_search_rpm")]
+    pub search_rpm: u32,
+    /// Max requests per minute for store/ingest operations (per stream).
+    #[serde(default = "default_store_rpm")]
+    pub store_rpm: u32,
+    /// Max requests per minute for destructive/expensive operations
+    /// (delete/purge/dream) per stream.
+    #[serde(default = "default_delete_rpm")]
+    pub delete_rpm: u32,
+}
+
+fn default_rate_limit_enabled() -> bool {
+    false
+}
+fn default_search_rpm() -> u32 {
+    120
+}
+fn default_store_rpm() -> u32 {
+    60
+}
+fn default_delete_rpm() -> u32 {
+    10
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_rate_limit_enabled(),
+            search_rpm: default_search_rpm(),
+            store_rpm: default_store_rpm(),
+            delete_rpm: default_delete_rpm(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +296,23 @@ impl Config {
             anyhow::ensure!(
                 self.storage.tantivy.heap_size_mb > 0,
                 "tantivy.heap_size_mb must be positive when enabled"
+            );
+        }
+
+        // Rate-limit validation (audit 2026-07-01 item 3): an enabled limiter
+        // with rpm = 0 would reject every request in that category.
+        if self.rate_limit.enabled {
+            anyhow::ensure!(
+                self.rate_limit.search_rpm > 0,
+                "rate_limit.search_rpm must be positive when enabled"
+            );
+            anyhow::ensure!(
+                self.rate_limit.store_rpm > 0,
+                "rate_limit.store_rpm must be positive when enabled"
+            );
+            anyhow::ensure!(
+                self.rate_limit.delete_rpm > 0,
+                "rate_limit.delete_rpm must be positive when enabled"
             );
         }
 
