@@ -285,6 +285,7 @@ fn test_extra_mutator_runs_atomically_on_apply() -> Result<()> {
         extraction_model: None,
         original_content: None,
         topic: None,
+        attributed_to: None,
     });
     store.store_chunk(&old)?;
 
@@ -389,6 +390,7 @@ async fn test_dream_run_e2e_blocks_a1_supersede() -> Result<()> {
         extraction_model: None,
         original_content: None,
         topic: None,
+        attributed_to: None,
     });
     store.store_chunk(&a1)?;
 
