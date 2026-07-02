@@ -627,7 +627,7 @@ async fn tool_store(
                     inject_caller_relations(state, &stored_id, &stream, relations);
                 }
             }
-            let preview: String = args.content.chars().take(80).collect();
+            let preview: String = content.chars().take(80).collect();
             Ok(ToolResult::text(format!(
                 "Stored: \"{}...\" (id: {})",
                 preview, stored_id
