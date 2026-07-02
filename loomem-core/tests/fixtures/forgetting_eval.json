@@ -1,0 +1,40 @@
+{
+  "retention_days": 30,
+  "supersede": [
+    { "name": "none_supersedes_none", "old_trust": null, "new_trust": null, "expect": "applied" },
+    { "name": "a1_supersedes_none", "old_trust": null, "new_trust": "a1", "expect": "applied" },
+    { "name": "a2_cannot_supersede_none", "old_trust": null, "new_trust": "a2", "expect": "guard_blocked" },
+    { "name": "b_cannot_supersede_none", "old_trust": null, "new_trust": "b", "expect": "guard_blocked" },
+    { "name": "none_supersedes_a1", "old_trust": "a1", "new_trust": null, "expect": "applied" },
+    { "name": "a1_supersedes_a1", "old_trust": "a1", "new_trust": "a1", "expect": "applied" },
+    { "name": "a2_cannot_supersede_a1", "old_trust": "a1", "new_trust": "a2", "expect": "guard_blocked" },
+    { "name": "b_cannot_supersede_a1", "old_trust": "a1", "new_trust": "b", "expect": "guard_blocked" },
+    { "name": "none_supersedes_a2", "old_trust": "a2", "new_trust": null, "expect": "applied" },
+    { "name": "a1_supersedes_a2", "old_trust": "a2", "new_trust": "a1", "expect": "applied" },
+    { "name": "a2_supersedes_a2", "old_trust": "a2", "new_trust": "a2", "expect": "applied" },
+    { "name": "b_cannot_supersede_a2", "old_trust": "a2", "new_trust": "b", "expect": "guard_blocked" },
+    { "name": "none_supersedes_b", "old_trust": "b", "new_trust": null, "expect": "applied" },
+    { "name": "a1_supersedes_b", "old_trust": "b", "new_trust": "a1", "expect": "applied" },
+    { "name": "a2_supersedes_b", "old_trust": "b", "new_trust": "a2", "expect": "applied" },
+    { "name": "b_supersedes_b", "old_trust": "b", "new_trust": "b", "expect": "applied" },
+    { "name": "chain_of_three_preserves_history", "old_trust": null, "new_trust": null, "expect": "applied", "chain_len": 3 }
+  ],
+  "purge": [
+    { "name": "direct_purge_no_soft_delete", "soft_delete_first": false, "shared_entity": false },
+    { "name": "purge_after_soft_delete_window", "soft_delete_first": true, "shared_entity": false },
+    { "name": "purge_keeps_shared_entity_for_survivor", "soft_delete_first": false, "shared_entity": true }
+  ],
+  "release": [
+    { "name": "live_chunk_not_collected", "deleted_age_days": null, "persistent": false, "superseded": false, "expect_collected": false },
+    { "name": "soft_deleted_1d_inside_window", "deleted_age_days": 1, "persistent": false, "superseded": false, "expect_collected": false },
+    { "name": "soft_deleted_7d_inside_window", "deleted_age_days": 7, "persistent": false, "superseded": false, "expect_collected": false },
+    { "name": "soft_deleted_15d_inside_window", "deleted_age_days": 15, "persistent": false, "superseded": false, "expect_collected": false },
+    { "name": "soft_deleted_29d_inside_window", "deleted_age_days": 29, "persistent": false, "superseded": false, "expect_collected": false },
+    { "name": "soft_deleted_31d_expired", "deleted_age_days": 31, "persistent": false, "superseded": false, "expect_collected": true },
+    { "name": "soft_deleted_45d_expired", "deleted_age_days": 45, "persistent": false, "superseded": false, "expect_collected": true },
+    { "name": "soft_deleted_90d_expired", "deleted_age_days": 90, "persistent": false, "superseded": false, "expect_collected": true },
+    { "name": "expired_persistent_explicit_delete_collected", "deleted_age_days": 40, "persistent": true, "superseded": false, "expect_collected": true },
+    { "name": "superseded_history_never_collected", "deleted_age_days": null, "persistent": false, "superseded": true, "expect_collected": false },
+    { "name": "superseded_and_expired_collected", "deleted_age_days": 40, "persistent": false, "superseded": true, "expect_collected": true }
+  ]
+}
