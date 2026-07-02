@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-01
+
+Security hardening release — implements items 1–7 of the 2026-07-01 security
+& performance audit (PR #32).
+
+### Security
+
+- **Startup fail-safe: an unauthenticated non-loopback bind now refuses to start.** The Docker image binds `0.0.0.0`, so a container without `LOOMEM_AUTH_TOKEN` used to expose the full admin API; it now fails fast with an actionable error. Deliberate opt-out: `LOOMEM_ALLOW_UNAUTH=1` (e.g. behind an authenticating reverse proxy). (#32)
+- **No more silent plaintext at rest.** A missing master key logs a prominent PLAINTEXT warning, and the Docker image sets `LOOMEM_AT_REST_EXPECT_ENABLED=1` — networked deployments must provide `LOOMEM_AT_REST_MASTER_KEY` or explicitly opt out. (#32)
+- **Per-stream rate limiting on hot paths.** The previously dead `RateLimiter` is wired into `/v1`/`/api` (429 + `Retry-After`) and the MCP dispatcher (tool error): `[rate_limit]` in `config.toml`, off by default, enabled in the Docker image. Applies to every caller — no admin exemption (single-user: everyone is admin). (#32)
+- **Constant-time bearer-token comparison** (`subtle::ConstantTimeEq`) closes a theoretical timing side-channel on the API key. (#32)
+- **Master key and cached DEKs are zeroized** on provider drop, FIFO eviction, and `flush_cache` (defense-in-depth for after-teardown memory). (#32)
+
+### Added
+
+- Vector search now warns loudly when stored embeddings mismatch the query dimension (silent BM25-only degradation before), naming the `--reembed` remedy. (#32)
+
 ### Changed
 
 - **HTTP connection-pool settings for the shared OpenAI client are now config-driven** (`[llm].pool_max_idle_per_host`, `pool_idle_timeout_secs`, `tcp_keepalive_secs`) instead of hardcoded, and a single `LlmConfig::build_http_client` is used by both the server and the CLI re-embed path. The idle pool is bounded and actively recycled so long-running instances don't accumulate stale keep-alive sockets (silent ingest degradation). **Note:** the idle-timeout/keep-alive defaults are 30s/30s — more aggressive recycling than the previous hardcoded 90s/60s (#24); deployments upgrading without the new config keys will pick up the shorter intervals via `#[serde(default)]`. (#29)
