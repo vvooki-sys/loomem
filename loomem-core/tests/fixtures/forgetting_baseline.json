@@ -1,0 +1,156 @@
+{
+  "eval": "forgetting_correctness_baseline",
+  "generated_at_unix": 1782979607,
+  "retention_days": 30,
+  "supersede": {
+    "total": 17,
+    "passed": 17,
+    "cases": [
+      {
+        "name": "none_supersedes_none",
+        "pass": true
+      },
+      {
+        "name": "a1_supersedes_none",
+        "pass": true
+      },
+      {
+        "name": "a2_cannot_supersede_none",
+        "pass": true
+      },
+      {
+        "name": "b_cannot_supersede_none",
+        "pass": true
+      },
+      {
+        "name": "none_supersedes_a1",
+        "pass": true
+      },
+      {
+        "name": "a1_supersedes_a1",
+        "pass": true
+      },
+      {
+        "name": "a2_cannot_supersede_a1",
+        "pass": true
+      },
+      {
+        "name": "b_cannot_supersede_a1",
+        "pass": true
+      },
+      {
+        "name": "none_supersedes_a2",
+        "pass": true
+      },
+      {
+        "name": "a1_supersedes_a2",
+        "pass": true
+      },
+      {
+        "name": "a2_supersedes_a2",
+        "pass": true
+      },
+      {
+        "name": "b_cannot_supersede_a2",
+        "pass": true
+      },
+      {
+        "name": "none_supersedes_b",
+        "pass": true
+      },
+      {
+        "name": "a1_supersedes_b",
+        "pass": true
+      },
+      {
+        "name": "a2_supersedes_b",
+        "pass": true
+      },
+      {
+        "name": "b_supersedes_b",
+        "pass": true
+      },
+      {
+        "name": "chain_of_three_preserves_history",
+        "pass": true
+      }
+    ]
+  },
+  "purge": {
+    "total": 3,
+    "passed": 3,
+    "cases": [
+      {
+        "name": "direct_purge_no_soft_delete",
+        "pass": true
+      },
+      {
+        "name": "purge_after_soft_delete_window",
+        "pass": true
+      },
+      {
+        "name": "purge_keeps_shared_entity_for_survivor",
+        "pass": true
+      }
+    ]
+  },
+  "release": {
+    "total": 11,
+    "passed": 11,
+    "cases": [
+      {
+        "name": "live_chunk_not_collected",
+        "pass": true
+      },
+      {
+        "name": "soft_deleted_1d_inside_window",
+        "pass": true
+      },
+      {
+        "name": "soft_deleted_7d_inside_window",
+        "pass": true
+      },
+      {
+        "name": "soft_deleted_15d_inside_window",
+        "pass": true
+      },
+      {
+        "name": "soft_deleted_29d_inside_window",
+        "pass": true
+      },
+      {
+        "name": "soft_deleted_31d_expired",
+        "pass": true
+      },
+      {
+        "name": "soft_deleted_45d_expired",
+        "pass": true
+      },
+      {
+        "name": "soft_deleted_90d_expired",
+        "pass": true
+      },
+      {
+        "name": "expired_persistent_explicit_delete_collected",
+        "pass": true
+      },
+      {
+        "name": "superseded_history_never_collected",
+        "pass": true
+      },
+      {
+        "name": "superseded_and_expired_collected",
+        "pass": true
+      }
+    ]
+  },
+  "purge_orphans": {
+    "rocksdb_chunk": 0,
+    "embedding": 0,
+    "entity_kv": 0,
+    "relation_kv": 0,
+    "graph_reverse_index": 0,
+    "graph_entity_refs": 0,
+    "tantivy_doc": 0
+  }
+}
