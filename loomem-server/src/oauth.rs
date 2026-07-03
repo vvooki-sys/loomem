@@ -413,6 +413,11 @@ pub async fn authorize_page(
             "PKCE required: send a code_challenge with code_challenge_method=S256",
         );
     }
+    // Opening the form starts an active flow — refresh last_used so this client
+    // is protected from eviction for the grace period while the user completes
+    // it. Without this, a client idle >10 min could be evicted between the GET
+    // here and the POST /authorize + /token that follow (Greptile, audit F2).
+    touch_client(&state, &q.client_id).await;
     authorize_page_html(q).into_response()
 }
 
@@ -1065,6 +1070,47 @@ mod tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    // Opening the GET authorize form marks the client active (refreshes
+    // last_used) so it isn't evicted mid-flow between GET and the POST/token
+    // that follow.
+    #[tokio::test]
+    async fn authorize_page_refreshes_last_used() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        let stale = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(EVICT_MIN_AGE_SECS + 100))
+            .expect("representable stale instant");
+        state.clients.write().await.insert(
+            "c1".to_string(),
+            OAuthClient {
+                client_id: "c1".to_string(),
+                client_secret: Some("s".to_string()),
+                redirect_uris: vec!["https://c1/cb".to_string()],
+                confidential: false,
+                last_used: stale,
+            },
+        );
+        let q = AuthorizeQuery {
+            client_id: "c1".to_string(),
+            redirect_uri: "https://c1/cb".to_string(),
+            response_type: None,
+            state: None,
+            scope: None,
+            code_challenge: Some("abc".to_string()),
+            code_challenge_method: Some("S256".to_string()),
+            resource: None,
+        };
+        let _ = authorize_page(State(state.clone()), Query(q)).await;
+        let last_used = state
+            .clients
+            .read()
+            .await
+            .get("c1")
+            .expect("client present")
+            .last_used;
+        // Refreshed: no longer stale, so no longer an eviction candidate.
+        assert!(last_used.elapsed().as_secs() < EVICT_MIN_AGE_SECS);
     }
 
     // A confidential client must present its registered secret; a correct
