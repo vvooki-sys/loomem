@@ -131,11 +131,33 @@ pub async fn auth_middleware(mut request: Request, next: Next) -> Result<Respons
     }
 }
 
+/// Stream ids become RocksDB key components (e.g. `access:{stream}:…`) matched
+/// by byte prefix, so a value containing the `:` separator, whitespace, or
+/// control characters could collide across namespaces or escape a prefix
+/// (audit F5). Allow the characters real stream ids use — alphanumerics plus
+/// `_ - . @` (the last two cover email-shaped `__user_<email>` ids used by
+/// multi-user deployments) — and reject everything else, including `:`.
+#[must_use]
+pub fn is_valid_stream_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'@'))
+}
+
 /// Validate that the requested stream belongs to the authenticated user's scope.
 /// Admins can access any stream. Regular users can only access their own stream_id.
 /// Returns the validated stream, defaulting to auth.stream_id if none requested.
 pub fn validate_stream(auth: &AuthContext, requested: Option<&str>) -> Result<String, StatusCode> {
     let stream = requested.unwrap_or(&auth.stream_id);
+    if !is_valid_stream_id(stream) {
+        tracing::warn!(
+            target: "audit",
+            "Rejected malformed stream id: user={:?} requested={:?}",
+            auth.user_id, stream
+        );
+        return Err(StatusCode::BAD_REQUEST);
+    }
     if auth.is_admin {
         return Ok(stream.to_string());
     }
@@ -301,5 +323,39 @@ mod tests {
             true,
         );
         assert!(ctx.memberships.iter().any(|m| m.stream_id == ctx.stream_id));
+    }
+
+    #[test]
+    fn stream_id_charset_accepts_real_and_rejects_malformed() {
+        // Every stream-id shape actually used by the system/clients passes.
+        assert!(is_valid_stream_id("__user_default__"));
+        assert!(is_valid_stream_id("__shared_team__"));
+        assert!(is_valid_stream_id("__project_alpha__"));
+        assert!(is_valid_stream_id("plej-lukasz-gumowski"));
+        assert!(is_valid_stream_id("001"));
+        assert!(is_valid_stream_id("550e8400-e29b-41d4-a716-446655440000"));
+        assert!(is_valid_stream_id("__user_jane.doe@example.com"));
+        // Malformed: empty, colon (prefix escape), whitespace, control, overlong.
+        assert!(!is_valid_stream_id(""));
+        assert!(!is_valid_stream_id("access:evil"));
+        assert!(!is_valid_stream_id("has space"));
+        assert!(!is_valid_stream_id("bad\nnewline"));
+        assert!(!is_valid_stream_id(&"x".repeat(129)));
+    }
+
+    #[test]
+    fn validate_stream_rejects_malformed_id() {
+        let ctx = AuthContext::single_stream(
+            DEFAULT_STREAM_ID,
+            UserRole::Admin,
+            KeyScope::Shared,
+            None,
+            true,
+        );
+        // Even an admin (who may target any stream) cannot pass a colon-bearing id.
+        assert_eq!(
+            validate_stream(&ctx, Some("access:evil")).unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
     }
 }
