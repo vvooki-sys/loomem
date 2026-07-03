@@ -18,6 +18,20 @@
 # See the dedicated block below.
 set -e
 
+# --- Privilege drop (trivy DS-0002, audit 2026-07-03) ------------------------
+# The container starts as root only to fix /data ownership — fleet volumes
+# created before the non-root user existed are root-owned — then re-execs this
+# script as the unprivileged `loomem` user (uid 10001) via gosu. The chown is
+# incremental (only paths not already owned by loomem), so boots after the
+# first are a fast no-op, and an interrupted first pass resumes on the next
+# boot. Port 3030 is unprivileged; every write path (rocksdb, tantivy, wal,
+# events, backups, graph-migration-plans) lives under /data.
+if [ "$(id -u)" = "0" ]; then
+  mkdir -p /data
+  find /data \! -user loomem -exec chown loomem:loomem '{}' +
+  exec gosu loomem:loomem "$0" "$@"
+fi
+
 if [ "${LOOMEM_MIGRATE_GRAPH_STREAMS_ON_START}" = "1" ]; then
   COMMIT_FLAG=""
   if [ "${LOOMEM_MIGRATE_GRAPH_STREAMS_COMMIT}" = "1" ]; then

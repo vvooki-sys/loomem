@@ -1,0 +1,14 @@
+# Trivy misconfig findings deliberately not "fixed" in the Dockerfile itself.
+# (Trivy is not wired into CI; this file documents decisions for anyone
+# running `trivy config .` ad hoc.)
+
+# DS-0002 (no USER directive): privileges are dropped at startup instead.
+# Pre-existing fleet volumes are root-owned, so a static USER would break
+# them on redeploy; scripts/docker-entrypoint.sh starts as root, fixes /data
+# ownership incrementally, then re-execs as the unprivileged `loomem` user
+# (uid 10001) via gosu.
+DS-0002
+
+# DS-0026 (no HEALTHCHECK): the deployment platform (Railway) performs its
+# own HTTP health checks and ignores Dockerfile HEALTHCHECK directives.
+DS-0026
