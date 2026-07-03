@@ -1,0 +1,50 @@
+# Supply-chain policy for cargo-deny (audit follow-up).
+# Run: `cargo deny check`  — advisories, licenses, bans, sources.
+
+[advisories]
+# RustSec advisory DB (default). Yanked crates are rejected; add IDs to
+# `ignore` only with a written reason. `cargo audit` also runs in CI.
+yanked = "deny"
+ignore = [
+    # Unmaintained-only advisories (no known vulnerability). Ignored by ID so
+    # any *new* advisory — including real vulns — still fails the check.
+    { id = "RUSTSEC-2025-0141", reason = "bincode 1.x is unmaintained, no known vuln; used only for internal embedding (de)serialization. bincode 2.x migration tracked separately." },
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained, no known vuln; pulled in transitively via tokenizers. Drops out when that dependency stops using it." },
+]
+
+[licenses]
+# Permissive licenses only. Every identifier here is present in the current
+# dependency tree (verified with `cargo deny check licenses`). Copyleft /
+# source-available options (MPL-2.0, LGPL, BlueOak) are intentionally NOT
+# allowed outright — they only appear on the permissive side of an OR
+# expression, which is satisfied by the entries below.
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+]
+
+[bans]
+# Duplicate versions and wildcard deps are surfaced, not fatal — both are
+# common transitively. Tighten to "deny" once the tree is deduplicated.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+# crates.io only. A crate from an unknown registry or a git source must be
+# added here deliberately.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
