@@ -124,15 +124,21 @@ impl OAuthState {
 
 // ── Validation helpers ──────────────────────────────────────────────
 
-/// Exact-match check: does `client_id` exist and is `redirect_uri` one of the
-/// URIs it registered? Exact string equality only — no prefix, substring, or
-/// normalization — so a caller cannot smuggle a different destination past a
-/// registered one.
-async fn redirect_is_registered(state: &OAuthState, client_id: &str, redirect_uri: &str) -> bool {
-    let clients = state.clients.read().await;
-    clients
-        .get(client_id)
-        .is_some_and(|c| c.redirect_uris.iter().any(|u| u == redirect_uri))
+/// Under a single write lock: confirm `client_id` is registered with an exactly
+/// matching `redirect_uri` (no prefix, substring, or normalization — a caller
+/// cannot smuggle a different destination) and, if so, refresh its `last_used`.
+/// Doing the check and the refresh atomically closes the TOCTOU where a
+/// concurrent eviction could remove the client between a separate read-lock
+/// validation and a later write-lock touch (Greptile, audit F2).
+async fn validate_and_touch(state: &OAuthState, client_id: &str, redirect_uri: &str) -> bool {
+    let mut clients = state.clients.write().await;
+    match clients.get_mut(client_id) {
+        Some(c) if c.redirect_uris.iter().any(|u| u == redirect_uri) => {
+            c.last_used = std::time::Instant::now();
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Mandatory-PKCE gate for the authorize endpoints: a non-empty `code_challenge`
@@ -447,9 +453,13 @@ pub async fn authorize_page(
     State(state): State<Arc<OAuthState>>,
     Query(q): Query<AuthorizeQuery>,
 ) -> axum::response::Response {
-    // Validate before rendering. On rejection we return an inline error page,
-    // never a redirect — the redirect target is exactly what we're checking.
-    if !redirect_is_registered(&state, &q.client_id, &q.redirect_uri).await {
+    // Validate the redirect and refresh last_used atomically (single write lock)
+    // so a concurrent eviction cannot slip between the check and the refresh.
+    // On rejection we return an inline error page, never a redirect — the
+    // redirect target is exactly what we're validating. Opening the form starts
+    // an active flow, so the touch protects the client from eviction for the
+    // grace period while the user completes it.
+    if !validate_and_touch(&state, &q.client_id, &q.redirect_uri).await {
         return authorize_error("redirect_uri is not registered for this client_id");
     }
     if !pkce_authorize_ok(
@@ -460,11 +470,6 @@ pub async fn authorize_page(
             "PKCE required: send a code_challenge with code_challenge_method=S256",
         );
     }
-    // Opening the form starts an active flow — refresh last_used so this client
-    // is protected from eviction for the grace period while the user completes
-    // it. Without this, a client idle >10 min could be evicted between the GET
-    // here and the POST /authorize + /token that follow (Greptile, audit F2).
-    touch_client(&state, &q.client_id).await;
     authorize_page_html(q).into_response()
 }
 
@@ -546,10 +551,11 @@ pub async fn authorize_submit(
     State(state): State<Arc<OAuthState>>,
     axum::Form(form): axum::Form<AuthorizeSubmit>,
 ) -> axum::response::Response {
-    // Re-validate on submit — the GET check can be bypassed by POSTing directly.
-    // redirect_uri must be registered and PKCE is mandatory; reject inline,
-    // never redirect to an unvalidated target.
-    if !redirect_is_registered(&state, &form.client_id, &form.redirect_uri).await {
+    // Re-validate on submit (a direct POST can skip the GET) and refresh
+    // last_used atomically under one write lock — no eviction race between the
+    // check and the touch. redirect_uri must be registered and PKCE is
+    // mandatory; reject inline, never redirect to an unvalidated target.
+    if !validate_and_touch(&state, &form.client_id, &form.redirect_uri).await {
         return authorize_error("redirect_uri is not registered for this client_id");
     }
     if !pkce_authorize_ok(
@@ -560,7 +566,6 @@ pub async fn authorize_submit(
             "PKCE required: send a code_challenge with code_challenge_method=S256",
         );
     }
-    touch_client(&state, &form.client_id).await;
 
     let code = Uuid::new_v4().to_string();
 
@@ -917,10 +922,10 @@ mod tests {
     async fn redirect_must_be_registered() {
         let state = OAuthState::new("https://memory.example.com".to_string());
         seed_client(&state, "c1", "https://client.example/cb", false).await;
-        assert!(redirect_is_registered(&state, "c1", "https://client.example/cb").await);
-        assert!(!redirect_is_registered(&state, "c1", "https://evil.example/cb").await);
-        assert!(!redirect_is_registered(&state, "c1", "https://client.example/cb/extra").await);
-        assert!(!redirect_is_registered(&state, "unknown", "https://client.example/cb").await);
+        assert!(validate_and_touch(&state, "c1", "https://client.example/cb").await);
+        assert!(!validate_and_touch(&state, "c1", "https://evil.example/cb").await);
+        assert!(!validate_and_touch(&state, "c1", "https://client.example/cb/extra").await);
+        assert!(!validate_and_touch(&state, "unknown", "https://client.example/cb").await);
     }
 
     // (b) PKCE is mandatory at authorize time: no challenge (or an empty one,
