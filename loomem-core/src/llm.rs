@@ -733,6 +733,11 @@ pub async fn reflect(
 
 /// Fallback regex-based compression: first 3 sentences + "..." + last sentence
 fn regex_compress(text: &str) -> String {
+    // This fallback output is stored verbatim, so strip any [CHUNK] boundary
+    // markers first: they are LLM-only scaffolding (added by
+    // `sanitizer::wrap_untrusted` for the compression prompt) and must never
+    // land in a consolidated memory (sec/prompt-injection-delimiters, Greptile).
+    let text = crate::sanitizer::strip_untrusted_markers(text);
     let sentences: Vec<&str> = text
         .split(['.', '!', '?'])
         .map(|s| s.trim())
@@ -809,6 +814,18 @@ mod tests {
         let compressed = regex_compress(text);
 
         assert_eq!(compressed, text);
+    }
+
+    #[test]
+    fn regex_fallback_strips_chunk_markers() {
+        // The fallback output is stored verbatim, so [CHUNK] prompt scaffolding
+        // must not survive — even on the short-text early-return path.
+        let wrapped =
+            crate::sanitizer::wrap_untrusted("L0:a", "one sentence. two sentence. three.");
+        let compressed = regex_compress(&wrapped);
+        assert!(!compressed.contains("[CHUNK"));
+        assert!(!compressed.contains("[/CHUNK]"));
+        assert!(compressed.contains("one sentence"));
     }
 
     #[tokio::test]

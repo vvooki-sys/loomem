@@ -75,6 +75,21 @@ pub fn wrap_untrusted(id: &str, content: &str) -> String {
     format!("[CHUNK id=\"{id}\"]\n{safe}\n[/CHUNK]")
 }
 
+/// Remove the `[CHUNK id="…"]` / `[/CHUNK]` boundary markers added by
+/// [`wrap_untrusted`]. The non-LLM (regex) consolidation fallback stores its
+/// output verbatim, so it must strip this prompt-only scaffolding first — the
+/// markers are meaningful to the compression LLM, never to stored content.
+#[must_use]
+pub fn strip_untrusted_markers(text: &str) -> String {
+    text.lines()
+        .filter(|line| {
+            let t = line.trim();
+            !(t == "[/CHUNK]" || (t.starts_with("[CHUNK id=\"") && t.ends_with("\"]")))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Strip HTML tags and decode common HTML entities.
 fn strip_html(text: &str) -> (String, bool) {
     // Quick check: does it contain any HTML-like content?
@@ -281,6 +296,23 @@ mod tests {
             wrapped,
             "[CHUNK id=\"L0:abc\"]\nthe user likes dark mode\n[/CHUNK]"
         );
+    }
+
+    #[test]
+    fn strip_untrusted_markers_removes_boundaries() {
+        let wrapped = wrap_untrusted("L0:abc", "the user likes dark mode");
+        assert_eq!(
+            strip_untrusted_markers(&wrapped),
+            "the user likes dark mode"
+        );
+        let joined = format!(
+            "{}\n\n{}",
+            wrap_untrusted("L0:a", "one"),
+            wrap_untrusted("L0:b", "two")
+        );
+        let stripped = strip_untrusted_markers(&joined);
+        assert!(!stripped.contains("[CHUNK"));
+        assert!(!stripped.contains("[/CHUNK]"));
     }
 
     #[test]
