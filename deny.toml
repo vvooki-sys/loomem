@@ -6,10 +6,13 @@
 # `ignore` only with a written reason. `cargo audit` also runs in CI.
 yanked = "deny"
 ignore = [
-    # Unmaintained-only advisories (no known vulnerability). Ignored by ID so
-    # any *new* advisory — including real vulns — still fails the check.
+    # Kept in sync with .cargo/audit.toml so `cargo deny check` and `cargo audit`
+    # agree. Each is ignored by ID, so any *new* advisory — including real vulns —
+    # still fails the check.
     { id = "RUSTSEC-2025-0141", reason = "bincode 1.x is unmaintained, no known vuln; used only for internal embedding (de)serialization. bincode 2.x migration tracked separately." },
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained, no known vuln; pulled in transitively via tokenizers. Drops out when that dependency stops using it." },
+    { id = "RUSTSEC-2026-0002", reason = "lru unsound IterMut, no exploit path here; transitive via tantivy." },
+    { id = "RUSTSEC-2026-0097", reason = "rand unsound custom logger, no exploit path here; transitive." },
 ]
 
 [licenses]
