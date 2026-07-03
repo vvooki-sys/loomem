@@ -14,13 +14,14 @@
 //!
 //! The issued access_token IS the user's API key — no extra token layer.
 
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -28,6 +29,26 @@ use uuid::Uuid;
 use subtle::ConstantTimeEq;
 
 // ── In-memory stores ────────────────────────────────────────────────
+
+/// Ceiling on concurrently-registered OAuth clients. Dynamic client
+/// registration is unauthenticated (it bootstraps auth), so without a bound a
+/// caller could grow the client map indefinitely (audit F2). At capacity a new
+/// registration evicts the least-recently-used client **only if it is stale**
+/// (`EVICT_MIN_AGE_SECS`); if every entry is fresh — an active burst or flood —
+/// it sheds load with 429 rather than dropping a client that may be mid-flow.
+const MAX_OAUTH_CLIENTS: usize = 1000;
+
+/// A client younger than this may still be mid-flow (its auth code is valid for
+/// up to 10 min), so it is never chosen for eviction. Matches the auth-code
+/// lifetime enforced in `token`.
+const EVICT_MIN_AGE_SECS: u64 = 600;
+
+/// Per-source-IP registration limit: at most `REGISTER_RATE_LIMIT` registrations
+/// per `REGISTER_RATE_WINDOW_SECS`. `/oauth/register` is unauthenticated, so this
+/// throttles a flood at the source before it can fill the client store — the
+/// primary F2 defense; the cap + LRU eviction are a backstop.
+const REGISTER_RATE_LIMIT: u32 = 20;
+const REGISTER_RATE_WINDOW_SECS: u64 = 60;
 
 /// Registered OAuth clients (from Dynamic Client Registration).
 #[allow(dead_code)] // OAuth DCR fields; stored for future token-introspection and revocation endpoints
@@ -40,6 +61,10 @@ pub struct OAuthClient {
     /// `token_endpoint_auth_method`; such clients must present their secret at
     /// the token endpoint. Public clients (`none`) authenticate via PKCE only.
     pub confidential: bool,
+    /// Last time this client was used (registration, authorize, or token
+    /// exchange). Drives LRU eviction at capacity, so a still-active connector
+    /// is not dropped in favor of a fresh flood entry.
+    pub last_used: std::time::Instant,
 }
 
 /// Pending authorization: after user submits API key on /oauth/authorize.
@@ -59,6 +84,14 @@ struct PendingAuth {
 pub struct OAuthState {
     clients: Arc<RwLock<HashMap<String, OAuthClient>>>,
     pending_auths: Arc<RwLock<HashMap<String, PendingAuth>>>,
+    /// Per-source-IP fixed-window registration counters: ip → (window start,
+    /// count). Bounds the unauthenticated registration rate (audit F2).
+    register_hits: Arc<RwLock<HashMap<String, (std::time::Instant, u32)>>>,
+    /// When set, a trusted reverse proxy fronts this server and the last
+    /// `X-Forwarded-For` entry (appended by that proxy) keys the registration
+    /// rate limit. The TCP peer address would be the proxy itself there, so
+    /// keying on it would collapse every client into one shared bucket.
+    trust_forwarded_for: bool,
     pub server_origin: String, // e.g. "https://memory.example.com"
 }
 
@@ -67,18 +100,39 @@ impl OAuthState {
         Self {
             clients: Arc::new(RwLock::new(HashMap::new())),
             pending_auths: Arc::new(RwLock::new(HashMap::new())),
+            register_hits: Arc::new(RwLock::new(HashMap::new())),
+            trust_forwarded_for: false,
             server_origin,
         }
     }
 
-    /// Spawn a background task to clean up expired auth codes (>10 min old).
+    /// Declare that a trusted reverse proxy fronts this server, so the last
+    /// `X-Forwarded-For` entry identifies registration sources. Never enable
+    /// this on a directly-exposed listener: the header is caller-controlled
+    /// there, which would let a registration flood choose its own buckets.
+    #[must_use]
+    pub fn with_trust_forwarded_for(mut self, trusted: bool) -> Self {
+        self.trust_forwarded_for = trusted;
+        self
+    }
+
+    /// Spawn a background task to evict expired auth codes (>10 min).
+    /// Registered clients are bounded by LRU eviction in `register`, not here.
     pub fn spawn_cleanup(self: &Arc<Self>) {
         let state = Arc::clone(self);
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                let mut auths = state.pending_auths.write().await;
-                auths.retain(|_, v| v.created_at.elapsed().as_secs() < 600);
+                state
+                    .pending_auths
+                    .write()
+                    .await
+                    .retain(|_, v| v.created_at.elapsed().as_secs() < 600);
+                state
+                    .register_hits
+                    .write()
+                    .await
+                    .retain(|_, (start, _)| start.elapsed().as_secs() < REGISTER_RATE_WINDOW_SECS);
             }
         });
     }
@@ -86,15 +140,21 @@ impl OAuthState {
 
 // ── Validation helpers ──────────────────────────────────────────────
 
-/// Exact-match check: does `client_id` exist and is `redirect_uri` one of the
-/// URIs it registered? Exact string equality only — no prefix, substring, or
-/// normalization — so a caller cannot smuggle a different destination past a
-/// registered one.
-async fn redirect_is_registered(state: &OAuthState, client_id: &str, redirect_uri: &str) -> bool {
-    let clients = state.clients.read().await;
-    clients
-        .get(client_id)
-        .is_some_and(|c| c.redirect_uris.iter().any(|u| u == redirect_uri))
+/// Under a single write lock: confirm `client_id` is registered with an exactly
+/// matching `redirect_uri` (no prefix, substring, or normalization — a caller
+/// cannot smuggle a different destination) and, if so, refresh its `last_used`.
+/// Doing the check and the refresh atomically closes the TOCTOU where a
+/// concurrent eviction could remove the client between a separate read-lock
+/// validation and a later write-lock touch (Greptile, audit F2).
+async fn validate_and_touch(state: &OAuthState, client_id: &str, redirect_uri: &str) -> bool {
+    let mut clients = state.clients.write().await;
+    match clients.get_mut(client_id) {
+        Some(c) if c.redirect_uris.iter().any(|u| u == redirect_uri) => {
+            c.last_used = std::time::Instant::now();
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Mandatory-PKCE gate for the authorize endpoints: a non-empty `code_challenge`
@@ -163,6 +223,53 @@ async fn verify_client_secret(
             "client authentication failed",
         ))
     }
+}
+
+/// Mark a client as recently used so LRU eviction favors abandoned entries over
+/// active connectors.
+async fn touch_client(state: &OAuthState, client_id: &str) {
+    if let Some(c) = state.clients.write().await.get_mut(client_id) {
+        c.last_used = std::time::Instant::now();
+    }
+}
+
+/// Fixed-window per-IP registration limiter. Returns `false` once a source has
+/// made more than `REGISTER_RATE_LIMIT` registrations in the current
+/// `REGISTER_RATE_WINDOW_SECS` window. Stale windows are swept by the cleanup
+/// task, so the counter map stays bounded too.
+async fn register_rate_ok(state: &OAuthState, ip: &str) -> bool {
+    let now = std::time::Instant::now();
+    let mut hits = state.register_hits.write().await;
+    let entry = hits.entry(ip.to_string()).or_insert((now, 0));
+    if now.duration_since(entry.0).as_secs() >= REGISTER_RATE_WINDOW_SECS {
+        *entry = (now, 0);
+    }
+    entry.1 += 1;
+    entry.1 <= REGISTER_RATE_LIMIT
+}
+
+/// Resolve the source key for the registration rate limit.
+///
+/// Defaults to the TCP peer address. Behind a trusted reverse proxy
+/// (`trust_forwarded_for`) the peer is the proxy itself and would collapse
+/// every client into one shared bucket, so the last `X-Forwarded-For` entry —
+/// the one appended by that proxy — is used instead. Earlier entries are
+/// caller-supplied and spoofable, so they are never consulted; a missing or
+/// malformed header falls back to the peer address (the shared bucket), never
+/// to an attacker-chosen key.
+fn register_rate_key(trust_forwarded_for: bool, headers: &HeaderMap, peer: IpAddr) -> String {
+    if trust_forwarded_for {
+        if let Some(client_ip) = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.rsplit(',').next())
+            .map(str::trim)
+            .and_then(|v| v.parse::<IpAddr>().ok())
+        {
+            return client_ip.to_string();
+        }
+    }
+    peer.to_string()
 }
 
 // ── Request / Response types ────────────────────────────────────────
@@ -257,9 +364,28 @@ pub async fn authorization_server_metadata(
 
 /// POST /oauth/register — Dynamic Client Registration (RFC 7591)
 pub async fn register(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<OAuthState>>,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> axum::response::Response {
+    // Throttle unauthenticated registration per source (audit F2) — the
+    // primary defense against a flood filling the client store, before the cap +
+    // LRU backstop even comes into play. Behind a trusted reverse proxy the
+    // source is the proxy-appended X-Forwarded-For client, not the peer
+    // address, so unrelated clients sharing the proxy keep separate budgets.
+    let rate_key = register_rate_key(state.trust_forwarded_for, &headers, addr.ip());
+    if !register_rate_ok(&state, &rate_key).await {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "error": "temporarily_unavailable",
+                "error_description": "too many registrations from this address; retry later",
+            })),
+        )
+            .into_response();
+    }
+
     let redirect_uris = req.redirect_uris.unwrap_or_default();
     // The authorization-code flow requires at least one redirect_uri; without
     // one the exact-match allowlist can never pass, so we would issue a
@@ -309,13 +435,45 @@ pub async fn register(
         client_secret: Some(client_secret.clone()),
         redirect_uris: redirect_uris.clone(),
         confidential,
+        last_used: std::time::Instant::now(),
     };
 
-    state
-        .clients
-        .write()
-        .await
-        .insert(client_id.clone(), client);
+    {
+        // Bound the unauthenticated client store (audit F2) under a single write
+        // lock (no check-then-insert race). At capacity, evict the
+        // least-recently-used client — but only if it is stale
+        // (`EVICT_MIN_AGE_SECS`). A client fresher than that may be mid-flow
+        // (touched on authorize/token), so if every entry is that fresh — an
+        // active burst or a registration flood — shed load with 429 instead of
+        // dropping a live client. Under a flood the attacker's own entries age
+        // out first, so a legitimate mid-flow client is never the victim.
+        let mut clients = state.clients.write().await;
+        if clients.len() >= MAX_OAUTH_CLIENTS {
+            let lru = clients
+                .iter()
+                .min_by_key(|(_, c)| c.last_used)
+                .map(|(id, c)| (id.clone(), c.last_used));
+            match lru {
+                Some((lru_id, last_used))
+                    if last_used.elapsed().as_secs() >= EVICT_MIN_AGE_SECS =>
+                {
+                    clients.remove(&lru_id);
+                }
+                _ => {
+                    return (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        Json(json!({
+                            "error": "temporarily_unavailable",
+                            "error_description":
+                                "client registration is temporarily full; retry shortly",
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+        clients.insert(client_id.clone(), client);
+    }
 
     (
         StatusCode::CREATED,
@@ -339,9 +497,13 @@ pub async fn authorize_page(
     State(state): State<Arc<OAuthState>>,
     Query(q): Query<AuthorizeQuery>,
 ) -> axum::response::Response {
-    // Validate before rendering. On rejection we return an inline error page,
-    // never a redirect — the redirect target is exactly what we're checking.
-    if !redirect_is_registered(&state, &q.client_id, &q.redirect_uri).await {
+    // Validate the redirect and refresh last_used atomically (single write lock)
+    // so a concurrent eviction cannot slip between the check and the refresh.
+    // On rejection we return an inline error page, never a redirect — the
+    // redirect target is exactly what we're validating. Opening the form starts
+    // an active flow, so the touch protects the client from eviction for the
+    // grace period while the user completes it.
+    if !validate_and_touch(&state, &q.client_id, &q.redirect_uri).await {
         return authorize_error("redirect_uri is not registered for this client_id");
     }
     if !pkce_authorize_ok(
@@ -433,10 +595,11 @@ pub async fn authorize_submit(
     State(state): State<Arc<OAuthState>>,
     axum::Form(form): axum::Form<AuthorizeSubmit>,
 ) -> axum::response::Response {
-    // Re-validate on submit — the GET check can be bypassed by POSTing directly.
-    // redirect_uri must be registered and PKCE is mandatory; reject inline,
-    // never redirect to an unvalidated target.
-    if !redirect_is_registered(&state, &form.client_id, &form.redirect_uri).await {
+    // Re-validate on submit (a direct POST can skip the GET) and refresh
+    // last_used atomically under one write lock — no eviction race between the
+    // check and the touch. redirect_uri must be registered and PKCE is
+    // mandatory; reject inline, never redirect to an unvalidated target.
+    if !validate_and_touch(&state, &form.client_id, &form.redirect_uri).await {
         return authorize_error("redirect_uri is not registered for this client_id");
     }
     if !pkce_authorize_ok(
@@ -574,6 +737,7 @@ pub async fn token(
     {
         return resp;
     }
+    touch_client(&state, &pending.client_id).await;
 
     // TODO(sec F1 follow-up): issue a distinct, expiring access token (e.g. a
     // random UUID mapped to the API key in AppState) instead of returning the
@@ -750,6 +914,7 @@ fn base64_url_encode(data: &[u8]) -> String {
 mod tests {
     use super::*;
     use axum::extract::State;
+    use axum::http::HeaderValue;
     use axum::response::IntoResponse;
 
     async fn seed_client(state: &OAuthState, id: &str, redirect: &str, confidential: bool) {
@@ -760,6 +925,7 @@ mod tests {
                 client_secret: Some("shhh".to_string()),
                 redirect_uris: vec![redirect.to_string()],
                 confidential,
+                last_used: std::time::Instant::now(),
             },
         );
     }
@@ -801,10 +967,10 @@ mod tests {
     async fn redirect_must_be_registered() {
         let state = OAuthState::new("https://memory.example.com".to_string());
         seed_client(&state, "c1", "https://client.example/cb", false).await;
-        assert!(redirect_is_registered(&state, "c1", "https://client.example/cb").await);
-        assert!(!redirect_is_registered(&state, "c1", "https://evil.example/cb").await);
-        assert!(!redirect_is_registered(&state, "c1", "https://client.example/cb/extra").await);
-        assert!(!redirect_is_registered(&state, "unknown", "https://client.example/cb").await);
+        assert!(validate_and_touch(&state, "c1", "https://client.example/cb").await);
+        assert!(!validate_and_touch(&state, "c1", "https://evil.example/cb").await);
+        assert!(!validate_and_touch(&state, "c1", "https://client.example/cb/extra").await);
+        assert!(!validate_and_touch(&state, "unknown", "https://client.example/cb").await);
     }
 
     // (b) PKCE is mandatory at authorize time: no challenge (or an empty one,
@@ -903,7 +1069,9 @@ mod tests {
     async fn register_requires_redirect_uris() {
         let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
         let resp = register(
+            test_conn(),
             State(state),
+            HeaderMap::new(),
             Json(RegisterRequest {
                 redirect_uris: None,
                 client_name: None,
@@ -923,7 +1091,9 @@ mod tests {
     async fn register_rejects_unsupported_auth_method() {
         let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
         let resp = register(
+            test_conn(),
             State(state),
+            HeaderMap::new(),
             Json(RegisterRequest {
                 redirect_uris: Some(vec!["https://client.example/cb".to_string()]),
                 client_name: None,
@@ -935,6 +1105,242 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    async fn flood_state(oldest_stale: bool) -> Arc<OAuthState> {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        let stale = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(EVICT_MIN_AGE_SECS + 100))
+            .expect("representable stale instant");
+        {
+            let mut clients = state.clients.write().await;
+            for i in 0..MAX_OAUTH_CLIENTS {
+                let id = format!("c{i}");
+                let last_used = if oldest_stale && i == 0 {
+                    stale
+                } else {
+                    std::time::Instant::now()
+                };
+                clients.insert(
+                    id.clone(),
+                    OAuthClient {
+                        client_id: id,
+                        client_secret: Some("s".to_string()),
+                        redirect_uris: vec!["https://c/cb".to_string()],
+                        confidential: false,
+                        last_used,
+                    },
+                );
+            }
+        }
+        state
+    }
+
+    fn public_register_req() -> RegisterRequest {
+        RegisterRequest {
+            redirect_uris: Some(vec!["https://client.example/cb".to_string()]),
+            client_name: None,
+            grant_types: None,
+            response_types: None,
+            token_endpoint_auth_method: Some("none".to_string()),
+        }
+    }
+
+    fn test_conn() -> ConnectInfo<SocketAddr> {
+        ConnectInfo("127.0.0.1:0".parse().expect("addr"))
+    }
+
+    // At capacity, registration evicts a STALE least-recently-used client
+    // (older than the mid-flow grace period) to admit the new one; the store
+    // stays bounded.
+    #[tokio::test]
+    async fn register_at_cap_evicts_stale_lru() {
+        let state = flood_state(true).await;
+        let resp = register(
+            test_conn(),
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(public_register_req()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let clients = state.clients.read().await;
+        assert_eq!(clients.len(), MAX_OAUTH_CLIENTS);
+        assert!(!clients.contains_key("c0")); // the stale one was evicted
+    }
+
+    // At capacity with every client fresh (an active burst / flood), a new
+    // registration is shed with 429 rather than evicting a possibly mid-flow
+    // client.
+    #[tokio::test]
+    async fn register_at_cap_full_of_fresh_rejects() {
+        let state = flood_state(false).await;
+        let resp = register(
+            test_conn(),
+            State(state),
+            HeaderMap::new(),
+            Json(public_register_req()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    // A single source IP is throttled after REGISTER_RATE_LIMIT registrations in
+    // the window — the primary defense against a registration flood.
+    #[tokio::test]
+    async fn register_rate_limited_per_ip() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        let addr: SocketAddr = "203.0.113.7:5000".parse().expect("addr");
+        for _ in 0..REGISTER_RATE_LIMIT {
+            let resp = register(
+                ConnectInfo(addr),
+                State(state.clone()),
+                HeaderMap::new(),
+                Json(public_register_req()),
+            )
+            .await
+            .into_response();
+            assert_eq!(resp.status(), StatusCode::CREATED);
+        }
+        // The next registration from the same IP within the window is throttled.
+        let resp = register(
+            ConnectInfo(addr),
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(public_register_req()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    // Without trusted-proxy mode the TCP peer keys the bucket and
+    // X-Forwarded-For is ignored — the header is caller-controlled, so
+    // honoring it would let a flood pick a fresh bucket per request.
+    #[test]
+    fn rate_key_ignores_xff_when_untrusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("9.9.9.9"));
+        let peer: IpAddr = "203.0.113.7".parse().expect("ip");
+        assert_eq!(register_rate_key(false, &headers, peer), "203.0.113.7");
+    }
+
+    // With a trusted proxy, the LAST X-Forwarded-For entry — the one appended
+    // by that proxy — keys the bucket; earlier caller-supplied entries never do.
+    #[test]
+    fn rate_key_uses_last_xff_entry_when_trusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("6.6.6.6, 198.51.100.9"),
+        );
+        let peer: IpAddr = "203.0.113.7".parse().expect("ip");
+        assert_eq!(register_rate_key(true, &headers, peer), "198.51.100.9");
+    }
+
+    // A missing or malformed X-Forwarded-For falls back to the peer address —
+    // the shared bucket — never to an attacker-chosen key.
+    #[test]
+    fn rate_key_falls_back_to_peer_on_absent_or_malformed_xff() {
+        let peer: IpAddr = "203.0.113.7".parse().expect("ip");
+        assert_eq!(
+            register_rate_key(true, &HeaderMap::new(), peer),
+            "203.0.113.7"
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("not-an-ip"));
+        assert_eq!(register_rate_key(true, &headers, peer), "203.0.113.7");
+    }
+
+    // Behind a trusted proxy every request arrives from the proxy's peer
+    // address; the limiter must still isolate sources. Exhausting one
+    // forwarded client's budget throttles that client only — another client
+    // behind the same proxy keeps its own budget.
+    #[tokio::test]
+    async fn register_rate_keyed_per_forwarded_client_behind_proxy() {
+        let state = Arc::new(
+            OAuthState::new("https://memory.example.com".to_string())
+                .with_trust_forwarded_for(true),
+        );
+        let proxy: SocketAddr = "10.0.0.2:7777".parse().expect("addr");
+        let mut flooding = HeaderMap::new();
+        flooding.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.1"));
+        for _ in 0..REGISTER_RATE_LIMIT {
+            let resp = register(
+                ConnectInfo(proxy),
+                State(state.clone()),
+                flooding.clone(),
+                Json(public_register_req()),
+            )
+            .await
+            .into_response();
+            assert_eq!(resp.status(), StatusCode::CREATED);
+        }
+        // The flooding client is throttled…
+        let resp = register(
+            ConnectInfo(proxy),
+            State(state.clone()),
+            flooding,
+            Json(public_register_req()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        // …while a different client behind the same proxy is not.
+        let mut other = HeaderMap::new();
+        other.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.2"));
+        let resp = register(
+            ConnectInfo(proxy),
+            State(state.clone()),
+            other,
+            Json(public_register_req()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    // Opening the GET authorize form marks the client active (refreshes
+    // last_used) so it isn't evicted mid-flow between GET and the POST/token
+    // that follow.
+    #[tokio::test]
+    async fn authorize_page_refreshes_last_used() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        let stale = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(EVICT_MIN_AGE_SECS + 100))
+            .expect("representable stale instant");
+        state.clients.write().await.insert(
+            "c1".to_string(),
+            OAuthClient {
+                client_id: "c1".to_string(),
+                client_secret: Some("s".to_string()),
+                redirect_uris: vec!["https://c1/cb".to_string()],
+                confidential: false,
+                last_used: stale,
+            },
+        );
+        let q = AuthorizeQuery {
+            client_id: "c1".to_string(),
+            redirect_uri: "https://c1/cb".to_string(),
+            response_type: None,
+            state: None,
+            scope: None,
+            code_challenge: Some("abc".to_string()),
+            code_challenge_method: Some("S256".to_string()),
+            resource: None,
+        };
+        let _ = authorize_page(State(state.clone()), Query(q)).await;
+        let last_used = state
+            .clients
+            .read()
+            .await
+            .get("c1")
+            .expect("client present")
+            .last_used;
+        // Refreshed: no longer stale, so no longer an eviction candidate.
+        assert!(last_used.elapsed().as_secs() < EVICT_MIN_AGE_SECS);
     }
 
     // A confidential client must present its registered secret; a correct
@@ -949,6 +1355,7 @@ mod tests {
                 client_secret: Some("topsecret".to_string()),
                 redirect_uris: vec!["https://client.example/cb".to_string()],
                 confidential: true,
+                last_used: std::time::Instant::now(),
             },
         );
         let verifier = "verifier-1234567890-abcdefghijklmnop";
