@@ -14,13 +14,14 @@
 //!
 //! The issued access_token IS the user's API key — no extra token layer.
 
-use axum::extract::{Query, State};
+use axum::extract::{ConnectInfo, Query, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -41,6 +42,13 @@ const MAX_OAUTH_CLIENTS: usize = 1000;
 /// up to 10 min), so it is never chosen for eviction. Matches the auth-code
 /// lifetime enforced in `token`.
 const EVICT_MIN_AGE_SECS: u64 = 600;
+
+/// Per-source-IP registration limit: at most `REGISTER_RATE_LIMIT` registrations
+/// per `REGISTER_RATE_WINDOW_SECS`. `/oauth/register` is unauthenticated, so this
+/// throttles a flood at the source before it can fill the client store — the
+/// primary F2 defense; the cap + LRU eviction are a backstop.
+const REGISTER_RATE_LIMIT: u32 = 20;
+const REGISTER_RATE_WINDOW_SECS: u64 = 60;
 
 /// Registered OAuth clients (from Dynamic Client Registration).
 #[allow(dead_code)] // OAuth DCR fields; stored for future token-introspection and revocation endpoints
@@ -76,6 +84,9 @@ struct PendingAuth {
 pub struct OAuthState {
     clients: Arc<RwLock<HashMap<String, OAuthClient>>>,
     pending_auths: Arc<RwLock<HashMap<String, PendingAuth>>>,
+    /// Per-source-IP fixed-window registration counters: ip → (window start,
+    /// count). Bounds the unauthenticated registration rate (audit F2).
+    register_hits: Arc<RwLock<HashMap<String, (std::time::Instant, u32)>>>,
     pub server_origin: String, // e.g. "https://memory.example.com"
 }
 
@@ -84,6 +95,7 @@ impl OAuthState {
         Self {
             clients: Arc::new(RwLock::new(HashMap::new())),
             pending_auths: Arc::new(RwLock::new(HashMap::new())),
+            register_hits: Arc::new(RwLock::new(HashMap::new())),
             server_origin,
         }
     }
@@ -100,6 +112,11 @@ impl OAuthState {
                     .write()
                     .await
                     .retain(|_, v| v.created_at.elapsed().as_secs() < 600);
+                state
+                    .register_hits
+                    .write()
+                    .await
+                    .retain(|_, (start, _)| start.elapsed().as_secs() < REGISTER_RATE_WINDOW_SECS);
             }
         });
     }
@@ -194,6 +211,21 @@ async fn touch_client(state: &OAuthState, client_id: &str) {
     }
 }
 
+/// Fixed-window per-IP registration limiter. Returns `false` once a source has
+/// made more than `REGISTER_RATE_LIMIT` registrations in the current
+/// `REGISTER_RATE_WINDOW_SECS` window. Stale windows are swept by the cleanup
+/// task, so the counter map stays bounded too.
+async fn register_rate_ok(state: &OAuthState, ip: &str) -> bool {
+    let now = std::time::Instant::now();
+    let mut hits = state.register_hits.write().await;
+    let entry = hits.entry(ip.to_string()).or_insert((now, 0));
+    if now.duration_since(entry.0).as_secs() >= REGISTER_RATE_WINDOW_SECS {
+        *entry = (now, 0);
+    }
+    entry.1 += 1;
+    entry.1 <= REGISTER_RATE_LIMIT
+}
+
 // ── Request / Response types ────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -286,9 +318,24 @@ pub async fn authorization_server_metadata(
 
 /// POST /oauth/register — Dynamic Client Registration (RFC 7591)
 pub async fn register(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<OAuthState>>,
     Json(req): Json<RegisterRequest>,
 ) -> axum::response::Response {
+    // Throttle unauthenticated registration per source IP (audit F2) — the
+    // primary defense against a flood filling the client store, before the cap +
+    // LRU backstop even comes into play.
+    if !register_rate_ok(&state, &addr.ip().to_string()).await {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "error": "temporarily_unavailable",
+                "error_description": "too many registrations from this address; retry later",
+            })),
+        )
+            .into_response();
+    }
+
     let redirect_uris = req.redirect_uris.unwrap_or_default();
     // The authorization-code flow requires at least one redirect_uri; without
     // one the exact-match allowlist can never pass, so we would issue a
@@ -972,6 +1019,7 @@ mod tests {
     async fn register_requires_redirect_uris() {
         let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
         let resp = register(
+            test_conn(),
             State(state),
             Json(RegisterRequest {
                 redirect_uris: None,
@@ -992,6 +1040,7 @@ mod tests {
     async fn register_rejects_unsupported_auth_method() {
         let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
         let resp = register(
+            test_conn(),
             State(state),
             Json(RegisterRequest {
                 redirect_uris: Some(vec!["https://client.example/cb".to_string()]),
@@ -1045,15 +1094,23 @@ mod tests {
         }
     }
 
+    fn test_conn() -> ConnectInfo<SocketAddr> {
+        ConnectInfo("127.0.0.1:0".parse().expect("addr"))
+    }
+
     // At capacity, registration evicts a STALE least-recently-used client
     // (older than the mid-flow grace period) to admit the new one; the store
     // stays bounded.
     #[tokio::test]
     async fn register_at_cap_evicts_stale_lru() {
         let state = flood_state(true).await;
-        let resp = register(State(state.clone()), Json(public_register_req()))
-            .await
-            .into_response();
+        let resp = register(
+            test_conn(),
+            State(state.clone()),
+            Json(public_register_req()),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::CREATED);
         let clients = state.clients.read().await;
         assert_eq!(clients.len(), MAX_OAUTH_CLIENTS);
@@ -1066,9 +1123,36 @@ mod tests {
     #[tokio::test]
     async fn register_at_cap_full_of_fresh_rejects() {
         let state = flood_state(false).await;
-        let resp = register(State(state), Json(public_register_req()))
+        let resp = register(test_conn(), State(state), Json(public_register_req()))
             .await
             .into_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    // A single source IP is throttled after REGISTER_RATE_LIMIT registrations in
+    // the window — the primary defense against a registration flood.
+    #[tokio::test]
+    async fn register_rate_limited_per_ip() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        let addr: SocketAddr = "203.0.113.7:5000".parse().expect("addr");
+        for _ in 0..REGISTER_RATE_LIMIT {
+            let resp = register(
+                ConnectInfo(addr),
+                State(state.clone()),
+                Json(public_register_req()),
+            )
+            .await
+            .into_response();
+            assert_eq!(resp.status(), StatusCode::CREATED);
+        }
+        // The next registration from the same IP within the window is throttled.
+        let resp = register(
+            ConnectInfo(addr),
+            State(state.clone()),
+            Json(public_register_req()),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
