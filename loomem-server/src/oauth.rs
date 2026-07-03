@@ -15,13 +15,13 @@
 //! The issued access_token IS the user's API key — no extra token layer.
 
 use axum::extract::{ConnectInfo, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -87,6 +87,11 @@ pub struct OAuthState {
     /// Per-source-IP fixed-window registration counters: ip → (window start,
     /// count). Bounds the unauthenticated registration rate (audit F2).
     register_hits: Arc<RwLock<HashMap<String, (std::time::Instant, u32)>>>,
+    /// When set, a trusted reverse proxy fronts this server and the last
+    /// `X-Forwarded-For` entry (appended by that proxy) keys the registration
+    /// rate limit. The TCP peer address would be the proxy itself there, so
+    /// keying on it would collapse every client into one shared bucket.
+    trust_forwarded_for: bool,
     pub server_origin: String, // e.g. "https://memory.example.com"
 }
 
@@ -96,8 +101,19 @@ impl OAuthState {
             clients: Arc::new(RwLock::new(HashMap::new())),
             pending_auths: Arc::new(RwLock::new(HashMap::new())),
             register_hits: Arc::new(RwLock::new(HashMap::new())),
+            trust_forwarded_for: false,
             server_origin,
         }
+    }
+
+    /// Declare that a trusted reverse proxy fronts this server, so the last
+    /// `X-Forwarded-For` entry identifies registration sources. Never enable
+    /// this on a directly-exposed listener: the header is caller-controlled
+    /// there, which would let a registration flood choose its own buckets.
+    #[must_use]
+    pub fn with_trust_forwarded_for(mut self, trusted: bool) -> Self {
+        self.trust_forwarded_for = trusted;
+        self
     }
 
     /// Spawn a background task to evict expired auth codes (>10 min).
@@ -232,6 +248,30 @@ async fn register_rate_ok(state: &OAuthState, ip: &str) -> bool {
     entry.1 <= REGISTER_RATE_LIMIT
 }
 
+/// Resolve the source key for the registration rate limit.
+///
+/// Defaults to the TCP peer address. Behind a trusted reverse proxy
+/// (`trust_forwarded_for`) the peer is the proxy itself and would collapse
+/// every client into one shared bucket, so the last `X-Forwarded-For` entry —
+/// the one appended by that proxy — is used instead. Earlier entries are
+/// caller-supplied and spoofable, so they are never consulted; a missing or
+/// malformed header falls back to the peer address (the shared bucket), never
+/// to an attacker-chosen key.
+fn register_rate_key(trust_forwarded_for: bool, headers: &HeaderMap, peer: IpAddr) -> String {
+    if trust_forwarded_for {
+        if let Some(client_ip) = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.rsplit(',').next())
+            .map(str::trim)
+            .and_then(|v| v.parse::<IpAddr>().ok())
+        {
+            return client_ip.to_string();
+        }
+    }
+    peer.to_string()
+}
+
 // ── Request / Response types ────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -326,12 +366,16 @@ pub async fn authorization_server_metadata(
 pub async fn register(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<OAuthState>>,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> axum::response::Response {
-    // Throttle unauthenticated registration per source IP (audit F2) — the
+    // Throttle unauthenticated registration per source (audit F2) — the
     // primary defense against a flood filling the client store, before the cap +
-    // LRU backstop even comes into play.
-    if !register_rate_ok(&state, &addr.ip().to_string()).await {
+    // LRU backstop even comes into play. Behind a trusted reverse proxy the
+    // source is the proxy-appended X-Forwarded-For client, not the peer
+    // address, so unrelated clients sharing the proxy keep separate budgets.
+    let rate_key = register_rate_key(state.trust_forwarded_for, &headers, addr.ip());
+    if !register_rate_ok(&state, &rate_key).await {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({
@@ -870,6 +914,7 @@ fn base64_url_encode(data: &[u8]) -> String {
 mod tests {
     use super::*;
     use axum::extract::State;
+    use axum::http::HeaderValue;
     use axum::response::IntoResponse;
 
     async fn seed_client(state: &OAuthState, id: &str, redirect: &str, confidential: bool) {
@@ -1026,6 +1071,7 @@ mod tests {
         let resp = register(
             test_conn(),
             State(state),
+            HeaderMap::new(),
             Json(RegisterRequest {
                 redirect_uris: None,
                 client_name: None,
@@ -1047,6 +1093,7 @@ mod tests {
         let resp = register(
             test_conn(),
             State(state),
+            HeaderMap::new(),
             Json(RegisterRequest {
                 redirect_uris: Some(vec!["https://client.example/cb".to_string()]),
                 client_name: None,
@@ -1112,6 +1159,7 @@ mod tests {
         let resp = register(
             test_conn(),
             State(state.clone()),
+            HeaderMap::new(),
             Json(public_register_req()),
         )
         .await
@@ -1128,9 +1176,14 @@ mod tests {
     #[tokio::test]
     async fn register_at_cap_full_of_fresh_rejects() {
         let state = flood_state(false).await;
-        let resp = register(test_conn(), State(state), Json(public_register_req()))
-            .await
-            .into_response();
+        let resp = register(
+            test_conn(),
+            State(state),
+            HeaderMap::new(),
+            Json(public_register_req()),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
@@ -1144,6 +1197,7 @@ mod tests {
             let resp = register(
                 ConnectInfo(addr),
                 State(state.clone()),
+                HeaderMap::new(),
                 Json(public_register_req()),
             )
             .await
@@ -1154,11 +1208,98 @@ mod tests {
         let resp = register(
             ConnectInfo(addr),
             State(state.clone()),
+            HeaderMap::new(),
             Json(public_register_req()),
         )
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    // Without trusted-proxy mode the TCP peer keys the bucket and
+    // X-Forwarded-For is ignored — the header is caller-controlled, so
+    // honoring it would let a flood pick a fresh bucket per request.
+    #[test]
+    fn rate_key_ignores_xff_when_untrusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("9.9.9.9"));
+        let peer: IpAddr = "203.0.113.7".parse().expect("ip");
+        assert_eq!(register_rate_key(false, &headers, peer), "203.0.113.7");
+    }
+
+    // With a trusted proxy, the LAST X-Forwarded-For entry — the one appended
+    // by that proxy — keys the bucket; earlier caller-supplied entries never do.
+    #[test]
+    fn rate_key_uses_last_xff_entry_when_trusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("6.6.6.6, 198.51.100.9"),
+        );
+        let peer: IpAddr = "203.0.113.7".parse().expect("ip");
+        assert_eq!(register_rate_key(true, &headers, peer), "198.51.100.9");
+    }
+
+    // A missing or malformed X-Forwarded-For falls back to the peer address —
+    // the shared bucket — never to an attacker-chosen key.
+    #[test]
+    fn rate_key_falls_back_to_peer_on_absent_or_malformed_xff() {
+        let peer: IpAddr = "203.0.113.7".parse().expect("ip");
+        assert_eq!(
+            register_rate_key(true, &HeaderMap::new(), peer),
+            "203.0.113.7"
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("not-an-ip"));
+        assert_eq!(register_rate_key(true, &headers, peer), "203.0.113.7");
+    }
+
+    // Behind a trusted proxy every request arrives from the proxy's peer
+    // address; the limiter must still isolate sources. Exhausting one
+    // forwarded client's budget throttles that client only — another client
+    // behind the same proxy keeps its own budget.
+    #[tokio::test]
+    async fn register_rate_keyed_per_forwarded_client_behind_proxy() {
+        let state = Arc::new(
+            OAuthState::new("https://memory.example.com".to_string())
+                .with_trust_forwarded_for(true),
+        );
+        let proxy: SocketAddr = "10.0.0.2:7777".parse().expect("addr");
+        let mut flooding = HeaderMap::new();
+        flooding.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.1"));
+        for _ in 0..REGISTER_RATE_LIMIT {
+            let resp = register(
+                ConnectInfo(proxy),
+                State(state.clone()),
+                flooding.clone(),
+                Json(public_register_req()),
+            )
+            .await
+            .into_response();
+            assert_eq!(resp.status(), StatusCode::CREATED);
+        }
+        // The flooding client is throttled…
+        let resp = register(
+            ConnectInfo(proxy),
+            State(state.clone()),
+            flooding,
+            Json(public_register_req()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        // …while a different client behind the same proxy is not.
+        let mut other = HeaderMap::new();
+        other.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.2"));
+        let resp = register(
+            ConnectInfo(proxy),
+            State(state.clone()),
+            other,
+            Json(public_register_req()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
     // Opening the GET authorize form marks the client active (refreshes

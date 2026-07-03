@@ -292,6 +292,7 @@ restartPolicyMaxRetries = 3
 <li>[ ] Review PII settings — ensure <code>pii.enabled = true</code></li>
 <li>[ ] Consider enabling at-rest encryption (<code>LOOMEM_AT_REST_MASTER_KEY</code>) — see <a href="security.html">SECURITY.md</a></li>
 <li>[ ] Set up HTTPS (managed platforms provide this; Docker needs a reverse proxy)</li>
+<li>[ ] Behind a reverse proxy, set <code>LOOMEM_TRUST_FORWARDED_FOR=1</code> so the <code>/oauth/register</code> rate limit keys on the client address your proxy appends to <code>X-Forwarded-For</code>, instead of lumping every client into the proxy's own bucket — leave it unset when Loomem is exposed directly (the header is caller-controlled there)</li>
 </ul>
 <p>If a secret leaks, rotate it: replace the env var value, restart the service, and verify with a request using the old key (must be rejected).</p>
 <h3 id="performance">Performance</h3>

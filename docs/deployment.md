@@ -161,6 +161,7 @@ Other `loomem-migrate` subcommands (run manually, not via the entrypoint): `--va
 - [ ] Review PII settings — ensure `pii.enabled = true`
 - [ ] Consider enabling at-rest encryption (`LOOMEM_AT_REST_MASTER_KEY`) — see [SECURITY.md](SECURITY.md)
 - [ ] Set up HTTPS (managed platforms provide this; Docker needs a reverse proxy)
+- [ ] Behind a reverse proxy, set `LOOMEM_TRUST_FORWARDED_FOR=1` so the `/oauth/register` rate limit keys on the client address your proxy appends to `X-Forwarded-For`, instead of lumping every client into the proxy's own bucket — leave it unset when Loomem is exposed directly (the header is caller-controlled there)
 
 If a secret leaks, rotate it: replace the env var value, restart the service, and verify with a request using the old key (must be rejected).
 

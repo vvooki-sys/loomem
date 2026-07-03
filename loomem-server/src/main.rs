@@ -136,6 +136,33 @@ fn allow_unauth_env() -> bool {
     }
 }
 
+/// Env var declaring a trusted reverse proxy in front of the server. When
+/// `true`, the `/oauth/register` rate limit keys on the last
+/// `X-Forwarded-For` entry (appended by that proxy) instead of the TCP peer
+/// address — behind a proxy the peer is the proxy itself, which would
+/// collapse every client into one shared bucket. Leave unset on a
+/// directly-exposed listener: the header is caller-controlled there.
+const TRUST_FORWARDED_FOR_ENV: &str = "LOOMEM_TRUST_FORWARDED_FOR";
+
+/// Parse `LOOMEM_TRUST_FORWARDED_FOR` with the same truthiness rules as
+/// [`at_rest_expect_enabled`]: `true|1` → on, `false|0` → off, anything else
+/// → `warn!` and keep the default `false`.
+fn trust_forwarded_for_env() -> bool {
+    match std::env::var(TRUST_FORWARDED_FOR_ENV) {
+        Ok(v) => match v.as_str() {
+            "true" | "1" => true,
+            "false" | "0" => false,
+            other => {
+                warn!(
+                    "{TRUST_FORWARDED_FOR_ENV}={other:?} not recognized (expected true/false/1/0), defaulting to false"
+                );
+                false
+            }
+        },
+        Err(_) => false,
+    }
+}
+
 /// True when `host` can only be reached from the local machine: `localhost`
 /// or any loopback IP (127.0.0.0/8, `::1`).
 fn is_loopback_host(host: &str) -> bool {
@@ -761,7 +788,9 @@ async fn main() -> Result<()> {
             .unwrap_or(config.server.port);
         format!("http://{}:{}", config.server.host, p)
     });
-    let oauth_state = Arc::new(oauth::OAuthState::new(server_origin));
+    let oauth_state = Arc::new(
+        oauth::OAuthState::new(server_origin).with_trust_forwarded_for(trust_forwarded_for_env()),
+    );
     oauth_state.spawn_cleanup();
 
     let app = build_routes(RouteParams {
