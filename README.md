@@ -251,6 +251,10 @@ Any MCP-capable client. Loomem speaks MCP over streamable HTTP and provides reci
 **Why not just use ChatGPT or Claude built-in memory?**
 Built-in memory is locked to one vendor. Loomem keeps your context portable across every tool and model, self-hosted and owned by you, with a structured entity graph and bitemporal history a single vendor's feature doesn't give you.
 
+## Author
+
+Loomem is created and maintained by **Łukasz Gumowski** — [lukasz.gumowski@gmail.com](mailto:lukasz.gumowski@gmail.com).
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
