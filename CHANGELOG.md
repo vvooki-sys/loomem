@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-04
+
+Second security-audit remediation round (2026-07-03 audit @96db3a9): findings
+F1–F6 fixed, plus supply-chain and container hardening.
+
+### Security
+
+- **OAuth authorization-code flow hardened** (audit F1). `redirect_uri` must exact-match the registered allowlist at authorize and token time, PKCE is mandatory (S256 only, `plain` removed), the auth code is bound to `client_id` + `redirect_uri`, and confidential clients must present their secret (constant-time compare). Registration rejects unsupported `token_endpoint_auth_method` values and empty `redirect_uris`. (#37)
+- **Unauthenticated Dynamic Client Registration is bounded** (audit F2). The client store is hard-capped (1000 clients) with LRU-by-last-use eviction and a 10-minute mid-flow grace period matching the auth-code lifetime: at capacity stale clients are evicted, a store full of fresh clients sheds load with 429, redirect validation and the last-used refresh happen atomically, and `/oauth/register` is rate-limited per source (20/min). Behind a reverse proxy, set `LOOMEM_TRUST_FORWARDED_FOR=1` to key the limiter on the proxy-appended `X-Forwarded-For` client instead of the proxy's own address (see the deployment checklist). (#39)
+- **Stored content is delimited as data in LLM prompts** (audit F3). Extraction and consolidation wrap chunk text in explicit data/instruction boundaries, and the regex consolidation fallback strips `[CHUNK]` markers, blunting second-order prompt injection via memory content. (#42)
+- **`stream_id` charset validation** prevents key-prefix collisions in storage keys (audit F5); MCP ingress is guarded and the charset covers email-derived ids. (#40)
+- **Installer fails closed** when the release checksum cannot be verified, instead of warning and installing anyway (audit F4). (#38)
+- **Docker image drops privileges**: the server runs as non-root via a gosu entrypoint drop (volumes stay root-owned for existing fleets), the builder image is pinned, and command overrides route through the drop. (#36)
+- **`memory_store` preview echoes redacted content**, not the raw argument. (#35)
+- **CI actions pinned to full commit SHAs** with an explicit `toolchain: stable` (audit F6). (#41)
+
+### Added
+
+- `cargo-deny` supply-chain policy (`deny.toml`), with advisory ignores aligned to `.cargo/audit.toml`. (#43, #44)
+- Forgetting-correctness baseline eval (cycle/010 Phase A): supersede, purge and retention-release behavior locked in fixtures. (#34)
+
 ## [0.5.0] - 2026-07-01
 
 Security hardening release — implements items 1–7 of the 2026-07-01 security
