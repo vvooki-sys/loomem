@@ -57,6 +57,17 @@ fn resolve_stream_for_call(
         });
     };
 
+    // Defense-in-depth (audit F5): reject a malformed stream id before it is
+    // matched or used as a key component, mirroring validate_stream on the REST
+    // path. Membership matching already restricts to the caller's own streams;
+    // this closes the charset gap on the MCP ingress too.
+    if !crate::auth::is_valid_stream_id(explicit_id) {
+        return Err(ToolResult::error(format!(
+            "Invalid stream id '{}'.",
+            explicit_id
+        )));
+    }
+
     let Some(membership) = auth.memberships.iter().find(|m| m.stream_id == explicit_id) else {
         return Err(ToolResult::error(format!(
             "Access denied: no membership on stream '{}'.",
@@ -2192,6 +2203,24 @@ mod tests {
             msg.contains("Access denied") && msg.contains("__user_someone_else__"),
             "denial text unexpected: {msg}"
         );
+    }
+
+    #[test]
+    fn ac2_6_resolve_explicit_malformed_stream_rejected() {
+        // Audit F5 defense-in-depth: a colon-bearing stream id is rejected at
+        // the resolver before any key is built — even if it somehow appeared as
+        // a membership (charset check runs before the membership match).
+        let auth = multi_membership_auth(
+            "__user_u__",
+            vec![
+                ("__user_u__", UserRole::Admin, KeyScope::Private),
+                ("access:evil", UserRole::Admin, KeyScope::Private),
+            ],
+        );
+        let args = json!({ "content": "x", "stream": "access:evil" });
+        let deny = resolve_stream_for_call(&args, "__user_u__", &auth).expect_err("should reject");
+        assert_eq!(deny.is_error, Some(true));
+        assert!(deny.content[0].text.contains("Invalid stream id"));
     }
 
     #[test]

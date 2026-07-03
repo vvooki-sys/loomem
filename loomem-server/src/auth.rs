@@ -132,16 +132,17 @@ pub async fn auth_middleware(mut request: Request, next: Next) -> Result<Respons
 }
 
 /// Stream ids become RocksDB key components (e.g. `access:{stream}:…`) matched
-/// by byte prefix, so a value containing `:` or control characters could
-/// collide across namespaces or escape a prefix (audit F5). Restrict to a
-/// conservative charset + length; every reserved (`__…__`), user, project,
-/// UUID-shaped, and numeric stream id in use satisfies it.
+/// by byte prefix, so a value containing the `:` separator, whitespace, or
+/// control characters could collide across namespaces or escape a prefix
+/// (audit F5). Allow the characters real stream ids use — alphanumerics plus
+/// `_ - . @` (the last two cover email-shaped `__user_<email>` ids used by
+/// multi-user deployments) — and reject everything else, including `:`.
 #[must_use]
 pub fn is_valid_stream_id(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
         && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'@'))
 }
 
 /// Validate that the requested stream belongs to the authenticated user's scope.
@@ -333,6 +334,7 @@ mod tests {
         assert!(is_valid_stream_id("plej-lukasz-gumowski"));
         assert!(is_valid_stream_id("001"));
         assert!(is_valid_stream_id("550e8400-e29b-41d4-a716-446655440000"));
+        assert!(is_valid_stream_id("__user_jane.doe@example.com"));
         // Malformed: empty, colon (prefix escape), whitespace, control, overlong.
         assert!(!is_valid_stream_id(""));
         assert!(!is_valid_stream_id("access:evil"));
