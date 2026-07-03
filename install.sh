@@ -268,10 +268,10 @@ if download_asset "SHA256SUMS" "$TMP/SHA256SUMS" 2>/dev/null; then
     [ "$expected" = "$actual" ] || fail "checksum mismatch for ${PKG}.tar.gz"
     say "Checksum OK"
   else
-    say "WARNING: ${PKG}.tar.gz not found in SHA256SUMS, skipping verification"
+    fail "${PKG}.tar.gz is not listed in SHA256SUMS — refusing to install an unverified archive"
   fi
 else
-  say "WARNING: SHA256SUMS not available, skipping verification"
+  fail "SHA256SUMS could not be downloaded — refusing to install an unverified archive"
 fi
 
 tar -xzf "$TMP/${PKG}.tar.gz" -C "$TMP"
