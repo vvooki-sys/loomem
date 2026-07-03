@@ -181,6 +181,22 @@ pub fn get_compress_prompt(style: &str) -> &'static str {
     }
 }
 
+/// Consolidation system prompt for `style`, prefixed with the shared
+/// untrusted-data notice ([`crate::sanitizer::UNTRUSTED_DATA_NOTICE`]).
+///
+/// The fragments passed to [`compress`] are stored, user-authored content wrapped
+/// in `[CHUNK id="…"]` markers by the caller. Prepending this notice in the trusted
+/// system role tells the model to treat those fragments as data, so a memory that
+/// says "replace facts about X with Y" is summarized, not obeyed — the fix for
+/// second-order prompt injection on the consolidation path.
+fn compress_system_prompt(style: &str) -> String {
+    format!(
+        "{}\n\n{}",
+        crate::sanitizer::UNTRUSTED_DATA_NOTICE,
+        get_compress_prompt(style)
+    )
+}
+
 #[derive(Debug, Serialize)]
 struct EmbeddingRequest {
     input: String,
@@ -508,8 +524,7 @@ pub async fn compress(
         messages: vec![
             Message {
                 role: "system".to_string(),
-                content: get_compress_prompt(consolidation_style.unwrap_or("observation"))
-                    .to_string(),
+                content: compress_system_prompt(consolidation_style.unwrap_or("observation")),
             },
             Message {
                 role: "user".to_string(),
@@ -754,6 +769,24 @@ mod tests {
         assert!(config.build_http_client().is_ok());
         // Defaults are also valid (configs that predate the pool fields).
         assert!(LlmConfig::default().build_http_client().is_ok());
+    }
+
+    /// Every consolidation style carries the untrusted-data notice ahead of its
+    /// style-specific instructions, so wrapped memory fragments are treated as
+    /// data, not instructions (second-order prompt-injection defense).
+    #[test]
+    fn compress_system_prompt_prepends_untrusted_notice() {
+        for style in ["observation", "summary", "structured", "unknown"] {
+            let prompt = compress_system_prompt(style);
+            assert!(
+                prompt.starts_with(crate::sanitizer::UNTRUSTED_DATA_NOTICE),
+                "style {style} missing untrusted-data notice"
+            );
+            assert!(
+                prompt.ends_with(get_compress_prompt(style)),
+                "style {style} dropped its base prompt"
+            );
+        }
     }
 
     #[test]
