@@ -29,6 +29,16 @@ use subtle::ConstantTimeEq;
 
 // ── In-memory stores ────────────────────────────────────────────────
 
+/// Ceiling on concurrently-registered OAuth clients. Dynamic client
+/// registration is unauthenticated (it bootstraps auth), so without a bound a
+/// caller could grow the client map indefinitely (audit F2). New registrations
+/// are refused once this is hit; the cleanup loop evicts stale clients below.
+const MAX_OAUTH_CLIENTS: usize = 1000;
+
+/// Registered clients older than this are evicted by the cleanup loop, so the
+/// map does not accumulate abandoned DCR entries for the process lifetime.
+const OAUTH_CLIENT_TTL_SECS: u64 = 24 * 60 * 60;
+
 /// Registered OAuth clients (from Dynamic Client Registration).
 #[allow(dead_code)] // OAuth DCR fields; stored for future token-introspection and revocation endpoints
 #[derive(Clone, Debug)]
@@ -40,6 +50,8 @@ pub struct OAuthClient {
     /// `token_endpoint_auth_method`; such clients must present their secret at
     /// the token endpoint. Public clients (`none`) authenticate via PKCE only.
     pub confidential: bool,
+    /// Registration time, used by the cleanup loop to evict stale clients.
+    pub created_at: std::time::Instant,
 }
 
 /// Pending authorization: after user submits API key on /oauth/authorize.
@@ -71,14 +83,23 @@ impl OAuthState {
         }
     }
 
-    /// Spawn a background task to clean up expired auth codes (>10 min old).
+    /// Spawn a background task to evict expired auth codes (>10 min) and stale
+    /// registered clients (older than `OAUTH_CLIENT_TTL_SECS`).
     pub fn spawn_cleanup(self: &Arc<Self>) {
         let state = Arc::clone(self);
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                let mut auths = state.pending_auths.write().await;
-                auths.retain(|_, v| v.created_at.elapsed().as_secs() < 600);
+                state
+                    .pending_auths
+                    .write()
+                    .await
+                    .retain(|_, v| v.created_at.elapsed().as_secs() < 600);
+                state
+                    .clients
+                    .write()
+                    .await
+                    .retain(|_, v| v.created_at.elapsed().as_secs() < OAUTH_CLIENT_TTL_SECS);
             }
         });
     }
@@ -260,6 +281,20 @@ pub async fn register(
     State(state): State<Arc<OAuthState>>,
     Json(req): Json<RegisterRequest>,
 ) -> axum::response::Response {
+    // Bound the unauthenticated client store (audit F2): refuse new
+    // registrations once the ceiling is reached, so a registration flood cannot
+    // grow memory without bound. Stale clients are evicted by the cleanup loop.
+    if state.clients.read().await.len() >= MAX_OAUTH_CLIENTS {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "error": "temporarily_unavailable",
+                "error_description": "client registration limit reached; retry later",
+            })),
+        )
+            .into_response();
+    }
+
     let redirect_uris = req.redirect_uris.unwrap_or_default();
     // The authorization-code flow requires at least one redirect_uri; without
     // one the exact-match allowlist can never pass, so we would issue a
@@ -309,6 +344,7 @@ pub async fn register(
         client_secret: Some(client_secret.clone()),
         redirect_uris: redirect_uris.clone(),
         confidential,
+        created_at: std::time::Instant::now(),
     };
 
     state
@@ -760,6 +796,7 @@ mod tests {
                 client_secret: Some("shhh".to_string()),
                 redirect_uris: vec![redirect.to_string()],
                 confidential,
+                created_at: std::time::Instant::now(),
             },
         );
     }
@@ -937,6 +974,42 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    // Registration is refused once the client-store ceiling is reached, so an
+    // unauthenticated flood cannot grow memory without bound.
+    #[tokio::test]
+    async fn register_rejects_beyond_client_cap() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        {
+            let mut clients = state.clients.write().await;
+            for i in 0..MAX_OAUTH_CLIENTS {
+                let id = format!("c{i}");
+                clients.insert(
+                    id.clone(),
+                    OAuthClient {
+                        client_id: id,
+                        client_secret: Some("s".to_string()),
+                        redirect_uris: vec!["https://c/cb".to_string()],
+                        confidential: false,
+                        created_at: std::time::Instant::now(),
+                    },
+                );
+            }
+        }
+        let resp = register(
+            State(state),
+            Json(RegisterRequest {
+                redirect_uris: Some(vec!["https://client.example/cb".to_string()]),
+                client_name: None,
+                grant_types: None,
+                response_types: None,
+                token_endpoint_auth_method: Some("none".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
     // A confidential client must present its registered secret; a correct
     // secret is accepted, a missing one rejected.
     #[tokio::test]
@@ -949,6 +1022,7 @@ mod tests {
                 client_secret: Some("topsecret".to_string()),
                 redirect_uris: vec!["https://client.example/cb".to_string()],
                 confidential: true,
+                created_at: std::time::Instant::now(),
             },
         );
         let verifier = "verifier-1234567890-abcdefghijklmnop";
