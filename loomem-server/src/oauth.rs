@@ -31,13 +31,10 @@ use subtle::ConstantTimeEq;
 
 /// Ceiling on concurrently-registered OAuth clients. Dynamic client
 /// registration is unauthenticated (it bootstraps auth), so without a bound a
-/// caller could grow the client map indefinitely (audit F2). New registrations
-/// are refused once this is hit; the cleanup loop evicts stale clients below.
+/// caller could grow the client map indefinitely (audit F2). At capacity a new
+/// registration evicts the least-recently-used client (see `register`), so the
+/// store stays bounded without ever rejecting a legitimate new client.
 const MAX_OAUTH_CLIENTS: usize = 1000;
-
-/// Registered clients older than this are evicted by the cleanup loop, so the
-/// map does not accumulate abandoned DCR entries for the process lifetime.
-const OAUTH_CLIENT_TTL_SECS: u64 = 24 * 60 * 60;
 
 /// Registered OAuth clients (from Dynamic Client Registration).
 #[allow(dead_code)] // OAuth DCR fields; stored for future token-introspection and revocation endpoints
@@ -50,8 +47,10 @@ pub struct OAuthClient {
     /// `token_endpoint_auth_method`; such clients must present their secret at
     /// the token endpoint. Public clients (`none`) authenticate via PKCE only.
     pub confidential: bool,
-    /// Registration time, used by the cleanup loop to evict stale clients.
-    pub created_at: std::time::Instant,
+    /// Last time this client was used (registration, authorize, or token
+    /// exchange). Drives LRU eviction at capacity, so a still-active connector
+    /// is not dropped in favor of a fresh flood entry.
+    pub last_used: std::time::Instant,
 }
 
 /// Pending authorization: after user submits API key on /oauth/authorize.
@@ -83,8 +82,8 @@ impl OAuthState {
         }
     }
 
-    /// Spawn a background task to evict expired auth codes (>10 min) and stale
-    /// registered clients (older than `OAUTH_CLIENT_TTL_SECS`).
+    /// Spawn a background task to evict expired auth codes (>10 min).
+    /// Registered clients are bounded by LRU eviction in `register`, not here.
     pub fn spawn_cleanup(self: &Arc<Self>) {
         let state = Arc::clone(self);
         tokio::spawn(async move {
@@ -95,11 +94,6 @@ impl OAuthState {
                     .write()
                     .await
                     .retain(|_, v| v.created_at.elapsed().as_secs() < 600);
-                state
-                    .clients
-                    .write()
-                    .await
-                    .retain(|_, v| v.created_at.elapsed().as_secs() < OAUTH_CLIENT_TTL_SECS);
             }
         });
     }
@@ -183,6 +177,14 @@ async fn verify_client_secret(
             "invalid_client",
             "client authentication failed",
         ))
+    }
+}
+
+/// Mark a client as recently used so LRU eviction favors abandoned entries over
+/// active connectors.
+async fn touch_client(state: &OAuthState, client_id: &str) {
+    if let Some(c) = state.clients.write().await.get_mut(client_id) {
+        c.last_used = std::time::Instant::now();
     }
 }
 
@@ -281,20 +283,6 @@ pub async fn register(
     State(state): State<Arc<OAuthState>>,
     Json(req): Json<RegisterRequest>,
 ) -> axum::response::Response {
-    // Bound the unauthenticated client store (audit F2): refuse new
-    // registrations once the ceiling is reached, so a registration flood cannot
-    // grow memory without bound. Stale clients are evicted by the cleanup loop.
-    if state.clients.read().await.len() >= MAX_OAUTH_CLIENTS {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({
-                "error": "temporarily_unavailable",
-                "error_description": "client registration limit reached; retry later",
-            })),
-        )
-            .into_response();
-    }
-
     let redirect_uris = req.redirect_uris.unwrap_or_default();
     // The authorization-code flow requires at least one redirect_uri; without
     // one the exact-match allowlist can never pass, so we would issue a
@@ -344,14 +332,27 @@ pub async fn register(
         client_secret: Some(client_secret.clone()),
         redirect_uris: redirect_uris.clone(),
         confidential,
-        created_at: std::time::Instant::now(),
+        last_used: std::time::Instant::now(),
     };
 
-    state
-        .clients
-        .write()
-        .await
-        .insert(client_id.clone(), client);
+    {
+        // Bound the unauthenticated client store (audit F2) under a single write
+        // lock (no check-then-insert race): at capacity, evict the
+        // least-recently-used client to make room. A registration flood creates
+        // never-used entries (last_used == registration time), so those are
+        // evicted first and active connectors survive.
+        let mut clients = state.clients.write().await;
+        if clients.len() >= MAX_OAUTH_CLIENTS {
+            if let Some(lru_id) = clients
+                .iter()
+                .min_by_key(|(_, c)| c.last_used)
+                .map(|(id, _)| id.clone())
+            {
+                clients.remove(&lru_id);
+            }
+        }
+        clients.insert(client_id.clone(), client);
+    }
 
     (
         StatusCode::CREATED,
@@ -483,6 +484,7 @@ pub async fn authorize_submit(
             "PKCE required: send a code_challenge with code_challenge_method=S256",
         );
     }
+    touch_client(&state, &form.client_id).await;
 
     let code = Uuid::new_v4().to_string();
 
@@ -610,6 +612,7 @@ pub async fn token(
     {
         return resp;
     }
+    touch_client(&state, &pending.client_id).await;
 
     // TODO(sec F1 follow-up): issue a distinct, expiring access token (e.g. a
     // random UUID mapped to the API key in AppState) instead of returning the
@@ -796,7 +799,7 @@ mod tests {
                 client_secret: Some("shhh".to_string()),
                 redirect_uris: vec![redirect.to_string()],
                 confidential,
-                created_at: std::time::Instant::now(),
+                last_used: std::time::Instant::now(),
             },
         );
     }
@@ -974,10 +977,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    // Registration is refused once the client-store ceiling is reached, so an
-    // unauthenticated flood cannot grow memory without bound.
+    // At capacity, registration evicts the least-recently-used client instead
+    // of rejecting, so the store stays bounded without dropping a fresh client.
     #[tokio::test]
-    async fn register_rejects_beyond_client_cap() {
+    async fn register_at_cap_evicts_lru() {
         let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
         {
             let mut clients = state.clients.write().await;
@@ -990,13 +993,13 @@ mod tests {
                         client_secret: Some("s".to_string()),
                         redirect_uris: vec!["https://c/cb".to_string()],
                         confidential: false,
-                        created_at: std::time::Instant::now(),
+                        last_used: std::time::Instant::now(),
                     },
                 );
             }
         }
         let resp = register(
-            State(state),
+            State(state.clone()),
             Json(RegisterRequest {
                 redirect_uris: Some(vec!["https://client.example/cb".to_string()]),
                 client_name: None,
@@ -1007,7 +1010,12 @@ mod tests {
         )
         .await
         .into_response();
-        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let clients = state.clients.read().await;
+        // Bounded at MAX; oldest (c0) evicted, newest kept.
+        assert_eq!(clients.len(), MAX_OAUTH_CLIENTS);
+        assert!(!clients.contains_key("c0"));
+        assert!(clients.contains_key(&format!("c{}", MAX_OAUTH_CLIENTS - 1)));
     }
 
     // A confidential client must present its registered secret; a correct
@@ -1022,7 +1030,7 @@ mod tests {
                 client_secret: Some("topsecret".to_string()),
                 redirect_uris: vec!["https://client.example/cb".to_string()],
                 confidential: true,
-                created_at: std::time::Instant::now(),
+                last_used: std::time::Instant::now(),
             },
         );
         let verifier = "verifier-1234567890-abcdefghijklmnop";
