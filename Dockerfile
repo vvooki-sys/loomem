@@ -41,4 +41,8 @@ RUN sed -i 's/host = "127.0.0.1"/host = "0.0.0.0"/' config.toml && \
 # (LOOMEM_ALLOW_UNAUTH=1 to override deliberately).
 ENV LOOMEM_AT_REST_EXPECT_ENABLED=1
 EXPOSE 3030
-CMD ["./docker-entrypoint.sh"]
+# ENTRYPOINT (not a bare CMD) so operator command overrides — debug shells,
+# one-off loomem-migrate runs — still pass through the privilege drop in
+# docker-entrypoint.sh (Greptile P2, PR #36). Default command is the server.
+ENTRYPOINT ["./docker-entrypoint.sh"]
+CMD ["./loomem-server"]

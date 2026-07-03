@@ -71,4 +71,10 @@ else
   echo ">>> Skipping plaintext-event purge (LOOMEM_PURGE_PLAINTEXT_EVENTS_ON_START not set)."
 fi
 
-exec ./loomem-server
+# The image ENTRYPOINT routes every command through this script, so operator
+# overrides also run unprivileged. Default command is the server (Dockerfile
+# CMD); the migration blocks above stay env-gated no-ops for overrides too.
+if [ "$#" -eq 0 ]; then
+  set -- ./loomem-server
+fi
+exec "$@"
