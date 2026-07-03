@@ -25,6 +25,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use subtle::ConstantTimeEq;
+
 // ── In-memory stores ────────────────────────────────────────────────
 
 /// Registered OAuth clients (from Dynamic Client Registration).
@@ -34,6 +36,10 @@ pub struct OAuthClient {
     pub client_id: String,
     pub client_secret: Option<String>,
     pub redirect_uris: Vec<String>,
+    /// True when the client registered with a secret-based
+    /// `token_endpoint_auth_method`; such clients must present their secret at
+    /// the token endpoint. Public clients (`none`) authenticate via PKCE only.
+    pub confidential: bool,
 }
 
 /// Pending authorization: after user submits API key on /oauth/authorize.
@@ -75,6 +81,87 @@ impl OAuthState {
                 auths.retain(|_, v| v.created_at.elapsed().as_secs() < 600);
             }
         });
+    }
+}
+
+// ── Validation helpers ──────────────────────────────────────────────
+
+/// Exact-match check: does `client_id` exist and is `redirect_uri` one of the
+/// URIs it registered? Exact string equality only — no prefix, substring, or
+/// normalization — so a caller cannot smuggle a different destination past a
+/// registered one.
+async fn redirect_is_registered(state: &OAuthState, client_id: &str, redirect_uri: &str) -> bool {
+    let clients = state.clients.read().await;
+    clients
+        .get(client_id)
+        .is_some_and(|c| c.redirect_uris.iter().any(|u| u == redirect_uri))
+}
+
+/// Mandatory-PKCE gate for the authorize endpoints: a non-empty `code_challenge`
+/// with method `S256` is required. A missing challenge, an empty one, `plain`,
+/// or any other method is rejected — the token exchange only accepts S256.
+fn pkce_authorize_ok(challenge: Option<&str>, method: Option<&str>) -> bool {
+    challenge.is_some_and(|c| !c.is_empty()) && method == Some("S256")
+}
+
+/// S256 PKCE verification: BASE64URL(SHA256(verifier)) == challenge.
+fn pkce_s256_matches(verifier: &str, challenge: &str) -> bool {
+    use std::io::Write;
+    let mut hasher = Sha256::new();
+    if hasher.write_all(verifier.as_bytes()).is_err() {
+        return false;
+    }
+    base64_url_encode(&hasher.finalize()) == challenge
+}
+
+/// Minimal 400 page for a rejected authorize request. Returned instead of a
+/// redirect so a bad or forged `redirect_uri` is never honored.
+fn authorize_error(msg: &str) -> axum::response::Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Html(format!(
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Authorization error</title></head>\
+             <body style=\"font-family:sans-serif;max-width:32rem;margin:4rem auto;color:#1F1B16\">\
+             <h1>Authorization error</h1><p>{}</p></body></html>",
+            html_escape(msg)
+        )),
+    )
+        .into_response()
+}
+
+/// Uniform OAuth token-endpoint error body (RFC 6749 §5.2).
+fn token_error(error: &str, description: &str) -> axum::response::Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": error, "error_description": description })),
+    )
+        .into_response()
+}
+
+/// Confidential-client secret check (constant-time). Public clients — those
+/// registered with `token_endpoint_auth_method=none` — skip this and rely on
+/// mandatory PKCE.
+async fn verify_client_secret(
+    state: &OAuthState,
+    client_id: &str,
+    presented: Option<&str>,
+) -> Result<(), axum::response::Response> {
+    let clients = state.clients.read().await;
+    let Some(client) = clients.get(client_id) else {
+        return Err(token_error("invalid_client", "unknown client"));
+    };
+    if !client.confidential {
+        return Ok(());
+    }
+    let expected = client.client_secret.as_deref().unwrap_or_default();
+    let presented = presented.unwrap_or_default();
+    if bool::from(presented.as_bytes().ct_eq(expected.as_bytes())) {
+        Ok(())
+    } else {
+        Err(token_error(
+            "invalid_client",
+            "client authentication failed",
+        ))
     }
 }
 
@@ -163,7 +250,7 @@ pub async fn authorization_server_metadata(
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
-        "code_challenge_methods_supported": ["S256", "plain"],
+        "code_challenge_methods_supported": ["S256"],
         "scopes_supported": ["mcp"],
     }))
 }
@@ -176,11 +263,18 @@ pub async fn register(
     let client_id = Uuid::new_v4().to_string();
     let client_secret = Uuid::new_v4().to_string();
     let redirect_uris = req.redirect_uris.unwrap_or_default();
+    // Confidential iff the client chose a secret-based auth method; public
+    // clients (`none` / unset) are authenticated by mandatory PKCE at /token.
+    let confidential = matches!(
+        req.token_endpoint_auth_method.as_deref(),
+        Some("client_secret_post") | Some("client_secret_basic")
+    );
 
     let client = OAuthClient {
         client_id: client_id.clone(),
         client_secret: Some(client_secret.clone()),
         redirect_uris: redirect_uris.clone(),
+        confidential,
     };
 
     state
@@ -209,9 +303,22 @@ pub async fn register(
 
 /// GET /oauth/authorize — shows a minimal login page where user enters API key.
 pub async fn authorize_page(
-    State(_state): State<Arc<OAuthState>>,
+    State(state): State<Arc<OAuthState>>,
     Query(q): Query<AuthorizeQuery>,
 ) -> axum::response::Response {
+    // Validate before rendering. On rejection we return an inline error page,
+    // never a redirect — the redirect target is exactly what we're checking.
+    if !redirect_is_registered(&state, &q.client_id, &q.redirect_uri).await {
+        return authorize_error("redirect_uri is not registered for this client_id");
+    }
+    if !pkce_authorize_ok(
+        q.code_challenge.as_deref(),
+        q.code_challenge_method.as_deref(),
+    ) {
+        return authorize_error(
+            "PKCE required: send a code_challenge with code_challenge_method=S256",
+        );
+    }
     authorize_page_html(q).into_response()
 }
 
@@ -292,7 +399,22 @@ fn authorize_page_html(q: AuthorizeQuery) -> impl IntoResponse {
 pub async fn authorize_submit(
     State(state): State<Arc<OAuthState>>,
     axum::Form(form): axum::Form<AuthorizeSubmit>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    // Re-validate on submit — the GET check can be bypassed by POSTing directly.
+    // redirect_uri must be registered and PKCE is mandatory; reject inline,
+    // never redirect to an unvalidated target.
+    if !redirect_is_registered(&state, &form.client_id, &form.redirect_uri).await {
+        return authorize_error("redirect_uri is not registered for this client_id");
+    }
+    if !pkce_authorize_ok(
+        form.code_challenge.as_deref(),
+        form.code_challenge_method.as_deref(),
+    ) {
+        return authorize_error(
+            "PKCE required: send a code_challenge with code_challenge_method=S256",
+        );
+    }
+
     let code = Uuid::new_v4().to_string();
 
     let pending = PendingAuth {
@@ -329,7 +451,7 @@ pub async fn authorize_submit(
         }
     }
 
-    Redirect::to(&redirect_url)
+    Redirect::to(&redirect_url).into_response()
 }
 
 /// POST /oauth/token — exchange authorization code for access token.
@@ -378,38 +500,54 @@ pub async fn token(
             .into_response();
     }
 
-    // Verify PKCE if code_challenge was provided
-    if let Some(challenge) = &pending.code_challenge {
-        let verifier = match &req.code_verifier {
-            Some(v) => v,
-            None => return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "invalid_grant", "error_description": "missing code_verifier" })),
-            ).into_response(),
-        };
-
-        let method = pending.code_challenge_method.as_deref().unwrap_or("plain");
-        let valid = match method {
-            "S256" => {
-                use std::io::Write;
-                let mut hasher = Sha256::new();
-                hasher.write_all(verifier.as_bytes()).ok();
-                let hash = hasher.finalize();
-                base64_url_encode(&hash) == *challenge
-            }
-            "plain" => verifier == challenge,
-            _ => false,
-        };
-
-        if !valid {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "invalid_grant", "error_description": "PKCE verification failed" })),
-            ).into_response();
-        }
+    // Bind the code to the client and redirect it was issued for (RFC 6749
+    // §4.1.3). A code minted for one client_id / redirect_uri cannot be
+    // redeemed under another — this closes the interception path independently
+    // of PKCE.
+    if req.client_id.as_deref() != Some(pending.client_id.as_str()) {
+        return token_error(
+            "invalid_grant",
+            "client_id does not match the authorization code",
+        );
+    }
+    if req.redirect_uri.as_deref() != Some(pending.redirect_uri.as_str()) {
+        return token_error(
+            "invalid_grant",
+            "redirect_uri does not match the authorization code",
+        );
     }
 
-    // The access_token IS the user's API key
+    // Mandatory PKCE, S256 only. The challenge is always present (enforced at
+    // authorize time); a missing verifier or a mismatch is fatal. `plain` is
+    // not accepted.
+    let Some(challenge) = pending.code_challenge.as_deref() else {
+        return token_error(
+            "invalid_grant",
+            "authorization code is missing its PKCE challenge",
+        );
+    };
+    let Some(verifier) = req.code_verifier.as_deref() else {
+        return token_error("invalid_request", "missing code_verifier");
+    };
+    if !pkce_s256_matches(verifier, challenge) {
+        return token_error("invalid_grant", "PKCE verification failed");
+    }
+
+    // Confidential clients must additionally present their registered secret;
+    // public clients (token_endpoint_auth_method=none) are authenticated by
+    // PKCE alone.
+    if let Err(resp) =
+        verify_client_secret(&state, &pending.client_id, req.client_secret.as_deref()).await
+    {
+        return resp;
+    }
+
+    // TODO(sec F1 follow-up): issue a distinct, expiring access token (e.g. a
+    // random UUID mapped to the API key in AppState) instead of returning the
+    // raw key, so tokens are independently revocable. Deferred from this PR —
+    // it requires the Bearer middleware (auth.rs) to resolve issued tokens,
+    // which is out of scope for this surgical change. Tracked in the backlog.
+    // The access_token currently IS the user's API key.
     (
         StatusCode::OK,
         Json(json!({
@@ -573,4 +711,156 @@ fn base64_url_encode(data: &[u8]) -> String {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+
+    async fn seed_client(state: &OAuthState, id: &str, redirect: &str, confidential: bool) {
+        state.clients.write().await.insert(
+            id.to_string(),
+            OAuthClient {
+                client_id: id.to_string(),
+                client_secret: Some("shhh".to_string()),
+                redirect_uris: vec![redirect.to_string()],
+                confidential,
+            },
+        );
+    }
+
+    async fn seed_pending(state: &OAuthState, code: &str, challenge: &str) {
+        state.pending_auths.write().await.insert(
+            code.to_string(),
+            PendingAuth {
+                code: code.to_string(),
+                client_id: "c1".to_string(),
+                redirect_uri: "https://client.example/cb".to_string(),
+                api_key: "USER_KEY".to_string(),
+                code_challenge: Some(challenge.to_string()),
+                code_challenge_method: Some("S256".to_string()),
+                created_at: std::time::Instant::now(),
+            },
+        );
+    }
+
+    fn token_req(
+        code: &str,
+        client_id: &str,
+        redirect_uri: &str,
+        verifier: Option<&str>,
+    ) -> TokenRequest {
+        TokenRequest {
+            grant_type: "authorization_code".to_string(),
+            code: Some(code.to_string()),
+            redirect_uri: Some(redirect_uri.to_string()),
+            client_id: Some(client_id.to_string()),
+            client_secret: None,
+            code_verifier: verifier.map(str::to_string),
+        }
+    }
+
+    // (a) an unregistered redirect_uri is rejected; only the exact registered
+    // value matches.
+    #[tokio::test]
+    async fn redirect_must_be_registered() {
+        let state = OAuthState::new("https://memory.example.com".to_string());
+        seed_client(&state, "c1", "https://client.example/cb", false).await;
+        assert!(redirect_is_registered(&state, "c1", "https://client.example/cb").await);
+        assert!(!redirect_is_registered(&state, "c1", "https://evil.example/cb").await);
+        assert!(!redirect_is_registered(&state, "c1", "https://client.example/cb/extra").await);
+        assert!(!redirect_is_registered(&state, "unknown", "https://client.example/cb").await);
+    }
+
+    // (b) PKCE is mandatory at authorize time: no challenge (or an empty one,
+    // or a missing method) is rejected.
+    #[test]
+    fn pkce_required_at_authorize() {
+        assert!(!pkce_authorize_ok(None, Some("S256")));
+        assert!(!pkce_authorize_ok(Some(""), Some("S256")));
+        assert!(!pkce_authorize_ok(Some("abc"), None));
+        assert!(pkce_authorize_ok(Some("abc"), Some("S256")));
+    }
+
+    // (c) the `plain` method (and anything other than S256) is rejected.
+    #[test]
+    fn non_s256_pkce_method_rejected() {
+        assert!(!pkce_authorize_ok(Some("abc"), Some("plain")));
+        assert!(!pkce_authorize_ok(Some("abc"), Some("S512")));
+    }
+
+    #[test]
+    fn s256_verifier_matches_known_challenge() {
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        let challenge = base64_url_encode(&sha256_digest(verifier.as_bytes()));
+        assert!(pkce_s256_matches(verifier, &challenge));
+        assert!(!pkce_s256_matches("wrong-verifier", &challenge));
+    }
+
+    // (d) the token endpoint rejects a code redeemed under a different
+    // client_id or redirect_uri, and accepts the correctly-bound request.
+    #[tokio::test]
+    async fn token_binds_client_and_redirect() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        seed_client(&state, "c1", "https://client.example/cb", false).await;
+        let verifier = "verifier-1234567890-abcdefghijklmnop";
+        let challenge = base64_url_encode(&sha256_digest(verifier.as_bytes()));
+
+        // Mismatched client_id → rejected.
+        seed_pending(&state, "code-a", &challenge).await;
+        let resp = token(
+            State(state.clone()),
+            axum::Form(token_req(
+                "code-a",
+                "attacker",
+                "https://client.example/cb",
+                Some(verifier),
+            )),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Mismatched redirect_uri → rejected.
+        seed_pending(&state, "code-b", &challenge).await;
+        let resp = token(
+            State(state.clone()),
+            axum::Form(token_req(
+                "code-b",
+                "c1",
+                "https://evil.example/cb",
+                Some(verifier),
+            )),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Missing verifier → rejected (mandatory PKCE).
+        seed_pending(&state, "code-c", &challenge).await;
+        let resp = token(
+            State(state.clone()),
+            axum::Form(token_req("code-c", "c1", "https://client.example/cb", None)),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Correct client_id + redirect_uri + verifier → 200.
+        seed_pending(&state, "code-d", &challenge).await;
+        let resp = token(
+            State(state.clone()),
+            axum::Form(token_req(
+                "code-d",
+                "c1",
+                "https://client.example/cb",
+                Some(verifier),
+            )),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }
