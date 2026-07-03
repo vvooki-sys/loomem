@@ -32,9 +32,15 @@ use subtle::ConstantTimeEq;
 /// Ceiling on concurrently-registered OAuth clients. Dynamic client
 /// registration is unauthenticated (it bootstraps auth), so without a bound a
 /// caller could grow the client map indefinitely (audit F2). At capacity a new
-/// registration evicts the least-recently-used client (see `register`), so the
-/// store stays bounded without ever rejecting a legitimate new client.
+/// registration evicts the least-recently-used client **only if it is stale**
+/// (`EVICT_MIN_AGE_SECS`); if every entry is fresh — an active burst or flood —
+/// it sheds load with 429 rather than dropping a client that may be mid-flow.
 const MAX_OAUTH_CLIENTS: usize = 1000;
+
+/// A client younger than this may still be mid-flow (its auth code is valid for
+/// up to 10 min), so it is never chosen for eviction. Matches the auth-code
+/// lifetime enforced in `token`.
+const EVICT_MIN_AGE_SECS: u64 = 600;
 
 /// Registered OAuth clients (from Dynamic Client Registration).
 #[allow(dead_code)] // OAuth DCR fields; stored for future token-introspection and revocation endpoints
@@ -337,18 +343,36 @@ pub async fn register(
 
     {
         // Bound the unauthenticated client store (audit F2) under a single write
-        // lock (no check-then-insert race): at capacity, evict the
-        // least-recently-used client to make room. A registration flood creates
-        // never-used entries (last_used == registration time), so those are
-        // evicted first and active connectors survive.
+        // lock (no check-then-insert race). At capacity, evict the
+        // least-recently-used client — but only if it is stale
+        // (`EVICT_MIN_AGE_SECS`). A client fresher than that may be mid-flow
+        // (touched on authorize/token), so if every entry is that fresh — an
+        // active burst or a registration flood — shed load with 429 instead of
+        // dropping a live client. Under a flood the attacker's own entries age
+        // out first, so a legitimate mid-flow client is never the victim.
         let mut clients = state.clients.write().await;
         if clients.len() >= MAX_OAUTH_CLIENTS {
-            if let Some(lru_id) = clients
+            let lru = clients
                 .iter()
                 .min_by_key(|(_, c)| c.last_used)
-                .map(|(id, _)| id.clone())
-            {
-                clients.remove(&lru_id);
+                .map(|(id, c)| (id.clone(), c.last_used));
+            match lru {
+                Some((lru_id, last_used))
+                    if last_used.elapsed().as_secs() >= EVICT_MIN_AGE_SECS =>
+                {
+                    clients.remove(&lru_id);
+                }
+                _ => {
+                    return (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        Json(json!({
+                            "error": "temporarily_unavailable",
+                            "error_description":
+                                "client registration is temporarily full; retry shortly",
+                        })),
+                    )
+                        .into_response();
+                }
             }
         }
         clients.insert(client_id.clone(), client);
@@ -977,15 +1001,20 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    // At capacity, registration evicts the least-recently-used client instead
-    // of rejecting, so the store stays bounded without dropping a fresh client.
-    #[tokio::test]
-    async fn register_at_cap_evicts_lru() {
+    async fn flood_state(oldest_stale: bool) -> Arc<OAuthState> {
         let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        let stale = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(EVICT_MIN_AGE_SECS + 100))
+            .expect("representable stale instant");
         {
             let mut clients = state.clients.write().await;
             for i in 0..MAX_OAUTH_CLIENTS {
                 let id = format!("c{i}");
+                let last_used = if oldest_stale && i == 0 {
+                    stale
+                } else {
+                    std::time::Instant::now()
+                };
                 clients.insert(
                     id.clone(),
                     OAuthClient {
@@ -993,29 +1022,49 @@ mod tests {
                         client_secret: Some("s".to_string()),
                         redirect_uris: vec!["https://c/cb".to_string()],
                         confidential: false,
-                        last_used: std::time::Instant::now(),
+                        last_used,
                     },
                 );
             }
         }
-        let resp = register(
-            State(state.clone()),
-            Json(RegisterRequest {
-                redirect_uris: Some(vec!["https://client.example/cb".to_string()]),
-                client_name: None,
-                grant_types: None,
-                response_types: None,
-                token_endpoint_auth_method: Some("none".to_string()),
-            }),
-        )
-        .await
-        .into_response();
+        state
+    }
+
+    fn public_register_req() -> RegisterRequest {
+        RegisterRequest {
+            redirect_uris: Some(vec!["https://client.example/cb".to_string()]),
+            client_name: None,
+            grant_types: None,
+            response_types: None,
+            token_endpoint_auth_method: Some("none".to_string()),
+        }
+    }
+
+    // At capacity, registration evicts a STALE least-recently-used client
+    // (older than the mid-flow grace period) to admit the new one; the store
+    // stays bounded.
+    #[tokio::test]
+    async fn register_at_cap_evicts_stale_lru() {
+        let state = flood_state(true).await;
+        let resp = register(State(state.clone()), Json(public_register_req()))
+            .await
+            .into_response();
         assert_eq!(resp.status(), StatusCode::CREATED);
         let clients = state.clients.read().await;
-        // Bounded at MAX; oldest (c0) evicted, newest kept.
         assert_eq!(clients.len(), MAX_OAUTH_CLIENTS);
-        assert!(!clients.contains_key("c0"));
-        assert!(clients.contains_key(&format!("c{}", MAX_OAUTH_CLIENTS - 1)));
+        assert!(!clients.contains_key("c0")); // the stale one was evicted
+    }
+
+    // At capacity with every client fresh (an active burst / flood), a new
+    // registration is shed with 429 rather than evicting a possibly mid-flow
+    // client.
+    #[tokio::test]
+    async fn register_at_cap_full_of_fresh_rejects() {
+        let state = flood_state(false).await;
+        let resp = register(State(state), Json(public_register_req()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     // A confidential client must present its registered secret; a correct
