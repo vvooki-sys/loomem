@@ -259,16 +259,50 @@ pub async fn authorization_server_metadata(
 pub async fn register(
     State(state): State<Arc<OAuthState>>,
     Json(req): Json<RegisterRequest>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    let redirect_uris = req.redirect_uris.unwrap_or_default();
+    // The authorization-code flow requires at least one redirect_uri; without
+    // one the exact-match allowlist can never pass, so we would issue a
+    // client_id that can never reach /oauth/authorize. Refuse up front.
+    if redirect_uris.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "invalid_redirect_uri",
+                "error_description": "at least one redirect_uri is required",
+            })),
+        )
+            .into_response();
+    }
+
+    // Resolve the effective auth method (unset mirrors the `client_secret_post`
+    // default we echo below). We implement only secret-in-body
+    // (`client_secret_post`) and public (`none`) — the two methods advertised
+    // in server metadata — so reject anything else rather than store a client
+    // whose advertised auth we don't actually enforce (e.g. `client_secret_basic`,
+    // whose secret rides an Authorization header we don't read).
+    let auth_method = req
+        .token_endpoint_auth_method
+        .as_deref()
+        .unwrap_or("client_secret_post");
+    if auth_method != "client_secret_post" && auth_method != "none" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "invalid_client_metadata",
+                "error_description":
+                    "unsupported token_endpoint_auth_method; use client_secret_post or none",
+            })),
+        )
+            .into_response();
+    }
+    // Confidential unless the client explicitly registered as public (`none`),
+    // kept consistent with the `token_endpoint_auth_method` echoed back so a
+    // client told it is confidential actually has its secret enforced at /token.
+    let confidential = auth_method != "none";
+
     let client_id = Uuid::new_v4().to_string();
     let client_secret = Uuid::new_v4().to_string();
-    let redirect_uris = req.redirect_uris.unwrap_or_default();
-    // Confidential iff the client chose a secret-based auth method; public
-    // clients (`none` / unset) are authenticated by mandatory PKCE at /token.
-    let confidential = matches!(
-        req.token_endpoint_auth_method.as_deref(),
-        Some("client_secret_post") | Some("client_secret_basic")
-    );
 
     let client = OAuthClient {
         client_id: client_id.clone(),
@@ -294,11 +328,10 @@ pub async fn register(
                 .grant_types
                 .unwrap_or_else(|| vec!["authorization_code".into()]),
             response_types: req.response_types.unwrap_or_else(|| vec!["code".into()]),
-            token_endpoint_auth_method: req
-                .token_endpoint_auth_method
-                .unwrap_or_else(|| "client_secret_post".into()),
+            token_endpoint_auth_method: auth_method.to_string(),
         }),
     )
+        .into_response()
 }
 
 /// GET /oauth/authorize — shows a minimal login page where user enters API key.
@@ -861,6 +894,82 @@ mod tests {
         )
         .await
         .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // Registration must supply at least one redirect_uri, else the allowlist
+    // can never pass and the issued client_id is unusable.
+    #[tokio::test]
+    async fn register_requires_redirect_uris() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        let resp = register(
+            State(state),
+            Json(RegisterRequest {
+                redirect_uris: None,
+                client_name: None,
+                grant_types: None,
+                response_types: None,
+                token_endpoint_auth_method: Some("none".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // An auth method we don't implement (and don't advertise) is rejected at
+    // registration rather than stored as a client we can't authenticate.
+    #[tokio::test]
+    async fn register_rejects_unsupported_auth_method() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        let resp = register(
+            State(state),
+            Json(RegisterRequest {
+                redirect_uris: Some(vec!["https://client.example/cb".to_string()]),
+                client_name: None,
+                grant_types: None,
+                response_types: None,
+                token_endpoint_auth_method: Some("client_secret_basic".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // A confidential client must present its registered secret; a correct
+    // secret is accepted, a missing one rejected.
+    #[tokio::test]
+    async fn confidential_client_must_present_secret() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        state.clients.write().await.insert(
+            "c1".to_string(),
+            OAuthClient {
+                client_id: "c1".to_string(),
+                client_secret: Some("topsecret".to_string()),
+                redirect_uris: vec!["https://client.example/cb".to_string()],
+                confidential: true,
+            },
+        );
+        let verifier = "verifier-1234567890-abcdefghijklmnop";
+        let challenge = base64_url_encode(&sha256_digest(verifier.as_bytes()));
+
+        // Missing secret → rejected.
+        seed_pending(&state, "code-x", &challenge).await;
+        let mut req = token_req("code-x", "c1", "https://client.example/cb", Some(verifier));
+        req.client_secret = None;
+        let resp = token(State(state.clone()), axum::Form(req))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Correct secret → accepted.
+        seed_pending(&state, "code-y", &challenge).await;
+        let mut req = token_req("code-y", "c1", "https://client.example/cb", Some(verifier));
+        req.client_secret = Some("topsecret".to_string());
+        let resp = token(State(state.clone()), axum::Form(req))
+            .await
+            .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 }
