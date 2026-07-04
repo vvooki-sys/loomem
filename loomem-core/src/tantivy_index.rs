@@ -5,7 +5,7 @@ use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, RangeQuery};
 use tantivy::schema::*;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::storage::RocksDbStore;
 
@@ -31,14 +31,16 @@ fn default_drift_warn_pct() -> f64 {
 
 /// Sanitize query text for Tantivy's `QueryParser`.
 ///
-/// A natural-language query is never DSL, but any unescaped Tantivy operator
-/// metacharacter makes `QueryParser::parse_query` return
-/// `QueryParserError::SyntaxError`, which fails the whole `memory_search`
-/// (zero hits) instead of degrading to the vector leg. Mapping every operator
-/// metacharacter to a space guarantees arbitrary input always parses. Lossy by
-/// design (terms are split, not interpreted); the vector leg keeps full recall
-/// on the raw text. Covers the full Tantivy set
-/// `+ - && || ! ( ) { } [ ] ^ " ~ * ? : \ / < > =` plus apostrophes/smart quotes.
+/// Fallback step of [`parse_lexical_query`]: when the raw input fails to
+/// parse (an unescaped operator metacharacter makes `parse_query` return
+/// `QueryParserError::SyntaxError`), mapping every operator metacharacter to
+/// a space lets arbitrary natural-language input parse as plain terms. Lossy
+/// by design (terms are split, not interpreted); the vector leg keeps full
+/// recall on the raw text. Covers the full Tantivy set
+/// `+ - && || ! ( ) { } [ ] ^ " ~ * ? : \ / < > =` plus apostrophes/smart
+/// quotes. Character-level only: bare boolean keywords (`AND`, `OR`) pass
+/// through and can still fail the parse — [`parse_lexical_query`] handles
+/// that residual case by degrading instead of erroring.
 fn sanitize_query(q: &str) -> String {
     q.chars()
         .map(|c| match c {
@@ -53,11 +55,57 @@ fn sanitize_query(q: &str) -> String {
         .collect()
 }
 
+/// Which attempt produced the lexical query (observable for tests/logs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LexicalParse {
+    /// The raw input parsed as-is — valid Tantivy syntax, so deliberate DSL
+    /// (e.g. `"quoted phrases"`) keeps its exact semantics and ranking.
+    Raw,
+    /// The raw input failed to parse; the [`sanitize_query`]-mapped form
+    /// parsed instead (byte-identical results to the previous unconditional
+    /// sanitization for every such input).
+    Sanitized,
+}
+
+/// Parse the content query for the BM25 leg without ever hard-failing search.
+///
+/// Three-step contract (query-sanitization brief, roadmap W2):
+/// 1. Try the raw input first, so currently-valid queries — including
+///    deliberate `"quoted phrases"` — keep identical semantics and ranking.
+/// 2. On a parse error, retry with [`sanitize_query`] (operator
+///    metacharacters → space). `parse_query_lenient` is available in tantivy
+///    0.25 but drops offending tokens wholesale (losing terms like
+///    `SIAC_GEE?`); the sanitize-retry keeps every alphanumeric term and
+///    reproduces the pre-change fallback results byte-for-byte.
+/// 3. If even the sanitized form fails (e.g. a bare boolean keyword like
+///    `AND`, which character sanitization cannot neutralize), log a `warn!`
+///    and return `None`: callers skip the lexical leg so hybrid search
+///    degrades to the remaining legs (vector/graph) instead of erroring.
+fn parse_lexical_query(
+    parser: &QueryParser,
+    query_text: &str,
+) -> Option<(Box<dyn tantivy::query::Query>, LexicalParse)> {
+    match parser.parse_query(query_text) {
+        Ok(q) => Some((q, LexicalParse::Raw)),
+        Err(raw_err) => match parser.parse_query(&sanitize_query(query_text)) {
+            Ok(q) => Some((q, LexicalParse::Sanitized)),
+            Err(sanitized_err) => {
+                warn!(
+                    "BM25 leg skipped: query unparsable raw ({raw_err}) and sanitized \
+                     ({sanitized_err}); degrading to remaining search legs"
+                );
+                None
+            }
+        },
+    }
+}
+
 #[cfg(test)]
 mod sanitize_query_tests {
-    //! Sanitization must be total: no input may reach `QueryParser::parse_query`
-    //! carrying a Tantivy operator, or the whole `memory_search` errors with
-    //! `SyntaxError` instead of returning hits. See the query-sanitization brief.
+    //! Sanitization must stay total at the character level: the fallback in
+    //! `parse_lexical_query` relies on the sanitized form parsing for any
+    //! input whose failure was caused by operator metacharacters. See the
+    //! query-sanitization brief (roadmap W2).
     use super::sanitize_query;
 
     /// Every Tantivy DSL metacharacter is neutralised to whitespace, so the
@@ -105,6 +153,158 @@ mod sanitize_query_tests {
     fn leaves_clean_query_unchanged() {
         let clean = "atmospheric correction methods for Sentinel imagery";
         assert_eq!(sanitize_query(clean), clean);
+    }
+}
+
+#[cfg(test)]
+mod lexical_parse_tests {
+    //! Three-step lexical parse contract (query-sanitization brief, W2):
+    //! raw first (valid DSL keeps its semantics), sanitize-retry on error,
+    //! degrade to the remaining legs when even the sanitized form fails.
+    use super::*;
+    use crate::config::TantivyConfig;
+    use tempfile::TempDir;
+
+    fn cfg() -> TantivyConfig {
+        TantivyConfig {
+            enabled: true,
+            heap_size_mb: 16,
+            drift_warn_pct: 5.0,
+            auto_rebuild_on_drift: false,
+        }
+    }
+
+    fn doc(id: &str, content: &str) -> TextDocument {
+        TextDocument {
+            id: id.to_string(),
+            content: content.to_string(),
+            user_id: "default".to_string(),
+            app_id: "default".to_string(),
+            level: 0,
+            timestamp: 1_000,
+            stream: "s1".to_string(),
+            entities: None,
+            relations: None,
+            event_date: None,
+            source_agent: None,
+        }
+    }
+
+    fn seeded_index(docs: &[(&str, &str)]) -> (TempDir, TantivyIndex) {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut idx = TantivyIndex::open(tmp.path().join("tantivy"), &cfg()).expect("open");
+        for (id, content) in docs {
+            idx.index_document(doc(id, content)).unwrap();
+        }
+        idx.commit().unwrap();
+        (tmp, idx)
+    }
+
+    fn content_parser(idx: &TantivyIndex) -> QueryParser {
+        QueryParser::for_index(&idx.index, vec![idx.content_field])
+    }
+
+    /// (a) The verbatim benchmark question that used to hard-fail
+    /// `memory_search` with `SyntaxError` retrieves the indexed fact.
+    #[test]
+    fn verbatim_benchmark_question_retrieves_doc() {
+        let (_tmp, idx) = seeded_index(&[
+            (
+                "fact",
+                "6S, MAJA and Sen2Cor are atmospheric correction algorithms; \
+                 6S is implemented in the SIAC_GEE tool",
+            ),
+            ("noise", "unrelated cycling trivia"),
+        ]);
+        let q = "I was going through our previous conversation about atmospheric \
+                 correction methods, and I wanted to confirm - you mentioned that 6S, \
+                 MAJA, and Sen2Cor are all algorithms … which one is implemented in \
+                 the SIAC_GEE tool?";
+        let results = idx.search(q, 10).expect("search must not hard-fail");
+        assert!(
+            results.iter().any(|r| r.id == "fact"),
+            "expected the SIAC_GEE fact to be retrieved, got: {results:?}"
+        );
+    }
+
+    /// (b) Metachar battery: none of these may return an error, across the
+    /// stream/entity/date/agent search entry points as well as plain search.
+    #[test]
+    fn metachar_battery_never_errors() {
+        let (_tmp, idx) = seeded_index(&[("d1", "foo bar narrow wide")]);
+        for q in ["foo - bar?", "a:b (c)", "x/y ~z", "wide < narrow"] {
+            assert!(idx.search(q, 5).is_ok(), "search({q:?}) errored");
+            assert!(
+                idx.search_with_stream(q, "s1", 5).is_ok(),
+                "search_with_stream({q:?}) errored"
+            );
+            assert!(
+                idx.search_with_date_range(q, 0, 2_000, 5).is_ok(),
+                "search_with_date_range({q:?}) errored"
+            );
+            assert!(
+                idx.search_with_agent(AgentSearchParams {
+                    query_text: q,
+                    stream: None,
+                    entity: None,
+                    date_range: None,
+                    source_agent: None,
+                    exclude_source_agents: None,
+                    limit: 5,
+                })
+                .is_ok(),
+                "search_with_agent({q:?}) errored"
+            );
+        }
+    }
+
+    /// (c) A deliberate `"quoted phrase"` parses via the first attempt — no
+    /// fallback taken — and keeps phrase semantics (adjacency required).
+    #[test]
+    fn quoted_phrase_parses_raw_with_phrase_semantics() {
+        let (_tmp, idx) = seeded_index(&[
+            ("adjacent", "the exact phrase lives here"),
+            ("scrambled", "phrase then some filler then exact"),
+        ]);
+
+        let parser = content_parser(&idx);
+        let (_, mode) =
+            parse_lexical_query(&parser, "\"exact phrase\"").expect("quoted phrase must parse");
+        assert_eq!(mode, LexicalParse::Raw, "phrase must not take the fallback");
+
+        let results = idx.search("\"exact phrase\"", 10).unwrap();
+        let ids: Vec<&str> = results.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"adjacent"), "phrase must match adjacent doc");
+        assert!(
+            !ids.contains(&"scrambled"),
+            "phrase must not match scrambled doc"
+        );
+    }
+
+    /// Raw-unparsable input with metacharacters takes the sanitize fallback
+    /// (deterministic case: `a:b` targets a nonexistent field).
+    #[test]
+    fn unknown_field_query_takes_sanitized_fallback() {
+        let (_tmp, idx) = seeded_index(&[("d1", "a b c")]);
+        let parser = content_parser(&idx);
+        let (_, mode) = parse_lexical_query(&parser, "a:b (c)").expect("must parse sanitized");
+        assert_eq!(mode, LexicalParse::Sanitized);
+    }
+
+    /// A bare boolean keyword survives character sanitization and still fails
+    /// the parser: the helper degrades (`None`) and every search entry point
+    /// returns `Ok` with an empty lexical result instead of an error.
+    #[test]
+    fn bare_boolean_keyword_degrades_instead_of_erroring() {
+        let (_tmp, idx) = seeded_index(&[("d1", "foo bar")]);
+        let parser = content_parser(&idx);
+        assert!(
+            parse_lexical_query(&parser, "AND").is_none(),
+            "bare AND must be unparsable in both attempts"
+        );
+        let results = idx.search("AND", 5).expect("degrade must not error");
+        assert!(results.is_empty(), "degraded lexical leg must be empty");
+        assert!(idx.search_with_stream("AND", "s1", 5).unwrap().is_empty());
     }
 }
 
@@ -326,9 +526,9 @@ impl TantivyIndex {
         query_parser.set_field_boost(self.content_field, 1.0);
         query_parser.set_field_boost(self.entities_field, 0.2);
         query_parser.set_field_boost(self.relations_field, 0.2);
-        let query = query_parser
-            .parse_query(&sanitize_query(query_text))
-            .context("Failed to parse query")?;
+        let Some((query, _)) = parse_lexical_query(&query_parser, query_text) else {
+            return Ok(Vec::new());
+        };
 
         // Execute search
         let top_docs = searcher
@@ -412,9 +612,9 @@ impl TantivyIndex {
 
         // Parse query (searches in content field) and add stream filter
         let query_parser = QueryParser::for_index(&self.index, vec![self.content_field]);
-        let content_query = query_parser
-            .parse_query(&sanitize_query(query_text))
-            .context("Failed to parse query")?;
+        let Some((content_query, _)) = parse_lexical_query(&query_parser, query_text) else {
+            return Ok(Vec::new());
+        };
 
         // Create term query for stream
         let stream_term = tantivy::Term::from_field_text(self.stream_field, stream);
@@ -519,9 +719,9 @@ impl TantivyIndex {
         query_parser.set_field_boost(self.content_field, 1.0);
         query_parser.set_field_boost(self.entities_field, 1.0);
         query_parser.set_field_boost(self.relations_field, 0.5);
-        let content_query = query_parser
-            .parse_query(&sanitize_query(query_text))
-            .context("Failed to parse query")?;
+        let Some((content_query, _)) = parse_lexical_query(&query_parser, query_text) else {
+            return Ok(Vec::new());
+        };
 
         // Create query for entity filter
         let entity_query_parser = QueryParser::for_index(&self.index, vec![self.entities_field]);
@@ -656,9 +856,9 @@ impl TantivyIndex {
             query_parser.set_field_boost(self.content_field, 1.0);
             query_parser.set_field_boost(self.entities_field, 0.2);
             query_parser.set_field_boost(self.relations_field, 0.2);
-            let content_query = query_parser
-                .parse_query(&sanitize_query(query_text))
-                .context("Failed to parse query")?;
+            let Some((content_query, _)) = parse_lexical_query(&query_parser, query_text) else {
+                return Ok(Vec::new());
+            };
 
             // Combine with AND
             Box::new(BooleanQuery::new(vec![
@@ -782,9 +982,10 @@ impl TantivyIndex {
             query_parser.set_field_boost(self.content_field, 1.0);
             query_parser.set_field_boost(self.entities_field, ent_boost);
             query_parser.set_field_boost(self.relations_field, rel_boost);
-            let content_query = query_parser
-                .parse_query(&sanitize_query(params.query_text))
-                .context("Failed to parse query")?;
+            let Some((content_query, _)) = parse_lexical_query(&query_parser, params.query_text)
+            else {
+                return Ok(Vec::new());
+            };
             clauses.push((Occur::Must, content_query));
         }
 

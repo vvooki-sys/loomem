@@ -1,0 +1,17 @@
+{
+  "comment": "Docs for the query-metachar integration test (query-sanitization brief, W2). The 'target' doc holds the fact a natural-language question with metacharacters must retrieve.",
+  "docs": [
+    {
+      "id": "target",
+      "content": "The SIAC_GEE tool implements the 6S atmospheric correction algorithm; MAJA and Sen2Cor are alternatives."
+    },
+    {
+      "id": "filler-1",
+      "content": "Grocery list: oat milk, coffee beans, rye bread."
+    },
+    {
+      "id": "filler-2",
+      "content": "Cycling route notes from the weekend ride around the lake."
+    }
+  ]
+}
