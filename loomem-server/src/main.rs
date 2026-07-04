@@ -1527,6 +1527,7 @@ mod tests {
             content_type: cfg::ContentTypeConfig::default(),
             access_audit: cfg::AccessAuditConfig::default(),
             rate_limit: cfg::RateLimitConfig::default(),
+            mcp: cfg::McpConfig::default(),
         }
     }
 

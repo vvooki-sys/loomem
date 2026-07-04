@@ -736,11 +736,12 @@ async fn tool_search(
     .iter()
     .any(|k| query_lower.contains(k));
 
-    let top_k = if is_aggregation {
-        args.top_k.unwrap_or(30).min(30)
-    } else {
-        args.top_k.unwrap_or(5).min(20)
-    };
+    // Config-driven defaults/caps ([mcp] in config.toml, roadmap W2); shipped
+    // values reproduce the previously hardcoded 5/20 and 30/30 byte-for-byte.
+    let top_k = state
+        .config
+        .mcp
+        .effective_search_top_k(args.top_k, is_aggregation);
 
     let req = handlers::types::SearchRequest {
         query: args.query,

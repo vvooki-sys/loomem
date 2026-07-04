@@ -59,7 +59,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     },
                     "top_k": {
                         "type": "integer",
-                        "description": "Number of results to return (default: 5, max: 20)."
+                        "description": "Number of results to return. Default and maximum are server-configured ([mcp] section in config.toml); aggregation-style queries get a separate, larger window."
                     },
                     "time_filter": {
                         "type": "string",

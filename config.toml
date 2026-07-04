@@ -176,6 +176,20 @@ search_rpm = 120   # memory_search/context/graph/profile/history/reflect + /v1/s
 store_rpm = 60     # memory_store/ingest/associate/feedback + /v1/store|associate|feedback
 delete_rpm = 10    # memory_delete/dream + /v1/delete|purge*|dream*
 
+# MCP transport-layer top_k limits for memory_search (roadmap W2). The default
+# applies when the caller omits top_k; the max caps explicit requests. The
+# aggregation_* pair covers aggregation-detected queries ("how many", "list
+# all", ...), which get a larger result window for complete enumeration.
+# Shipped values reproduce the previously hardcoded behavior byte-identically;
+# raise the caps (e.g. for retrieval experiments with top_k > 20) in your own
+# config copy. An explicit caller top_k is never silently overridden — only
+# clamped to the max for its query class.
+[mcp]
+search_default_top_k = 5        # top_k when omitted (normal queries)
+search_max_top_k = 20           # cap for normal queries
+aggregation_default_top_k = 30  # top_k when omitted (aggregation queries)
+aggregation_max_top_k = 30      # cap for aggregation queries
+
 [resource_guards]
 max_cpu_cores = 1.0
 max_memory_mb = 512
