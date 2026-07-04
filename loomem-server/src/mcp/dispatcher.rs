@@ -2407,7 +2407,7 @@ mod tests {
 
     #[test]
     fn ac6_3_tool_definitions_has_stream_in_twelve_tools_and_not_in_namespaces() {
-        let defs = crate::mcp::tools::tool_definitions();
+        let defs = crate::mcp::tools::tool_definitions(&loomem_core::config::McpConfig::default());
         // 13 memory tools + 1 feedback tool (/113) = 14.
         let expected_total = 13 + 1;
         assert_eq!(
@@ -2489,7 +2489,7 @@ mod tests {
 
     #[test]
     fn ac6_3_stream_description_is_identical_across_twelve_tools() {
-        let defs = crate::mcp::tools::tool_definitions();
+        let defs = crate::mcp::tools::tool_definitions(&loomem_core::config::McpConfig::default());
         let descriptions: Vec<String> = defs
             .iter()
             .filter_map(|d| {

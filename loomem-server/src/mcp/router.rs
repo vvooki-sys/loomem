@@ -49,7 +49,7 @@ pub async fn route_jsonrpc(
     match request.method.as_str() {
         "initialize" => Some(handle_initialize(state, id, request.params, stream_id)),
         "ping" => Some(JsonRpcResponse::success(id, json!({}))),
-        "tools/list" => Some(handle_tools_list(id)),
+        "tools/list" => Some(handle_tools_list(state, id)),
         "tools/call" => Some(handle_tools_call(state, id, request.params, stream_id, auth).await),
         _ => Some(JsonRpcResponse::error(
             id,
@@ -117,8 +117,11 @@ fn handle_initialize(
     JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_tools_list(id: Value) -> JsonRpcResponse {
-    JsonRpcResponse::success(id, json!({ "tools": tools::tool_definitions() }))
+fn handle_tools_list(state: &Arc<AppState>, id: Value) -> JsonRpcResponse {
+    JsonRpcResponse::success(
+        id,
+        json!({ "tools": tools::tool_definitions(&state.config.mcp) }),
+    )
 }
 
 async fn handle_tools_call(

@@ -365,10 +365,15 @@ impl Config {
         );
 
         // MCP top_k limits: a default above its cap would silently truncate
-        // every defaulted request — fail fast at load instead.
+        // every defaulted request, and a zero default would silently empty
+        // every defaulted search (Greptile #46 P1) — fail fast at load.
         anyhow::ensure!(
             self.mcp.search_max_top_k > 0 && self.mcp.aggregation_max_top_k > 0,
             "mcp.search_max_top_k and mcp.aggregation_max_top_k must be positive"
+        );
+        anyhow::ensure!(
+            self.mcp.search_default_top_k > 0 && self.mcp.aggregation_default_top_k > 0,
+            "mcp.search_default_top_k and mcp.aggregation_default_top_k must be positive"
         );
         anyhow::ensure!(
             self.mcp.search_default_top_k <= self.mcp.search_max_top_k,
@@ -692,6 +697,29 @@ mod tests {
         assert!(
             err.to_string().contains("search_default_top_k"),
             "unexpected error: {err}"
+        );
+    }
+
+    /// validate() rejects a zero default (Greptile #46 P1): a positive cap
+    /// with `search_default_top_k = 0` would make every defaulted
+    /// memory_search resolve to zero results while the server starts fine.
+    #[test]
+    fn mcp_validate_rejects_zero_default() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+        let content = std::fs::read_to_string(path).expect("read config.toml");
+        let mut cfg: Config = toml::from_str(&content).expect("parse config.toml");
+        cfg.mcp.search_default_top_k = 0;
+        let err = cfg.validate().expect_err("zero default must fail");
+        assert!(
+            err.to_string().contains("must be positive"),
+            "unexpected error: {err}"
+        );
+
+        let mut cfg2: Config = toml::from_str(&content).expect("parse config.toml");
+        cfg2.mcp.aggregation_default_top_k = 0;
+        assert!(
+            cfg2.validate().is_err(),
+            "zero aggregation default must fail"
         );
     }
 }

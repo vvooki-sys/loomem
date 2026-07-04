@@ -1,6 +1,11 @@
+use loomem_core::config::McpConfig;
 use serde_json::{json, Value};
 
-pub fn tool_definitions() -> Vec<Value> {
+/// Tool definitions for `tools/list`. Takes the live `[mcp]` config so the
+/// `top_k` description reflects this deployment's actual defaults and caps
+/// (Greptile #46 P2) — on raised-cap instances clients see the real limits
+/// instead of the shipped ones.
+pub fn tool_definitions(mcp: &McpConfig) -> Vec<Value> {
     vec![
         json!({
             "name": "memory_store",
@@ -59,7 +64,15 @@ pub fn tool_definitions() -> Vec<Value> {
                     },
                     "top_k": {
                         "type": "integer",
-                        "description": "Number of results to return. Default and maximum are server-configured ([mcp] section in config.toml); aggregation-style queries get a separate, larger window."
+                        "description": format!(
+                            "Number of results to return (this server: default {}, max {}; \
+                             aggregation-style queries: default {}, max {}). Configurable via \
+                             the [mcp] section in config.toml.",
+                            mcp.search_default_top_k,
+                            mcp.search_max_top_k,
+                            mcp.aggregation_default_top_k,
+                            mcp.aggregation_max_top_k
+                        )
                     },
                     "time_filter": {
                         "type": "string",
@@ -342,4 +355,42 @@ pub fn tool_definitions() -> Vec<Value> {
             }
         }),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    //! Greptile #46 P2: the `top_k` description must reflect the live
+    //! deployment's configured limits, not the shipped ones.
+    use super::*;
+
+    fn top_k_description(mcp: &McpConfig) -> String {
+        let defs = tool_definitions(mcp);
+        let search = defs
+            .iter()
+            .find(|d| d.get("name").and_then(Value::as_str) == Some("memory_search"))
+            .expect("memory_search definition present");
+        search["inputSchema"]["properties"]["top_k"]["description"]
+            .as_str()
+            .expect("top_k description is a string")
+            .to_string()
+    }
+
+    /// A raised-cap config surfaces its actual values in tools/list, so MCP
+    /// clients on such deployments see the real limits.
+    #[test]
+    fn top_k_description_reflects_configured_limits() {
+        let raised = McpConfig {
+            search_default_top_k: 7,
+            search_max_top_k: 42,
+            aggregation_default_top_k: 30,
+            aggregation_max_top_k: 60,
+        };
+        let desc = top_k_description(&raised);
+        assert!(desc.contains("default 7, max 42"), "got: {desc}");
+        assert!(desc.contains("default 30, max 60"), "got: {desc}");
+
+        let shipped = top_k_description(&McpConfig::default());
+        assert!(shipped.contains("default 5, max 20"), "got: {shipped}");
+        assert!(shipped.contains("default 30, max 30"), "got: {shipped}");
+    }
 }
