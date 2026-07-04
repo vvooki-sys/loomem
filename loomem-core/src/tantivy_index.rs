@@ -65,6 +65,13 @@ enum LexicalParse {
     /// parsed instead (byte-identical results to the previous unconditional
     /// sanitization for every such input).
     Sanitized,
+    /// Even the sanitized form failed (bare boolean keywords like `AND`,
+    /// which are character-clean); lowercasing folded them into plain terms.
+    /// Keeps BM25 recall on the real terms in configurations without a
+    /// vector leg (Greptile #45 P1). Query-time lowercasing cannot change
+    /// term matching — the default tokenizer already lowercases — it only
+    /// stops the parser from recognizing operator keywords.
+    Folded,
 }
 
 /// Parse the content query for the BM25 leg without ever hard-failing search.
@@ -77,26 +84,40 @@ enum LexicalParse {
 ///    0.25 but drops offending tokens wholesale (losing terms like
 ///    `SIAC_GEE?`); the sanitize-retry keeps every alphanumeric term and
 ///    reproduces the pre-change fallback results byte-for-byte.
-/// 3. If even the sanitized form fails (e.g. a bare boolean keyword like
-///    `AND`, which character sanitization cannot neutralize), log a `warn!`
-///    and return `None`: callers skip the lexical leg so hybrid search
-///    degrades to the remaining legs (vector/graph) instead of erroring.
+/// 3. If even the sanitized form fails (bare boolean keywords like `AND`,
+///    which character sanitization cannot neutralize), retry once more with
+///    the sanitized form lowercased: the parser only recognizes uppercase
+///    operator keywords, and the default tokenizer lowercases terms at both
+///    index and query time, so folding preserves matching for every real
+///    term while neutralizing the operators (Greptile #45 P1 — keeps BM25
+///    recall in configurations without a usable vector leg).
+/// 4. Only if all three attempts fail, log a `warn!` and return `None`:
+///    callers skip the lexical leg so hybrid search degrades to the
+///    remaining legs (vector/graph) instead of erroring. No known input
+///    reaches this — it stays as a defensive last resort.
 fn parse_lexical_query(
     parser: &QueryParser,
     query_text: &str,
 ) -> Option<(Box<dyn tantivy::query::Query>, LexicalParse)> {
     match parser.parse_query(query_text) {
         Ok(q) => Some((q, LexicalParse::Raw)),
-        Err(raw_err) => match parser.parse_query(&sanitize_query(query_text)) {
-            Ok(q) => Some((q, LexicalParse::Sanitized)),
-            Err(sanitized_err) => {
-                warn!(
-                    "BM25 leg skipped: query unparsable raw ({raw_err}) and sanitized \
-                     ({sanitized_err}); degrading to remaining search legs"
-                );
-                None
+        Err(raw_err) => {
+            let sanitized = sanitize_query(query_text);
+            match parser.parse_query(&sanitized) {
+                Ok(q) => Some((q, LexicalParse::Sanitized)),
+                Err(sanitized_err) => match parser.parse_query(&sanitized.to_lowercase()) {
+                    Ok(q) => Some((q, LexicalParse::Folded)),
+                    Err(folded_err) => {
+                        warn!(
+                            "BM25 leg skipped: query unparsable raw ({raw_err}), sanitized \
+                             ({sanitized_err}) and keyword-folded ({folded_err}); degrading \
+                             to remaining search legs"
+                        );
+                        None
+                    }
+                },
             }
-        },
+        }
     }
 }
 
@@ -292,19 +313,39 @@ mod lexical_parse_tests {
     }
 
     /// A bare boolean keyword survives character sanitization and still fails
-    /// the parser: the helper degrades (`None`) and every search entry point
-    /// returns `Ok` with an empty lexical result instead of an error.
+    /// that attempt, but the keyword fold (lowercase) turns it into a plain
+    /// term: never an error, and the term is searchable like any word.
     #[test]
-    fn bare_boolean_keyword_degrades_instead_of_erroring() {
-        let (_tmp, idx) = seeded_index(&[("d1", "foo bar")]);
+    fn bare_boolean_keyword_folds_instead_of_erroring() {
+        let (_tmp, idx) = seeded_index(&[("d1", "foo bar"), ("d2", "salt and pepper")]);
         let parser = content_parser(&idx);
-        assert!(
-            parse_lexical_query(&parser, "AND").is_none(),
-            "bare AND must be unparsable in both attempts"
+        let (_, mode) =
+            parse_lexical_query(&parser, "AND").expect("bare AND must fold, not degrade");
+        assert_eq!(mode, LexicalParse::Folded);
+        // The folded keyword is a plain term: it matches the doc containing
+        // the word "and" and errors nowhere.
+        let results = idx.search("AND", 5).expect("fold must not error");
+        assert_eq!(
+            results.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["d2"],
+            "folded AND must match the doc containing the term 'and'"
         );
-        let results = idx.search("AND", 5).expect("degrade must not error");
-        assert!(results.is_empty(), "degraded lexical leg must be empty");
-        assert!(idx.search_with_stream("AND", "s1", 5).unwrap().is_empty());
+        assert!(idx.search_with_stream("AND", "s1", 5).is_ok());
+    }
+
+    /// Greptile #45 P1 scenario: a query with a real term plus a dangling
+    /// boolean keyword (`foo AND`) must keep BM25 recall on the term — the
+    /// lexical leg is the only leg in vector-less configurations, so it must
+    /// not come back empty.
+    #[test]
+    fn dangling_keyword_keeps_term_recall() {
+        let (_tmp, idx) = seeded_index(&[("hit", "foo lives here"), ("miss", "bar elsewhere")]);
+        let results = idx.search("foo AND", 5).expect("must not error");
+        assert_eq!(
+            results.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["hit"],
+            "term recall on 'foo' must survive the dangling keyword"
+        );
     }
 }
 
