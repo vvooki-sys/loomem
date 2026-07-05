@@ -88,6 +88,11 @@ pub struct Config {
     /// so configs without `[rate_limit]` load and degrade to off.
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
+    /// MCP `memory_search` top_k defaults/caps (roadmap W2). `#[serde(default)]`
+    /// so configs without `[mcp]` load and keep the previous hardcoded
+    /// behavior (5/20 normal, 30/30 aggregation) byte-identically.
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,6 +221,73 @@ impl Default for RateLimitConfig {
     }
 }
 
+/// MCP transport-layer limits for `memory_search` (roadmap W2): the `top_k`
+/// default applied when the caller omits the parameter, and the cap applied
+/// to explicit requests — separately for normal and aggregation-detected
+/// queries. Previously hardcoded in the dispatcher (5/20 and 30/30), which
+/// blocked any experiment with `top_k > 20` over MCP.
+///
+/// Declared here rather than next to `loomem-server/src/mcp/dispatcher.rs`
+/// because the root [`Config`] composes it and `loomem-core` cannot depend on
+/// server types — same precedent as [`ServerConfig`] and [`RateLimitConfig`].
+/// Enforcement lives in the MCP dispatcher.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpConfig {
+    /// `top_k` used when a normal (non-aggregation) search omits it.
+    #[serde(default = "default_mcp_search_default_top_k")]
+    pub search_default_top_k: usize,
+    /// Hard cap on `top_k` for normal searches, explicit or defaulted.
+    #[serde(default = "default_mcp_search_max_top_k")]
+    pub search_max_top_k: usize,
+    /// `top_k` used when an aggregation-detected search omits it.
+    #[serde(default = "default_mcp_aggregation_default_top_k")]
+    pub aggregation_default_top_k: usize,
+    /// Hard cap on `top_k` for aggregation-detected searches.
+    #[serde(default = "default_mcp_aggregation_max_top_k")]
+    pub aggregation_max_top_k: usize,
+}
+
+fn default_mcp_search_default_top_k() -> usize {
+    5
+}
+fn default_mcp_search_max_top_k() -> usize {
+    20
+}
+fn default_mcp_aggregation_default_top_k() -> usize {
+    30
+}
+fn default_mcp_aggregation_max_top_k() -> usize {
+    30
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            search_default_top_k: default_mcp_search_default_top_k(),
+            search_max_top_k: default_mcp_search_max_top_k(),
+            aggregation_default_top_k: default_mcp_aggregation_default_top_k(),
+            aggregation_max_top_k: default_mcp_aggregation_max_top_k(),
+        }
+    }
+}
+
+impl McpConfig {
+    /// The effective `top_k` for an MCP `memory_search` call: the explicit
+    /// caller value if present (never silently overridden by complexity
+    /// tiers), else the configured default — both clamped to the configured
+    /// cap for the query class. Mirrors the dispatcher's previous hardcoded
+    /// `args.top_k.unwrap_or(default).min(cap)` byte-for-byte under shipped
+    /// values.
+    pub fn effective_search_top_k(&self, requested: Option<usize>, is_aggregation: bool) -> usize {
+        let (default, cap) = if is_aggregation {
+            (self.aggregation_default_top_k, self.aggregation_max_top_k)
+        } else {
+            (self.search_default_top_k, self.search_max_top_k)
+        };
+        requested.unwrap_or(default).min(cap)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceGuardsConfig {
     pub max_cpu_cores: f64,
@@ -290,6 +362,26 @@ impl Config {
         anyhow::ensure!(
             self.storage.rocksdb.max_write_buffer_number > 0,
             "rocksdb.max_write_buffer_number must be positive"
+        );
+
+        // MCP top_k limits: a default above its cap would silently truncate
+        // every defaulted request, and a zero default would silently empty
+        // every defaulted search (Greptile #46 P1) — fail fast at load.
+        anyhow::ensure!(
+            self.mcp.search_max_top_k > 0 && self.mcp.aggregation_max_top_k > 0,
+            "mcp.search_max_top_k and mcp.aggregation_max_top_k must be positive"
+        );
+        anyhow::ensure!(
+            self.mcp.search_default_top_k > 0 && self.mcp.aggregation_default_top_k > 0,
+            "mcp.search_default_top_k and mcp.aggregation_default_top_k must be positive"
+        );
+        anyhow::ensure!(
+            self.mcp.search_default_top_k <= self.mcp.search_max_top_k,
+            "mcp.search_default_top_k must not exceed mcp.search_max_top_k"
+        );
+        anyhow::ensure!(
+            self.mcp.aggregation_default_top_k <= self.mcp.aggregation_max_top_k,
+            "mcp.aggregation_default_top_k must not exceed mcp.aggregation_max_top_k"
         );
 
         if self.storage.tantivy.enabled {
@@ -511,6 +603,123 @@ mod tests {
         assert!(
             cfg.event_log.enabled,
             "config.toml [event_log].enabled must stay true (code Default is false)"
+        );
+    }
+
+    /// Shipped config.toml must reproduce the previously hardcoded MCP
+    /// memory_search limits byte-identically (roadmap W2): 5/20 normal,
+    /// 30/30 aggregation. Guards against drift between the file and the
+    /// code Default (which covers configs without an `[mcp]` section).
+    #[test]
+    fn config_toml_mcp_limits_match_previous_hardcoded_behavior() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+        let content = std::fs::read_to_string(path).expect("read config.toml");
+        let cfg: Config = toml::from_str(&content).expect("parse config.toml");
+        assert_eq!(cfg.mcp.search_default_top_k, 5);
+        assert_eq!(cfg.mcp.search_max_top_k, 20);
+        assert_eq!(cfg.mcp.aggregation_default_top_k, 30);
+        assert_eq!(cfg.mcp.aggregation_max_top_k, 30);
+        // And the code Default must agree with the shipped file.
+        let dflt = McpConfig::default();
+        assert_eq!(dflt.search_default_top_k, cfg.mcp.search_default_top_k);
+        assert_eq!(dflt.search_max_top_k, cfg.mcp.search_max_top_k);
+        assert_eq!(
+            dflt.aggregation_default_top_k,
+            cfg.mcp.aggregation_default_top_k
+        );
+        assert_eq!(dflt.aggregation_max_top_k, cfg.mcp.aggregation_max_top_k);
+    }
+
+    /// Clamp contract for the MCP dispatcher (roadmap W2): explicit beyond
+    /// cap → cap; omitted → default; aggregation uses its own pair;
+    /// config-driven values are respected (a raised cap admits top_k > 20).
+    #[test]
+    fn mcp_effective_search_top_k_clamps_and_defaults() {
+        let shipped = McpConfig::default();
+        // Omitted → default, per query class.
+        assert_eq!(shipped.effective_search_top_k(None, false), 5);
+        assert_eq!(shipped.effective_search_top_k(None, true), 30);
+        // Explicit within cap → honored (never silently overridden).
+        assert_eq!(shipped.effective_search_top_k(Some(12), false), 12);
+        assert_eq!(shipped.effective_search_top_k(Some(8), true), 8);
+        // Explicit beyond cap → clamped to cap.
+        assert_eq!(shipped.effective_search_top_k(Some(40), false), 20);
+        assert_eq!(shipped.effective_search_top_k(Some(99), true), 30);
+
+        // Raised caps (bench-style config copy) admit larger windows.
+        let raised = McpConfig {
+            search_default_top_k: 5,
+            search_max_top_k: 40,
+            aggregation_default_top_k: 30,
+            aggregation_max_top_k: 60,
+        };
+        assert_eq!(raised.effective_search_top_k(Some(40), false), 40);
+        assert_eq!(raised.effective_search_top_k(Some(50), false), 40);
+        assert_eq!(raised.effective_search_top_k(Some(60), true), 60);
+        assert_eq!(raised.effective_search_top_k(None, false), 5);
+    }
+
+    /// A config without an `[mcp]` section (every pre-W2 deployment) must
+    /// load and keep the previous hardcoded behavior.
+    #[test]
+    fn mcp_section_absent_defaults_to_previous_behavior() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+        let content = std::fs::read_to_string(path).expect("read config.toml");
+        let without_mcp: String = content
+            .lines()
+            .scan(false, |in_mcp, line| {
+                if line.trim() == "[mcp]" {
+                    *in_mcp = true;
+                } else if *in_mcp && line.trim_start().starts_with('[') {
+                    *in_mcp = false;
+                }
+                Some(if *in_mcp { None } else { Some(line) })
+            })
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cfg: Config = toml::from_str(&without_mcp).expect("parse config.toml without [mcp]");
+        assert_eq!(cfg.mcp.search_default_top_k, 5);
+        assert_eq!(cfg.mcp.search_max_top_k, 20);
+        assert_eq!(cfg.mcp.aggregation_default_top_k, 30);
+        assert_eq!(cfg.mcp.aggregation_max_top_k, 30);
+    }
+
+    /// validate() rejects a default above its cap (silent truncation of every
+    /// defaulted request) and non-positive caps.
+    #[test]
+    fn mcp_validate_rejects_default_above_cap() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+        let content = std::fs::read_to_string(path).expect("read config.toml");
+        let mut cfg: Config = toml::from_str(&content).expect("parse config.toml");
+        cfg.mcp.search_default_top_k = 25; // above search_max_top_k = 20
+        let err = cfg.validate().expect_err("default above cap must fail");
+        assert!(
+            err.to_string().contains("search_default_top_k"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// validate() rejects a zero default (Greptile #46 P1): a positive cap
+    /// with `search_default_top_k = 0` would make every defaulted
+    /// memory_search resolve to zero results while the server starts fine.
+    #[test]
+    fn mcp_validate_rejects_zero_default() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+        let content = std::fs::read_to_string(path).expect("read config.toml");
+        let mut cfg: Config = toml::from_str(&content).expect("parse config.toml");
+        cfg.mcp.search_default_top_k = 0;
+        let err = cfg.validate().expect_err("zero default must fail");
+        assert!(
+            err.to_string().contains("must be positive"),
+            "unexpected error: {err}"
+        );
+
+        let mut cfg2: Config = toml::from_str(&content).expect("parse config.toml");
+        cfg2.mcp.aggregation_default_top_k = 0;
+        assert!(
+            cfg2.validate().is_err(),
+            "zero aggregation default must fail"
         );
     }
 }

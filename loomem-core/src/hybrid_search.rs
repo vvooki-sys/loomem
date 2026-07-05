@@ -676,6 +676,7 @@ mod tests {
             content_type: crate::config::ContentTypeConfig::default(),
             access_audit: crate::config::AccessAuditConfig::default(),
             rate_limit: crate::config::RateLimitConfig::default(),
+            mcp: crate::config::McpConfig::default(),
         }
     }
 

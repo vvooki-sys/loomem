@@ -736,11 +736,12 @@ async fn tool_search(
     .iter()
     .any(|k| query_lower.contains(k));
 
-    let top_k = if is_aggregation {
-        args.top_k.unwrap_or(30).min(30)
-    } else {
-        args.top_k.unwrap_or(5).min(20)
-    };
+    // Config-driven defaults/caps ([mcp] in config.toml, roadmap W2); shipped
+    // values reproduce the previously hardcoded 5/20 and 30/30 byte-for-byte.
+    let top_k = state
+        .config
+        .mcp
+        .effective_search_top_k(args.top_k, is_aggregation);
 
     let req = handlers::types::SearchRequest {
         query: args.query,
@@ -2406,7 +2407,7 @@ mod tests {
 
     #[test]
     fn ac6_3_tool_definitions_has_stream_in_twelve_tools_and_not_in_namespaces() {
-        let defs = crate::mcp::tools::tool_definitions();
+        let defs = crate::mcp::tools::tool_definitions(&loomem_core::config::McpConfig::default());
         // 13 memory tools + 1 feedback tool (/113) = 14.
         let expected_total = 13 + 1;
         assert_eq!(
@@ -2488,7 +2489,7 @@ mod tests {
 
     #[test]
     fn ac6_3_stream_description_is_identical_across_twelve_tools() {
-        let defs = crate::mcp::tools::tool_definitions();
+        let defs = crate::mcp::tools::tool_definitions(&loomem_core::config::McpConfig::default());
         let descriptions: Vec<String> = defs
             .iter()
             .filter_map(|d| {
