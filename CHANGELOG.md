@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-06
+
+Per-stream statistics endpoint.
+
+### Added
+
+- Per-stream statistics endpoint with REST (admin + user), MCP tool `memory_stats`, and CLI `stats` subcommand (#48). Metrics span **health** (chunk/entity/edge counts, index freshness), **retrieval** (search-surface sizing), **consolidation** (dream/merge activity), **distribution** (fact-type and stream spread), **activity** (ingest/access recency), **extraction** (facts-per-chunk yield), and **meta** (schema/version) — all counts and aggregates. Privacy invariant: **no chunk content is ever returned.**
+
 ## [0.5.1] - 2026-07-04
 
 Second security-audit remediation round (2026-07-03 audit @96db3a9): findings
