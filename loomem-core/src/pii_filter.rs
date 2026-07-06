@@ -54,10 +54,16 @@ pub struct PiiFilter {
 /// boundaries keeps redaction maximal for natural-language text.
 fn embedded_in_token(text: &str, start: usize, end: usize) -> bool {
     let bytes = text.as_bytes();
-    let before_alnum = start
-        .checked_sub(1)
-        .and_then(|i| bytes.get(i))
-        .is_some_and(|b| b.is_ascii_alphanumeric());
+    // The left boundary only matters when the match itself opens with an
+    // alphanumeric byte: a match that opens with '+' (international prefix)
+    // is already delimited — the preceding byte cannot extend it into a
+    // longer token (`Call+48123456789` is a phone, not an identifier).
+    let starts_alnum = bytes.get(start).is_some_and(|b| b.is_ascii_alphanumeric());
+    let before_alnum = starts_alnum
+        && start
+            .checked_sub(1)
+            .and_then(|i| bytes.get(i))
+            .is_some_and(|b| b.is_ascii_alphanumeric());
     let after_alnum = bytes.get(end).is_some_and(|b| b.is_ascii_alphanumeric());
     before_alnum || after_alnum
 }
@@ -451,6 +457,28 @@ mod tests {
             assert_eq!(redactions.len(), 1, "expected 1 redaction in: {text}");
             assert_eq!(redactions[0].redaction_type, "phone");
         }
+    }
+
+    #[test]
+    fn test_pii_filter_plus_prefixed_phone_glued_to_text_still_redacts() {
+        // Greptile P1 on PR #50: a '+'-prefixed phone directly after ASCII
+        // text is still a standalone phone — the '+' breaks the alphanumeric
+        // token, so the left-boundary guard must not treat it as embedded.
+        let config = PiiConfig {
+            enabled: true,
+            redact_phones: true,
+            blocklist_file: "nonexistent.txt".to_string(),
+            ..Default::default()
+        };
+        let filter = PiiFilter::new(config).expect("Failed to create filter");
+
+        let (sanitized, redactions) = filter.sanitize("Call+48123456789 now");
+        assert_eq!(sanitized, "Call[PHONE] now");
+        // Only the output text and the presence of a phone redaction are
+        // asserted: `id_regex` also matches the 11-digit tail in the
+        // *original* text and records a no-op entry — the pre-existing
+        // scan-original/replace-in-sanitized wart deferred in #49.
+        assert!(redactions.iter().any(|r| r.redaction_type == "phone"));
     }
 
     #[test]
