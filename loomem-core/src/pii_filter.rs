@@ -44,6 +44,30 @@ pub struct PiiFilter {
     blocklist: HashSet<String>,
 }
 
+/// True when the `[start, end)` match is embedded inside a longer ASCII
+/// alphanumeric token — i.e. the byte before `start` or the byte at `end` is
+/// an ASCII letter or digit. Used to reject phone-regex matches that are
+/// really digit runs inside hex SHAs, UUIDs, unix timestamps, or build
+/// numbers (issue #49); the `regex` crate has no lookaround, so the guard
+/// lives here instead of in the pattern. ASCII-only on purpose: the
+/// identifier false-positive class is ASCII, and treating non-ASCII bytes as
+/// boundaries keeps redaction maximal for natural-language text.
+fn embedded_in_token(text: &str, start: usize, end: usize) -> bool {
+    let bytes = text.as_bytes();
+    // The left boundary only matters when the match itself opens with an
+    // alphanumeric byte: a match that opens with '+' (international prefix)
+    // is already delimited — the preceding byte cannot extend it into a
+    // longer token (`Call+48123456789` is a phone, not an identifier).
+    let starts_alnum = bytes.get(start).is_some_and(|b| b.is_ascii_alphanumeric());
+    let before_alnum = starts_alnum
+        && start
+            .checked_sub(1)
+            .and_then(|i| bytes.get(i))
+            .is_some_and(|b| b.is_ascii_alphanumeric());
+    let after_alnum = bytes.get(end).is_some_and(|b| b.is_ascii_alphanumeric());
+    before_alnum || after_alnum
+}
+
 impl PiiFilter {
     pub fn new(config: PiiConfig) -> Result<Self> {
         // Phone regex: matches various Polish phone formats (+48, 0xx)
@@ -99,17 +123,29 @@ impl PiiFilter {
         let mut sanitized = text.to_string();
         let mut redactions = Vec::new();
 
-        // Redact phones
+        // Redact phones. Each match is validated against its surrounding
+        // bytes (issue #49: digit runs inside hex SHAs / UUIDs / timestamps
+        // must survive), and the output is rebuilt in a single pass —
+        // `str::replace` on the raw match text would hit every identical
+        // substring and desynchronize the recorded positions.
         if self.config.redact_phones {
-            for mat in self.phone_regex.find_iter(text) {
-                let original_len = mat.as_str().len();
-                sanitized = sanitized.replace(mat.as_str(), "[PHONE]");
+            let mut rebuilt = String::with_capacity(sanitized.len());
+            let mut last = 0usize;
+            for mat in self.phone_regex.find_iter(&sanitized) {
+                if embedded_in_token(&sanitized, mat.start(), mat.end()) {
+                    continue;
+                }
+                rebuilt.push_str(&sanitized[last..mat.start()]);
+                rebuilt.push_str("[PHONE]");
                 redactions.push(PiiRedaction {
                     redaction_type: "phone".to_string(),
-                    original_length: original_len,
+                    original_length: mat.as_str().len(),
                     position: mat.start(),
                 });
+                last = mat.end();
             }
+            rebuilt.push_str(&sanitized[last..]);
+            sanitized = rebuilt;
         }
 
         // Redact emails
@@ -371,5 +407,99 @@ mod tests {
         assert_eq!(out["count"], serde_json::json!(42));
         assert_eq!(out["active"], serde_json::json!(true));
         assert_eq!(out["missing"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn test_pii_filter_preserves_identifiers_with_digit_runs() {
+        // Issue #49: digit runs inside hex SHAs, UUIDs, unix timestamps, and
+        // build numbers must round-trip unchanged instead of being redacted
+        // as phone numbers.
+        let config = PiiConfig {
+            enabled: true,
+            blocklist_file: "nonexistent.txt".to_string(),
+            ..Default::default()
+        };
+        let filter = PiiFilter::new(config).expect("Failed to create filter");
+
+        let cases = [
+            "commit a3f8b2c1d4123456789e5f6a7b8c9d0e1f2a3b4 pushed",
+            "chunk id 550e8400-e29b-41d4-a716-446655440000",
+            "seen at 1751234567 (unix)",
+            "release v0.5.1 build 202607051330 finished",
+        ];
+        for case in cases {
+            let (sanitized, redactions) = filter.sanitize(case);
+            assert_eq!(sanitized, case, "identifier corrupted in: {case}");
+            assert!(
+                redactions.is_empty(),
+                "spurious redaction in: {case} -> {redactions:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pii_filter_phone_variants_still_redact() {
+        // The issue-#49 boundary guard must not weaken real phone redaction
+        // (hard rule 1): standalone numbers in every supported format still
+        // redact, including at punctuation and string boundaries.
+        let config = PiiConfig {
+            enabled: true,
+            redact_phones: true,
+            blocklist_file: "nonexistent.txt".to_string(),
+            ..Default::default()
+        };
+        let filter = PiiFilter::new(config).expect("Failed to create filter");
+
+        for phone in ["+48 600 000 000", "600 000 000", "600-000-000", "600000000"] {
+            let text = format!("tel: {phone}!");
+            let (sanitized, redactions) = filter.sanitize(&text);
+            assert_eq!(sanitized, "tel: [PHONE]!", "not redacted: {text}");
+            assert_eq!(redactions.len(), 1, "expected 1 redaction in: {text}");
+            assert_eq!(redactions[0].redaction_type, "phone");
+        }
+    }
+
+    #[test]
+    fn test_pii_filter_plus_prefixed_phone_glued_to_text_still_redacts() {
+        // Greptile P1 on PR #50: a '+'-prefixed phone directly after ASCII
+        // text is still a standalone phone — the '+' breaks the alphanumeric
+        // token, so the left-boundary guard must not treat it as embedded.
+        let config = PiiConfig {
+            enabled: true,
+            redact_phones: true,
+            blocklist_file: "nonexistent.txt".to_string(),
+            ..Default::default()
+        };
+        let filter = PiiFilter::new(config).expect("Failed to create filter");
+
+        let (sanitized, redactions) = filter.sanitize("Call+48123456789 now");
+        assert_eq!(sanitized, "Call[PHONE] now");
+        // Only the output text and the presence of a phone redaction are
+        // asserted: `id_regex` also matches the 11-digit tail in the
+        // *original* text and records a no-op entry — the pre-existing
+        // scan-original/replace-in-sanitized wart deferred in #49.
+        assert!(redactions.iter().any(|r| r.redaction_type == "phone"));
+    }
+
+    #[test]
+    fn test_pii_filter_duplicate_phones_redact_each_with_correct_position() {
+        // The single-pass rebuild records one redaction per occurrence with
+        // positions in the pre-redaction text (the old `str::replace` path
+        // replaced globally per match and drifted positions).
+        let config = PiiConfig {
+            enabled: true,
+            redact_phones: true,
+            blocklist_file: "nonexistent.txt".to_string(),
+            ..Default::default()
+        };
+        let filter = PiiFilter::new(config).expect("Failed to create filter");
+
+        let text = "600000000 oraz 600000000";
+        let (sanitized, redactions) = filter.sanitize(text);
+
+        assert_eq!(sanitized, "[PHONE] oraz [PHONE]");
+        assert_eq!(redactions.len(), 2);
+        assert_eq!(redactions[0].position, 0);
+        assert_eq!(redactions[1].position, 15);
     }
 }
