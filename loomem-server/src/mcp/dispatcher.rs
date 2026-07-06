@@ -1110,14 +1110,18 @@ async fn tool_stats(
         .data_dir
         .join(&state.config.event_log.dir);
 
-    let mut stats = match loomem_core::stream_stats::compute_stream(
-        &state.store,
-        &events_dir,
-        &opts,
-        stream_id,
-    ) {
-        Ok(s) => s,
-        Err(e) => return Ok(ToolResult::error(format!("stats failed: {e}"))),
+    // Offload the full RocksDB + event-log scan to the blocking pool so it
+    // never holds a Tokio worker (mirrors the REST handlers).
+    let store = state.store.clone();
+    let sid = stream_id.to_string();
+    let computed = tokio::task::spawn_blocking(move || {
+        loomem_core::stream_stats::compute_stream(&store, &events_dir, &opts, &sid)
+    })
+    .await;
+    let mut stats = match computed {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Ok(ToolResult::error(format!("stats failed: {e}"))),
+        Err(e) => return Ok(ToolResult::error(format!("stats task join error: {e}"))),
     };
     // Per-stream BM25 index count (async index handle).
     stats.retrieval.tantivy_indexed_count = state.tantivy.lock().await.count_stream(stream_id).ok();
