@@ -74,15 +74,44 @@ async fn fill_tantivy_all(state: &AppState, all: &mut AllStreamStats) {
     all.total.retrieval.tantivy_indexed_count = idx.count().ok();
 }
 
+/// Run the single-stream compute on the blocking pool: it does a full RocksDB
+/// scan + event-log file reads, which must not run on an async worker.
+async fn compute_stream_blocking(
+    state: &AppState,
+    opts: ComputeOpts,
+    stream_id: String,
+) -> Result<StreamStats, AppError> {
+    let store = state.store.clone();
+    let dir = events_dir(state);
+    tokio::task::spawn_blocking(move || {
+        stream_stats::compute_stream(&store, &dir, &opts, &stream_id)
+    })
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("stats task join error: {e}")))?
+    .map_err(AppError::Internal)
+}
+
+/// Run the all-streams compute on the blocking pool (single scan bucketed by
+/// stream).
+async fn compute_all_blocking(
+    state: &AppState,
+    opts: ComputeOpts,
+) -> Result<AllStreamStats, AppError> {
+    let store = state.store.clone();
+    let dir = events_dir(state);
+    tokio::task::spawn_blocking(move || stream_stats::compute_all(&store, &dir, &opts))
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("stats task join error: {e}")))?
+        .map_err(AppError::Internal)
+}
+
 /// GET /v1/my/stream-stats — full statistics for the caller's own stream.
 pub async fn user_stream_stats_handler(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
 ) -> Result<Json<StreamStats>, AppError> {
     let opts = opts_for(&state);
-    let dir = events_dir(&state);
-    let mut stats = stream_stats::compute_stream(&state.store, &dir, &opts, &auth.stream_id)
-        .map_err(AppError::Internal)?;
+    let mut stats = compute_stream_blocking(&state, opts, auth.stream_id.clone()).await?;
     fill_tantivy_one(&state, &mut stats).await;
     Ok(Json(stats))
 }
@@ -98,17 +127,14 @@ pub async fn admin_stream_stats_handler(
         return Err(AppError::Forbidden("Admin access required".to_string()));
     }
     let opts = opts_for(&state);
-    let dir = events_dir(&state);
     match q.stream {
         Some(stream) if !stream.is_empty() => {
-            let mut stats = stream_stats::compute_stream(&state.store, &dir, &opts, &stream)
-                .map_err(AppError::Internal)?;
+            let mut stats = compute_stream_blocking(&state, opts, stream).await?;
             fill_tantivy_one(&state, &mut stats).await;
             Ok(Json(AdminStreamStatsResponse::One(Box::new(stats))))
         }
         _ => {
-            let mut all =
-                stream_stats::compute_all(&state.store, &dir, &opts).map_err(AppError::Internal)?;
+            let mut all = compute_all_blocking(&state, opts).await?;
             fill_tantivy_all(&state, &mut all).await;
             Ok(Json(AdminStreamStatsResponse::All(Box::new(all))))
         }

@@ -1182,18 +1182,22 @@ async fn main() -> Result<()> {
             if stream.is_some() && !admin {
                 eprintln!("note: --stream is ignored without --admin; showing your own stream");
             }
-            let mut url = if admin {
-                format!("{}/v1/admin/stream-stats", cli.url)
+            let path = if admin {
+                "/v1/admin/stream-stats"
             } else {
-                format!("{}/v1/my/stream-stats", cli.url)
+                "/v1/my/stream-stats"
             };
+            let mut url = reqwest::Url::parse(&format!("{}{}", cli.url, path))
+                .context("invalid server url")?;
             if admin {
                 if let Some(s) = &stream {
-                    url = format!("{url}?stream={s}");
+                    // append_pair percent-encodes, so stream ids with reserved
+                    // chars (& # ? = space) reach the server as one value.
+                    url.query_pairs_mut().append_pair("stream", s);
                 }
             }
 
-            let mut req = client.get(&url);
+            let mut req = client.get(url);
             if let Some(t) = &token {
                 req = req.bearer_auth(t);
             }

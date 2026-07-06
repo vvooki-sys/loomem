@@ -107,10 +107,12 @@ pub struct ConsolidationStats {
     pub chunks_awaiting_consolidation: u64,
     /// The configured threshold, for context on the backlog above.
     pub min_chunks_to_consolidate: u64,
-    /// Engine-global consolidation-run count seen in the event-log window
-    /// (consolidation events carry no stream id).
+    /// Engine-global consolidation-run count over the trailing 30d (matching
+    /// the activity windows). Global because consolidation events carry no
+    /// stream id.
     pub runs_total_global: u64,
-    /// Engine-global timestamp of the most recent consolidation event.
+    /// Engine-global timestamp of the most recent consolidation event within
+    /// the trailing 30d.
     pub last_at_global: Option<u64>,
 }
 
@@ -501,6 +503,12 @@ fn fold_event(
     now: u64,
     only: Option<&str>,
 ) {
+    // Drop future-dated events (clock skew or a corrupt log line): otherwise
+    // `saturating_sub` gives them age 0, counting them in every window and
+    // letting them set `last_*` to a timestamp that has not happened yet.
+    if entry.timestamp > now {
+        return;
+    }
     let age = now.saturating_sub(entry.timestamp);
     match &entry.event {
         MemoryEvent::Store {
@@ -517,7 +525,10 @@ fn fold_event(
             acc.searches.bump(age);
             acc.last_search_at = max_opt(acc.last_search_at, Some(entry.timestamp));
         }
-        MemoryEvent::Consolidation { .. } => {
+        // Bound consolidation to the same 30d horizon as the activity windows,
+        // so `runs_total`/`last_at` never include runs from older rotated logs
+        // that fall outside the reported window.
+        MemoryEvent::Consolidation { .. } if age <= 30 * DAY_SECS => {
             consolidation.runs_total += 1;
             consolidation.last_at = max_opt(consolidation.last_at, Some(entry.timestamp));
         }
@@ -977,6 +988,44 @@ mod tests {
         let scan = scan_events(dir.path(), now, Some("s1"));
         assert!(scan.per_stream.contains_key("s1"));
         assert!(!scan.per_stream.contains_key("s2"));
+    }
+
+    #[test]
+    fn future_events_dropped_and_old_consolidation_excluded() {
+        let dir = TempDir::new().unwrap();
+        let now = 100 * DAY_SECS;
+        let future = now + 1000;
+        let old = now - 40 * DAY_SECS;
+        let recent = now - 100;
+        write_events(
+            dir.path(),
+            &[
+                // future-dated ingest → dropped entirely (no window, no last_*)
+                &format!(
+                    r#"{{"timestamp":{future},"event":{{"type":"store","content_len":10,"chunk_count":9,"stream_id":"s","source":"api"}}}}"#
+                ),
+                // consolidation 40d ago → outside the 30d horizon, excluded
+                &format!(
+                    r#"{{"timestamp":{old},"event":{{"type":"consolidation","input_count":5,"output_count":1,"dropped_ids":[],"cost_usd":0.0}}}}"#
+                ),
+                // consolidation just now → counted
+                &format!(
+                    r#"{{"timestamp":{recent},"event":{{"type":"consolidation","input_count":5,"output_count":1,"dropped_ids":[],"cost_usd":0.0}}}}"#
+                ),
+            ],
+        );
+        let scan = scan_events(dir.path(), now, None);
+        assert!(
+            scan.per_stream
+                .get("s")
+                .is_none_or(|a| a.ingests.last_30d == 0 && a.last_ingest_at.is_none()),
+            "future ingest must not appear in any window or last_ingest_at"
+        );
+        assert_eq!(
+            scan.consolidation.runs_total, 1,
+            "only the recent run counts"
+        );
+        assert_eq!(scan.consolidation.last_at, Some(recent));
     }
 
     // ── text rendering (MCP memory_stats) ──
