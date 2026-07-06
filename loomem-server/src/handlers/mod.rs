@@ -14,6 +14,7 @@ pub mod purge;
 pub mod scope;
 pub mod search;
 pub mod stats;
+pub mod stream_stats;
 pub mod types;
 pub mod workers;
 
@@ -52,6 +53,7 @@ pub use stats::{
     dream_trigger_handler, stats_feedback_handler, stats_profile_handler, stats_stream_handler,
     stats_summary_handler, stats_trends_handler,
 };
+pub use stream_stats::{admin_stream_stats_handler, user_stream_stats_handler};
 pub use workers::{
     admin_streams_stats_handler, admin_workers_pause_handler, admin_workers_pause_one_handler,
     admin_workers_resume_handler, admin_workers_resume_one_handler, admin_workers_status_handler,

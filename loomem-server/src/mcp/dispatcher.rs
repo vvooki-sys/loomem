@@ -182,6 +182,7 @@ pub async fn dispatch_tool(
         "memory_context" => tool_context(state, args, stream).await,
         "memory_profile" => tool_profile(state, args, stream).await,
         "memory_status" => tool_status(state, args, stream).await,
+        "memory_stats" => tool_stats(state, args, stream).await,
         "memory_reflect" => tool_reflect(state, args, stream).await,
         "memory_graph" => tool_graph(state, args, stream).await,
         "memory_namespaces" => tool_namespaces(state, stream, &auth.memberships).await,
@@ -1072,6 +1073,62 @@ async fn tool_status(
         llm_fail.extraction_empty,
     );
     Ok(ToolResult::text(text))
+}
+
+// ── memory_stats ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct StatsArgs {
+    // stream is resolved upstream by resolve_stream_for_call; present to mirror
+    // the other stream-accepting args structs.
+    #[allow(dead_code)]
+    #[serde(default)]
+    stream: Option<String>,
+}
+
+/// memory_stats — full inventory/health breakdown for the caller's stream.
+/// Complements memory_status (health-only). Privacy: emits only aggregate
+/// counts, timestamps, and distributions — never chunk content.
+async fn tool_stats(
+    state: &Arc<AppState>,
+    args: Value,
+    stream_id: &str,
+) -> Result<ToolResult, JsonRpcError> {
+    let _args: StatsArgs = serde_json::from_value(args).unwrap_or(StatsArgs { stream: None });
+
+    let opts = loomem_core::stream_stats::ComputeOpts {
+        now: u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(0),
+        min_chunks_to_consolidate: u64::try_from(
+            state.config.worker.consolidation.min_chunks_to_consolidate,
+        )
+        .unwrap_or(0),
+        event_log_enabled: state.config.event_log.enabled,
+    };
+    let events_dir = state
+        .config
+        .storage
+        .data_dir
+        .join(&state.config.event_log.dir);
+
+    // Offload the full RocksDB + event-log scan to the blocking pool so it
+    // never holds a Tokio worker (mirrors the REST handlers).
+    let store = state.store.clone();
+    let sid = stream_id.to_string();
+    let computed = tokio::task::spawn_blocking(move || {
+        loomem_core::stream_stats::compute_stream(&store, &events_dir, &opts, &sid)
+    })
+    .await;
+    let mut stats = match computed {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Ok(ToolResult::error(format!("stats failed: {e}"))),
+        Err(e) => return Ok(ToolResult::error(format!("stats task join error: {e}"))),
+    };
+    // Per-stream BM25 index count (async index handle).
+    stats.retrieval.tantivy_indexed_count = state.tantivy.lock().await.count_stream(stream_id).ok();
+
+    Ok(ToolResult::text(loomem_core::stream_stats::render_text(
+        &stats,
+    )))
 }
 
 // ── memory_reflect ───────────────────────────────────────────────

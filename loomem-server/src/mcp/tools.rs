@@ -164,6 +164,20 @@ pub fn tool_definitions(mcp: &McpConfig) -> Vec<Value> {
             }
         }),
         json!({
+            "name": "memory_stats",
+            "description": "Return a full inventory/health breakdown for the caller's stream — counts, distributions, activity, and extraction quality. Aggregates only: no memory content is ever returned.\n\nWhen to use vs siblings: use memory_status for a quick reachability/health check; use memory_stats for the deep breakdown (how many memories by level, fact-type, attribution, and trust tier; embedding/BM25 index readiness; consolidation backlog; rolling ingest/search activity over 24h/7d/30d; extraction quality). It scans the stream, so it is heavier than memory_status — do not call it every turn.\n\nReturns: plain text grouped as [health] live/deleted/superseded chunk counts, L0/L1 breakdown, oldest/newest and last-ingest/last-search timestamps; [retrieval] embedded vs pending vectors, BM25-indexed count, undecodable chunks; [consolidation] L0 awaiting consolidation and the configured threshold, plus engine-global run count/last-run; [fact_types], [attribution], and [trust] histograms; [activity] ingests and searches over 24h/7d/30d; [extraction] average facts-per-ingest and empty-extraction counts (24h/7d) plus engine-global LLM-failure counters. Activity and extraction windows require the event log to be enabled.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "stream": {
+                        "type": "string",
+                        "description": "Optional stream_id. Omit to use your default stream. Call memory_namespaces to discover accessible streams."
+                    }
+                },
+                "required": []
+            }
+        }),
+        json!({
             "name": "memory_reflect",
             "description": "Analyze memory quality and return a health report with actionable cleanup suggestions.\n\nWhen to use vs siblings: use memory_reflect periodically or when memory quality seems poor (stale facts, too many raw transcripts). It does not modify anything — call memory_dream to actually consolidate. Do not call memory_reflect on every turn; it scans up to 200 chunks and is slow.\n\nReturns: markdown quality report with fields: Score (0-100%), total chunks analyzed, breakdown counts (structured facts, subject tags, low-confidence, raw transcripts, very short chunks), by-level distribution, by-source distribution, by-fact-type distribution, and a Suggestions section with recommended actions.",
             "inputSchema": {
