@@ -1122,6 +1122,14 @@ fn protected_routes(p: &RouteParams) -> Router<Arc<AppState>> {
         )
         .route("/v1/stats/trends", get(handlers::stats_trends_handler))
         .route("/v1/stats/feedback", post(handlers::stats_feedback_handler))
+        .route(
+            "/v1/my/stream-stats",
+            get(handlers::user_stream_stats_handler),
+        )
+        .route(
+            "/v1/admin/stream-stats",
+            get(handlers::admin_stream_stats_handler),
+        )
         .route("/v1/feedback", post(handlers::feedback_handler))
         .route("/v1/advisory", get(handlers::advisory_handler))
         .route(

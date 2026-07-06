@@ -108,6 +108,24 @@ enum Commands {
     /// Get Loomem server status
     Status,
 
+    /// Show per-stream statistics (health, distributions, activity, extraction)
+    Stats {
+        /// Stream ID to inspect. With --admin, selects that stream; omit to
+        /// aggregate every stream. Without --admin it is ignored (your own
+        /// stream is used).
+        #[arg(long)]
+        stream: Option<String>,
+
+        /// Query the admin endpoint (/v1/admin/stream-stats) instead of your
+        /// own (/v1/my/stream-stats). Needs an admin token.
+        #[arg(long)]
+        admin: bool,
+
+        /// Bearer token for the server (falls back to $LOOMEM_AUTH_TOKEN).
+        #[arg(long)]
+        token: Option<String>,
+    },
+
     /// Ingest a conversation and extract memories
     IngestConversation {
         /// Stream ID
@@ -222,6 +240,233 @@ struct SearchRequest {
 #[derive(Deserialize)]
 struct NamespacesResponse {
     namespaces: HashMap<String, String>,
+}
+
+// ── stream-stats mirror types (server: loomem_core::stream_stats) ──────────
+// The CLI pulls no loomem-core, so the response shape is mirrored locally.
+// Only fields shown in the table are declared; unknown fields are ignored.
+
+#[derive(Deserialize)]
+struct CliStreamStats {
+    stream_id: String,
+    health: CliHealth,
+    retrieval: CliRetrieval,
+    consolidation: CliConsolidation,
+    distribution: CliDistribution,
+    activity: CliActivity,
+    extraction: CliExtraction,
+    meta: CliMeta,
+}
+
+#[derive(Deserialize)]
+struct CliHealth {
+    memory_count: u64,
+    deleted_count: u64,
+    superseded_count: u64,
+    l0_count: u64,
+    l1_count: u64,
+    oldest_chunk_at: Option<u64>,
+    newest_chunk_at: Option<u64>,
+    last_ingest_at: Option<u64>,
+    last_search_at: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct CliRetrieval {
+    embedded_count: u64,
+    embeddings_pending: u64,
+    tantivy_indexed_count: Option<u64>,
+    undecodable_count: u64,
+}
+
+#[derive(Deserialize)]
+struct CliConsolidation {
+    chunks_awaiting_consolidation: u64,
+    min_chunks_to_consolidate: u64,
+    runs_total_global: u64,
+    last_at_global: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct CliDistribution {
+    fact_types: CliFactTypes,
+    attribution: CliAttribution,
+    trust_tier: CliTrust,
+}
+
+#[derive(Deserialize)]
+struct CliFactTypes {
+    preference_or_decision: u64,
+    project_state: u64,
+    fact: u64,
+    event: u64,
+    experience: u64,
+    unclassified: u64,
+}
+
+#[derive(Deserialize)]
+struct CliAttribution {
+    user_authored: u64,
+    assistant_authored: u64,
+    unattributed: u64,
+}
+
+#[derive(Deserialize)]
+struct CliTrust {
+    a1: u64,
+    a2: u64,
+    b: u64,
+}
+
+#[derive(Deserialize)]
+struct CliActivity {
+    ingests: CliWindow,
+    searches: CliWindow,
+}
+
+#[derive(Deserialize)]
+struct CliWindow {
+    last_24h: u64,
+    last_7d: u64,
+    last_30d: u64,
+}
+
+#[derive(Deserialize)]
+struct CliExtraction {
+    avg_facts_per_ingest_24h: f64,
+    avg_facts_per_ingest_7d: f64,
+    empty_extractions_24h: u64,
+    empty_extractions_7d: u64,
+    llm_failures_recent_global: CliLlmFailures,
+}
+
+#[derive(Deserialize)]
+struct CliLlmFailures {
+    extraction: u64,
+    ner: u64,
+    embedding: u64,
+    consolidation: u64,
+    extraction_empty: u64,
+    window_secs: u64,
+}
+
+#[derive(Deserialize)]
+struct CliMeta {
+    generated_at: u64,
+    event_log_enabled: bool,
+    scanned_rows: u64,
+}
+
+/// Admin all-streams response (`?stream` omitted): per-stream map + `_total`.
+#[derive(Deserialize)]
+struct CliAllStreamStats {
+    streams: std::collections::BTreeMap<String, CliStreamStats>,
+    #[serde(rename = "_total")]
+    total: CliStreamStats,
+}
+
+/// Render an optional count/timestamp, showing `n/a` when absent.
+fn fmt_opt(v: Option<u64>) -> String {
+    v.map_or_else(|| "n/a".to_string(), |t| t.to_string())
+}
+
+/// Render one stream's stats as an aligned, section-grouped table. Numbers and
+/// timestamps only — the server never sends chunk content.
+fn print_stream_table(s: &CliStreamStats) {
+    let h = &s.health;
+    let r = &s.retrieval;
+    let c = &s.consolidation;
+    let ft = &s.distribution.fact_types;
+    let at = &s.distribution.attribution;
+    let tt = &s.distribution.trust_tier;
+    let a = &s.activity;
+    let ex = &s.extraction;
+    let lf = &ex.llm_failures_recent_global;
+
+    println!("── stream {} ──", s.stream_id);
+    println!("  health");
+    println!("    live memories       {}", h.memory_count);
+    println!("    deleted             {}", h.deleted_count);
+    println!("    superseded          {}", h.superseded_count);
+    println!("    level L0 / L1       {} / {}", h.l0_count, h.l1_count);
+    println!(
+        "    oldest / newest     {} / {}",
+        fmt_opt(h.oldest_chunk_at),
+        fmt_opt(h.newest_chunk_at)
+    );
+    println!(
+        "    last ingest/search  {} / {}",
+        fmt_opt(h.last_ingest_at),
+        fmt_opt(h.last_search_at)
+    );
+    println!("  retrieval");
+    println!(
+        "    embedded / pending  {} / {}",
+        r.embedded_count, r.embeddings_pending
+    );
+    println!(
+        "    bm25 indexed        {}",
+        fmt_opt(r.tantivy_indexed_count)
+    );
+    println!("    undecodable         {}", r.undecodable_count);
+    println!("  consolidation");
+    println!(
+        "    awaiting L0         {} (threshold {})",
+        c.chunks_awaiting_consolidation, c.min_chunks_to_consolidate
+    );
+    println!(
+        "    runs total (global) {} (last {})",
+        c.runs_total_global,
+        fmt_opt(c.last_at_global)
+    );
+    println!("  fact types");
+    println!(
+        "    pref/proj/fact      {} / {} / {}",
+        ft.preference_or_decision, ft.project_state, ft.fact
+    );
+    println!(
+        "    event/exp/unclass   {} / {} / {}",
+        ft.event, ft.experience, ft.unclassified
+    );
+    println!(
+        "  attribution         user {} / assistant {} / none {}",
+        at.user_authored, at.assistant_authored, at.unattributed
+    );
+    println!(
+        "  trust tier          a1 {} / a2 {} / b {}",
+        tt.a1, tt.a2, tt.b
+    );
+    println!("  activity (24h/7d/30d)");
+    println!(
+        "    ingests             {} / {} / {}",
+        a.ingests.last_24h, a.ingests.last_7d, a.ingests.last_30d
+    );
+    println!(
+        "    searches            {} / {} / {}",
+        a.searches.last_24h, a.searches.last_7d, a.searches.last_30d
+    );
+    println!("  extraction");
+    println!(
+        "    avg facts/ingest    {:.2} (24h) / {:.2} (7d)",
+        ex.avg_facts_per_ingest_24h, ex.avg_facts_per_ingest_7d
+    );
+    println!(
+        "    empty extractions   {} (24h) / {} (7d)",
+        ex.empty_extractions_24h, ex.empty_extractions_7d
+    );
+    println!(
+        "    llm failures ~{}m    extraction {} / ner {} / embedding {} / consolidation {} / empty {}",
+        lf.window_secs / 60,
+        lf.extraction,
+        lf.ner,
+        lf.embedding,
+        lf.consolidation,
+        lf.extraction_empty
+    );
+    println!(
+        "  meta                event_log={} scanned_rows={} generated_at={}",
+        s.meta.event_log_enabled, s.meta.scanned_rows, s.meta.generated_at
+    );
 }
 
 /// Resolve namespace to stream ID(s) by querying the server's /v1/namespaces endpoint.
@@ -927,7 +1172,121 @@ async fn main() -> Result<()> {
                 serde_json::to_string_pretty(&result.config_summary)?
             );
         }
+
+        Commands::Stats {
+            stream,
+            admin,
+            token,
+        } => {
+            let token = token.or_else(|| std::env::var("LOOMEM_AUTH_TOKEN").ok());
+            if stream.is_some() && !admin {
+                eprintln!("note: --stream is ignored without --admin; showing your own stream");
+            }
+            let mut url = if admin {
+                format!("{}/v1/admin/stream-stats", cli.url)
+            } else {
+                format!("{}/v1/my/stream-stats", cli.url)
+            };
+            if admin {
+                if let Some(s) = &stream {
+                    url = format!("{url}?stream={s}");
+                }
+            }
+
+            let mut req = client.get(&url);
+            if let Some(t) = &token {
+                req = req.bearer_auth(t);
+            }
+            let response = req.send().await.context("Failed to send stats request")?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                anyhow::bail!("Stats request failed: {} - {}", status, body);
+            }
+
+            let value: serde_json::Value = response
+                .json()
+                .await
+                .context("Failed to parse stats response")?;
+            if value.get("streams").is_some() {
+                // Admin all-streams shape: per-stream map + _total.
+                let all: CliAllStreamStats =
+                    serde_json::from_value(value).context("Failed to decode all-streams stats")?;
+                for s in all.streams.values() {
+                    print_stream_table(s);
+                    println!();
+                }
+                print_stream_table(&all.total);
+            } else {
+                let s: CliStreamStats =
+                    serde_json::from_value(value).context("Failed to decode stream stats")?;
+                print_stream_table(&s);
+            }
+        }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `stats --admin --stream X` parses into the right variant/fields.
+    #[test]
+    fn stats_command_parses_flags() {
+        let cli = Cli::try_parse_from(["loomem-cli", "stats", "--admin", "--stream", "s1"])
+            .expect("stats args parse");
+        match cli.command {
+            Commands::Stats {
+                stream,
+                admin,
+                token,
+            } => {
+                assert_eq!(stream.as_deref(), Some("s1"));
+                assert!(admin);
+                assert!(token.is_none());
+            }
+            _ => panic!("expected Stats command"),
+        }
+    }
+
+    /// A representative server `StreamStats` JSON (snake_case, hierarchical)
+    /// decodes into the CLI mirror types — guards against schema drift between
+    /// `loomem_core::stream_stats` and this file.
+    #[test]
+    fn stream_stats_json_decodes_into_mirror() {
+        let json = r#"{
+            "stream_id": "s1",
+            "health": {"memory_count": 3, "deleted_count": 1, "superseded_count": 2,
+                "l0_count": 2, "l1_count": 1, "oldest_chunk_at": 100, "newest_chunk_at": 900,
+                "last_ingest_at": null, "last_search_at": 900},
+            "retrieval": {"embedded_count": 2, "embeddings_pending": 1,
+                "tantivy_indexed_count": 3, "undecodable_count": 0},
+            "consolidation": {"chunks_awaiting_consolidation": 2, "min_chunks_to_consolidate": 3,
+                "runs_total_global": 5, "last_at_global": 800},
+            "distribution": {
+                "fact_types": {"preference_or_decision": 1, "project_state": 0, "fact": 1,
+                    "event": 1, "experience": 0, "unclassified": 0},
+                "attribution": {"user_authored": 2, "assistant_authored": 1, "unattributed": 0},
+                "trust_tier": {"a1": 2, "a2": 1, "b": 0}
+            },
+            "activity": {"ingests": {"last_24h": 1, "last_7d": 2, "last_30d": 3},
+                "searches": {"last_24h": 0, "last_7d": 1, "last_30d": 1}},
+            "extraction": {"avg_facts_per_ingest_24h": 1.5, "avg_facts_per_ingest_7d": 2.0,
+                "empty_extractions_24h": 0, "empty_extractions_7d": 1,
+                "llm_failures_recent_global": {"extraction": 0, "ner": 0, "embedding": 0,
+                    "consolidation": 0, "extraction_empty": 0, "window_secs": 3600}},
+            "meta": {"generated_at": 1000, "event_log_enabled": true, "scanned_rows": 6}
+        }"#;
+        let s: CliStreamStats = serde_json::from_str(json).expect("decode StreamStats");
+        assert_eq!(s.stream_id, "s1");
+        assert_eq!(s.health.memory_count, 3);
+        assert_eq!(s.retrieval.tantivy_indexed_count, Some(3));
+        assert_eq!(s.distribution.trust_tier.a1, 2);
+        assert_eq!(s.activity.ingests.last_30d, 3);
+        assert!((s.extraction.avg_facts_per_ingest_24h - 1.5).abs() < 1e-9);
+        // Smoke: rendering must not panic.
+        print_stream_table(&s);
+    }
 }

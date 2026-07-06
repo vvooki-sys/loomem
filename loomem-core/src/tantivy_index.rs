@@ -857,6 +857,23 @@ impl TantivyIndex {
         Ok(count)
     }
 
+    /// Number of documents indexed for a single `stream`. Runs a `TermQuery` on
+    /// the exact-match `stream` field with tantivy's `Count` collector — no doc
+    /// materialization, cheap enough for a stats request. Surfaced by the
+    /// stream-stats endpoint as a per-stream BM25 retrieval-readiness signal:
+    /// a gap between this and the chunk-store count means some chunks are
+    /// missing from full-text search.
+    pub fn count_stream(&self, stream: &str) -> Result<u64> {
+        let searcher = self.reader.searcher();
+        let stream_term = tantivy::Term::from_field_text(self.stream_field, stream);
+        let stream_query =
+            tantivy::query::TermQuery::new(stream_term, tantivy::schema::IndexRecordOption::Basic);
+        let count = searcher
+            .search(&stream_query, &tantivy::collector::Count)
+            .context("Failed to count stream docs in tantivy index")?;
+        u64::try_from(count).context("tantivy stream doc count exceeds u64")
+    }
+
     /// Search with date range filter
     pub fn search_with_date_range(
         &self,

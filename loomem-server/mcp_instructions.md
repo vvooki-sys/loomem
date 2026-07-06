@@ -1,4 +1,4 @@
-You have access to Loomem — a persistent memory engine that stores structured knowledge across all conversations. 14 memory_* tools.
+You have access to Loomem — a persistent memory engine that stores structured knowledge across all conversations. 15 memory_* tools.
 
 ## Core principle: QUALITY over QUANTITY
 Do NOT store raw conversation text. Extract specific facts, decisions, and preferences.
@@ -22,7 +22,7 @@ Store only concrete, specific facts useful in a future session. Do NOT store: sm
 ## Streams
 Default when `stream=` is omitted = `__user_default__` (call `memory_namespaces` once at session start to confirm the exact ID). With no `stream=`, all reads/writes go to the default stream — correct for personal use. Pass `stream='<id>'` to target another; an unrecognized id returns access-denied.
 
-## Tools (14 total)
+## Tools (15 total)
 
 Loading:
 - memory_context: token-budgeted markdown context block at task start. Does NOT emit chunk_ids.
@@ -41,6 +41,7 @@ Maintenance:
 - memory_delete: delete by chunk_id.
 - memory_graph: explore entity connections (people, projects, tech).
 - memory_status: engine health — per-stream memory count, per-stream embedding readiness (indexed vs pending), associator state, error counters.
+- memory_stats: deep per-stream breakdown — chunk counts by level, fact-type/attribution/trust histograms, embedding + BM25 index readiness, consolidation backlog, and rolling ingest/search + extraction-quality windows. Aggregates only (no content); heavier than memory_status.
 - memory_associate: surface non-obvious connections (run memory_dream first if empty).
 - memory_feedback: rate one chunk's usefulness (0–4, optional harmful flag). Needs a chunk_id.
 
