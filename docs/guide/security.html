@@ -36,7 +36,11 @@ a:hover{text-decoration:underline}
 .topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
 .brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
 .brand:hover{text-decoration:none}
-.brand svg{width:26px;height:26px}
+.wm-word{white-space:nowrap}
+@supports ((-webkit-background-clip:text) or (background-clip:text)){.wm{background-image:linear-gradient(100deg,#CE7D08 0%,#EE9913 15%,#F88546 18%,#F7756F 21%,#EB6D95 24%,#D66BB7 27%,#B86ED2 30%,#9474E2 33%,#667CE6 36%,#1684DC 39%,#1684DC 61%,#667CE6 64%,#9474E2 67%,#B86ED2 70%,#D66BB7 73%,#EB6D95 76%,#F7756F 79%,#F88546 82%,#EE9913 85%,#CE7D08 100%);background-size:200% 100%;background-position:0% 50%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:wm-flow 12s ease-in-out infinite alternate}}
+@keyframes wm-flow{to{background-position:100% 50%}}
+@media (prefers-reduced-motion:reduce){.wm{animation:none}}
+@media (forced-colors: active){.wm{background:none;-webkit-background-clip:border-box;background-clip:border-box;color:inherit;animation:none}}
 .brand .tag{font-family:var(--lm-font-sans);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--lm-ink-400);border:1px solid var(--lm-ink-200);border-radius:999px;padding:2px 9px;margin-left:2px}
 .topnav{display:flex;align-items:center;gap:22px}
 .topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
@@ -150,7 +154,7 @@ a:hover{text-decoration:underline}
 </head>
 <body>
 <header class="topbar"><div class="wrap inner">
-<a class="brand" href="../"><svg viewBox="27 27 146 146" fill="none"><g stroke-linecap="round" fill="none" stroke-width="13"><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(187.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#1684DC" stroke-dasharray="86 329" transform="rotate(277.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(7.5 100 100)"/><circle cx="100" cy="100" r="66" stroke="#F4AC2E" stroke-dasharray="86 329" transform="rotate(97.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#F4AC2E" stroke-dasharray="48 266" transform="rotate(182.5 100 100)"/><circle cx="100" cy="100" r="50" stroke="#1684DC" stroke-dasharray="48 266" transform="rotate(12.5 100 100)"/></g></svg> Loomem <span class="tag">Docs</span></a>
+<a class="brand" href="../"><span class="wm-word">loo<span class="wm">mem</span></span><span class="tag">Docs</span></a>
 <nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
 </div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html" class="active">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Project</div><article class="doc-content"><h1 id="security-overview">Security overview</h1>
