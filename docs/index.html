@@ -113,11 +113,14 @@
   --lm-success:#2E9E6B;--lm-success-bg:#E4F4EC;--lm-error:#D2553B;--lm-error-bg:#FBE9E3;
   --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-brand-press:#0F5491;
   --lm-accent:#EE9913;--lm-accent-hover:#CE7D08;--lm-focus-ring:rgba(22,132,220,0.42);
-  --lm-weave:linear-gradient(108deg,#EE9913 0%,#F4AC2E 20%,#63B5F0 64%,#1684DC 100%);
-  --lm-weave-soft:linear-gradient(108deg,#FBD68A 0%,#F9C254 26%,#9CD0F7 70%,#63B5F0 100%);
-  --lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#1684DC 100%);
+  /* weave ramps C (2026-07-06): OKLCH bake through magenta/violet — keep all
+     four in sync with the wordmark assets; never reintroduce the sRGB 2–3 stop
+     versions (desaturated olive midpoint) */
+  --lm-weave:linear-gradient(108deg,#EE9913 0%,#F4AC2E 18%,#F7756F 38%,#B86ED2 58%,#63B5F0 80%,#1684DC 100%);
+  --lm-weave-soft:linear-gradient(108deg,#FBD68A 0%,#F9C254 26%,#FFB472 31.5%,#FFAC98 37%,#FFAABE 42.5%,#FBAEDF 48%,#E4B6F6 53.5%,#CABFFF 59%,#B0C9FF 64.5%,#9CD0F7 70%,#63B5F0 100%);
+  --lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#F7756F 30%,#B86ED2 55%,#667CE6 75%,#1684DC 100%);
   --lm-weave-radial:radial-gradient(120% 120% at 0% 0%,#FDEAC4 0%,#FBF8F1 38%,#E9F4FD 100%);
-  --lm-weave-text:linear-gradient(100deg,#CE7D08 0%,#EE9913 30%,#1684DC 78%);
+  --lm-weave-text:linear-gradient(100deg,#CE7D08 0%,#EE9913 30%,#F88546 36%,#F7756F 42%,#EB6D95 48%,#D66BB7 54%,#B86ED2 60%,#9474E2 66%,#667CE6 72%,#1684DC 78%);
   --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
   --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
   --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
@@ -253,7 +256,7 @@ h2.sec{font-family:var(--lm-font-display);font-size:clamp(1.9rem,3.5vw,2.5rem);f
 .pcard p{font-size:14.5px;color:var(--lm-ink-500);line-height:1.6}
 
 /* ---------- code blocks ---------- */
-.code{background:var(--lm-ink-900);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;
+.code{background:var(--lm-weave) no-repeat top center/100% 3px,var(--lm-ink-800);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;
   font-family:var(--lm-font-mono);font-size:13.5px;line-height:1.7;overflow-x:auto;box-shadow:var(--lm-shadow-md)}
 .code .c{color:var(--lm-ink-400)}
 .code .p{color:var(--lm-gold-300)}
@@ -323,11 +326,11 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 .foot-links{display:flex;gap:clamp(40px,8vw,90px);flex-wrap:wrap}
 
 /* ---------- business / Loomem T ---------- */
-.biz{background:var(--lm-ink-900);color:var(--lm-ink-100);position:relative;overflow:hidden}
+.biz{background:var(--lm-ink-800);color:var(--lm-ink-100);position:relative;overflow:hidden}
 .biz::before{content:"";position:absolute;top:0;left:0;right:0;height:4px;background:var(--lm-weave)}
 .biz .sec-eyebrow{background:none;-webkit-text-fill-color:initial;color:var(--lm-gold-300)}
 .biz h2.sec{color:#fff}
-.biz h2.sec em{font-style:italic;background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.biz h2.sec em{font-style:italic;background:var(--lm-weave-soft);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .biz .sec-lead{color:var(--lm-ink-300)}
 .biz-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px;margin-bottom:40px}
 .biz-card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.10);border-radius:var(--lm-radius-lg);padding:26px;transition:all var(--lm-dur-base) var(--lm-ease)}
@@ -396,7 +399,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 .arch-layer .arch-tag{font-family:var(--lm-font-mono);font-size:12px;font-weight:600;color:var(--lm-ink-500);margin-bottom:12px}
 .arch-layer.server{border-color:#CBE6FB;background:linear-gradient(180deg,#fff,var(--lm-surface-cool))}
 .arch-layer.core{border-color:var(--lm-gold-200);background:linear-gradient(180deg,#fff,var(--lm-surface-warm))}
-.arch-layer.storage{background:var(--lm-ink-900);border-color:var(--lm-ink-900)}
+.arch-layer.storage{background:var(--lm-ink-800);border-color:var(--lm-ink-800)}
 .arch-layer.storage .arch-tag{color:var(--lm-ink-300)}
 .arch-chips{display:flex;flex-wrap:wrap;gap:8px}
 .arch-chips span{font-size:13px;font-weight:500;color:var(--lm-ink-700);background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-pill);padding:6px 13px}
