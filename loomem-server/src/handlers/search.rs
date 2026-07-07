@@ -14,8 +14,9 @@ use tracing::warn;
 
 use super::date_filter::extract_date_filter;
 use super::types::{
-    AssociateRequest, AssociateResponse, Association, ContextSufficiency, DateFilter,
-    SearchRequest, SearchResponse, SearchResult,
+    AssociateRequest, AssociateResponse, Association, ChannelDiagnostics, ChannelHit,
+    ContextSufficiency, DateFilter, FusedPoolHit, RareTermLaneDiag, SearchRequest, SearchResponse,
+    SearchResult,
 };
 
 /// Sanitize query before sending to an LLM gateway (asymmetric threat model).
@@ -656,6 +657,10 @@ pub async fn search_handler(
                 associations: None,
                 recommendations: None,
                 query_classification: surface_classification(&payload, &classification),
+                // Cache hit path skips fresh retrieval — per-channel
+                // diagnostics are a fresh-pipeline-only artifact (cycle/012),
+                // same policy as signal_breakdown above.
+                channel_diagnostics: None,
             }));
         }
     }
@@ -677,11 +682,44 @@ pub async fn search_handler(
     // agent-scoped at the source — no post-retrieval pre-filter pass needed.
     let bm25_results = bm25_retrieve(&ctx, &sub_queries, &payload, &state).await?;
 
+    // Cycle/012: channel diagnostics (request-flag gated, None on the
+    // production path) capture the pre-fusion BM25 channel before the lane
+    // can inject anything into it.
+    let mut channel_diag: Option<ChannelDiagnostics> = if payload.debug_channels {
+        Some(ChannelDiagnostics {
+            bm25_top: channel_hits_from_bm25(&bm25_results),
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
+    // Cycle/012: rare-term guarantee lane (config-gated, default off — the
+    // call returns `None` immediately when disabled). Mandatory posting-list
+    // candidates join the BM25 pool and their ids survive the fusion pool
+    // cut + join the reranker slice below.
+    let lane = compute_rare_term_lane(&ctx, &state, channel_diag.as_mut()).await;
+    let bm25_results = merge_lane_candidates(bm25_results, lane.as_ref(), channel_diag.as_mut());
+
     // Vector retrieval: embed query + hybrid search + vector multi-query merge.
     // Returns the full hybrid-results list (graph boost + scoring happen in
     // the orchestrator, preserved for Iter 3). See `vector_retrieve` below.
-    let hybrid_results =
-        vector_retrieve(&ctx, &sub_queries, bm25_results, &payload, &state).await?;
+    let hybrid_results = vector_retrieve(
+        &ctx,
+        &sub_queries,
+        bm25_results,
+        &payload,
+        &state,
+        lane.as_ref().map(|l| &l.ids),
+        channel_diag.as_mut(),
+    )
+    .await?;
+
+    // Cycle/012 diagnostics: fused pool snapshot (post-fusion, pre-boost).
+    if let Some(diag) = channel_diag.as_mut() {
+        diag.fused_pool = fused_pool_hits(&hybrid_results);
+        diag.graph_top = graph_channel_hits(&payload, &auth, &state);
+    }
 
     // Cache store moved to AFTER all score mutations + filters + truncate
     // (see below, after hybrid_results.truncate). Previously this insert
@@ -697,6 +735,12 @@ pub async fn search_handler(
     // complexity-aware final sort. Sync (no await — `graph.find_related_chunks`
     // and `state.store.get_chunk` are blocking). See `score_and_rank` below.
     let hybrid_results = score_and_rank(hybrid_results, &ctx, &payload, &auth, &state);
+
+    // Cycle/012 diagnostics: post-rank snapshot (after graph/level/tier
+    // boosts, before soft-delete filter + truncate).
+    if let Some(diag) = channel_diag.as_mut() {
+        diag.post_rank_top = fused_pool_hits(&hybrid_results);
+    }
 
     // RED-SD-1/SD-2 defense-in-depth: drop soft-deleted chunks before
     // reranker spawn (external LLM) and before filter_and_truncate. Covers
@@ -731,11 +775,20 @@ pub async fn search_handler(
                 .len()
                 .min(state.config.search.rerank_candidates);
             let top_k = payload.top_k.unwrap_or(state.config.search.top_k);
-            let chunks: Vec<String> = hybrid_results[..candidates]
+            // Cycle/012: the reranker slice is the head of the ranked pool
+            // plus — when the rare-term lane is active — any guaranteed ids
+            // that survived the pool cut but fell below the head. Lane off
+            // (`lane == None`) → exactly the pre-cycle `[..candidates]`.
+            let results_for_rerank = rerank_slice_with_lane(
+                &hybrid_results,
+                candidates,
+                lane.as_ref(),
+                state.config.search.rare_term_lane.candidate_cap,
+            );
+            let chunks: Vec<String> = results_for_rerank
                 .iter()
                 .map(|r| r.content.clone())
                 .collect();
-            let results_for_rerank = hybrid_results[..candidates].to_vec();
             let query_for_rerank = prepare_llm_input(&payload.query, "reranker::rerank");
             let cache = state.query_cache.clone();
             let http_client = state.http_client.clone();
@@ -814,17 +867,19 @@ pub async fn search_handler(
         total_results_before_topk,
         final_top_k,
     };
-    Ok(Json(
-        build_response(
-            metrics,
-            hybrid_results,
-            &state,
-            &auth,
-            &payload,
-            &classification,
-        )
-        .await,
-    ))
+    let mut response = build_response(
+        metrics,
+        hybrid_results,
+        &state,
+        &auth,
+        &payload,
+        &classification,
+    )
+    .await;
+    // Cycle/012: attach channel diagnostics after response assembly (None on
+    // the production path — field serializes as omitted).
+    response.channel_diagnostics = channel_diag;
+    Ok(Json(response))
 }
 
 /// Cycle/85: gate `query_classification` on the request flag. Helper kept
@@ -1138,6 +1193,9 @@ async fn build_response(
         associations,
         recommendations,
         query_classification: surface_classification(payload, classification),
+        // Cycle/012: attached by the orchestrator after assembly (the
+        // diagnostics snapshots live outside build_response's inputs).
+        channel_diagnostics: None,
     }
 }
 
@@ -1339,6 +1397,294 @@ async fn bm25_retrieve(
     Ok(bm25_results)
 }
 
+// ─── Cycle/012: rare-term guarantee lane + per-channel diagnostics ──────────
+
+/// Cap for every diagnostic channel snapshot — a debugging surface, not a
+/// data export (brief 012 asks for top-20 per channel).
+const CHANNEL_DIAG_TOP_N: usize = 20;
+
+/// Rare-term lane outcome for one query: the posting-list candidates that
+/// were force-added to the BM25 pool, and their ids (used for the fusion
+/// pool-cut exemption and the reranker slice).
+struct LaneOutcome {
+    candidates: Vec<loomem_core::SearchResult>,
+    ids: std::collections::HashSet<String>,
+}
+
+/// Config-gated entry point. Returns `None` immediately when the lane is
+/// disabled. Lane failures degrade to "no lane" with a warn — a best-effort
+/// recall add-on must never fail the whole search.
+async fn compute_rare_term_lane(
+    ctx: &QueryContext,
+    state: &Arc<AppState>,
+    diag: Option<&mut ChannelDiagnostics>,
+) -> Option<LaneOutcome> {
+    if !state.config.search.rare_term_lane.enabled {
+        return None;
+    }
+    match rare_term_lane_inner(ctx, state, diag).await {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            warn!("Rare-term lane degraded, search continues without it: {e:#}");
+            None
+        }
+    }
+}
+
+/// Lane pipeline: corpus size → rarity threshold → tokenize the same string
+/// the BM25 channel searches → DF lookup per token → posting-list candidates
+/// (BM25-scored, capped). Holds the tantivy lock for the DF lookups and
+/// releases it before returning.
+async fn rare_term_lane_inner(
+    ctx: &QueryContext,
+    state: &Arc<AppState>,
+    diag: Option<&mut ChannelDiagnostics>,
+) -> anyhow::Result<Option<LaneOutcome>> {
+    let cfg = &state.config.search.rare_term_lane;
+    let tantivy = state.tantivy.lock().await;
+
+    let single_stream: Option<&str> = match ctx.stream_list.as_deref() {
+        Some([only]) => Some(only.as_str()),
+        _ => None,
+    };
+    // Brief 012: threshold scales with the *stream* corpus when the query
+    // targets a single stream; DF itself is index-global (posting lists are
+    // not per-stream).
+    let n_docs = match single_stream {
+        Some(s) => tantivy.count_stream(s)?,
+        None => tantivy.count()?,
+    };
+    let threshold = loomem_core::search::rare_df_threshold(n_docs, cfg);
+    let tokens = tantivy.tokenize_content(&ctx.original_query_stemmed)?;
+    let rare = loomem_core::search::select_rare_tokens(&tokens, threshold, |t| {
+        tantivy.doc_freq_content(t)
+    })?;
+
+    if rare.is_empty() {
+        if let Some(d) = diag {
+            d.lane = Some(RareTermLaneDiag {
+                n_docs,
+                df_threshold: threshold,
+                rare_tokens: rare,
+                candidates: Vec::new(),
+                injected_ids: Vec::new(),
+            });
+        }
+        return Ok(None);
+    }
+
+    let rare_token_strings: Vec<String> = rare.iter().map(|r| r.token.clone()).collect();
+    let candidates = lane_candidates_for_streams(
+        &tantivy,
+        &rare_token_strings,
+        ctx.stream_list.as_deref(),
+        cfg.candidate_cap,
+    )?;
+    drop(tantivy);
+
+    let ids: std::collections::HashSet<String> = candidates.iter().map(|c| c.id.clone()).collect();
+    if let Some(d) = diag {
+        d.lane = Some(RareTermLaneDiag {
+            n_docs,
+            df_threshold: threshold,
+            rare_tokens: rare,
+            candidates: candidates
+                .iter()
+                .enumerate()
+                .map(|(i, c)| ChannelHit {
+                    rank: i + 1,
+                    id: c.id.clone(),
+                    score: f64::from(c.score),
+                })
+                .collect(),
+            // Filled by `merge_lane_candidates` once the BM25 pool is known.
+            injected_ids: Vec::new(),
+        });
+    }
+    Ok(Some(LaneOutcome { candidates, ids }))
+}
+
+/// Stream-isolation-aware posting-list retrieval: single stream (or no
+/// filter) maps directly onto `term_candidates`; a multi-stream scope
+/// queries per stream and merges by score, mirroring the BM25 channel's
+/// multi-stream merge semantics.
+fn lane_candidates_for_streams(
+    tantivy: &loomem_core::TantivyIndex,
+    tokens: &[String],
+    streams: Option<&[String]>,
+    cap: usize,
+) -> anyhow::Result<Vec<loomem_core::SearchResult>> {
+    match streams {
+        None => tantivy.term_candidates(tokens, None, cap),
+        Some([only]) => tantivy.term_candidates(tokens, Some(only.as_str()), cap),
+        Some(streams) => {
+            let mut merged: std::collections::HashMap<String, loomem_core::SearchResult> =
+                std::collections::HashMap::new();
+            for s in streams {
+                for r in tantivy.term_candidates(tokens, Some(s.as_str()), cap)? {
+                    merged
+                        .entry(r.id.clone())
+                        .and_modify(|e| {
+                            if r.score > e.score {
+                                e.score = r.score;
+                            }
+                        })
+                        .or_insert(r);
+                }
+            }
+            let mut list: Vec<_> = merged.into_values().collect();
+            list.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            list.truncate(cap);
+            Ok(list)
+        }
+    }
+}
+
+/// Union the lane candidates into the BM25 pool (presence, not score
+/// override: candidates already retrieved by the BM25 channel keep their
+/// channel score). Records the actually-injected ids in the diagnostics.
+fn merge_lane_candidates(
+    mut bm25_results: Vec<loomem_core::SearchResult>,
+    lane: Option<&LaneOutcome>,
+    diag: Option<&mut ChannelDiagnostics>,
+) -> Vec<loomem_core::SearchResult> {
+    let Some(lane) = lane else {
+        return bm25_results;
+    };
+    let existing: std::collections::HashSet<String> =
+        bm25_results.iter().map(|r| r.id.clone()).collect();
+    let mut injected = Vec::new();
+    for cand in &lane.candidates {
+        if !existing.contains(&cand.id) {
+            injected.push(cand.id.clone());
+            bm25_results.push(cand.clone());
+        }
+    }
+    if let Some(d) = diag {
+        if let Some(l) = d.lane.as_mut() {
+            l.injected_ids = injected;
+        }
+    }
+    bm25_results
+}
+
+/// Reranker slice: the ranked head (`[..head]`, pre-cycle behaviour) plus —
+/// lane only — guaranteed ids that survived the pool cut but sit below the
+/// head, capped at `cap` extras. Lane off → exactly the pre-cycle slice.
+fn rerank_slice_with_lane(
+    ranked: &[loomem_core::HybridSearchResult],
+    head: usize,
+    lane: Option<&LaneOutcome>,
+    cap: usize,
+) -> Vec<loomem_core::HybridSearchResult> {
+    let mut slice: Vec<_> = ranked[..head].to_vec();
+    let Some(lane) = lane else {
+        return slice;
+    };
+    let mut appended = 0usize;
+    for r in ranked.iter().skip(head) {
+        if appended >= cap {
+            break;
+        }
+        if lane.ids.contains(&r.id) {
+            slice.push(r.clone());
+            appended += 1;
+        }
+    }
+    slice
+}
+
+/// Pre-fusion BM25 channel snapshot (score-desc top-N).
+fn channel_hits_from_bm25(bm25: &[loomem_core::SearchResult]) -> Vec<ChannelHit> {
+    let mut sorted: Vec<(&str, f32)> = bm25.iter().map(|r| (r.id.as_str(), r.score)).collect();
+    sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    sorted
+        .into_iter()
+        .take(CHANNEL_DIAG_TOP_N)
+        .enumerate()
+        .map(|(i, (id, score))| ChannelHit {
+            rank: i + 1,
+            id: id.to_string(),
+            score: f64::from(score),
+        })
+        .collect()
+}
+
+/// Pre-fusion vector channel snapshot — same inputs the fusion consumes.
+/// Diagnostic-only duplicate of the in-fusion vector search (flag-gated, so
+/// the production path never pays for it).
+fn vector_channel_hits(
+    embeddings: &[(String, Vec<f32>)],
+    query_embedding: &[f32],
+) -> Vec<ChannelHit> {
+    loomem_core::vector_search::vector_search(embeddings, query_embedding, CHANNEL_DIAG_TOP_N)
+        .into_iter()
+        .enumerate()
+        .map(|(i, (id, score))| ChannelHit {
+            rank: i + 1,
+            id,
+            score: f64::from(score),
+        })
+        .collect()
+}
+
+/// Graph channel snapshot — flag-gated duplicate of the `score_and_rank`
+/// graph lookup (entity extraction + `find_related_chunks`), surfaced as its
+/// own channel so buried-entity incidents can be attributed per channel.
+fn graph_channel_hits(
+    payload: &SearchRequest,
+    auth: &AuthContext,
+    state: &Arc<AppState>,
+) -> Vec<ChannelHit> {
+    if !state.config.search.graph.enabled {
+        return Vec::new();
+    }
+    let query_entities = state.entity_extractor.extract(&payload.query);
+    if query_entities.is_empty() {
+        return Vec::new();
+    }
+    let entity_names: Vec<String> = query_entities.iter().map(|(n, _)| n.clone()).collect();
+    let Ok(graph_chunks) = state.graph.find_related_chunks(
+        &entity_names,
+        state.config.search.graph.max_hops,
+        &auth.stream_id,
+    ) else {
+        return Vec::new();
+    };
+    let mut list: Vec<(String, f64)> = graph_chunks.into_iter().collect();
+    list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    list.into_iter()
+        .take(CHANNEL_DIAG_TOP_N)
+        .enumerate()
+        .map(|(i, (id, score))| ChannelHit {
+            rank: i + 1,
+            id,
+            score,
+        })
+        .collect()
+}
+
+/// Fused/post-rank pool snapshot with score components (already sorted by
+/// the pipeline — order is preserved, not recomputed).
+fn fused_pool_hits(pool: &[loomem_core::HybridSearchResult]) -> Vec<FusedPoolHit> {
+    pool.iter()
+        .take(CHANNEL_DIAG_TOP_N)
+        .enumerate()
+        .map(|(i, r)| FusedPoolHit {
+            rank: i + 1,
+            id: r.id.clone(),
+            score: r.score,
+            bm25_score: r.bm25_score,
+            vector_score: r.vector_score,
+            time_decay: r.time_decay_factor,
+        })
+        .collect()
+}
+
 /// Vector retrieval: embed query (local embedder or OpenAI), run hybrid
 /// search with stream pre-filter, and merge vector-multi-query results.
 /// Falls back to BM25-only when vector search is disabled, simple query,
@@ -1349,12 +1695,18 @@ async fn bm25_retrieve(
 /// user's stream is minority. Preserves F-R3 (duplicate embed logic between
 /// main query and vector multi-query — not DRY'd in this cycle because the
 /// two paths cache differently).
+/// Cycle/012 additions: `guaranteed` forwards rare-term-lane ids to the
+/// fusion pool cut (`None` == pre-cycle path on every branch), and
+/// `channel_diag` captures the pre-fusion vector channel top-N when the
+/// request asked for diagnostics (`None` on the production path).
 async fn vector_retrieve(
     ctx: &QueryContext,
     sub_queries: &[String],
     bm25_results: Vec<loomem_core::SearchResult>,
     payload: &SearchRequest,
     state: &Arc<AppState>,
+    guaranteed: Option<&std::collections::HashSet<String>>,
+    channel_diag: Option<&mut ChannelDiagnostics>,
 ) -> Result<Vec<loomem_core::HybridSearchResult>, AppError> {
     // Cycle/258 (Option A): agent id-set fetched once (None when no filter); the
     // two vector pre-filters use it via `retain_by_agent_set` (HashSet lookup,
@@ -1418,34 +1770,51 @@ async fn vector_retrieve(
                             );
 
                             if filtered_embeddings.is_empty() {
-                                state.hybrid_search.bm25_only(bm25_results)?
+                                state
+                                    .hybrid_search
+                                    .bm25_only_guaranteed(bm25_results, guaranteed)?
                             } else {
-                                state.hybrid_search.search_with_vector(
+                                // Cycle/012 diagnostics: pre-fusion vector
+                                // channel view (same inputs the fusion sees).
+                                if let Some(diag) = channel_diag {
+                                    diag.vector_top =
+                                        vector_channel_hits(&filtered_embeddings, &query_embedding);
+                                }
+                                state.hybrid_search.search_with_vector_guaranteed(
                                     bm25_results,
                                     &filtered_embeddings,
                                     &query_embedding,
                                     Some(&state.store),
                                     None, // already filtered, no need for post-filter
+                                    guaranteed,
                                 )?
                             }
                         } else {
                             tracing::info!("No embeddings found, falling back to BM25 only");
-                            state.hybrid_search.bm25_only(bm25_results)?
+                            state
+                                .hybrid_search
+                                .bm25_only_guaranteed(bm25_results, guaranteed)?
                         }
                     }
                     Err(e) => {
                         warn!("Failed to retrieve embeddings: {}, falling back to BM25", e);
-                        state.hybrid_search.bm25_only(bm25_results)?
+                        state
+                            .hybrid_search
+                            .bm25_only_guaranteed(bm25_results, guaranteed)?
                     }
                 }
             }
             Err(e) => {
                 warn!("Failed to embed query: {}, falling back to BM25", e);
-                state.hybrid_search.bm25_only(bm25_results)?
+                state
+                    .hybrid_search
+                    .bm25_only_guaranteed(bm25_results, guaranteed)?
             }
         }
     } else {
-        state.hybrid_search.bm25_only(bm25_results)?
+        state
+            .hybrid_search
+            .bm25_only_guaranteed(bm25_results, guaranteed)?
     };
 
     // Vector multi-query: embed each sub-query, search vectors, merge results
@@ -2810,6 +3179,7 @@ mod tests {
                 scope: Some(ScopeParam::Shared),
                 debug_query_classification: false,
                 debug_signal_breakdown: false,
+                debug_channels: false,
             };
             // Both scope and stream are Some — this combination is the one
             // prepare_query_context rejects with BadRequest. Assert the payload
@@ -3144,6 +3514,7 @@ mod tests {
                 scope: None,
                 debug_query_classification: debug,
                 debug_signal_breakdown: false,
+                debug_channels: false,
             }
         }
 
@@ -3156,6 +3527,7 @@ mod tests {
                 associations: None,
                 recommendations: None,
                 query_classification: None,
+                channel_diagnostics: None,
             }
         }
 
@@ -3261,6 +3633,7 @@ mod tests {
                 scope: None,
                 debug_query_classification: false,
                 debug_signal_breakdown: debug,
+                debug_channels: false,
             }
         }
 
@@ -3595,6 +3968,7 @@ mod tests {
                 implicit_access_boost_weight: 0.0,
                 user_state_boost: 1.0,
                 agent_fact_damp: 1.0,
+                rare_term_lane: loomem_core::search::rare_term::RareTermLaneConfig::default(),
             }
         }
 
@@ -3693,6 +4067,7 @@ mod agent_filter_tests {
             scope: None,
             debug_query_classification: false,
             debug_signal_breakdown: false,
+            debug_channels: false,
         }
     }
 

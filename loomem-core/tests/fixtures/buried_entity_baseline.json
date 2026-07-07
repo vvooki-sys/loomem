@@ -1,0 +1,25 @@
+{
+  "eval": "buried_entity_probe",
+  "seed": 1229022,
+  "cases": 50,
+  "lane_off_full_name": {
+    "cases": 50,
+    "r_at_5": 0.0,
+    "r_at_10": 0.44
+  },
+  "lane_off_diminutive": {
+    "cases": 50,
+    "r_at_5": 0.12,
+    "r_at_10": 0.94
+  },
+  "lane_on_full_name": {
+    "cases": 50,
+    "r_at_5": 0.0,
+    "r_at_10": 0.44
+  },
+  "lane_on_diminutive": {
+    "cases": 50,
+    "r_at_5": 0.12,
+    "r_at_10": 0.94
+  }
+}

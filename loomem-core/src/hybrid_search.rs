@@ -62,6 +62,11 @@ pub struct SearchConfig {
     /// assistant/preference categories.
     #[serde(default = "default_attribution_neutral")]
     pub agent_fact_damp: f64,
+    /// Cycle/012: rare-term guarantee lane. Chunks containing a rare query
+    /// token are force-kept in the candidate pool that feeds the reranker.
+    /// Default fully disabled — execution path identical to pre-cycle.
+    #[serde(default)]
+    pub rare_term_lane: crate::search::rare_term::RareTermLaneConfig,
 }
 
 fn default_rerank_candidates() -> usize {
@@ -183,6 +188,24 @@ impl HybridSearchEngine {
         bm25_results: Vec<SearchResult>,
         vector_scores: Vec<(String, f32)>,
         store: Option<&crate::storage::RocksDbStore>,
+    ) -> Result<Vec<HybridSearchResult>> {
+        self.fuse_with_vector_guaranteed(bm25_results, vector_scores, store, None)
+    }
+
+    /// Cycle/012 rare-term lane: same as [`Self::fuse_with_vector`], but ids
+    /// in `guaranteed` are exempt from the pool-size truncation — they stay
+    /// in the candidate pool handed to downstream boosting/reranking even
+    /// when their fused score falls below the `top_k * 3` cut. Their score
+    /// is computed by the exact same formula as every other candidate; the
+    /// exemption changes *membership*, never ordering. With `guaranteed =
+    /// None` this is byte-identical to the pre-cycle path (the public
+    /// wrapper above delegates with `None`).
+    pub fn fuse_with_vector_guaranteed(
+        &self,
+        bm25_results: Vec<SearchResult>,
+        vector_scores: Vec<(String, f32)>,
+        store: Option<&crate::storage::RocksDbStore>,
+        guaranteed: Option<&std::collections::HashSet<String>>,
     ) -> Result<Vec<HybridSearchResult>> {
         let weights = &self.config.search.hybrid_weights;
         let decay_config = &self.config.search.decay;
@@ -311,9 +334,10 @@ impl HybridSearchEngine {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Keep a larger pool for downstream boosting/reranking (3x top_k)
+        // Keep a larger pool for downstream boosting/reranking (3x top_k).
+        // Cycle/012: guaranteed ids survive the cut (rare-term lane).
         let pool_size = self.config.search.top_k * 3;
-        fused_results.truncate(pool_size);
+        retain_pool_with_guaranteed(&mut fused_results, pool_size, guaranteed);
 
         debug!(
             "Fused {} results (BM25 + vector, pool={})",
@@ -350,6 +374,28 @@ impl HybridSearchEngine {
         store: Option<&crate::storage::RocksDbStore>,
         stream_filter: Option<&[String]>,
     ) -> Result<Vec<HybridSearchResult>> {
+        self.search_with_vector_guaranteed(
+            bm25_results,
+            all_embeddings,
+            query_embedding,
+            store,
+            stream_filter,
+            None,
+        )
+    }
+
+    /// Cycle/012 rare-term lane variant of [`Self::search_with_vector`]:
+    /// forwards `guaranteed` ids to the fusion pool cut (see
+    /// [`Self::fuse_with_vector_guaranteed`]). `None` == pre-cycle path.
+    pub fn search_with_vector_guaranteed(
+        &self,
+        bm25_results: Vec<SearchResult>,
+        all_embeddings: &[(String, Vec<f32>)],
+        query_embedding: &[f32],
+        store: Option<&crate::storage::RocksDbStore>,
+        stream_filter: Option<&[String]>,
+        guaranteed: Option<&std::collections::HashSet<String>>,
+    ) -> Result<Vec<HybridSearchResult>> {
         // Fetch extra candidates when stream filtering (some will be filtered out)
         let fetch_k = if stream_filter.is_some() {
             self.config.search.top_k * 4
@@ -383,7 +429,7 @@ impl HybridSearchEngine {
         );
 
         // Fuse with BM25 results
-        self.fuse_with_vector(bm25_results, vector_results, store)
+        self.fuse_with_vector_guaranteed(bm25_results, vector_results, store, guaranteed)
     }
 
     /// Fuse BM25 and vector scores (legacy version for compatibility)
@@ -485,6 +531,17 @@ impl HybridSearchEngine {
 
     /// Simple BM25-only search (for Phase 2, before vector embeddings are ready)
     pub fn bm25_only(&self, bm25_results: Vec<SearchResult>) -> Result<Vec<HybridSearchResult>> {
+        self.bm25_only_guaranteed(bm25_results, None)
+    }
+
+    /// Cycle/012 rare-term lane variant of [`Self::bm25_only`]: `guaranteed`
+    /// ids survive the pool cut (see [`Self::fuse_with_vector_guaranteed`]).
+    /// `None` == pre-cycle path.
+    pub fn bm25_only_guaranteed(
+        &self,
+        bm25_results: Vec<SearchResult>,
+        guaranteed: Option<&std::collections::HashSet<String>>,
+    ) -> Result<Vec<HybridSearchResult>> {
         let decay_config = &self.config.search.decay;
 
         // Normalize BM25 scores
@@ -521,11 +578,36 @@ impl HybridSearchEngine {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Keep larger pool for downstream boosting/reranking
+        // Keep larger pool for downstream boosting/reranking.
+        // Cycle/012: guaranteed ids survive the cut (rare-term lane).
         let pool_size = self.config.search.top_k * 3;
-        results.truncate(pool_size);
+        retain_pool_with_guaranteed(&mut results, pool_size, guaranteed);
 
         Ok(results)
+    }
+}
+
+/// Cycle/012: pool truncation with rare-term-lane membership guarantee.
+/// Keeps the score-descending head of `results` (`pool_size` entries) plus
+/// every entry beyond the cut whose id is in `guaranteed`. Relative order is
+/// preserved on both sides of the cut, so the vector stays sorted by score.
+/// `guaranteed = None` (or a set that matches nothing) degrades to a plain
+/// `truncate` — the pre-cycle behaviour.
+fn retain_pool_with_guaranteed(
+    results: &mut Vec<HybridSearchResult>,
+    pool_size: usize,
+    guaranteed: Option<&std::collections::HashSet<String>>,
+) {
+    if results.len() <= pool_size {
+        return;
+    }
+    match guaranteed {
+        None => results.truncate(pool_size),
+        Some(ids) if ids.is_empty() => results.truncate(pool_size),
+        Some(ids) => {
+            let tail = results.split_off(pool_size);
+            results.extend(tail.into_iter().filter(|r| ids.contains(&r.id)));
+        }
     }
 }
 
@@ -645,6 +727,7 @@ mod tests {
                 implicit_access_boost_weight: 0.0,
                 user_state_boost: 1.0,
                 agent_fact_damp: 1.0,
+                rare_term_lane: crate::search::rare_term::RareTermLaneConfig::default(),
             },
             advisor: crate::config::AdvisorConfig::default(),
             worker: crate::config::WorkerConfig::default(),

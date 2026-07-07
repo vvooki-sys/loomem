@@ -767,6 +767,7 @@ async fn tool_search(
         scope: None,
         debug_query_classification: false,
         debug_signal_breakdown: false,
+        debug_channels: false,
     };
 
     // Construct auth context from MCP-authenticated stream_id

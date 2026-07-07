@@ -65,6 +65,12 @@ max_graph_additions = 3    # max graph-only results added to search
 vector = 0.6
 bm25 = 0.4
 
+[search.rare_term_lane]
+enabled = false        # Cycle/012: force-include chunks holding a rare query token in the reranker candidate pool. Off = execution path identical to pre-cycle.
+df_absolute_max = 3    # token is "rare" when df <= max(df_absolute_max, ceil(df_ratio_max * n_docs))
+df_ratio_max = 0.005   # relative rarity cutoff (fraction of the stream corpus)
+candidate_cap = 10     # max mandatory candidates per query (top BM25 wins beyond the cap)
+
 [search.decay]
 l0_lambda = 0.05   # L0: raw events — reduced from 0.10 for multi-session recall
 l1_lambda = 0.03   # L1: compressed, medium decay

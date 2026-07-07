@@ -97,6 +97,15 @@ pub struct SearchRequest {
     /// off by default — production clients see no shape change.
     #[serde(default)]
     pub debug_signal_breakdown: bool,
+    /// Cycle/012: when `true`, response includes a `channel_diagnostics`
+    /// block with the pre-fusion top-N of every retrieval channel (BM25,
+    /// vector, graph), the fused pool, the post-rank pool, and the rare-term
+    /// lane decision trail. Diagnostic-only: the extra channel snapshots are
+    /// computed alongside the pipeline without altering hot-path logic.
+    /// Always off by default — production clients see no shape change.
+    /// REST-only (not exposed through the MCP tool schema).
+    #[serde(default)]
+    pub debug_channels: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +126,63 @@ pub struct SearchResponse {
     /// of this struct in the retrieval hot path; /85 just produces and logs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query_classification: Option<loomem_core::search::ClassifiedQuery>,
+    /// Cycle/012: per-channel retrieval diagnostics (see
+    /// `SearchRequest::debug_channels`). Present only when requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_diagnostics: Option<ChannelDiagnostics>,
+}
+
+/// Cycle/012: one pre-fusion channel hit — `rank` is 1-indexed within its
+/// channel, `score` is the channel-native score (BM25 raw, cosine
+/// similarity, or graph proximity — scales are NOT comparable across
+/// channels; that incomparability is exactly what the diagnostics exist to
+/// make visible).
+#[derive(Debug, Serialize)]
+pub struct ChannelHit {
+    pub rank: usize,
+    pub id: String,
+    pub score: f64,
+}
+
+/// Cycle/012: one fused-pool entry with its score components, capturing how
+/// the weighted fusion + time decay shaped the candidate before (fused) and
+/// after (post-rank) the boost stages.
+#[derive(Debug, Serialize)]
+pub struct FusedPoolHit {
+    pub rank: usize,
+    pub id: String,
+    pub score: f64,
+    pub bm25_score: f32,
+    pub vector_score: f32,
+    pub time_decay: f64,
+}
+
+/// Cycle/012: rare-term lane decision trail for one query.
+#[derive(Debug, Serialize)]
+pub struct RareTermLaneDiag {
+    /// Corpus size used for the rarity threshold (stream-scoped when the
+    /// query targets a single stream, index-global otherwise).
+    pub n_docs: u64,
+    pub df_threshold: u64,
+    pub rare_tokens: Vec<loomem_core::search::RareToken>,
+    /// Posting-list candidates (BM25-scored, capped at `candidate_cap`).
+    pub candidates: Vec<ChannelHit>,
+    /// Ids injected into the BM25 pool (candidates not already retrieved).
+    pub injected_ids: Vec<String>,
+}
+
+/// Cycle/012: pre-fusion per-channel top-N + fused/post-rank pools + lane
+/// trail. Every list is capped at a small N (20) — this is a debugging
+/// surface, not a data export.
+#[derive(Debug, Serialize, Default)]
+pub struct ChannelDiagnostics {
+    pub bm25_top: Vec<ChannelHit>,
+    pub vector_top: Vec<ChannelHit>,
+    pub graph_top: Vec<ChannelHit>,
+    pub fused_pool: Vec<FusedPoolHit>,
+    pub post_rank_top: Vec<FusedPoolHit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lane: Option<RareTermLaneDiag>,
 }
 
 #[derive(Debug, Serialize)]

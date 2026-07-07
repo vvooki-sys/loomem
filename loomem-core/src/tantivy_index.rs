@@ -874,6 +874,124 @@ impl TantivyIndex {
         u64::try_from(count).context("tantivy stream doc count exceeds u64")
     }
 
+    /// Tokenize `text` with the analyzer registered for the `content` field —
+    /// the same pipeline that produced the index terms, so tokens returned
+    /// here agree byte-for-byte with the posting lists that `doc_freq_content`
+    /// and `term_candidates` consult (cycle/012 rare-term lane).
+    pub fn tokenize_content(&self, text: &str) -> Result<Vec<String>> {
+        let mut analyzer = self
+            .index
+            .tokenizer_for_field(self.content_field)
+            .context("No tokenizer registered for content field")?;
+        let mut stream = analyzer.token_stream(text);
+        let mut tokens = Vec::new();
+        while let Some(token) = stream.next() {
+            tokens.push(token.text.clone());
+        }
+        Ok(tokens)
+    }
+
+    /// Document frequency of a single already-tokenized term in the `content`
+    /// field. Reads the index term dictionary only — no doc materialization.
+    pub fn doc_freq_content(&self, token: &str) -> Result<u64> {
+        let searcher = self.reader.searcher();
+        let term = tantivy::Term::from_field_text(self.content_field, token);
+        let df = searcher
+            .doc_freq(&term)
+            .context("Failed to read doc_freq from tantivy index")?;
+        Ok(df)
+    }
+
+    /// Posting-list retrieval for the rare-term lane (cycle/012): fetch the
+    /// top `limit` documents (by BM25 score) containing **any** of `tokens`
+    /// in the `content` field, optionally restricted to a single `stream`.
+    /// Uses `TermQuery`s over the same index/field as the BM25 channel — no
+    /// separate content scan, no query parsing.
+    pub fn term_candidates(
+        &self,
+        tokens: &[String],
+        stream: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        if tokens.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let searcher = self.reader.searcher();
+
+        let token_clauses: Vec<(tantivy::query::Occur, Box<dyn tantivy::query::Query>)> = tokens
+            .iter()
+            .map(|t| {
+                let term = tantivy::Term::from_field_text(self.content_field, t);
+                let tq = tantivy::query::TermQuery::new(
+                    term,
+                    tantivy::schema::IndexRecordOption::WithFreqs,
+                );
+                (
+                    tantivy::query::Occur::Should,
+                    Box::new(tq) as Box<dyn tantivy::query::Query>,
+                )
+            })
+            .collect();
+        let token_query = tantivy::query::BooleanQuery::new(token_clauses);
+
+        let query: Box<dyn tantivy::query::Query> = if let Some(stream) = stream {
+            let stream_term = tantivy::Term::from_field_text(self.stream_field, stream);
+            let stream_query = tantivy::query::TermQuery::new(
+                stream_term,
+                tantivy::schema::IndexRecordOption::Basic,
+            );
+            Box::new(tantivy::query::BooleanQuery::new(vec![
+                (tantivy::query::Occur::Must, Box::new(token_query)),
+                (tantivy::query::Occur::Must, Box::new(stream_query)),
+            ]))
+        } else {
+            Box::new(token_query)
+        };
+
+        let top_docs = searcher
+            .search(&query, &TopDocs::with_limit(limit))
+            .context("Failed to execute rare-term candidate search")?;
+
+        let mut results = Vec::new();
+        for (score, doc_address) in top_docs {
+            let doc: tantivy::TantivyDocument = searcher
+                .doc(doc_address)
+                .context("Failed to retrieve rare-term candidate document")?;
+            results.push(self.doc_to_search_result(&doc, score));
+        }
+        Ok(results)
+    }
+
+    /// Compact `TantivyDocument → SearchResult` conversion for cycle/012
+    /// methods. Mirrors the inline conversion used by the `search*` family;
+    /// intentionally private and additive — existing methods keep their
+    /// inline copies untouched (no drive-by refactor).
+    fn doc_to_search_result(&self, doc: &tantivy::TantivyDocument, score: f32) -> SearchResult {
+        let text = |field: Field| -> String {
+            doc.get_first(field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        let level_i64 = doc
+            .get_first(self.level_field)
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        SearchResult {
+            id: text(self.id_field),
+            content: text(self.content_field),
+            user_id: text(self.user_id_field),
+            app_id: text(self.app_id_field),
+            level: i32::try_from(level_i64).unwrap_or(0),
+            timestamp: doc
+                .get_first(self.timestamp_field)
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0),
+            stream: text(self.stream_field),
+            score,
+        }
+    }
+
     /// Search with date range filter
     pub fn search_with_date_range(
         &self,
