@@ -902,6 +902,37 @@ impl TantivyIndex {
         Ok(df)
     }
 
+    /// Stream-scoped document frequency of a `content` term: number of
+    /// documents in `stream` whose content contains `token`. Counted via a
+    /// posting-list intersection (`content:token AND stream:stream`) with
+    /// tantivy's `Count` collector — same index, no doc materialization.
+    /// Greptile PR#53 P1: keeps the rarity decision consistent with the
+    /// stream-scoped corpus size when a search targets a single stream
+    /// (a token rare *inside* the stream must not be masked by global DF).
+    pub fn doc_freq_content_in_stream(&self, token: &str, stream: &str) -> Result<u64> {
+        let searcher = self.reader.searcher();
+        let content_term = tantivy::Term::from_field_text(self.content_field, token);
+        let content_query =
+            tantivy::query::TermQuery::new(content_term, tantivy::schema::IndexRecordOption::Basic);
+        let stream_term = tantivy::Term::from_field_text(self.stream_field, stream);
+        let stream_query =
+            tantivy::query::TermQuery::new(stream_term, tantivy::schema::IndexRecordOption::Basic);
+        let query = tantivy::query::BooleanQuery::new(vec![
+            (
+                tantivy::query::Occur::Must,
+                Box::new(content_query) as Box<dyn tantivy::query::Query>,
+            ),
+            (
+                tantivy::query::Occur::Must,
+                Box::new(stream_query) as Box<dyn tantivy::query::Query>,
+            ),
+        ]);
+        let count = searcher
+            .search(&query, &tantivy::collector::Count)
+            .context("Failed to count stream-scoped doc_freq in tantivy index")?;
+        u64::try_from(count).context("stream-scoped doc_freq exceeds u64")
+    }
+
     /// Posting-list retrieval for the rare-term lane (cycle/012): fetch the
     /// top `limit` documents (by BM25 score) containing **any** of `tokens`
     /// in the `content` field, optionally restricted to a single `stream`.

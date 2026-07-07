@@ -1447,18 +1447,22 @@ async fn rare_term_lane_inner(
         Some([only]) => Some(only.as_str()),
         _ => None,
     };
-    // Brief 012: threshold scales with the *stream* corpus when the query
-    // targets a single stream; DF itself is index-global (posting lists are
-    // not per-stream).
+    // Brief 012 + Greptile PR#53 P1: rarity is judged against the corpus the
+    // query actually searches. Single-stream scope → stream-scoped corpus
+    // size AND stream-scoped DF (posting-list intersection count), so a
+    // token rare inside the stream is not masked by its global frequency.
+    // No stream filter (or multi-stream) → index-global N and DF.
     let n_docs = match single_stream {
         Some(s) => tantivy.count_stream(s)?,
         None => tantivy.count()?,
     };
     let threshold = loomem_core::search::rare_df_threshold(n_docs, cfg);
     let tokens = tantivy.tokenize_content(&ctx.original_query_stemmed)?;
-    let rare = loomem_core::search::select_rare_tokens(&tokens, threshold, |t| {
-        tantivy.doc_freq_content(t)
-    })?;
+    let rare =
+        loomem_core::search::select_rare_tokens(&tokens, threshold, |t| match single_stream {
+            Some(s) => tantivy.doc_freq_content_in_stream(t, s),
+            None => tantivy.doc_freq_content(t),
+        })?;
 
     if rare.is_empty() {
         if let Some(d) = diag {

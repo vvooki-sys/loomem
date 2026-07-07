@@ -439,7 +439,11 @@ fn run_case(
         let n_docs = env.tantivy.count_stream(&case.stream)?;
         let threshold = rare_df_threshold(n_docs, cfg);
         let tokens = env.tantivy.tokenize_content(query)?;
-        let rare = select_rare_tokens(&tokens, threshold, |t| env.tantivy.doc_freq_content(t))?;
+        // Stream-scoped DF, mirroring the handler (Greptile PR#53 P1):
+        // rarity is judged against the corpus the query searches.
+        let rare = select_rare_tokens(&tokens, threshold, |t| {
+            env.tantivy.doc_freq_content_in_stream(t, &case.stream)
+        })?;
         if !rare.is_empty() {
             let rare_tokens: Vec<String> = rare.into_iter().map(|r| r.token).collect();
             let candidates =
@@ -776,6 +780,12 @@ fn tantivy_df_and_candidates_basics() -> Result<()> {
     // DF counts documents, not term occurrences (d1 mentions it twice).
     assert_eq!(tantivy.doc_freq_content("wrzosik")?, 2);
     assert_eq!(tantivy.doc_freq_content("brak")?, 0);
+
+    // Stream-scoped DF (Greptile PR#53 P1): per-stream posting intersection.
+    assert_eq!(tantivy.doc_freq_content_in_stream("wrzosik", "s1")?, 1);
+    assert_eq!(tantivy.doc_freq_content_in_stream("wrzosik", "s2")?, 1);
+    assert_eq!(tantivy.doc_freq_content_in_stream("wrzosik", "s3")?, 0);
+    assert_eq!(tantivy.doc_freq_content_in_stream("brak", "s1")?, 0);
 
     // Stream isolation + cap.
     let toks = vec!["wrzosik".to_string()];
