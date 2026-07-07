@@ -6,8 +6,9 @@
       <stop offset="1" stop-color="#E9F4FD"/>
     </radialGradient>
     <linearGradient id="weave" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#EE9913"/><stop offset="0.2" stop-color="#F4AC2E"/>
-      <stop offset="0.64" stop-color="#63B5F0"/><stop offset="1" stop-color="#1684DC"/>
+      <stop offset="0" stop-color="#EE9913"/><stop offset="0.18" stop-color="#F4AC2E"/>
+      <stop offset="0.38" stop-color="#F7756F"/><stop offset="0.58" stop-color="#B86ED2"/>
+      <stop offset="0.8" stop-color="#63B5F0"/><stop offset="1" stop-color="#1684DC"/>
     </linearGradient>
     <linearGradient id="weaveText" gradientUnits="userSpaceOnUse" x1="17.0" y1="-170.5" x2="1633.5" y2="114.5">
       <stop offset="0" stop-color="#CE7D08"/><stop offset="0.3" stop-color="#EE9913"/><stop offset="0.36" stop-color="#F88546"/><stop offset="0.42" stop-color="#F7756F"/><stop offset="0.48" stop-color="#EB6D95"/><stop offset="0.54" stop-color="#D66BB7"/><stop offset="0.6" stop-color="#B86ED2"/><stop offset="0.66" stop-color="#9474E2"/><stop offset="0.72" stop-color="#667CE6"/><stop offset="0.78" stop-color="#1684DC"/>
