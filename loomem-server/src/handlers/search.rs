@@ -1431,6 +1431,47 @@ async fn compute_rare_term_lane(
     }
 }
 
+/// Corpus size for the rarity threshold, scoped to the searched streams
+/// (summed per stream — streams partition chunks, so the sum is exact) or
+/// index-global when the request is unscoped.
+fn scoped_corpus_size(
+    tantivy: &loomem_core::TantivyIndex,
+    scope: Option<&[String]>,
+) -> anyhow::Result<u64> {
+    match scope {
+        None => tantivy.count(),
+        Some(streams) => {
+            let mut n: u64 = 0;
+            for s in streams {
+                n = n.saturating_add(tantivy.count_stream(s)?);
+            }
+            Ok(n)
+        }
+    }
+}
+
+/// Document frequency of `token`, scoped to the searched streams (summed
+/// per-stream posting-intersection counts) or index-global when unscoped.
+/// Greptile PR#53 P1 rounds 1+2: keeps DF on the same corpus as
+/// `scoped_corpus_size` so locally-rare tokens are never masked by their
+/// global frequency.
+fn scoped_doc_freq(
+    tantivy: &loomem_core::TantivyIndex,
+    scope: Option<&[String]>,
+    token: &str,
+) -> anyhow::Result<u64> {
+    match scope {
+        None => tantivy.doc_freq_content(token),
+        Some(streams) => {
+            let mut df: u64 = 0;
+            for s in streams {
+                df = df.saturating_add(tantivy.doc_freq_content_in_stream(token, s)?);
+            }
+            Ok(df)
+        }
+    }
+}
+
 /// Lane pipeline: corpus size → rarity threshold → tokenize the same string
 /// the BM25 channel searches → DF lookup per token → posting-list candidates
 /// (BM25-scored, capped). Holds the tantivy lock for the DF lookups and
@@ -1443,26 +1484,20 @@ async fn rare_term_lane_inner(
     let cfg = &state.config.search.rare_term_lane;
     let tantivy = state.tantivy.lock().await;
 
-    let single_stream: Option<&str> = match ctx.stream_list.as_deref() {
-        Some([only]) => Some(only.as_str()),
-        _ => None,
-    };
-    // Brief 012 + Greptile PR#53 P1: rarity is judged against the corpus the
-    // query actually searches. Single-stream scope → stream-scoped corpus
-    // size AND stream-scoped DF (posting-list intersection count), so a
-    // token rare inside the stream is not masked by its global frequency.
-    // No stream filter (or multi-stream) → index-global N and DF.
-    let n_docs = match single_stream {
-        Some(s) => tantivy.count_stream(s)?,
-        None => tantivy.count()?,
-    };
+    // Brief 012 + Greptile PR#53 P1 (both rounds): rarity is judged against
+    // the corpus the query actually searches. Stream-scoped requests (one or
+    // many streams) use the summed per-stream corpus size and the summed
+    // per-stream DF (posting-list intersection counts; a chunk lives in
+    // exactly one stream, so the sum is exact) — a token rare inside the
+    // searched streams is not masked by its global frequency. Unscoped
+    // requests keep index-global N and DF.
+    let scope = ctx.stream_list.as_deref();
+    let n_docs = scoped_corpus_size(&tantivy, scope)?;
     let threshold = loomem_core::search::rare_df_threshold(n_docs, cfg);
     let tokens = tantivy.tokenize_content(&ctx.original_query_stemmed)?;
-    let rare =
-        loomem_core::search::select_rare_tokens(&tokens, threshold, |t| match single_stream {
-            Some(s) => tantivy.doc_freq_content_in_stream(t, s),
-            None => tantivy.doc_freq_content(t),
-        })?;
+    let rare = loomem_core::search::select_rare_tokens(&tokens, threshold, |t| {
+        scoped_doc_freq(&tantivy, scope, t)
+    })?;
 
     if rare.is_empty() {
         if let Some(d) = diag {
