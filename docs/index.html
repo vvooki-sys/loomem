@@ -223,7 +223,17 @@ code,.mono{font-family:var(--lm-font-mono)}
 .hero .meta b{display:block;color:var(--lm-ink-900);font-weight:600;margin-bottom:2px}
 .hero-fine{margin-top:20px;font-size:12.5px;color:var(--lm-ink-400);max-width:56ch;line-height:1.5}
 .hero-badges{margin:-6px 0 26px;font-size:13px;font-weight:600;letter-spacing:.01em;color:var(--lm-ink-700)}
-.mark-svg{width:100%;max-width:300px;margin:0 auto;display:block;filter:drop-shadow(0 18px 40px rgba(15,105,184,.16))}
+/* hero mark in 3D: outer ring tumbles on a tilted axis, middle counters
+   around the vertical, inner spins flat as the stable core; the context
+   graph rides on a static top layer */
+.mark3d{position:relative;width:100%;max-width:300px;aspect-ratio:1/1;margin:0 auto;perspective:900px;filter:drop-shadow(0 18px 40px rgba(15,105,184,.16))}
+.mark3d .m3{position:absolute;inset:0;width:100%;height:100%}
+.m3-r1{animation:m3a 24s linear infinite}
+.m3-r2{animation:m3b 18s linear infinite}
+.m3-r3{animation:m3c 12s linear infinite}
+@keyframes m3a{from{transform:rotate3d(1,.35,0,0deg)}to{transform:rotate3d(1,.35,0,360deg)}}
+@keyframes m3b{from{transform:rotate3d(.3,1,.1,360deg)}to{transform:rotate3d(.3,1,.1,0deg)}}
+@keyframes m3c{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 @keyframes lm-spin{to{transform:rotate(360deg)}}
 @keyframes lm-spin-rev{to{transform:rotate(-360deg)}}
 @media(max-width:860px){.hero-inner{grid-template-columns:1fr;gap:4px;padding:clamp(28px,7vw,80px) clamp(20px,5vw,40px)}.hero .art{order:-1;max-width:150px;margin:0 auto 4px}.hero .meta{gap:18px}}
@@ -367,7 +377,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 /* ---------- scroll reveal ---------- */
 .reveal{opacity:0;transform:translateY(18px);transition:opacity .7s var(--lm-ease),transform .7s var(--lm-ease)}
 .reveal.in{opacity:1;transform:none}
-@media(prefers-reduced-motion:reduce){.bg-fx .blob{animation:none}.reveal{opacity:1;transform:none;transition:none}.lm-ring circle{animation:none}.lm-ring .r1{transform:rotate(-18deg)}.lm-ring .r2{transform:rotate(150deg)}.lm-ring .r3{transform:rotate(40deg)}.hero::before,.hero::after{animation:none}}
+@media(prefers-reduced-motion:reduce){.bg-fx .blob{animation:none}.reveal{opacity:1;transform:none;transition:none}.lm-ring circle{animation:none}.lm-ring .r1{transform:rotate(-18deg)}.lm-ring .r2{transform:rotate(150deg)}.lm-ring .r3{transform:rotate(40deg)}.mark3d .m3{animation:none}.m3-r1{transform:rotate(-18deg)}.m3-r2{transform:rotate(150deg)}.m3-r3{transform:rotate(40deg)}.hero::before,.hero::after{animation:none}}
 
 /* ---------- not-a-rag contrast ---------- */
 .contrast{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -518,15 +528,12 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <p class="hero-fine">Storing and searching your context run fully offline — local ONNX embeddings, readable from any MCP client. An OpenAI key is optional and only sharpens extraction and consolidation; without it those steps fall back to regex.</p>
     </div>
     <div class="art">
-      <svg class="mark-svg mark-anim lm-ring" viewBox="0 0 200 200" fill="none" aria-hidden="true">
-        <defs><linearGradient id="heroRingW" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs>
-        <g fill="none" stroke="url(#heroRingW)" stroke-linecap="round">
-          <circle class="r1" cx="100" cy="100" r="77" stroke-width="13" stroke-dasharray="404 80"/>
-          <circle class="r2" cx="100" cy="100" r="56" stroke-width="13" stroke-dasharray="294 62"/>
-          <circle class="r3" cx="100" cy="100" r="36" stroke-width="12" stroke-dasharray="170 56"/>
-        </g>
-        <g id="ctxGraph" opacity="0"></g>
-      </svg>
+      <div class="mark3d" aria-hidden="true">
+        <svg class="m3 m3-r1" viewBox="0 0 200 200" fill="none"><defs><linearGradient id="hero3d1" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs><circle cx="100" cy="100" r="77" stroke="url(#hero3d1)" stroke-width="13" stroke-dasharray="404 80" stroke-linecap="round"/></svg>
+        <svg class="m3 m3-r2" viewBox="0 0 200 200" fill="none"><defs><linearGradient id="hero3d2" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs><circle cx="100" cy="100" r="56" stroke="url(#hero3d2)" stroke-width="13" stroke-dasharray="294 62" stroke-linecap="round"/></svg>
+        <svg class="m3 m3-r3" viewBox="0 0 200 200" fill="none"><defs><linearGradient id="hero3d3" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs><circle cx="100" cy="100" r="36" stroke="url(#hero3d3)" stroke-width="12" stroke-dasharray="170 56" stroke-linecap="round"/></svg>
+        <svg class="m3" viewBox="0 0 200 200" fill="none"><g id="ctxGraph" opacity="0"></g></svg>
+      </div>
     </div>
   </div>
 </div>
