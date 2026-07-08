@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-07-07
+
+Search-quality release: rare-term guarantee lane with per-channel diagnostics.
+
+### Added
+
+- Rare-term guarantee lane plus per-channel search diagnostics (#53).
+
+### Changed
+
+- Two-tone wordmark as the primary logo, with weave-C gradient ramps warming the ink surfaces (#51, #52).
+
+### Fixed
+
+- Phone-redaction guard against digit runs inside identifiers (#50).
+
+### Security
+
+- Bump `crossbeam-epoch` past RUSTSEC-2026-0204 (#54).
+
 ## [0.5.2] - 2026-07-06
 
 Per-stream statistics endpoint.
