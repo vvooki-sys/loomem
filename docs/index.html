@@ -224,8 +224,7 @@ code,.mono{font-family:var(--lm-font-mono)}
 .hero-fine{margin-top:20px;font-size:12.5px;color:var(--lm-ink-400);max-width:56ch;line-height:1.5}
 .hero-badges{margin:-6px 0 26px;font-size:13px;font-weight:600;letter-spacing:.01em;color:var(--lm-ink-700)}
 /* hero mark in 3D: outer ring tumbles on a tilted axis, middle counters
-   around the vertical, inner spins flat as the stable core; the context
-   graph rides on a static top layer */
+   around the vertical, inner spins flat as the stable core */
 .mark3d{position:relative;width:100%;max-width:300px;aspect-ratio:1/1;margin:0 auto;perspective:900px;filter:drop-shadow(0 18px 40px rgba(15,105,184,.16))}
 .mark3d .m3{position:absolute;inset:0;width:100%;height:100%}
 .m3-r1{animation:m3a 24s linear infinite}
@@ -532,7 +531,6 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
         <svg class="m3 m3-r1" viewBox="0 0 200 200" fill="none"><defs><linearGradient id="hero3d1" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs><circle cx="100" cy="100" r="77" stroke="url(#hero3d1)" stroke-width="13" stroke-dasharray="404 80" stroke-linecap="round"/></svg>
         <svg class="m3 m3-r2" viewBox="0 0 200 200" fill="none"><defs><linearGradient id="hero3d2" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs><circle cx="100" cy="100" r="56" stroke="url(#hero3d2)" stroke-width="13" stroke-dasharray="294 62" stroke-linecap="round"/></svg>
         <svg class="m3 m3-r3" viewBox="0 0 200 200" fill="none"><defs><linearGradient id="hero3d3" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs><circle cx="100" cy="100" r="36" stroke="url(#hero3d3)" stroke-width="12" stroke-dasharray="170 56" stroke-linecap="round"/></svg>
-        <svg class="m3" viewBox="0 0 200 200" fill="none"><g id="ctxGraph" opacity="0"></g></svg>
       </div>
     </div>
   </div>
@@ -1003,56 +1001,6 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     });
   }
 
-  // --- a living context graph inside the hero ring ---
-  var g = document.getElementById('ctxGraph');
-  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (g) {
-    var NS = 'http://www.w3.org/2000/svg';
-    function rnd(a, b){ return a + Math.random() * (b - a); }
-    var R = 30;                          // how far nodes roam from the cluster centre
-    var nodes = [], edges = [], lineEls = [], nodeEls = [];
-    function build(){
-      while (g.firstChild) g.removeChild(g.firstChild);
-      nodes = []; edges = []; lineEls = []; nodeEls = [];
-      var cx = rnd(86, 114), cy = rnd(86, 114);       // cluster centre — graph appears in a new spot
-      var n = 4 + Math.floor(Math.random() * 3);       // 4..6 nodes
-      for (var i = 0; i < n; i++){
-        var a = Math.random() * Math.PI * 2, r = rnd(7, R);
-        nodes.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r,
-                     vx: rnd(-0.09, 0.09), vy: rnd(-0.09, 0.09), cx: cx, cy: cy,
-                     r: i === 0 ? 3 : rnd(1.8, 2.6), color: i % 2 ? '#1684DC' : '#F4AC2E' });
-      }
-      for (var j = 1; j < n; j++) edges.push([j, Math.floor(Math.random() * j)]);   // spanning tree → every node is connected
-      if (n > 4 && Math.random() < 0.7){ var p = Math.floor(Math.random() * n), q = Math.floor(Math.random() * n); if (p !== q) edges.push([p, q]); }
-      edges.forEach(function(){ var l = document.createElementNS(NS, 'line'); l.setAttribute('stroke', '#B7AE9E'); l.setAttribute('stroke-width', '1.1'); l.setAttribute('stroke-linecap', 'round'); g.appendChild(l); lineEls.push(l); });
-      nodes.forEach(function(nd){ var c = document.createElementNS(NS, 'circle'); c.setAttribute('r', nd.r.toFixed(1)); c.setAttribute('fill', nd.color); g.appendChild(c); nodeEls.push(c); });
-      draw();
-    }
-    function draw(){
-      for (var i = 0; i < edges.length; i++){ var a = nodes[edges[i][0]], b = nodes[edges[i][1]];
-        lineEls[i].setAttribute('x1', a.x.toFixed(1)); lineEls[i].setAttribute('y1', a.y.toFixed(1));
-        lineEls[i].setAttribute('x2', b.x.toFixed(1)); lineEls[i].setAttribute('y2', b.y.toFixed(1)); }
-      for (var k = 0; k < nodes.length; k++){ nodeEls[k].setAttribute('cx', nodes[k].x.toFixed(1)); nodeEls[k].setAttribute('cy', nodes[k].y.toFixed(1)); }
-    }
-    function step(){
-      for (var i = 0; i < nodes.length; i++){ var nd = nodes[i];
-        nd.x += nd.vx; nd.y += nd.vy;
-        var dx = nd.x - nd.cx, dy = nd.y - nd.cy, d = Math.sqrt(dx * dx + dy * dy) || 1;
-        if (d > R){ var nx = dx / d, ny = dy / d, dot = nd.vx * nx + nd.vy * ny;   // bounce off the cluster boundary
-          nd.vx -= 2 * dot * nx; nd.vy -= 2 * dot * ny; nd.x = nd.cx + nx * R; nd.y = nd.cy + ny * R; }
-      }
-      draw();
-    }
-    window.__ctxStep = step;
-    build();
-    if (reduce){ g.style.opacity = '0.85'; }
-    else {
-      g.style.transition = 'opacity .9s ease'; g.style.opacity = '0';
-      setTimeout(function(){ g.style.opacity = '0.9'; }, 80);
-      (function loop(){ requestAnimationFrame(loop); step(); })();
-      setInterval(function(){ g.style.opacity = '0'; setTimeout(function(){ build(); g.style.opacity = '0.9'; }, 950); }, 7000);
-    }
-  }
 })();
 </script>
 
