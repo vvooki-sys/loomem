@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Loomem exposes 14 `memory_*` tools via the Model Context Protocol. These tools are what Claude (or any MCP client) uses to interact with memory. The MCP server identifies itself as `loomem-memory`.
+Loomem exposes 15 `memory_*` tools via the Model Context Protocol. These tools are what Claude (or any MCP client) uses to interact with memory. The MCP server identifies itself as `loomem-memory`.
 
 > **Runtime sync:** The condensed version sent to MCP clients lives in `loomem-server/mcp_instructions.md` (embedded at compile time). Edit that file to change what clients see.
 
@@ -12,7 +12,7 @@ Data lives in **streams**. Different tools operate at different scopes:
 
 | Scope | Tools | What it means |
 |-------|-------|---------------|
-| **Per-stream** (isolated) | `memory_store`, `memory_search`, `memory_ingest`, `memory_context`, `memory_profile`, `memory_dream`, `memory_reflect`, `memory_associate` | Only sees/writes data in the active stream |
+| **Per-stream** (isolated) | `memory_store`, `memory_search`, `memory_ingest`, `memory_context`, `memory_profile`, `memory_dream`, `memory_reflect`, `memory_associate`, `memory_stats` | Only sees/writes data in the active stream |
 | **Global** (engine-wide) | `memory_status`, `memory_namespaces` | Returns system-level info |
 | **Per-stream** (isolated graph) | `memory_graph` | Knowledge graph is per-stream isolated |
 | **By chunk ID** | `memory_history`, `memory_delete`, `memory_feedback` | Operates on a specific chunk |
@@ -340,6 +340,20 @@ Key indicators:
 - Non-zero `Event log drops`, `Audit write failures`, or `Undecodable chunks` signal data-integrity issues worth investigating.
 
 (The JSON object with `uptime_secs` / `rocksdb_keys` / `vector` / `scheduler` is the HTTP admin stats endpoint — see the API reference — not this MCP tool.)
+
+---
+
+### memory_stats
+
+A fuller inventory and usage breakdown for your stream — the companion to `memory_status` (which is health-only). Use it when you want counts and distributions rather than just a health check.
+
+**No parameters.**
+
+**When to call:**
+- You want a breakdown of what's stored for the active stream (totals, types, age distribution)
+- Auditing or reporting on a stream's contents without reading individual memories
+
+**Privacy:** emits only aggregate counts, timestamps, and distributions — never chunk content.
 
 ---
 

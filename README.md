@@ -4,13 +4,13 @@
 
 <br>
 
-[![Website](https://img.shields.io/badge/website-vvooki--sys.github.io%2Floomem-1684DC?style=flat-square&labelColor=1F1B16)](https://vvooki-sys.github.io/loomem/)
+[![Website](https://img.shields.io/badge/website-loomem.ai-1684DC?style=flat-square&labelColor=1F1B16)](https://loomem.ai/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-EE9913?style=flat-square&labelColor=1F1B16)](LICENSE)
 [![Built in Rust](https://img.shields.io/badge/built%20in-Rust-A2610B?style=flat-square&labelColor=1F1B16)](https://www.rust-lang.org)
 [![MCP-native](https://img.shields.io/badge/MCP-native-1684DC?style=flat-square&labelColor=1F1B16)](https://modelcontextprotocol.io)
 [![Status: early](https://img.shields.io/badge/status-early-CE7D08?style=flat-square&labelColor=1F1B16)](#)
 
-**[Website](https://vvooki-sys.github.io/loomem/)** · **[Quickstart](#quickstart)** · **[Install](#install)** · **[Architecture](#architecture)** · **[Docs](#documentation)**
+**[Website](https://loomem.ai/)** · **[Quickstart](#quickstart)** · **[Install](#install)** · **[Architecture](#architecture)** · **[Docs](#documentation)**
 
 </div>
 
@@ -24,7 +24,7 @@ Loomem stores structured knowledge extracted from conversations, and serves it b
 - **Consolidation** — background workers merge related facts, resolve contradictions, and let stale ones decay ("dreaming").
 - **Bitemporal model** — facts carry both ingestion time and event time (`valid_from` / `valid_until`), so "what did I know in March" and "what happened in March" are different queries.
 - **Entity graph** — people, projects, and technologies are extracted into a graph with aliases and relations, used both for retrieval and exploration.
-- **MCP-native** — 14 `memory_*` tools over the standard MCP HTTP transport, including OAuth dynamic client registration for remote connectors.
+- **MCP-native** — 15 `memory_*` tools over the standard MCP HTTP transport, including OAuth dynamic client registration for remote connectors.
 - **Encryption at rest** (optional) — field-level AES-GCM envelope encryption with a master key from the environment.
 
 Built in Rust on RocksDB + Tantivy. Single binary, no external services required.
@@ -58,7 +58,7 @@ cd ~/.loomem && loomem-server
 
 ```bash
 curl http://localhost:3030/health
-# {"status":"ok","version":"0.4.1"}
+# {"status":"ok","version":"0.5.3"}
 ```
 
 > The installer uses port **3030** by default and asks for an alternative if it's already taken (set `LOOMEM_PORT` to skip the prompt). If you picked a different port, use it in the commands below.

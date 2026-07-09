@@ -165,7 +165,7 @@ a:hover{text-decoration:underline}
 <nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
 </div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html" class="active">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Docs</div><article class="doc-content"><h1 id="mcp-tools-reference">MCP Tools Reference</h1>
-<p>Loomem exposes 14 <code>memory_*</code> tools via the Model Context Protocol. These tools are what Claude (or any MCP client) uses to interact with memory. The MCP server identifies itself as <code>loomem-memory</code>.</p>
+<p>Loomem exposes 15 <code>memory_*</code> tools via the Model Context Protocol. These tools are what Claude (or any MCP client) uses to interact with memory. The MCP server identifies itself as <code>loomem-memory</code>.</p>
 <blockquote>
 <p><strong>Runtime sync:</strong> The condensed version sent to MCP clients lives in <code>loomem-server/mcp_instructions.md</code> (embedded at compile time). Edit that file to change what clients see.</p>
 </blockquote>
@@ -183,7 +183,7 @@ a:hover{text-decoration:underline}
 <tbody>
 <tr>
 <td><strong>Per-stream</strong> (isolated)</td>
-<td><code>memory_store</code>, <code>memory_search</code>, <code>memory_ingest</code>, <code>memory_context</code>, <code>memory_profile</code>, <code>memory_dream</code>, <code>memory_reflect</code>, <code>memory_associate</code></td>
+<td><code>memory_store</code>, <code>memory_search</code>, <code>memory_ingest</code>, <code>memory_context</code>, <code>memory_profile</code>, <code>memory_dream</code>, <code>memory_reflect</code>, <code>memory_associate</code>, <code>memory_stats</code></td>
 <td>Only sees/writes data in the active stream</td>
 </tr>
 <tr>
@@ -622,6 +622,14 @@ LLM failures (last 60m): extraction=0, ner=0, embedding=0, consolidation=0
 - <code>Associator: enabled, awaiting clustering</code> means <code>memory_associate</code> has nothing to return until <code>memory_dream</code> runs.
 - Non-zero <code>Event log drops</code>, <code>Audit write failures</code>, or <code>Undecodable chunks</code> signal data-integrity issues worth investigating.</p>
 <p>(The JSON object with <code>uptime_secs</code> / <code>rocksdb_keys</code> / <code>vector</code> / <code>scheduler</code> is the HTTP admin stats endpoint — see the API reference — not this MCP tool.)</p>
+<hr />
+<h3 id="memory_stats">memory_stats</h3>
+<p>A fuller inventory and usage breakdown for your stream — the companion to <code>memory_status</code> (which is health-only). Use it when you want counts and distributions rather than just a health check.</p>
+<p><strong>No parameters.</strong></p>
+<p><strong>When to call:</strong>
+- You want a breakdown of what's stored for the active stream (totals, types, age distribution)
+- Auditing or reporting on a stream's contents without reading individual memories</p>
+<p><strong>Privacy:</strong> emits only aggregate counts, timestamps, and distributions — never chunk content.</p>
 <hr />
 <h3 id="memory_namespaces">memory_namespaces</h3>
 <p>List available memory spaces.</p>

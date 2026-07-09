@@ -446,7 +446,7 @@ Pause state does not survive server restart — workers resume automatically on 
 
 MCP JSON-RPC 2.0 endpoint. Used by Claude Desktop, claude.ai connectors, and other MCP clients. The server identifies itself as `loomem-memory`.
 
-See [MCP Tools Reference](mcp-tools.md) for the 14 available `memory_*` tools.
+See [MCP Tools Reference](mcp-tools.md) for the 15 available `memory_*` tools.
 
 ### OAuth endpoints
 

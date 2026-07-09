@@ -7,7 +7,7 @@
 - License: Apache-2.0, open source
 - Language: Rust
 - Storage: single binary, RocksDB (data + graph + embeddings) + Tantivy (full-text)
-- Interface: Model Context Protocol (MCP) over streamable HTTP; 14 `memory_*` tools
+- Interface: Model Context Protocol (MCP) over streamable HTTP; 15 `memory_*` tools
 - Deployment: local-first (macOS, Linux), Docker, or any cloud; runs offline with local ONNX embeddings
 - Distinctive: zero external services (one Rust binary), context-layer/portability framing, bitemporal facts, background consolidation ("dreaming")
 

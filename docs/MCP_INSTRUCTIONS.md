@@ -1,6 +1,6 @@
 # Loomem MCP — Instructions for Claude
 
-> **Runtime source of truth:** `loomem-server/mcp_instructions.md` — embedded at compile time via `include_str!()`. This document is the extended version with examples and guidance. See [MCP Tools Reference](mcp-tools.md) for the full list of 14 tools.
+> **Runtime source of truth:** `loomem-server/mcp_instructions.md` — embedded at compile time via `include_str!()`. This document is the extended version with examples and guidance. See [MCP Tools Reference](mcp-tools.md) for the full list of 15 tools.
 
 ---
 
@@ -15,7 +15,7 @@ Do NOT store raw conversation text. Extract specific facts, decisions, and
 preferences. Use memory_ingest for full conversations, memory_store for
 single confirmed facts.
 
-## Tools available (14 memory tools):
+## Tools available (15 memory tools):
 
 ### Loading memory
 - memory_context — load relevant background at start of task (token-budgeted)
@@ -42,6 +42,7 @@ single confirmed facts.
 
 ### Info
 - memory_status — engine health (per-stream memory count, embedding readiness, associator state, error counters)
+- memory_stats — fuller per-stream inventory and usage breakdown (companion to memory_status)
 - memory_graph — explore entity connections (people, projects, tech)
 ```
 
@@ -53,7 +54,7 @@ Data lives in isolated **streams**. Understanding scope prevents confusion:
 
 | Scope | Tools |
 |-------|-------|
-| **Per-stream** (isolated) | `memory_store`, `memory_search`, `memory_ingest`, `memory_context`, `memory_profile`, `memory_dream`, `memory_reflect`, `memory_associate`, `memory_graph` |
+| **Per-stream** (isolated) | `memory_store`, `memory_search`, `memory_ingest`, `memory_context`, `memory_profile`, `memory_dream`, `memory_reflect`, `memory_associate`, `memory_graph`, `memory_stats` |
 | **Global** (engine-wide) | `memory_status`, `memory_namespaces` |
 | **By chunk ID** | `memory_history`, `memory_delete`, `memory_feedback` |
 
