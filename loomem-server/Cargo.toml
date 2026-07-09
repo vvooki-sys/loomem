@@ -41,6 +41,9 @@ futures = "0.3"
 regex = "1"
 libc = "0.2"
 
+# Embedded dashboard SPA (see workspace Cargo.toml for rationale)
+rust-embed.workspace = true
+
 
 [features]
 default = ["onnx-rerank"]

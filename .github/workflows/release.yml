@@ -51,6 +51,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libclang-dev
 
+      # The dashboard SPA is embedded into loomem-server at compile time
+      # (rust-embed over loomem-dashboard/dist), so the front end must be
+      # built BEFORE cargo. Node 20+ is preinstalled on GitHub runners.
+      - name: Build dashboard SPA
+        working-directory: loomem-dashboard
+        run: |
+          npm ci
+          npm run build
+
       - name: Build release binaries
         run: cargo build --release --target ${{ matrix.target }} -p loomem-server -p loomem-cli -p loomem-migrate
 

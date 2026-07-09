@@ -7,6 +7,7 @@ mod mcp;
 mod oauth;
 pub mod rate_limiter;
 mod resource_guards;
+mod spa;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -1028,6 +1029,12 @@ pub(crate) fn build_routes(p: RouteParams) -> Router<Arc<AppState>> {
         .merge(protected_routes(&p))
         .route("/health", get(handlers::health_handler))
         .merge(oauth_routes_internal(&p))
+        // Embedded dashboard SPA. Registered as the fallback OUTSIDE the
+        // protected router so the login screen loads without a token — the
+        // SPA is static; every data call it makes goes through the
+        // auth-gated API routes above. API-shaped paths still 404 inside
+        // the fallback (spa.rs) instead of leaking the shell to JSON clients.
+        .fallback(spa::spa_fallback)
 }
 
 /// All auth-protected routes plus their middleware layers.
@@ -1109,6 +1116,11 @@ fn protected_routes(p: &RouteParams) -> Router<Arc<AppState>> {
                 .put(handlers::api_update_memory_handler)
                 .get(handlers::admin::api_get_memory_handler),
         )
+        .route(
+            "/api/dashboard/memory",
+            get(handlers::dashboard_memory_handler),
+        )
+        .route("/v1/memory-chain/{id}", get(handlers::memory_chain_handler))
         .route(
             "/api/namespace/{ns}/purge",
             post(handlers::api_purge_namespace_handler),
