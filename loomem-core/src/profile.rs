@@ -343,7 +343,7 @@ fn parse_profile_json(raw: &str) -> Result<UserProfile> {
 
     anyhow::bail!(
         "Could not extract valid JSON from LLM response. First 200 chars: {}",
-        &raw.chars().take(200).collect::<String>()
+        raw.chars().take(200).collect::<String>()
     )
 }
 

@@ -661,8 +661,20 @@ pub async fn search_handler(
                 // diagnostics are a fresh-pipeline-only artifact (cycle/012),
                 // same policy as signal_breakdown above.
                 channel_diagnostics: None,
+                // Cache stores full-pipeline results only — Tier-1 responses
+                // are never inserted (see `tier1_lookup`), so a hit is tierless.
+                tier: None,
             }));
         }
+    }
+
+    // WS-1(c) (Spectron gap brief 2026-07-09): Tier-1 direct entity→attribute
+    // lookup — the cheapest rung of the retrieval cost ladder (no embeddings,
+    // no fusion, no LLM). Config-gated, default off; `None` (gate off, query
+    // shape mismatch, or no confident entity-chunk match) falls through to
+    // the full pipeline below unchanged.
+    if let Some(response) = tier1_lookup(&ctx, &payload, &auth, &state, &classification).await {
+        return Ok(Json(response));
     }
 
     // Multi-query decomposition (if enabled). `sub_queries` stays in the
@@ -937,6 +949,165 @@ fn classify_and_trace(query: &str) -> ClassifiedQuery {
     c
 }
 
+/// WS-1(c) (Spectron gap brief 2026-07-09): Tier-1 direct entity→attribute
+/// lookup — the cheapest rung of the retrieval cost ladder. A factual query
+/// naming a known graph entity plus at least one attribute term is answered
+/// straight from the entity's chunk index: no embeddings, no fusion, no LLM.
+///
+/// Returns `None` whenever the tier does not *confidently* apply — gate off,
+/// non-factual query shape, no resolvable entity, no candidate whose content
+/// contains an attribute term, or everything filtered out downstream — and
+/// the caller then runs the full pipeline unchanged. Best-effort like the
+/// rare-term lane: a graph read error degrades to `None` with a warn, it
+/// never fails the search.
+///
+/// Responses are stamped `tier: Some(1)` and are intentionally NOT inserted
+/// into the query cache: recomputation is O(candidate_cap) chunk reads, and a
+/// cached copy would come back through the warm path without its tier stamp.
+/// Candidates are ordered newest-first (`timestamp` desc) — for mutable
+/// entity attributes the latest fact wins — and given descending rank-marker
+/// scores (1.0, 0.999, …) so the order survives `filter_and_truncate`, which
+/// retains but never re-sorts.
+async fn tier1_lookup(
+    ctx: &QueryContext,
+    payload: &SearchRequest,
+    auth: &AuthContext,
+    state: &Arc<AppState>,
+    classification: &ClassifiedQuery,
+) -> Option<SearchResponse> {
+    let cfg = &state.config.search.tier1;
+    if !cfg.enabled {
+        return None;
+    }
+    // Date-filtered, entity-filtered and diagnostic requests always take the
+    // full pipeline: the tier neither applies the BM25 date/entity branches
+    // nor produces channel/breakdown snapshots.
+    if ctx.date_filter.is_some()
+        || payload.entity.is_some()
+        || payload.debug_channels
+        || payload.debug_signal_breakdown
+    {
+        return None;
+    }
+    // Entity→attribute shape: a factual query with at least one detected
+    // entity. Temporal/Recent/Relational/DocumentLookup queries need the
+    // full pipeline's specialised handling.
+    if classification.query_type != loomem_core::search::QueryType::Factual
+        || classification.features.entities.is_empty()
+    {
+        return None;
+    }
+    let terms = loomem_core::search::tier1::attribute_terms(
+        &ctx.query_without_date,
+        &classification.features.entities,
+    );
+    if terms.is_empty() {
+        // Bare-entity query — dense retrieval handles open-ended entity
+        // questions better than a raw chunk dump would.
+        return None;
+    }
+
+    // Resolve entities in every searched stream (graph entities are
+    // stream-scoped; `get_entity_by_name` also consults the alias index).
+    let streams: Vec<String> = ctx
+        .stream_list
+        .clone()
+        .unwrap_or_else(|| vec![auth.stream_id.clone()]);
+    let mut candidate_ids: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    'collect: for stream in &streams {
+        for name in &classification.features.entities {
+            let entity = match state.graph.get_entity_by_name(name, stream) {
+                Ok(Some(entity)) => entity,
+                Ok(None) => continue,
+                Err(e) => {
+                    warn!("Tier-1 degraded, falling back to full pipeline: {e:#}");
+                    return None;
+                }
+            };
+            for chunk_id in entity.chunk_ids {
+                if candidate_ids.len() >= cfg.candidate_cap {
+                    break 'collect;
+                }
+                if seen.insert(chunk_id.clone()) {
+                    candidate_ids.push(chunk_id);
+                }
+            }
+        }
+    }
+    if candidate_ids.is_empty() {
+        return None;
+    }
+
+    // Load + pre-filter candidates: readable, live, in-scope, and answering
+    // the attribute part of the query.
+    let mut matched: Vec<loomem_core::HybridSearchResult> = Vec::new();
+    for chunk_id in &candidate_ids {
+        let chunk = match state.store.get_chunk(chunk_id) {
+            Ok(Some(chunk)) => chunk,
+            _ => continue,
+        };
+        if chunk.dormant
+            || !streams.contains(&chunk.stream)
+            || crate::handlers::delete::is_deleted_in_store(state, chunk_id)
+            || !loomem_core::search::tier1::content_matches(&chunk.content, &terms)
+        {
+            continue;
+        }
+        let timestamp = i64::try_from(chunk.timestamp).unwrap_or(i64::MAX);
+        matched.push(loomem_core::HybridSearchResult {
+            id: chunk.id,
+            content: chunk.content,
+            user_id: String::new(),
+            app_id: String::new(),
+            level: chunk.level,
+            timestamp,
+            score: 0.0, // rank marker assigned after the recency sort below
+            bm25_score: 0.0,
+            vector_score: 0.0,
+            time_decay_factor: 1.0,
+        });
+    }
+    if matched.is_empty() {
+        return None;
+    }
+    matched.sort_by_key(|r| std::cmp::Reverse(r.timestamp));
+    let mut rank_score = 1.0_f64;
+    for result in &mut matched {
+        // Rank marker, not a fusion score — encodes the newest-first order.
+        result.score = rank_score;
+        rank_score -= 0.001;
+    }
+
+    // Reuse the shared response tail: bitemporal/superseded/extraction-meta
+    // filters, dedup, agent filters, truncate — then the standard envelope.
+    let FilterOutcome {
+        results,
+        dedup_removed,
+        total_results_before_topk,
+        final_top_k,
+    } = filter_and_truncate(matched, ctx, payload, state);
+    if results.is_empty() {
+        return None;
+    }
+    tracing::debug!(
+        "Tier-1 direct lookup answered: {} results (entities={:?})",
+        results.len(),
+        classification.features.entities
+    );
+
+    let metrics = ResponseMetrics {
+        start: ctx.start,
+        complexity: ctx.complexity,
+        dedup_removed,
+        total_results_before_topk,
+        final_top_k,
+    };
+    let mut response = build_response(metrics, results, state, auth, payload, classification).await;
+    response.tier = Some(1);
+    Some(response)
+}
+
 /// Apply implicit boost, serialize `HybridSearchResult` → `SearchResult`,
 /// compute context-sufficiency score, emit search event, gather associations
 /// (ECA-29/31 circuit breakers) and recommendations, and assemble the final
@@ -1196,6 +1367,9 @@ async fn build_response(
         // Cycle/012: attached by the orchestrator after assembly (the
         // diagnostics snapshots live outside build_response's inputs).
         channel_diagnostics: None,
+        // WS-1(c): stamped by `tier1_lookup` when the direct lookup answered;
+        // the full pipeline is tierless (field serializes as omitted).
+        tier: None,
     }
 }
 
@@ -3567,6 +3741,7 @@ mod tests {
                 recommendations: None,
                 query_classification: None,
                 channel_diagnostics: None,
+                tier: None,
             }
         }
 
@@ -4008,6 +4183,9 @@ mod tests {
                 user_state_boost: 1.0,
                 agent_fact_damp: 1.0,
                 rare_term_lane: loomem_core::search::rare_term::RareTermLaneConfig::default(),
+                vector_similarity_floor: 0.0,
+                decay_match_relief: 0.0,
+                tier1: loomem_core::search::tier1::Tier1Config::default(),
             }
         }
 

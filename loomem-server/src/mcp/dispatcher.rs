@@ -808,10 +808,21 @@ async fn tool_search(
                 );
                 resp.results.truncate(keep);
             }
-            let mut text = if is_aggregation {
-                format!("ENUMERATION QUERY: Carefully count ALL unique items below. Do not estimate — enumerate each one.\n\nFound {} relevant memories:\n\n", resp.results.len())
+            // WS-1(c) (Spectron gap brief 2026-07-09): surface the retrieval
+            // tier on the MCP text surface too (REST carries `"tier": 1`), so
+            // callers can tell a direct entity lookup answered.
+            let tier_tag = if resp.tier == Some(1) {
+                " [tier:1 — direct entity lookup]"
             } else {
-                format!("Found {} relevant memories:\n\n", resp.results.len())
+                ""
+            };
+            let mut text = if is_aggregation {
+                format!("ENUMERATION QUERY: Carefully count ALL unique items below. Do not estimate — enumerate each one.\n\nFound {} relevant memories:{tier_tag}\n\n", resp.results.len())
+            } else {
+                format!(
+                    "Found {} relevant memories:{tier_tag}\n\n",
+                    resp.results.len()
+                )
             };
             for (i, r) in resp.results.iter().enumerate() {
                 // Prefer event_date from extraction_meta, fall back to ingestion timestamp
@@ -2464,10 +2475,11 @@ mod tests {
     // ── AC-6.3 (per addendum) — tools/list schema emission ──
 
     #[test]
-    fn ac6_3_tool_definitions_has_stream_in_twelve_tools_and_not_in_namespaces() {
+    fn ac6_3_tool_definitions_has_stream_in_thirteen_tools_and_not_in_namespaces() {
         let defs = crate::mcp::tools::tool_definitions(&loomem_core::config::McpConfig::default());
-        // 13 memory tools + 1 feedback tool (/113) = 14.
-        let expected_total = 13 + 1;
+        // 14 memory tools (memory_stats since v0.5.2) + 1 feedback tool
+        // (/113) = 15.
+        let expected_total = 14 + 1;
         assert_eq!(
             defs.len(),
             expected_total,
@@ -2534,8 +2546,8 @@ mod tests {
         }
 
         assert_eq!(
-            with_stream, 12,
-            "exactly 12 memory tools must have 'stream' property"
+            with_stream, 13,
+            "exactly 13 memory tools must have 'stream' property"
         );
         assert!(
             namespaces_without_stream,
@@ -2546,7 +2558,7 @@ mod tests {
     // ── AC-6.3 extra: verbatim consistency of the `stream` description ──
 
     #[test]
-    fn ac6_3_stream_description_is_identical_across_twelve_tools() {
+    fn ac6_3_stream_description_is_identical_across_thirteen_tools() {
         let defs = crate::mcp::tools::tool_definitions(&loomem_core::config::McpConfig::default());
         let descriptions: Vec<String> = defs
             .iter()
@@ -2563,7 +2575,7 @@ mod tests {
                     .map(String::from)
             })
             .collect();
-        assert_eq!(descriptions.len(), 12);
+        assert_eq!(descriptions.len(), 13);
         let first = &descriptions[0];
         for d in &descriptions[1..] {
             assert_eq!(d, first, "stream description must be verbatim across tools");
