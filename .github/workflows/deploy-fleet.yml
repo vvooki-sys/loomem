@@ -1,0 +1,31 @@
+# vvooki-sys/loomem  →  .github/workflows/deploy-fleet.yml
+#
+# After CI passes on main, signal the control-plane (vvooki-sys/loomem-cloud) to
+# roll the trial fleet to this commit. All Railway + secret logic stays in the
+# private control-plane repo; this public engine repo only emits "main is green".
+name: Deploy fleet on green main
+
+on:
+  workflow_run:
+    workflows: ["CI"] # must match `name:` in vvooki-sys/loomem .github/workflows/ci.yml
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  dispatch:
+    # workflow_run also fires on CI failure — only dispatch when CI actually passed.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch fleet rollout to loomem-cloud
+        env:
+          # Fine-grained PAT (or GitHub App token) with Contents: write on
+          # vvooki-sys/loomem-cloud — nothing else. Stored as an Actions secret.
+          GH_TOKEN: ${{ secrets.FLEET_DISPATCH_TOKEN }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          echo "CI green on main @ $SHA — dispatching fleet rollout"
+          printf '{"event_type":"engine-main-push","client_payload":{"sha":"%s"}}' "$SHA" \
+            | gh api repos/vvooki-sys/loomem-cloud/dispatches --input -
