@@ -289,21 +289,21 @@ impl<'a> Bm25Leaf<'a> {
             limit,
         }
     }
-    /// Entity branch: content + entity filter.
-    fn entity(query: &'a str, entity: &'a str, limit: usize) -> Self {
+    /// Entity branch: content + entity filter, stream-scoped at the source.
+    fn entity(query: &'a str, stream: Option<&'a str>, entity: &'a str, limit: usize) -> Self {
         Self {
             query,
-            stream: None,
+            stream,
             entity: Some(entity),
             date_range: None,
             limit,
         }
     }
-    /// Date branch: content + `event_date` range filter.
-    fn date(query: &'a str, range: (i64, i64), limit: usize) -> Self {
+    /// Date branch: content + `event_date` range filter, stream-scoped at the source.
+    fn date(query: &'a str, stream: Option<&'a str>, range: (i64, i64), limit: usize) -> Self {
         Self {
             query,
-            stream: None,
+            stream,
             entity: None,
             date_range: Some(range),
             limit,
@@ -335,13 +335,59 @@ fn bm25_leaf(
             limit: leaf.limit,
         })
     } else if let Some((start_ts, end_ts)) = leaf.date_range {
-        tantivy.search_with_date_range(leaf.query, start_ts, end_ts, leaf.limit)
+        tantivy.search_with_date_range(leaf.query, start_ts, end_ts, leaf.stream, leaf.limit)
     } else if let Some(entity) = leaf.entity {
-        tantivy.search_with_entity(leaf.query, entity, leaf.limit)
+        tantivy.search_with_entity(leaf.query, entity, leaf.stream, leaf.limit)
     } else if let Some(stream) = leaf.stream {
         tantivy.search_with_stream(leaf.query, stream, leaf.limit)
     } else {
         tantivy.search(leaf.query, leaf.limit)
+    }
+}
+
+/// Run one stream's BM25 leaf via `run_leaf` for every scoped stream and union
+/// the hits with max-score-wins merge — the multi-stream union semantics shared
+/// by all branches (cycle: BM25 stream-scoping parity). `run_leaf` builds and
+/// runs the branch-specific leaf (plain / date / entity) for the given stream,
+/// pushing the `stream` predicate at index-query time via `bm25_leaf`; it
+/// returns owned results, so the stream scope stays at the source rather than
+/// being reconstructed post-hoc:
+/// - single stream → one scoped leaf (fast path, no merge);
+/// - many streams → per-stream leaves merged by id, highest score wins;
+/// - `None` → one unscoped leaf (backward-compatible with pre-scoped callers).
+fn bm25_over_streams<F>(
+    streams: Option<&[String]>,
+    run_leaf: F,
+) -> anyhow::Result<Vec<loomem_core::SearchResult>>
+where
+    F: Fn(Option<&str>) -> anyhow::Result<Vec<loomem_core::SearchResult>>,
+{
+    match streams {
+        Some(streams) if streams.len() == 1 => run_leaf(Some(&streams[0])),
+        Some(streams) => {
+            let mut merged_map: std::collections::HashMap<String, loomem_core::SearchResult> =
+                std::collections::HashMap::new();
+            for s in streams {
+                for r in run_leaf(Some(s))? {
+                    merged_map
+                        .entry(r.id.clone())
+                        .and_modify(|e| {
+                            if r.score > e.score {
+                                e.score = r.score;
+                            }
+                        })
+                        .or_insert(r);
+                }
+            }
+            let mut merged: Vec<_> = merged_map.into_values().collect();
+            merged.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            Ok(merged)
+        }
+        None => run_leaf(None),
     }
 }
 
@@ -1392,62 +1438,37 @@ async fn bm25_retrieve(
     let tantivy = state.tantivy.lock().await;
     let oq: &str = &ctx.original_query_stemmed;
 
+    // Every branch routes through `bm25_over_streams`, so the stream predicate
+    // is applied at index-query time (per-stream union for multi-stream
+    // callers) rather than post-hoc — parity with the plain/vector/graph lanes.
+    let streams = ctx.stream_list.as_deref();
+
     let bm25_results = if let Some(ref date_filter) = ctx.date_filter {
         let (start_ts, end_ts) = match date_filter {
             DateFilter::Range(start, end) => (*start, *end),
         };
 
-        bm25_leaf(
-            &tantivy,
-            payload,
-            Bm25Leaf::date(oq, (start_ts, end_ts), ctx.limit * 2),
-        )?
+        bm25_over_streams(streams, |s| {
+            bm25_leaf(
+                &tantivy,
+                payload,
+                Bm25Leaf::date(oq, s, (start_ts, end_ts), ctx.limit * 2),
+            )
+        })?
     } else if let Some(ref entity) = payload.entity {
-        bm25_leaf(
-            &tantivy,
-            payload,
-            Bm25Leaf::entity(oq, entity, ctx.limit * 2),
-        )?
+        bm25_over_streams(streams, |s| {
+            bm25_leaf(
+                &tantivy,
+                payload,
+                Bm25Leaf::entity(oq, s, entity, ctx.limit * 2),
+            )
+        })?
     } else {
-        let stream_filter: Option<Vec<String>> = ctx.stream_list.clone();
-
         let search_query =
             |query: &str, lim: usize| -> anyhow::Result<Vec<loomem_core::SearchResult>> {
-                match &stream_filter {
-                    Some(streams) if streams.len() == 1 => bm25_leaf(
-                        &tantivy,
-                        payload,
-                        Bm25Leaf::plain(query, Some(&streams[0]), lim),
-                    ),
-                    Some(streams) => {
-                        let mut merged_map: std::collections::HashMap<
-                            String,
-                            loomem_core::SearchResult,
-                        > = std::collections::HashMap::new();
-                        for s in streams {
-                            let results =
-                                bm25_leaf(&tantivy, payload, Bm25Leaf::plain(query, Some(s), lim))?;
-                            for r in results {
-                                merged_map
-                                    .entry(r.id.clone())
-                                    .and_modify(|e| {
-                                        if r.score > e.score {
-                                            e.score = r.score;
-                                        }
-                                    })
-                                    .or_insert(r);
-                            }
-                        }
-                        let mut merged: Vec<_> = merged_map.into_values().collect();
-                        merged.sort_by(|a, b| {
-                            b.score
-                                .partial_cmp(&a.score)
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                        Ok(merged)
-                    }
-                    None => bm25_leaf(&tantivy, payload, Bm25Leaf::plain(query, None, lim)),
-                }
+                bm25_over_streams(streams, |s| {
+                    bm25_leaf(&tantivy, payload, Bm25Leaf::plain(query, s, lim))
+                })
             };
 
         let original_results = search_query(&ctx.original_query_stemmed, ctx.limit * 2)?;
@@ -2597,6 +2618,20 @@ fn filter_and_truncate(
             } else {
                 true
             }
+        });
+    }
+
+    // Fail-closed stream-scoping guard (defense-in-depth). The retrieval lanes
+    // now apply the stream predicate at index-query time, but this `retain`
+    // enforces the invariant one last time before top-K truncation so a future
+    // lane that forgets the predicate cannot leak cross-stream chunks. Mirrors
+    // the graph lane's `streams.contains(&chunk.stream)` gate — but fail-CLOSED:
+    // a result whose chunk is missing, unreadable, or carries no in-scope stream
+    // attribution is DROPPED, not passed through. `None` scope = unscoped query,
+    // so the guard is a no-op (backward compatible).
+    if let Some(ref streams) = ctx.stream_list {
+        hybrid_results.retain(|r| {
+            matches!(state.store.get_chunk(&r.id), Ok(Some(chunk)) if streams.contains(&chunk.stream))
         });
     }
 
@@ -4582,6 +4617,222 @@ mod agent_filter_tests {
             ids,
             ["b0", "u0"].into_iter().collect(),
             "exclude [agentA] keeps agentB + the agent-less chunk, drops agentA"
+        );
+    }
+}
+
+#[cfg(test)]
+mod stream_scoping_e2e_tests {
+    //! BM25 stream-scoping parity — handler-level e2e (cycle:
+    //! bm25-stream-scoping-parity). Drives `search_handler` end-to-end through
+    //! the `time_filter` (date) and `entity` retrieval branches with two content
+    //! twins living in different streams, and asserts a stream-scoped query
+    //! returns only the in-scope twin. The non-vacuous check re-runs the same
+    //! query scoped to the OTHER stream to prove the twin is genuinely
+    //! retrievable — the isolation is not just "returns nothing".
+    use super::*;
+    use crate::auth::{AuthContext, KeyScope};
+    use loomem_core::storage::{Chunk, UserRole};
+    use loomem_core::{SourceTag, TextDocument};
+
+    /// A chunk in an explicit stream. `1_700_000_000` = 2023-11-14, so a
+    /// 2023 date window covers it.
+    fn chunk(id: &str, stream: &str, content: &str) -> Chunk {
+        Chunk {
+            id: id.to_string(),
+            content: content.to_string(),
+            stream: stream.to_string(),
+            level: 0,
+            score: 1.0,
+            timestamp: 1_700_000_000,
+            consolidated: false,
+            dormant: false,
+            in_progress: false,
+            prompt_version: None,
+            source_ids: None,
+            last_decay: None,
+            metadata: None,
+            importance: None,
+            persistent: false,
+            last_implicit_boost: None,
+            access_count: 0,
+            source: Some(SourceTag::from_agent("tester")),
+            created_by: None,
+            updated_at: None,
+            valid_from: None,
+            valid_until: None,
+            is_latest: true,
+            superseded_by: None,
+            supersedes_id: None,
+            root_memory_id: None,
+            version: 1,
+            memory_type: None,
+            extraction_meta: None,
+            deleted_at: None,
+            trust_level: None,
+            ingester_user_id: None,
+            alpha: 1.0,
+            beta: 1.0,
+            harmful_count: 0,
+            n_ratings: 0,
+            last_rated_at: None,
+            provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+        }
+    }
+
+    fn index_doc(c: &Chunk, entities: Option<&str>) -> TextDocument {
+        TextDocument {
+            id: c.id.clone(),
+            content: c.content.clone(),
+            user_id: "default".into(),
+            app_id: "default".into(),
+            level: 0,
+            timestamp: c.timestamp as i64,
+            stream: c.stream.clone(),
+            entities: entities.map(|e| e.to_string()),
+            relations: None,
+            event_date: Some(c.timestamp as i64),
+            source_agent: Some("tester".into()),
+        }
+    }
+
+    /// Seed one chunk into both RocksDB and Tantivy (with an optional entity tag).
+    async fn seed_one(
+        state: &std::sync::Arc<AppState>,
+        id: &str,
+        stream: &str,
+        content: &str,
+        entities: Option<&str>,
+    ) {
+        let c = chunk(id, stream, content);
+        state.store.store_chunk(&c).unwrap();
+        let mut tv = state.tantivy.lock().await;
+        tv.upsert_document(index_doc(&c, entities)).unwrap();
+        tv.commit().unwrap();
+    }
+
+    /// Twins: identical content + entity, one in each stream.
+    async fn seed_twins(state: &std::sync::Arc<AppState>) {
+        seed_one(state, "a1", "streamA", "budget review notes", Some("Anna")).await;
+        seed_one(state, "b1", "streamB", "budget review notes", Some("Anna")).await;
+    }
+
+    /// Admin auth can reach any valid stream (single-user model), so the
+    /// `streams` filter in the request is what actually scopes the query.
+    fn admin_auth() -> AuthContext {
+        AuthContext::single_stream(
+            "streamA",
+            UserRole::Admin,
+            KeyScope::Shared,
+            Some("admin".into()),
+            true,
+        )
+    }
+
+    fn base_req() -> SearchRequest {
+        SearchRequest {
+            query: "budget".into(),
+            user_id: None,
+            top_k: Some(10),
+            stream: None,
+            streams: None,
+            entity: None,
+            date_from: None,
+            date_to: None,
+            valid_at: None,
+            dry_run: false,
+            filters: None,
+            include_superseded: false,
+            trace: false,
+            fact_type: None,
+            subject: None,
+            min_confidence: None,
+            include_associations: false,
+            source_agent: None,
+            exclude_source_agents: None,
+            scope: None,
+            debug_query_classification: false,
+            debug_signal_breakdown: false,
+            debug_channels: false,
+        }
+    }
+
+    async fn run(state: &std::sync::Arc<AppState>, payload: SearchRequest) -> Vec<String> {
+        let resp = search_handler(
+            axum::extract::State(state.clone()),
+            axum::Extension(admin_auth()),
+            axum::Json(payload),
+        )
+        .await
+        .expect("search_handler");
+        resp.0.results.into_iter().map(|r| r.id).collect()
+    }
+
+    #[tokio::test]
+    async fn time_filter_scopes_to_stream() {
+        let (_app, state) = crate::tests::make_test_app();
+        seed_twins(&state).await;
+
+        let mut payload = base_req();
+        payload.streams = Some(vec!["streamA".into()]);
+        payload.date_from = Some("2023-01-01".into());
+        payload.date_to = Some("2023-12-31".into());
+
+        let ids = run(&state, payload).await;
+        assert!(
+            ids.iter().all(|id| id == "a1"),
+            "time_filter scoped to streamA must not surface the streamB twin, got {ids:?}"
+        );
+        assert!(
+            ids.contains(&"a1".to_string()),
+            "streamA twin must be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn entity_filter_scopes_to_stream() {
+        let (_app, state) = crate::tests::make_test_app();
+        seed_twins(&state).await;
+
+        let mut payload = base_req();
+        payload.streams = Some(vec!["streamA".into()]);
+        payload.entity = Some("Anna".into());
+
+        let ids = run(&state, payload).await;
+        assert!(
+            ids.iter().all(|id| id == "a1"),
+            "entity filter scoped to streamA must not surface the streamB twin, got {ids:?}"
+        );
+        assert!(
+            ids.contains(&"a1".to_string()),
+            "streamA twin must be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn scoped_twin_is_still_retrievable_in_its_own_stream() {
+        // Non-vacuous: the streamB twin dropped above IS retrievable when the
+        // query is scoped to its own stream — isolation, not a dead pipeline.
+        let (_app, state) = crate::tests::make_test_app();
+        seed_twins(&state).await;
+
+        let mut date_req = base_req();
+        date_req.streams = Some(vec!["streamB".into()]);
+        date_req.date_from = Some("2023-01-01".into());
+        date_req.date_to = Some("2023-12-31".into());
+        let date_ids = run(&state, date_req).await;
+        assert!(
+            date_ids.contains(&"b1".to_string()),
+            "streamB twin must be retrievable via time_filter scoped to streamB, got {date_ids:?}"
+        );
+
+        let mut entity_req = base_req();
+        entity_req.streams = Some(vec!["streamB".into()]);
+        entity_req.entity = Some("Anna".into());
+        let entity_ids = run(&state, entity_req).await;
+        assert!(
+            entity_ids.contains(&"b1".to_string()),
+            "streamB twin must be retrievable via entity filter scoped to streamB, got {entity_ids:?}"
         );
     }
 }
