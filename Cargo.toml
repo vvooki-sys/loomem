@@ -38,6 +38,12 @@ bincode = "1.3"
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace"] }
+# Embedded dashboard SPA (loomem-dashboard/dist compiled into the binary —
+# ships one self-contained file to every instance). Chosen over ServeDir
+# (would require deploying a directory next to the binary) and include_str!
+# (doesn't scale to Vite's hashed asset names). cargo-audit clean, actively
+# maintained, no default extra features.
+rust-embed = "8"
 
 # Security primitives (audit 2026-07-01): constant-time token comparison
 # (item 4) + key-material zeroization on drop (item 5). Both were already in

@@ -4,6 +4,7 @@ pub mod backfill_encrypt;
 pub mod bench;
 pub mod co_occur;
 pub mod context;
+pub mod dashboard;
 pub mod date_filter;
 pub mod delete;
 pub mod encryption;
@@ -41,6 +42,7 @@ pub use backfill_encrypt::{
 pub use bench::{admin_bench_history_handler, admin_bench_run_handler};
 pub use co_occur::co_occur_handler;
 pub use context::context_pack_handler;
+pub use dashboard::{dashboard_memory_handler, memory_chain_handler};
 pub use encryption::encryption_status_handler;
 pub use feedback::feedback_handler;
 pub use graph_repair::graph_entity_stream_repair_handler;

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none" role="img" aria-label="Loomem">
+  <defs>
+    <linearGradient id="ringWeave" x1="0.05" y1="0" x2="0.95" y2="1">
+      <stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#ringWeave)" stroke-linecap="round">
+    <circle cx="100" cy="100" r="77" stroke-width="13" stroke-dasharray="404 80" transform="rotate(-18 100 100)"/>
+    <circle cx="100" cy="100" r="56" stroke-width="13" stroke-dasharray="294 62" transform="rotate(150 100 100)"/>
+    <circle cx="100" cy="100" r="36" stroke-width="12" stroke-dasharray="170 56" transform="rotate(40 100 100)"/>
+  </g>
+</svg>

@@ -2,3 +2,6 @@ target/
 data/
 wal/
 .git/
+loomem-dashboard/node_modules/
+loomem-dashboard/dist/
+loomem-dashboard/coverage/

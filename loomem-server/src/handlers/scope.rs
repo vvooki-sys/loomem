@@ -49,10 +49,10 @@ pub struct ScopeResolution {
 
 impl ScopeResolution {
     /// Does a given chunk stream_id belong to the resolved scope? Returns the
-    /// source label if so. Production consumer was the dashboard list mapping
-    /// removed in cycle/004; kept test-only as the canonical way to assert
-    /// resolution contents.
-    #[cfg(test)]
+    /// source label if so. Production consumer (the dashboard list mapping)
+    /// was removed in cycle/004 and reinstated with the embedded dashboard
+    /// (`handlers/dashboard.rs`); tests keep using it as the canonical way to
+    /// assert resolution contents.
     pub fn source_for(&self, stream_id: &str) -> Option<Source> {
         self.streams
             .iter()

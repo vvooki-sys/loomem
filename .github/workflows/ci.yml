@@ -74,6 +74,24 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
+  dashboard:
+    name: Dashboard (lint + test + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: loomem-dashboard
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # Node 20+ is preinstalled on ubuntu-latest runners.
+      - name: npm ci
+        run: npm ci
+      - name: eslint
+        run: npm run lint
+      - name: vitest
+        run: npm test
+      - name: vite build
+        run: npm run build
+
   audit:
     name: Audit
     runs-on: ubuntu-latest

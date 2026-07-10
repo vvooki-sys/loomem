@@ -1,0 +1,8 @@
+node_modules/
+coverage/
+.vite/
+# Built SPA — embedded into loomem-server at compile time. The folder itself
+# stays in git (.gitkeep) so `cargo build` works before the front end is
+# built; the contents are a build artifact.
+dist/*
+!dist/.gitkeep

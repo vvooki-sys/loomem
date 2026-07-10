@@ -1,0 +1,176 @@
+/* Self-hosted fonts (Loomem DS v2: Fraunces / Inter / JetBrains Mono).
+   @fontsource-variable — no Google Fonts request, deterministic rendering
+   offline and in headless environments. Fraunces needs the full variant:
+   it carries the opsz axis alongside wght. */
+@import '@fontsource-variable/fraunces/full.css';
+@import '@fontsource-variable/fraunces/full-italic.css';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    font-family: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-optical-sizing: auto;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+
+    /* Loomem DS v2 tokens (source of truth: Loomem Design System v2 +
+       BRAND.md, 2026-07-07). Canvas #FBF8F1, warm ink 900→50 scale, brand
+       blue #1684DC, accent gold #EE9913. */
+    --bg: #FBF8F1;
+    --panel: #FFFFFF;
+    --border: #DED7C8;
+    --border-strong: #B7AE9E;
+    --text: #1F1B16;
+    --text-muted: #6B6256;
+    --text-subtle: #8E8474;
+    --accent: #1684DC;
+    --accent-hover: #0F69B8;
+    --danger: #D2553B;
+    --danger-bg: #FBE9E3;
+    --success: #2E9E6B;
+    --success-bg: #E4F4EC;
+    --warn: #CE7D08;
+    --warn-bg: #FEF6E7;
+    --row-hover: #F4EFE4;
+    --row-selected: #EEF6FD;
+    --surface-warm: #FDF1DA;
+    --surface-cool: #EEF6FD;
+    --ink-800: #2E2820;
+
+    /* Gradients: brand-v2 "ramp C" (10-stop OKLCH bake gold → coral →
+       magenta → violet → blue, flattened to sRGB). Brand hard rule 05:
+       never reintroduce the old 2–3 stop weave (it had a desaturated
+       olive midpoint). */
+    --font-display: 'Fraunces Variable', 'Fraunces', 'Iowan Old Style', Georgia, serif;
+    --weave: linear-gradient(108deg, #EE9913 0%, #F4AC2E 18%, #F7756F 38%, #B86ED2 58%, #63B5F0 80%, #1684DC 100%);
+    --weave-vivid: linear-gradient(120deg, #EE9913 0%, #F7756F 30%, #B86ED2 55%, #667CE6 75%, #1684DC 100%);
+    --weave-text: linear-gradient(100deg, #CE7D08 0%, #EE9913 30%, #F88546 36%, #F7756F 42%, #EB6D95 48%, #D66BB7 54%, #B86ED2 60%, #9474E2 66%, #667CE6 72%, #1684DC 78%);
+    --weave-soft: linear-gradient(108deg, #FBD68A 0%, #F9C254 26%, #FFB472 31.5%, #FFAC98 37%, #FFAABE 42.5%, #FBAEDF 48%, #E4B6F6 53.5%, #CABFFF 59%, #B0C9FF 64.5%, #9CD0F7 70%, #63B5F0 100%);
+    --weave-radial: radial-gradient(120% 120% at 0% 0%, #FDEAC4 0%, #FBF8F1 38%, #E9F4FD 100%);
+    --focus-ring: rgba(22, 132, 220, 0.42);
+    --shadow-sm: 0 2px 6px rgba(31, 27, 22, 0.07);
+    --shadow-md: 0 8px 24px rgba(31, 27, 22, 0.09);
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+  }
+
+  ::selection {
+    background: #FBD68A;
+    color: #1F1B16;
+  }
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', Menlo, Monaco, Consolas, monospace;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/* Brand rule 02: the "mem" half of the wordmark is always clipped with the
+   ramp-C text gradient on light surfaces (never a flat single color). */
+.text-weave {
+  background: var(--weave-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Brand motion rule: all motion off under reduced-motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #B7AE9E;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #8E8474;
+}
+
+/* Login hero mark, 1:1 with the loomem.ai hero: three ramp-C gradient rings
+   spinning in 3D on different axes (values verbatim from the landing CSS). */
+.mark3d {
+  position: relative;
+  margin: 0 auto;
+  perspective: 900px;
+  filter: drop-shadow(0 18px 40px rgba(15, 105, 184, 0.16));
+}
+.mark3d .m3 {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform-box: border-box;
+  transform-origin: 50% 50%;
+}
+.m3-r1 { animation: m3a 24s linear infinite; }
+.m3-r2 { animation: m3b 18s linear infinite; }
+.m3-r3 { animation: m3c 12s linear infinite; }
+@keyframes m3a {
+  from { transform: rotate3d(1, 0.35, 0, 0deg); }
+  to { transform: rotate3d(1, 0.35, 0, 360deg); }
+}
+@keyframes m3b {
+  from { transform: rotate3d(0.3, 1, 0.1, 360deg); }
+  to { transform: rotate3d(0.3, 1, 0.1, 0deg); }
+}
+@keyframes m3c {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+/* Static composition from the landing when motion is reduced (the global
+   guard above already freezes the animations; this poses the rings). */
+@media (prefers-reduced-motion: reduce) {
+  .mark3d .m3 { animation: none; }
+  .m3-r1 { transform: rotate(-18deg); }
+  .m3-r2 { transform: rotate(150deg); }
+  .m3-r3 { transform: rotate(40deg); }
+}
+
+/* Dark code surfaces (Connect recipes): ink-800 with a 3px weave strip on
+   the top edge — never a tarry ink-900 slab (brand rule). */
+.codebox {
+  position: relative;
+  background: var(--ink-800);
+  color: #EFE9DD;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+}
+.codebox::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background-image: var(--weave);
+}
