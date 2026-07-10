@@ -58,7 +58,11 @@ pub async fn dashboard_memory_handler(
     // Reverse index once across the resolved streams for the entity_ids field.
     let chunk_to_entities = build_entity_reverse_index(&state, &resolution);
 
-    let offset = (page - 1) * per_page;
+    // Saturate: `page` comes straight from the query string, so an oversized
+    // value (e.g. `?page=18446744073709551615`) would overflow the offset —
+    // a panic in debug, a wrapped (wrong) page in release. Saturating clamps it
+    // to usize::MAX, which `.skip()` turns into a harmless empty page.
+    let offset = (page - 1).saturating_mul(per_page);
     let page_items: Vec<serde_json::Value> = items
         .into_iter()
         .skip(offset)
