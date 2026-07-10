@@ -43,6 +43,8 @@ stem_polish = true
 implicit_access_boost_weight = 0.0  # Cycle/118: log-frequency boost for access_count. 0.0=disabled (default, byte-identical to pre-cycle); 0.3-0.5 for eval/production.
 user_state_boost = 1.0  # Retrieval boost for user-authored state facts (attributed_to=="user" + PreferenceOrDecision/ProjectState). 1.0=disabled (byte-identical); 1.3-1.5 lifts latest user-state above agent-authored flooding for eval/production.
 agent_fact_damp = 1.0  # Retrieval damp for agent-authored facts (attributed_to=="assistant"). 1.0=neutral (default; no penalty). <1.0 only with A/B evidence the boost alone is insufficient and no regression on assistant/preference.
+vector_similarity_floor = 0.0  # WS-1(a) Spectron gap brief: raw-cosine floor for the vector channel — below-floor candidates get no vector weight (kills max-normalized noise). 0.0=disabled (byte-identical). e5-small cosines run high (~0.70-0.95); tune on the cycle/012 probe before enabling (0.75-0.80 starting range).
+decay_match_relief = 0.0  # WS-1(b) Spectron gap brief: strong lexical/vector match relieves the age penalty (effective = decay + (1-decay)*relief*strength). 0.0=disabled (byte-identical); 1.0=perfect match cancels decay. Tune with the floor on the cycle/012 probe.
 
 [search.cache]
 enabled = true
@@ -64,6 +66,10 @@ max_graph_additions = 3    # max graph-only results added to search
 [search.hybrid_weights]
 vector = 0.6
 bm25 = 0.4
+
+[search.tier1]
+enabled = false        # WS-1(c) Spectron gap brief: Tier-1 direct entity→attribute lookup — factual query naming a graph entity + attribute term answers straight from the entity chunk index (no embeddings, no fusion, no LLM). Off = execution path identical to pre-cycle. Response carries "tier": 1 when the lane answered.
+candidate_cap = 64     # max entity chunks inspected per query (cost stays O(cap) chunk reads)
 
 [search.rare_term_lane]
 enabled = false        # Cycle/012: force-include chunks holding a rare query token in the reranker candidate pool. Off = execution path identical to pre-cycle.

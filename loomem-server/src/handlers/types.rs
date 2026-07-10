@@ -130,6 +130,13 @@ pub struct SearchResponse {
     /// `SearchRequest::debug_channels`). Present only when requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_diagnostics: Option<ChannelDiagnostics>,
+    /// WS-1(c) (Spectron gap brief 2026-07-09): retrieval cost-ladder tier
+    /// that produced this response. `Some(1)` == Tier-1 direct
+    /// entity→attribute lookup (no fusion, no embeddings); `None` == the full
+    /// fusion pipeline (the pre-existing default — field serializes as
+    /// omitted, so production clients see no shape change).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<u8>,
 }
 
 /// Cycle/012: one pre-fusion channel hit — `rank` is 1-indexed within its

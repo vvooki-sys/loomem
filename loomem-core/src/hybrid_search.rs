@@ -67,6 +67,28 @@ pub struct SearchConfig {
     /// Default fully disabled — execution path identical to pre-cycle.
     #[serde(default)]
     pub rare_term_lane: crate::search::rare_term::RareTermLaneConfig,
+    /// WS-1(a) (Spectron gap brief 2026-07-09): absolute raw-cosine floor for
+    /// the vector channel. Per-channel max-normalization hands the top vector
+    /// hit the full `hybrid_weights.vector` even when its raw cosine is noise
+    /// (cycle/012 buried-needle diagnosis); candidates below the floor are
+    /// dropped from the vector channel before normalization. 0.0 == disabled,
+    /// byte-identical to pre-cycle. multilingual-e5-small cosines sit in a
+    /// high band (~0.70–0.95) — tune on the cycle/012 probe before enabling
+    /// (0.75–0.80 starting range).
+    #[serde(default)]
+    pub vector_similarity_floor: f64,
+    /// WS-1(b) (Spectron gap brief 2026-07-09): match-quality decay relief.
+    /// A strong lexical/vector match weakens the age penalty so an old needle
+    /// that is the best match cannot be killed by time decay alone (45-day-old
+    /// chunk at l1_lambda=0.03 → ×0.26). 0.0 == disabled (byte-identical);
+    /// 1.0 == a perfect match fully cancels decay. See [`relieve_decay`].
+    #[serde(default)]
+    pub decay_match_relief: f64,
+    /// WS-1(c) (Spectron gap brief 2026-07-09): Tier-1 direct entity→attribute
+    /// lookup (cheapest rung of the retrieval cost ladder — consumed by the
+    /// server-side search handler). Default fully disabled.
+    #[serde(default)]
+    pub tier1: crate::search::tier1::Tier1Config,
 }
 
 fn default_rerank_candidates() -> usize {
@@ -210,6 +232,22 @@ impl HybridSearchEngine {
         let weights = &self.config.search.hybrid_weights;
         let decay_config = &self.config.search.decay;
 
+        // WS-1(a) (Spectron gap brief 2026-07-09): absolute-similarity floor.
+        // Drop vector candidates whose *raw* cosine sits below the floor
+        // before max-normalization — otherwise the top hit of a noise-only
+        // vector channel is normalized to 1.0 and still collects the full
+        // `weights.vector`. Dropped candidates can still enter via BM25.
+        // floor == 0.0 (default) → byte-identical to the pre-cycle path.
+        let floor = self.config.search.vector_similarity_floor;
+        let vector_scores: Vec<(String, f32)> = if floor > 0.0 {
+            vector_scores
+                .into_iter()
+                .filter(|(_, score)| f64::from(*score) >= floor)
+                .collect()
+        } else {
+            vector_scores
+        };
+
         // Normalize BM25 scores
         let max_bm25 = bm25_results
             .iter()
@@ -286,7 +324,14 @@ impl HybridSearchEngine {
             };
 
             if let Some((content, user_id, app_id, level, timestamp)) = doc_data {
-                let time_decay = self.compute_time_decay(timestamp, level, decay_config);
+                // WS-1(b) (Spectron gap brief 2026-07-09): a strong match in
+                // either channel relieves the age penalty. Neutral (identity)
+                // with the default `decay_match_relief == 0.0`.
+                let time_decay = relieve_decay(
+                    self.compute_time_decay(timestamp, level, decay_config),
+                    f64::from(bm25_score.max(vector_score)),
+                    self.config.search.decay_match_relief,
+                );
                 // Cycle /001 (MemIR): weight equally-relevant chunks by authority
                 // (trust tier + provenance role) before the final sort. Hits with
                 // no chunk loaded (e.g. store=None) get a neutral 1.0 multiplier.
@@ -554,7 +599,13 @@ impl HybridSearchEngine {
         let mut results = Vec::new();
         for doc in bm25_results {
             let normalized_score = doc.score / max_bm25;
-            let time_decay = self.compute_time_decay(doc.timestamp, doc.level, decay_config);
+            // WS-1(b): same match-quality decay relief as the fused path —
+            // identity with the default `decay_match_relief == 0.0`.
+            let time_decay = relieve_decay(
+                self.compute_time_decay(doc.timestamp, doc.level, decay_config),
+                f64::from(normalized_score),
+                self.config.search.decay_match_relief,
+            );
             let final_score = normalized_score as f64 * time_decay;
 
             results.push(HybridSearchResult {
@@ -609,6 +660,28 @@ fn retain_pool_with_guaranteed(
             results.extend(tail.into_iter().filter(|r| ids.contains(&r.id)));
         }
     }
+}
+
+/// WS-1(b) (Spectron gap brief 2026-07-09): match-quality decay relief.
+///
+/// `effective = decay + (1 - decay) * relief * strength`, where `strength`
+/// is the candidate's best normalized channel score (BM25 or vector) clamped
+/// to `[0, 1]` and `relief` is `search.decay_match_relief` clamped to
+/// `[0, 1]`. With `relief == 0.0` (shipped default) the function returns
+/// `decay` unchanged — byte-identical to the pre-cycle path. With
+/// `relief == 1.0` a perfect match (`strength == 1.0`) fully cancels the age
+/// penalty; weaker matches are relieved proportionally. The relieved value
+/// is what lands in `HybridSearchResult::time_decay_factor`, so downstream
+/// tier overrides (`core` / `pinned` in `apply_chunk_score_adjustments`)
+/// stay consistent with the score they undo.
+#[must_use]
+pub fn relieve_decay(decay: f64, strength: f64, relief: f64) -> f64 {
+    if relief <= 0.0 {
+        return decay;
+    }
+    let relief = relief.min(1.0);
+    let strength = strength.clamp(0.0, 1.0);
+    decay + (1.0 - decay) * relief * strength
 }
 
 /// Cycle /001 (MemIR): retrieval-weight multiplier combining a chunk's trust
@@ -728,6 +801,9 @@ mod tests {
                 user_state_boost: 1.0,
                 agent_fact_damp: 1.0,
                 rare_term_lane: crate::search::rare_term::RareTermLaneConfig::default(),
+                vector_similarity_floor: 0.0,
+                decay_match_relief: 0.0,
+                tier1: crate::search::tier1::Tier1Config::default(),
             },
             advisor: crate::config::AdvisorConfig::default(),
             worker: crate::config::WorkerConfig::default(),
@@ -774,6 +850,165 @@ mod tests {
         let decay_l0_1d = engine.compute_time_decay(now - 86400, 0, &config.search.decay);
         assert!(decay_l0_1d < 1.0);
         assert!(decay_l0_1d > 0.9); // L0 lambda=0.10, so e^(-0.1) ≈ 0.905
+    }
+
+    /// Minimal BM25 `SearchResult` for fusion tests — neutral fields, `now`
+    /// timestamp unless overridden so time decay is ~1.0.
+    fn bm25_hit(id: &str, score: f32, timestamp: i64) -> SearchResult {
+        SearchResult {
+            id: id.to_string(),
+            content: format!("content of {id}"),
+            user_id: "u".to_string(),
+            app_id: "a".to_string(),
+            level: 1,
+            timestamp,
+            stream: "s".to_string(),
+            score,
+        }
+    }
+
+    // ── WS-1(a): absolute-similarity floor ─────────────────────────────────
+
+    #[test]
+    fn test_vector_floor_default_off_is_pre_cycle_normalization() {
+        // floor == 0.0 (default): a low raw cosine still max-normalizes to
+        // 1.0 and collects the full vector weight — the pre-cycle behaviour
+        // the floor exists to fix, asserted here as the compatibility base.
+        let config = test_config();
+        assert_eq!(config.search.vector_similarity_floor, 0.0);
+        let engine = HybridSearchEngine::new(config);
+        let now = Utc::now().timestamp();
+
+        let results = engine
+            .fuse_with_vector(
+                vec![bm25_hit("needle", 10.0, now)],
+                vec![("needle".to_string(), 0.2)], // noise cosine, sole vector hit
+                None,
+            )
+            .expect("fusion succeeds");
+        assert_eq!(results.len(), 1);
+        // Max-normalized to 1.0 despite the raw 0.2 cosine.
+        assert!((f64::from(results[0].vector_score) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_vector_floor_drops_noise_candidates_from_vector_channel() {
+        let mut config = test_config();
+        config.search.vector_similarity_floor = 0.8;
+        let engine = HybridSearchEngine::new(config);
+        let now = Utc::now().timestamp();
+
+        // "noise" sits below the floor: its vector contribution must vanish
+        // (bm25-only scoring), while "strong" keeps the vector channel.
+        let results = engine
+            .fuse_with_vector(
+                vec![bm25_hit("noise", 10.0, now), bm25_hit("strong", 5.0, now)],
+                vec![("noise".to_string(), 0.5), ("strong".to_string(), 0.9)],
+                None,
+            )
+            .expect("fusion succeeds");
+
+        let noise = results
+            .iter()
+            .find(|r| r.id == "noise")
+            .expect("noise kept via BM25");
+        let strong = results
+            .iter()
+            .find(|r| r.id == "strong")
+            .expect("strong present");
+        assert_eq!(noise.vector_score, 0.0, "below-floor cosine must not score");
+        assert!(strong.vector_score > 0.0, "above-floor cosine must survive");
+    }
+
+    #[test]
+    fn test_vector_floor_excludes_vector_only_noise_entirely() {
+        // A vector-only candidate below the floor must not enter the pool at
+        // all (before the floor it would be max-normalized to full weight).
+        let mut config = test_config();
+        config.search.vector_similarity_floor = 0.8;
+        let engine = HybridSearchEngine::new(config);
+        let now = Utc::now().timestamp();
+
+        let results = engine
+            .fuse_with_vector(
+                vec![bm25_hit("lexical", 10.0, now)],
+                vec![("ghost".to_string(), 0.3)],
+                None,
+            )
+            .expect("fusion succeeds");
+        assert!(
+            results.iter().all(|r| r.id != "ghost"),
+            "below-floor vector-only candidate must be dropped"
+        );
+    }
+
+    // ── WS-1(b): match-quality decay relief ────────────────────────────────
+
+    #[test]
+    fn test_relieve_decay_identity_when_disabled() {
+        // relief == 0.0 (shipped default) → exact identity for any inputs.
+        for decay in [0.05, 0.26, 1.0] {
+            for strength in [0.0, 0.5, 1.0] {
+                assert_eq!(relieve_decay(decay, strength, 0.0), decay);
+            }
+        }
+    }
+
+    #[test]
+    fn test_relieve_decay_formula_and_clamps() {
+        // Perfect match + full relief cancels decay entirely.
+        assert!((relieve_decay(0.26, 1.0, 1.0) - 1.0).abs() < 1e-9);
+        // Half relief on a perfect match: 0.26 + 0.74*0.5 = 0.63.
+        assert!((relieve_decay(0.26, 1.0, 0.5) - 0.63).abs() < 1e-9);
+        // Zero-strength match gets no relief.
+        assert!((relieve_decay(0.26, 0.0, 1.0) - 0.26).abs() < 1e-9);
+        // Out-of-range inputs clamp instead of over-relieving.
+        assert!((relieve_decay(0.26, 2.0, 5.0) - 1.0).abs() < 1e-9);
+        assert!((relieve_decay(0.26, -1.0, 1.0) - 0.26).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_relief_lets_old_needle_outrank_fresh_weak_match() {
+        // Cycle/012 buried-needle shape: the only strong lexical match is 60
+        // days old (l1_lambda=0.03 → decay ≈ 0.165) and loses to a fresh,
+        // loosely-matching chunk. With relief enabled the needle wins.
+        let now = Utc::now().timestamp();
+        let old_ts = now - 60 * 86400;
+        let bm25 = || {
+            vec![
+                bm25_hit("needle", 10.0, old_ts),
+                bm25_hit("fresh_weak", 3.0, now),
+            ]
+        };
+        let needle_decay = |results: &[HybridSearchResult]| {
+            results
+                .iter()
+                .find(|r| r.id == "needle")
+                .expect("needle present")
+                .time_decay_factor
+        };
+
+        let baseline_engine = HybridSearchEngine::new(test_config());
+        let baseline = baseline_engine
+            .fuse_with_vector(bm25(), vec![], None)
+            .expect("fusion succeeds");
+        assert_eq!(
+            baseline[0].id, "fresh_weak",
+            "without relief the fresh weak match must outrank the decayed needle"
+        );
+
+        let mut relieved_config = test_config();
+        relieved_config.search.decay_match_relief = 0.8;
+        let relieved_engine = HybridSearchEngine::new(relieved_config);
+        let relieved = relieved_engine
+            .fuse_with_vector(bm25(), vec![], None)
+            .expect("fusion succeeds");
+        assert_eq!(
+            relieved[0].id, "needle",
+            "with relief the strongest match must survive its age"
+        );
+        // The relieved decay is what lands in time_decay_factor.
+        assert!(needle_decay(&relieved) > needle_decay(&baseline));
     }
 
     /// Minimal `Chunk` with neutral fields; tests clone + mutate the one field

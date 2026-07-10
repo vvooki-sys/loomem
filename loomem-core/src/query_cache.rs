@@ -79,15 +79,14 @@ impl QueryCache {
 
     /// Look up cached results. Returns None if miss or expired.
     pub fn get(&mut self, key: u64) -> Option<&Vec<HybridSearchResult>> {
-        // Check TTL first
-        if let Some(entry) = self.entries.get(&key) {
+        // Check TTL first (rustc 1.97 clippy::question_mark shape)
+        {
+            let entry = self.entries.get(&key)?;
             if entry.inserted_at.elapsed().as_secs() >= self.config.ttl_secs {
                 self.entries.remove(&key);
                 self.access_order.retain(|k| *k != key);
                 return None;
             }
-        } else {
-            return None;
         }
 
         // Update LRU position
