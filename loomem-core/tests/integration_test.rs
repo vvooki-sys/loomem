@@ -205,7 +205,7 @@ fn test_entity_tagged_search() -> Result<()> {
     tantivy.commit()?;
 
     // Entity search — should prefer the tagged chunk
-    let results = tantivy.search_with_entity("budget", "Anna", 10)?;
+    let results = tantivy.search_with_entity("budget", "Anna", None, 10)?;
     assert!(!results.is_empty(), "Expected results for entity search");
     assert_eq!(
         results[0].id, "id-entity",

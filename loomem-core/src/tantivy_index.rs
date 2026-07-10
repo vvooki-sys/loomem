@@ -260,7 +260,7 @@ mod lexical_parse_tests {
                 "search_with_stream({q:?}) errored"
             );
             assert!(
-                idx.search_with_date_range(q, 0, 2_000, 5).is_ok(),
+                idx.search_with_date_range(q, 0, 2_000, None, 5).is_ok(),
                 "search_with_date_range({q:?}) errored"
             );
             assert!(
@@ -739,11 +739,12 @@ impl TantivyIndex {
         &self,
         query_text: &str,
         entity: &str,
+        stream: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         debug!(
-            "Searching with entity filter: query='{}', entity='{}', limit={}",
-            query_text, entity, limit
+            "Searching with entity filter: query='{}', entity='{}', stream={:?}, limit={}",
+            query_text, entity, stream, limit
         );
 
         let searcher = self.reader.searcher();
@@ -770,77 +771,21 @@ impl TantivyIndex {
             .parse_query(&sanitize_query(entity))
             .context("Failed to parse entity filter")?;
 
-        // Combine with boolean query (AND)
-        let combined_query = tantivy::query::BooleanQuery::new(vec![
-            (tantivy::query::Occur::Must, Box::new(content_query)),
-            (tantivy::query::Occur::Must, Box::new(entity_query)),
-        ]);
+        // Combine with boolean query (AND). The stream predicate is pushed at
+        // the source so the entity lane is stream-scoped exactly like
+        // `search_with_stream`; `None` leaves it unfiltered (callers that
+        // already pre-scope, and the backward-compatible default).
+        let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> =
+            vec![(Occur::Must, content_query), (Occur::Must, entity_query)];
+        self.push_stream_clause(&mut clauses, stream);
+        let combined_query = BooleanQuery::new(clauses);
 
         // Execute search
         let top_docs = searcher
             .search(&combined_query, &TopDocs::with_limit(limit))
             .context("Failed to execute search with entity filter")?;
 
-        // Convert results
-        let mut results = Vec::new();
-        for (_score, doc_address) in top_docs {
-            let retrieved_doc: tantivy::TantivyDocument = searcher
-                .doc(doc_address)
-                .context("Failed to retrieve document")?;
-
-            let id = retrieved_doc
-                .get_first(self.id_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let content = retrieved_doc
-                .get_first(self.content_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let user_id = retrieved_doc
-                .get_first(self.user_id_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let app_id = retrieved_doc
-                .get_first(self.app_id_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let level = retrieved_doc
-                .get_first(self.level_field)
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32;
-
-            let timestamp = retrieved_doc
-                .get_first(self.timestamp_field)
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-
-            let stream = retrieved_doc
-                .get_first(self.stream_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            results.push(SearchResult {
-                id,
-                content,
-                user_id,
-                app_id,
-                level,
-                timestamp,
-                stream,
-                score: _score,
-            });
-        }
-
-        Ok(results)
+        self.collect_results(&searcher, top_docs)
     }
 
     pub fn merge_segments(&mut self) -> Result<()> {
@@ -1029,11 +974,12 @@ impl TantivyIndex {
         query_text: &str,
         start_ts: i64,
         end_ts: i64,
+        stream: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         debug!(
-            "Searching with date range: query='{}', start={}, end={}, limit={}",
-            query_text, start_ts, end_ts, limit
+            "Searching with date range: query='{}', start={}, end={}, stream={:?}, limit={}",
+            query_text, start_ts, end_ts, stream, limit
         );
 
         let searcher = self.reader.searcher();
@@ -1047,10 +993,13 @@ impl TantivyIndex {
             std::ops::Bound::Included(tantivy::Term::from_field_i64(self.event_date_field, end_ts));
         let range_query = RangeQuery::new(lower, upper);
 
-        // If query text is empty, only use date range
-        let combined_query: Box<dyn tantivy::query::Query> = if query_text.trim().is_empty() {
-            Box::new(range_query)
-        } else {
+        // Assemble MUST clauses. Content is optional (date-only when the query
+        // text is empty). The stream predicate is pushed at the source so the
+        // date lane is stream-scoped exactly like `search_with_stream`; `None`
+        // leaves it unfiltered (backward-compatible for pre-scoped callers).
+        let empty_query = query_text.trim().is_empty();
+        let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
+        if !empty_query {
             // Parse content query: entities/relations as weak tiebreakers
             let mut query_parser = QueryParser::for_index(
                 &self.index,
@@ -1066,80 +1015,21 @@ impl TantivyIndex {
             let Some((content_query, _)) = parse_lexical_query(&query_parser, query_text) else {
                 return Ok(Vec::new());
             };
-
-            // Combine with AND
-            Box::new(BooleanQuery::new(vec![
-                (Occur::Must, Box::new(content_query)),
-                (Occur::Must, Box::new(range_query)),
-            ]))
-        };
+            clauses.push((Occur::Must, content_query));
+        }
+        clauses.push((Occur::Must, Box::new(range_query)));
+        self.push_stream_clause(&mut clauses, stream);
+        let combined_query = BooleanQuery::new(clauses);
 
         // Execute search
         let top_docs = searcher
-            .search(&*combined_query, &TopDocs::with_limit(limit))
+            .search(&combined_query, &TopDocs::with_limit(limit))
             .context("Failed to execute search with date range")?;
 
-        // Convert results
-        let mut results = Vec::new();
-        for (_score, doc_address) in top_docs {
-            let retrieved_doc: tantivy::TantivyDocument = searcher
-                .doc(doc_address)
-                .context("Failed to retrieve document")?;
-
-            let id = retrieved_doc
-                .get_first(self.id_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let content = retrieved_doc
-                .get_first(self.content_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let user_id = retrieved_doc
-                .get_first(self.user_id_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let app_id = retrieved_doc
-                .get_first(self.app_id_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let level = retrieved_doc
-                .get_first(self.level_field)
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32;
-
-            let timestamp = retrieved_doc
-                .get_first(self.timestamp_field)
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-
-            let stream = retrieved_doc
-                .get_first(self.stream_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            results.push(SearchResult {
-                id,
-                content,
-                user_id,
-                app_id,
-                level,
-                timestamp,
-                stream,
-                score: _score,
-            });
-        }
+        let mut results = self.collect_results(&searcher, top_docs)?;
 
         // Sort by timestamp descending if no text query
-        if query_text.trim().is_empty() {
+        if empty_query {
             results.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
         }
 
@@ -1270,6 +1160,27 @@ impl TantivyIndex {
             }
         }
         Ok(ids)
+    }
+
+    /// Append a MUST `stream` term clause when `stream` is `Some`, mirroring
+    /// the stream predicate in [`Self::search_with_stream`]. Shared by the date
+    /// and entity lanes so every BM25 lane scopes at the source. `None` is a
+    /// no-op — the caller either pre-scoped or wants the global index.
+    fn push_stream_clause(
+        &self,
+        clauses: &mut Vec<(Occur, Box<dyn tantivy::query::Query>)>,
+        stream: Option<&str>,
+    ) {
+        if let Some(stream) = stream {
+            let term = tantivy::Term::from_field_text(self.stream_field, stream);
+            clauses.push((
+                Occur::Must,
+                Box::new(tantivy::query::TermQuery::new(
+                    term,
+                    tantivy::schema::IndexRecordOption::Basic,
+                )),
+            ));
+        }
     }
 
     /// Append the `source_agent` include (MUST) and `exclude_source_agents`
@@ -1588,7 +1499,7 @@ mod agent_search_tests {
             .unwrap();
         idx.commit().unwrap();
 
-        let entity_hits = idx.search_with_entity("zeta", "zeta", 10).unwrap();
+        let entity_hits = idx.search_with_entity("zeta", "zeta", None, 10).unwrap();
         let p = AgentSearchParams {
             query_text: "zeta",
             stream: None,
@@ -1610,6 +1521,171 @@ mod agent_search_tests {
              (agent={}, entity={})",
             agent_hits[0].score,
             entity_hits[0].score
+        );
+    }
+}
+
+#[cfg(test)]
+mod stream_scoping_tests {
+    //! BM25 stream-scoping parity (cycle: bm25-stream-scoping-parity). The date
+    //! and entity lanes push the `stream` predicate at index-query time, exactly
+    //! like `search_with_stream`, so a stream-scoped query never surfaces a
+    //! twin chunk that lives in another stream. `stream = None` keeps the
+    //! pre-existing unscoped behaviour (backward compatibility for callers that
+    //! already pre-scope). Handler-level e2e coverage lives in
+    //! `loomem-server/src/handlers/search.rs`.
+    use super::*;
+    use crate::config::TantivyConfig;
+    use tempfile::TempDir;
+
+    fn cfg() -> TantivyConfig {
+        TantivyConfig {
+            enabled: true,
+            heap_size_mb: 16,
+            drift_warn_pct: 5.0,
+            auto_rebuild_on_drift: false,
+        }
+    }
+
+    /// Doc with an explicit stream, entities and event_date so both the date and
+    /// entity lanes can be exercised with real filters.
+    fn doc(
+        id: &str,
+        stream: &str,
+        level: i32,
+        content: &str,
+        entities: &str,
+        event_date: i64,
+    ) -> TextDocument {
+        TextDocument {
+            id: id.to_string(),
+            content: content.to_string(),
+            user_id: "default".to_string(),
+            app_id: "default".to_string(),
+            level,
+            timestamp: 1_000,
+            stream: stream.to_string(),
+            entities: Some(entities.to_string()),
+            relations: None,
+            event_date: Some(event_date),
+            source_agent: None,
+        }
+    }
+
+    /// Two content/entity/event_date twins in different streams, so only the
+    /// stream predicate can tell them apart.
+    fn seeded() -> (TempDir, TantivyIndex) {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut idx = TantivyIndex::open(tmp.path().join("tantivy"), &cfg()).expect("open");
+        idx.index_document(doc(
+            "a1",
+            "streamA",
+            0,
+            "budget review notes",
+            "Anna",
+            1_000,
+        ))
+        .unwrap();
+        idx.index_document(doc(
+            "b1",
+            "streamB",
+            0,
+            "budget review notes",
+            "Anna",
+            1_000,
+        ))
+        .unwrap();
+        idx.commit().unwrap();
+        (tmp, idx)
+    }
+
+    fn ids(results: &[SearchResult]) -> std::collections::HashSet<String> {
+        results.iter().map(|r| r.id.clone()).collect()
+    }
+
+    fn one(id: &str) -> std::collections::HashSet<String> {
+        [id.to_string()].into_iter().collect()
+    }
+
+    #[test]
+    fn date_lane_scopes_to_stream() {
+        let (_tmp, idx) = seeded();
+        let got = idx
+            .search_with_date_range("budget", 0, 2_000, Some("streamA"), 10)
+            .unwrap();
+        assert_eq!(
+            ids(&got),
+            one("a1"),
+            "date lane scoped to streamA must not return the streamB twin"
+        );
+    }
+
+    #[test]
+    fn entity_lane_scopes_to_stream() {
+        let (_tmp, idx) = seeded();
+        let got = idx
+            .search_with_entity("budget", "Anna", Some("streamA"), 10)
+            .unwrap();
+        assert_eq!(
+            ids(&got),
+            one("a1"),
+            "entity lane scoped to streamA must not return the streamB twin"
+        );
+    }
+
+    #[test]
+    fn none_stream_returns_union_both_lanes() {
+        // Backward compatibility: `None` is unfiltered, so both twins return.
+        let (_tmp, idx) = seeded();
+        let both: std::collections::HashSet<String> =
+            ["a1", "b1"].iter().map(|s| s.to_string()).collect();
+        let date = idx
+            .search_with_date_range("budget", 0, 2_000, None, 10)
+            .unwrap();
+        assert_eq!(ids(&date), both, "unscoped date lane returns the union");
+        let entity = idx.search_with_entity("budget", "Anna", None, 10).unwrap();
+        assert_eq!(ids(&entity), both, "unscoped entity lane returns the union");
+    }
+
+    #[test]
+    fn date_lane_empty_query_scopes_to_stream() {
+        // Date-only path (no content clause) still scopes at the source.
+        let (_tmp, idx) = seeded();
+        let got = idx
+            .search_with_date_range("", 0, 2_000, Some("streamB"), 10)
+            .unwrap();
+        assert_eq!(ids(&got), one("b1"));
+    }
+
+    #[test]
+    fn date_lane_excludes_high_score_l1_twin_in_other_stream() {
+        // Invariant vs ranking: an L1-consolidated streamB chunk whose content
+        // matches the query far more strongly cannot enter a streamA-scoped date
+        // query's pool at all — scoping at the source pre-empts any later
+        // ranking-stage reorder (e.g. the handler's L1 x1.5 boost). Fails if the
+        // date lane queries the global index and relies on a downstream gate.
+        let tmp = TempDir::new().expect("tempdir");
+        let mut idx = TantivyIndex::open(tmp.path().join("tantivy"), &cfg()).expect("open");
+        idx.index_document(doc("a1", "streamA", 0, "budget", "Anna", 1_000))
+            .unwrap();
+        idx.index_document(doc(
+            "b_l1",
+            "streamB",
+            1,
+            "budget budget budget review",
+            "Anna",
+            1_000,
+        ))
+        .unwrap();
+        idx.commit().unwrap();
+
+        let got = idx
+            .search_with_date_range("budget", 0, 2_000, Some("streamA"), 10)
+            .unwrap();
+        assert_eq!(
+            ids(&got),
+            one("a1"),
+            "the high-BM25 L1 streamB twin must never surface in a streamA date query"
         );
     }
 }
