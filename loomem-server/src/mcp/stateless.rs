@@ -105,14 +105,22 @@ fn error_response(status: StatusCode, id: Value, error: JsonRpcError) -> axum::r
 /// P1). The extractable `id`, if any, rides along for the error response.
 fn parse_single_request(body: Value) -> Result<JsonRpcRequest, (Value, JsonRpcError)> {
     let body_id = request_id_of(&body);
-    let request: JsonRpcRequest = serde_json::from_value(body)
+    // Serde collapses an explicit `"id": null` into the same `None` as an
+    // omitted id, but JSON-RPC 2.0 makes only the *omitted* id a
+    // notification — a present null id is a (discouraged but legal) request
+    // whose response id is null. Capture presence before the deserializer
+    // erases it (Greptile #63, round 4).
+    let has_explicit_null_id = body.get("id").is_some_and(Value::is_null);
+    let mut request: JsonRpcRequest = serde_json::from_value(body)
         .map_err(|e| (body_id, JsonRpcError::invalid_request(&e.to_string())))?;
+    if request.id.is_none() && has_explicit_null_id {
+        request.id = Some(Value::Null);
+    }
     // JSON-RPC 2.0 ids must be strings, numbers or null. A present id of any
     // other type is an invalid request answered with a null id — the given
-    // id cannot be echoed (Greptile #63, verified repro). An explicit
-    // `"id": null` deserializes to `None` and is handled as a notification.
+    // id cannot be echoed (Greptile #63, verified repro).
     if let Some(id) = &request.id {
-        if !(id.is_string() || id.is_number()) {
+        if !(id.is_string() || id.is_number() || id.is_null()) {
             return Err((
                 Value::Null,
                 JsonRpcError::invalid_request("id must be a string, a number or null"),
@@ -549,6 +557,21 @@ mod tests {
             parse_single_request(json!({"jsonrpc": "2.0", "id": "a", "method": "tools/list"}))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn explicit_null_id_is_a_request_not_a_notification() {
+        // JSON-RPC 2.0: only an *omitted* id makes a notification; an
+        // explicit null id is a legal request whose response id is null
+        // (Greptile #63, round 4).
+        let r = parse_single_request(
+            json!({"jsonrpc": "2.0", "id": null, "method": "tools/list", "params": {}}),
+        )
+        .expect("null id parses as a request");
+        assert_eq!(r.id, Some(Value::Null));
+        let r = parse_single_request(json!({"jsonrpc": "2.0", "method": "tools/list"}))
+            .expect("omitted id parses");
+        assert_eq!(r.id, None, "omitted id stays a notification");
     }
 
     #[test]
