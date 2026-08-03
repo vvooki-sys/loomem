@@ -520,6 +520,24 @@ pub async fn register(
         .into_response()
 }
 
+/// RFC 9207 hardening: a redirect URI that pre-embeds the reserved `iss`
+/// response parameter would make the final redirect carry two `iss` values
+/// (the embedded one and the one this server appends), so a compliant client
+/// could reject the response — or a naive one could validate the wrong
+/// issuer. Such URIs are refused at authorize time, inline like every other
+/// authorize-time rejection. Literal match is enough: an encoded evasion
+/// only ever confuses the registering client's own flow.
+fn redirect_embeds_iss(redirect_uri: &str) -> bool {
+    redirect_uri
+        .split_once('?')
+        .map(|(_, query)| {
+            query
+                .split('&')
+                .any(|pair| pair == "iss" || pair.starts_with("iss="))
+        })
+        .unwrap_or(false)
+}
+
 /// GET /oauth/authorize — shows a minimal login page where user enters API key.
 pub async fn authorize_page(
     State(state): State<Arc<OAuthState>>,
@@ -541,6 +559,9 @@ pub async fn authorize_page(
         return authorize_error(
             "PKCE required: send a code_challenge with code_challenge_method=S256",
         );
+    }
+    if redirect_embeds_iss(&q.redirect_uri) {
+        return authorize_error("redirect_uri must not embed the reserved iss response parameter");
     }
     authorize_page_html(q).into_response()
 }
@@ -637,6 +658,9 @@ pub async fn authorize_submit(
         return authorize_error(
             "PKCE required: send a code_challenge with code_challenge_method=S256",
         );
+    }
+    if redirect_embeds_iss(&form.redirect_uri) {
+        return authorize_error("redirect_uri must not embed the reserved iss response parameter");
     }
 
     let code = Uuid::new_v4().to_string();
@@ -1513,6 +1537,44 @@ mod tests {
         let resp = register(test_conn(), State(state), HeaderMap::new(), Json(req))
             .await
             .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // Greptile #62 P1: a redirect URI that pre-embeds `iss` would produce a
+    // duplicate issuer parameter in the final redirect — refuse it inline.
+    #[test]
+    fn redirect_embeds_iss_detection() {
+        assert!(redirect_embeds_iss("https://c/cb?iss=x"));
+        assert!(redirect_embeds_iss("https://c/cb?a=b&iss=x"));
+        assert!(redirect_embeds_iss("https://c/cb?iss"));
+        assert!(!redirect_embeds_iss("https://c/cb"));
+        assert!(!redirect_embeds_iss("https://c/cb?misses=x"));
+        assert!(!redirect_embeds_iss("https://c/cb?a=iss"));
+    }
+
+    #[tokio::test]
+    async fn authorize_rejects_redirect_uri_with_embedded_iss() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        seed_client(
+            &state,
+            "c1",
+            "https://client.example/cb?iss=https://evil.example",
+            false,
+        )
+        .await;
+        let resp = authorize_submit(
+            State(state.clone()),
+            axum::Form(AuthorizeSubmit {
+                client_id: "c1".to_string(),
+                redirect_uri: "https://client.example/cb?iss=https://evil.example".to_string(),
+                state: None,
+                api_key: "USER_KEY".to_string(),
+                code_challenge: Some("abc".to_string()),
+                code_challenge_method: Some("S256".to_string()),
+            }),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
