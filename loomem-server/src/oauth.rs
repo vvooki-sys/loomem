@@ -551,6 +551,16 @@ fn percent_decode(component: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// RFC 6749 §3.1.2 forbids fragments in the redirection endpoint URI — and a
+/// fragment would swallow every appended response parameter (`code`, `state`,
+/// `iss`) into the client-side fragment, so the callback request would never
+/// see them (Greptile #62, verified repro). A raw `#` is the only fragment
+/// delimiter: a percent-encoded `%23` stays an ordinary encoded octet in the
+/// Location header and opens no fragment.
+fn redirect_has_fragment(redirect_uri: &str) -> bool {
+    redirect_uri.contains('#')
+}
+
 /// RFC 9207 hardening: a redirect URI that pre-embeds the reserved `iss`
 /// response parameter would make the final redirect carry two `iss` values
 /// (the embedded one and the one this server appends), so a compliant client
@@ -593,6 +603,9 @@ pub async fn authorize_page(
         return authorize_error(
             "PKCE required: send a code_challenge with code_challenge_method=S256",
         );
+    }
+    if redirect_has_fragment(&q.redirect_uri) {
+        return authorize_error("redirect_uri must not contain a fragment component");
     }
     if redirect_embeds_iss(&q.redirect_uri) {
         return authorize_error("redirect_uri must not embed the reserved iss response parameter");
@@ -692,6 +705,9 @@ pub async fn authorize_submit(
         return authorize_error(
             "PKCE required: send a code_challenge with code_challenge_method=S256",
         );
+    }
+    if redirect_has_fragment(&form.redirect_uri) {
+        return authorize_error("redirect_uri must not contain a fragment component");
     }
     if redirect_embeds_iss(&form.redirect_uri) {
         return authorize_error("redirect_uri must not embed the reserved iss response parameter");
@@ -1594,6 +1610,45 @@ mod tests {
         assert!(!redirect_embeds_iss("https://c/cb?%2569ss=x"));
         // Parameter names are case-sensitive; ISS is not iss.
         assert!(!redirect_embeds_iss("https://c/cb?ISS=x"));
+    }
+
+    // RFC 6749 §3.1.2: fragments are forbidden in the redirection endpoint —
+    // and would swallow code/state/iss into the client-side fragment
+    // (Greptile #62, verified repro).
+    #[test]
+    fn redirect_fragment_detection() {
+        assert!(redirect_has_fragment("https://c/cb#frag"));
+        assert!(redirect_has_fragment("https://c/cb?a=b#frag"));
+        assert!(!redirect_has_fragment("https://c/cb"));
+        assert!(!redirect_has_fragment("https://c/cb?a=b"));
+        // Percent-encoded %23 is an ordinary octet, not a fragment delimiter.
+        assert!(!redirect_has_fragment("https://c/cb?next=%23section"));
+    }
+
+    #[tokio::test]
+    async fn authorize_rejects_redirect_uri_with_fragment() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        seed_client(
+            &state,
+            "c1",
+            "https://client.example/cb#client-state",
+            false,
+        )
+        .await;
+        let resp = authorize_submit(
+            State(state.clone()),
+            axum::Form(AuthorizeSubmit {
+                client_id: "c1".to_string(),
+                redirect_uri: "https://client.example/cb#client-state".to_string(),
+                state: None,
+                api_key: "USER_KEY".to_string(),
+                code_challenge: Some("abc".to_string()),
+                code_challenge_method: Some("S256".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]
