@@ -520,20 +520,54 @@ pub async fn register(
         .into_response()
 }
 
+/// Percent-decode one query component (used on the name position). Invalid
+/// escape sequences pass through unchanged, matching lenient client parsers;
+/// non-UTF-8 decodes lossily, which can never spell the pure-ASCII "iss".
+fn percent_decode(component: &str) -> String {
+    fn hex_val(c: u8) -> Option<u8> {
+        match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        }
+    }
+    let bytes = component.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if let (Some(&hi), Some(&lo)) = (bytes.get(i + 1), bytes.get(i + 2)) {
+                if let (Some(h), Some(l)) = (hex_val(hi), hex_val(lo)) {
+                    out.push((h << 4) | l);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// RFC 9207 hardening: a redirect URI that pre-embeds the reserved `iss`
 /// response parameter would make the final redirect carry two `iss` values
 /// (the embedded one and the one this server appends), so a compliant client
 /// could reject the response — or a naive one could validate the wrong
 /// issuer. Such URIs are refused at authorize time, inline like every other
-/// authorize-time rejection. Literal match is enough: an encoded evasion
-/// only ever confuses the registering client's own flow.
+/// authorize-time rejection. Parameter names are compared after
+/// percent-decoding, because the client's query parser decodes them too — a
+/// raw `%69ss` in the registered URI reaches that parser as a second `iss`
+/// (Greptile #62, verified repro).
 fn redirect_embeds_iss(redirect_uri: &str) -> bool {
     redirect_uri
         .split_once('?')
         .map(|(_, query)| {
-            query
-                .split('&')
-                .any(|pair| pair == "iss" || pair.starts_with("iss="))
+            query.split('&').any(|pair| {
+                let name = pair.split('=').next().unwrap_or("");
+                percent_decode(name) == "iss"
+            })
         })
         .unwrap_or(false)
 }
@@ -1547,9 +1581,29 @@ mod tests {
         assert!(redirect_embeds_iss("https://c/cb?iss=x"));
         assert!(redirect_embeds_iss("https://c/cb?a=b&iss=x"));
         assert!(redirect_embeds_iss("https://c/cb?iss"));
+        // Percent-encoded names decode to `iss` in the client's parser and
+        // must be caught too (Greptile #62, verified repro).
+        assert!(redirect_embeds_iss("https://c/cb?%69ss=x"));
+        assert!(redirect_embeds_iss("https://c/cb?i%73s=x"));
+        assert!(redirect_embeds_iss("https://c/cb?a=b&%69ss=x"));
         assert!(!redirect_embeds_iss("https://c/cb"));
         assert!(!redirect_embeds_iss("https://c/cb?misses=x"));
         assert!(!redirect_embeds_iss("https://c/cb?a=iss"));
+        // One decode only: a double-encoded name reaches the client's parser
+        // as `%69ss`, not `iss`.
+        assert!(!redirect_embeds_iss("https://c/cb?%2569ss=x"));
+        // Parameter names are case-sensitive; ISS is not iss.
+        assert!(!redirect_embeds_iss("https://c/cb?ISS=x"));
+    }
+
+    #[test]
+    fn percent_decode_handles_escapes_and_garbage() {
+        assert_eq!(percent_decode("%69ss"), "iss");
+        assert_eq!(percent_decode("plain"), "plain");
+        assert_eq!(percent_decode("%2569ss"), "%69ss");
+        // Truncated/invalid escapes pass through unchanged.
+        assert_eq!(percent_decode("%6"), "%6");
+        assert_eq!(percent_decode("%zz"), "%zz");
     }
 
     #[tokio::test]
