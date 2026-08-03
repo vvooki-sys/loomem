@@ -63,15 +63,9 @@ pub async fn handle_stateless_post(
             JsonRpcError::invalid_request("JSON-RPC batching is not supported in 2026-07-28"),
         );
     }
-    let request: JsonRpcRequest = match serde_json::from_value(body) {
+    let request = match parse_single_request(body) {
         Ok(r) => r,
-        Err(_) => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                Value::Null,
-                JsonRpcError::parse_error(),
-            )
-        }
+        Err((id, e)) => return error_response(StatusCode::BAD_REQUEST, id, e),
     };
     // Notifications: accept with 202 and no body. Header requirements for
     // notification POSTs are undefined in this revision, so none are enforced.
@@ -97,6 +91,16 @@ pub async fn handle_stateless_post(
 
 fn error_response(status: StatusCode, id: Value, error: JsonRpcError) -> axum::response::Response {
     (status, Json(JsonRpcResponse::error(id, error))).into_response()
+}
+
+/// Parse the POST body into a single JSON-RPC request. Valid JSON that is not
+/// a valid request object maps to `-32600` invalid request — JSON parsing
+/// already succeeded at this stage, so `-32700` would be wrong (Greptile #63
+/// P1). The extractable `id`, if any, rides along for the error response.
+fn parse_single_request(body: Value) -> Result<JsonRpcRequest, (Value, JsonRpcError)> {
+    let body_id = request_id_of(&body);
+    serde_json::from_value(body)
+        .map_err(|e| (body_id, JsonRpcError::invalid_request(&e.to_string())))
 }
 
 /// Transport status for a stateless-path JSON-RPC response (SEP-2243):
@@ -481,6 +485,20 @@ mod tests {
     fn request_id_extraction_defaults_to_null() {
         assert_eq!(request_id_of(&json!({"id": 7, "method": "x"})), json!(7));
         assert_eq!(request_id_of(&json!([1, 2])), Value::Null);
+    }
+
+    #[test]
+    fn non_request_json_is_invalid_request_not_parse_error() {
+        // Valid JSON with an invalid JSON-RPC shape: parsing already
+        // succeeded, so the stateless path answers -32600, not -32700,
+        // echoing the id when one is extractable (Greptile #63 P1).
+        let (id, err) = parse_single_request(json!({"id": 5, "not": "a request"}))
+            .expect_err("shape must be rejected");
+        assert_eq!(err.code, -32600);
+        assert_eq!(id, json!(5));
+        let (id, err) = parse_single_request(json!("just a string")).expect_err("must fail");
+        assert_eq!(err.code, -32600);
+        assert_eq!(id, Value::Null);
     }
 
     #[test]
