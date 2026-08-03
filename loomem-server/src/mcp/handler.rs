@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::router;
 use super::session;
+use super::stateless;
 use super::types::*;
 use crate::auth::AuthContext;
 use crate::AppState;
@@ -52,6 +53,33 @@ pub async fn mcp_post_handler(
         },
         Err(_) => return (StatusCode::BAD_REQUEST, Json(Value::Null)).into_response(),
     };
+
+    // MCP 2026-07-28 (SEP-2575): route on the `MCP-Protocol-Version` header.
+    // No header, or an initialize-era version (2025-06-18+ clients send the
+    // header with their *negotiated* version) → the legacy session path
+    // below, untouched. `2026-07-28` → the stateless path. Anything else →
+    // `-32004` with the supported list, per the negotiation flow.
+    match stateless::classify_protocol_version(
+        headers
+            .get("mcp-protocol-version")
+            .and_then(|v| v.to_str().ok()),
+    ) {
+        stateless::VersionRoute::Legacy => {}
+        stateless::VersionRoute::Stateless => {
+            return stateless::handle_stateless_post(&state, &headers, body, &auth).await
+        }
+        stateless::VersionRoute::Unsupported(v) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(JsonRpcResponse::error(
+                    stateless::request_id_of(&body),
+                    JsonRpcError::unsupported_protocol_version(&v),
+                )),
+            )
+                .into_response()
+        }
+    }
+
     let session_id = headers
         .get("mcp-session-id")
         .and_then(|v| v.to_str().ok())
