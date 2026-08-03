@@ -65,6 +65,11 @@ pub struct OAuthClient {
     /// exchange). Drives LRU eviction at capacity, so a still-active connector
     /// is not dropped in favor of a fresh flood entry.
     pub last_used: std::time::Instant,
+    /// RFC 7591 `application_type` ("web" or "native") as registered
+    /// (SEP-837). Recorded so redirect policy can differentiate native
+    /// clients (RFC 8252 loopback redirects) without a re-registration.
+    #[allow(dead_code)] // stored at registration; read once native-redirect policy lands
+    pub application_type: String,
 }
 
 /// Pending authorization: after user submits API key on /oauth/authorize.
@@ -281,6 +286,8 @@ pub struct RegisterRequest {
     pub grant_types: Option<Vec<String>>,
     pub response_types: Option<Vec<String>>,
     pub token_endpoint_auth_method: Option<String>,
+    /// RFC 7591 §2 / SEP-837: "web" (default) or "native".
+    pub application_type: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -292,6 +299,7 @@ struct RegisterResponse {
     grant_types: Vec<String>,
     response_types: Vec<String>,
     token_endpoint_auth_method: String,
+    application_type: String,
 }
 
 #[derive(Deserialize)]
@@ -359,6 +367,9 @@ pub async fn authorization_server_metadata(
         "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
         "code_challenge_methods_supported": ["S256"],
         "scopes_supported": ["mcp"],
+        // RFC 9207 (SEP-2468): authorization responses carry `iss`;
+        // advertising it here lets clients enforce mix-up protection.
+        "authorization_response_iss_parameter_supported": true,
     }))
 }
 
@@ -427,6 +438,21 @@ pub async fn register(
     // client told it is confidential actually has its secret enforced at /token.
     let confidential = auth_method != "none";
 
+    // SEP-837 / RFC 7591: accept and record `application_type`. Only the two
+    // registered values exist; reject anything else up front (same posture as
+    // the auth-method check above) instead of storing metadata we can't honor.
+    let application_type = req.application_type.as_deref().unwrap_or("web");
+    if application_type != "web" && application_type != "native" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "invalid_client_metadata",
+                "error_description": "unsupported application_type; use web or native",
+            })),
+        )
+            .into_response();
+    }
+
     let client_id = Uuid::new_v4().to_string();
     let client_secret = Uuid::new_v4().to_string();
 
@@ -435,6 +461,7 @@ pub async fn register(
         client_secret: Some(client_secret.clone()),
         redirect_uris: redirect_uris.clone(),
         confidential,
+        application_type: application_type.to_string(),
         last_used: std::time::Instant::now(),
     };
 
@@ -487,6 +514,7 @@ pub async fn register(
                 .unwrap_or_else(|| vec!["authorization_code".into()]),
             response_types: req.response_types.unwrap_or_else(|| vec!["code".into()]),
             token_endpoint_auth_method: auth_method.to_string(),
+            application_type: application_type.to_string(),
         }),
     )
         .into_response()
@@ -637,7 +665,7 @@ pub async fn authorize_submit(
         .await
         .insert(code.clone(), pending);
 
-    // Build redirect URL with code + state
+    // Build redirect URL with code + state + iss
     let mut redirect_url = form.redirect_uri;
     let separator = if redirect_url.contains('?') { '&' } else { '?' };
     redirect_url = format!("{}{}code={}", redirect_url, separator, urlencoding(&code));
@@ -646,6 +674,11 @@ pub async fn authorize_submit(
             redirect_url = format!("{}&state={}", redirect_url, urlencoding(&s));
         }
     }
+    // RFC 9207 (SEP-2468): identify the issuer in the authorization response
+    // so the client can detect an authorization-server mix-up before redeeming
+    // the code. Mirrors `issuer` from the AS metadata, where
+    // `authorization_response_iss_parameter_supported` advertises this.
+    redirect_url = format!("{}&iss={}", redirect_url, urlencoding(&state.server_origin));
 
     Redirect::to(&redirect_url).into_response()
 }
@@ -925,6 +958,7 @@ mod tests {
                 client_secret: Some("shhh".to_string()),
                 redirect_uris: vec![redirect.to_string()],
                 confidential,
+                application_type: "web".to_string(),
                 last_used: std::time::Instant::now(),
             },
         );
@@ -1078,6 +1112,7 @@ mod tests {
                 grant_types: None,
                 response_types: None,
                 token_endpoint_auth_method: Some("none".to_string()),
+                application_type: None,
             }),
         )
         .await
@@ -1100,6 +1135,7 @@ mod tests {
                 grant_types: None,
                 response_types: None,
                 token_endpoint_auth_method: Some("client_secret_basic".to_string()),
+                application_type: None,
             }),
         )
         .await
@@ -1128,6 +1164,7 @@ mod tests {
                         client_secret: Some("s".to_string()),
                         redirect_uris: vec!["https://c/cb".to_string()],
                         confidential: false,
+                        application_type: "web".to_string(),
                         last_used,
                     },
                 );
@@ -1143,6 +1180,7 @@ mod tests {
             grant_types: None,
             response_types: None,
             token_endpoint_auth_method: Some("none".to_string()),
+            application_type: None,
         }
     }
 
@@ -1318,6 +1356,7 @@ mod tests {
                 client_secret: Some("s".to_string()),
                 redirect_uris: vec!["https://c1/cb".to_string()],
                 confidential: false,
+                application_type: "web".to_string(),
                 last_used: stale,
             },
         );
@@ -1355,6 +1394,7 @@ mod tests {
                 client_secret: Some("topsecret".to_string()),
                 redirect_uris: vec!["https://client.example/cb".to_string()],
                 confidential: true,
+                application_type: "web".to_string(),
                 last_used: std::time::Instant::now(),
             },
         );
@@ -1378,5 +1418,101 @@ mod tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // RFC 9207 (SEP-2468): the success redirect carries `iss` identifying the
+    // issuer so the client can detect an authorization-server mix-up before
+    // redeeming the code.
+    #[tokio::test]
+    async fn authorize_redirect_includes_iss() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        seed_client(&state, "c1", "https://client.example/cb", false).await;
+        let resp = authorize_submit(
+            State(state.clone()),
+            axum::Form(AuthorizeSubmit {
+                client_id: "c1".to_string(),
+                redirect_uri: "https://client.example/cb".to_string(),
+                state: Some("xyz".to_string()),
+                api_key: "USER_KEY".to_string(),
+                code_challenge: Some("abc".to_string()),
+                code_challenge_method: Some("S256".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert!(
+            resp.status().is_redirection(),
+            "expected redirect, got {}",
+            resp.status()
+        );
+        let location = resp
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .expect("Location header")
+            .to_string();
+        assert!(location.starts_with("https://client.example/cb?code="));
+        assert!(location.contains("&state=xyz"));
+        assert!(
+            location.contains("&iss=https%3A%2F%2Fmemory.example.com"),
+            "iss must identify the issuer, got: {location}"
+        );
+    }
+
+    // SEP-2468: AS metadata advertises RFC 9207 support so clients know to
+    // expect and validate the `iss` parameter.
+    #[tokio::test]
+    async fn metadata_advertises_iss_support() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        let resp = authorization_server_metadata(State(state))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .expect("metadata body");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("metadata json");
+        assert_eq!(v["authorization_response_iss_parameter_supported"], true);
+        assert_eq!(v["issuer"], "https://memory.example.com");
+    }
+
+    // SEP-837: `application_type` is accepted, recorded on the client and
+    // echoed in the registration response.
+    #[tokio::test]
+    async fn register_stores_and_echoes_application_type() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        let mut req = public_register_req();
+        req.application_type = Some("native".to_string());
+        let resp = register(
+            test_conn(),
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(req),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .expect("register body");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("register json");
+        assert_eq!(v["application_type"], "native");
+        let client_id = v["client_id"].as_str().expect("client_id").to_string();
+        let clients = state.clients.read().await;
+        let stored = clients.get(&client_id).expect("stored client");
+        assert_eq!(stored.application_type, "native");
+    }
+
+    // An `application_type` outside RFC 7591's two registered values is
+    // rejected at registration, mirroring the unsupported-auth-method posture.
+    #[tokio::test]
+    async fn register_rejects_unknown_application_type() {
+        let state = Arc::new(OAuthState::new("https://memory.example.com".to_string()));
+        let mut req = public_register_req();
+        req.application_type = Some("spa".to_string());
+        let resp = register(test_conn(), State(state), HeaderMap::new(), Json(req))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
