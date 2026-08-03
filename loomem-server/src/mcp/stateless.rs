@@ -40,10 +40,16 @@ pub fn classify_protocol_version(header: Option<&str>) -> VersionRoute {
     }
 }
 
-/// The `id` of a single JSON-RPC request body, for error responses issued
-/// before full parsing (`Null` for arrays and non-objects).
+/// The `id` to echo in error responses issued before a request is accepted
+/// (`-32600`, `-32004`). JSON-RPC 2.0 allows only strings, numbers and null
+/// as identifiers and mandates null when the id cannot be trusted, so an
+/// object/array/boolean id maps to `Null` instead of being echoed back
+/// (Greptile #63, verified repro).
 pub fn request_id_of(body: &Value) -> Value {
-    body.get("id").cloned().unwrap_or(Value::Null)
+    match body.get("id") {
+        Some(id @ (Value::String(_) | Value::Number(_))) => id.clone(),
+        _ => Value::Null,
+    }
 }
 
 /// Handle one POST on the stateless path. The caller has already parsed the
@@ -484,7 +490,14 @@ mod tests {
     #[test]
     fn request_id_extraction_defaults_to_null() {
         assert_eq!(request_id_of(&json!({"id": 7, "method": "x"})), json!(7));
+        assert_eq!(request_id_of(&json!({"id": "abc"})), json!("abc"));
         assert_eq!(request_id_of(&json!([1, 2])), Value::Null);
+        // JSON-RPC ids are strings, numbers or null — an invalid id type is
+        // never echoed back into an error response (null instead).
+        assert_eq!(request_id_of(&json!({"id": {"o": 1}})), Value::Null);
+        assert_eq!(request_id_of(&json!({"id": [1]})), Value::Null);
+        assert_eq!(request_id_of(&json!({"id": true})), Value::Null);
+        assert_eq!(request_id_of(&json!({"id": null})), Value::Null);
     }
 
     #[test]
