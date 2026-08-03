@@ -105,8 +105,21 @@ fn error_response(status: StatusCode, id: Value, error: JsonRpcError) -> axum::r
 /// P1). The extractable `id`, if any, rides along for the error response.
 fn parse_single_request(body: Value) -> Result<JsonRpcRequest, (Value, JsonRpcError)> {
     let body_id = request_id_of(&body);
-    serde_json::from_value(body)
-        .map_err(|e| (body_id, JsonRpcError::invalid_request(&e.to_string())))
+    let request: JsonRpcRequest = serde_json::from_value(body)
+        .map_err(|e| (body_id, JsonRpcError::invalid_request(&e.to_string())))?;
+    // JSON-RPC 2.0 ids must be strings, numbers or null. A present id of any
+    // other type is an invalid request answered with a null id — the given
+    // id cannot be echoed (Greptile #63, verified repro). An explicit
+    // `"id": null` deserializes to `None` and is handled as a notification.
+    if let Some(id) = &request.id {
+        if !(id.is_string() || id.is_number()) {
+            return Err((
+                Value::Null,
+                JsonRpcError::invalid_request("id must be a string, a number or null"),
+            ));
+        }
+    }
+    Ok(request)
 }
 
 /// Transport status for a stateless-path JSON-RPC response (SEP-2243):
@@ -512,6 +525,30 @@ mod tests {
         let (id, err) = parse_single_request(json!("just a string")).expect_err("must fail");
         assert_eq!(err.code, -32600);
         assert_eq!(id, Value::Null);
+    }
+
+    #[test]
+    fn invalid_id_type_is_rejected_with_null_id() {
+        // JSON-RPC ids are strings, numbers or null; an object/array/bool id
+        // is an invalid request answered with a null id, before header or
+        // meta validation runs (Greptile #63, verified repro).
+        for bad in [json!({"bad": true}), json!([1]), json!(true)] {
+            let (id, err) = parse_single_request(json!({
+                "jsonrpc": "2.0", "id": bad, "method": "tools/list", "params": {}
+            }))
+            .expect_err("invalid id type must be rejected");
+            assert_eq!(err.code, -32600);
+            assert_eq!(id, Value::Null);
+        }
+        // Legal id types still parse.
+        assert!(
+            parse_single_request(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+                .is_ok()
+        );
+        assert!(
+            parse_single_request(json!({"jsonrpc": "2.0", "id": "a", "method": "tools/list"}))
+                .is_ok()
+        );
     }
 
     #[test]
