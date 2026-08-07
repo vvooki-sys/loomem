@@ -9,11 +9,18 @@
 mod inner {
     use anyhow::{Context, Result};
     use std::path::Path;
-    use tokenizers::Tokenizer;
+    use tokenizers::{Tokenizer, TruncationParams};
     use tracing::{debug, info};
     use tract_onnx::prelude::*;
 
     type Model = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+
+    /// Sentence transformers in the BERT / XLM-R family — including the default
+    /// multilingual-e5-small — bake 512 learned position embeddings into the
+    /// ONNX graph, so a longer sequence fails inside `model.run()` with
+    /// `Invalid range 0..N for slicing 1,512`. Used only when the checkpoint's
+    /// `tokenizer.json` declares no truncation of its own.
+    const DEFAULT_MAX_SEQUENCE_TOKENS: usize = 512;
 
     pub struct LocalEmbedder {
         model: Model,
@@ -44,8 +51,21 @@ mod inner {
                 .into_runnable()
                 .context("Failed to create runnable embedding model")?;
 
-            let tokenizer = Tokenizer::from_file(&tokenizer_path)
+            let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
                 .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
+
+            // Cycle /015: cap the sequence at the model's position window so a
+            // long chunk gets its head embedded instead of failing. Doing it on
+            // the tokenizer (rather than slicing tensors afterwards) keeps the
+            // post-processor's special tokens correct — max_length counts them.
+            if tokenizer.get_truncation().is_none() {
+                tokenizer
+                    .with_truncation(Some(TruncationParams {
+                        max_length: DEFAULT_MAX_SEQUENCE_TOKENS,
+                        ..Default::default()
+                    }))
+                    .map_err(|e| anyhow::anyhow!("Failed to set tokenizer truncation: {}", e))?;
+            }
 
             info!("Local embedding model loaded (dim={})", expected_dim);
             Ok(Self {
@@ -153,6 +173,18 @@ mod inner {
             Ok(results)
         }
 
+        /// Embed multiple texts, one `Result` per input, in the same order.
+        ///
+        /// Unlike [`Self::embed_batch`], a single failing text does not discard
+        /// the whole batch — the caller decides what to do per element. This is
+        /// what the embedding queue uses: cycle /015 traced the "buried entity"
+        /// incident to one oversized chunk aborting a 50-chunk flush.
+        /// Failures are returned, not logged — the caller owns the chunk id and
+        /// can say *which* chunk failed.
+        pub fn embed_batch_lenient(&self, texts: &[String]) -> Vec<Result<Vec<f32>>> {
+            texts.iter().map(|text| self.embed(text)).collect()
+        }
+
         pub fn dim(&self) -> usize {
             self.dim
         }
@@ -173,6 +205,16 @@ impl LocalEmbedder {
     }
     pub fn embed_batch(&self, _texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
         anyhow::bail!("Local embeddings require local-embeddings feature")
+    }
+    pub fn embed_batch_lenient(&self, texts: &[String]) -> Vec<anyhow::Result<Vec<f32>>> {
+        texts
+            .iter()
+            .map(|_| {
+                Err(anyhow::anyhow!(
+                    "Local embeddings require local-embeddings feature"
+                ))
+            })
+            .collect()
     }
     pub fn dim(&self) -> usize {
         0
@@ -252,5 +294,69 @@ mod tests {
             s_para > s_unrel + 0.05,
             "Polish paraphrase ({s_para:.3}) should clearly beat unrelated ({s_unrel:.3})"
         );
+    }
+
+    fn load_test_embedder() -> Option<LocalEmbedder> {
+        let Ok(model_dir) = std::env::var("LOOMEM_TEST_EMBED_MODEL") else {
+            eprintln!("skip: set LOOMEM_TEST_EMBED_MODEL=<dir> to run this test");
+            return None;
+        };
+        Some(
+            LocalEmbedder::load(std::path::Path::new(&model_dir), 384)
+                .expect("load local embedding model"),
+        )
+    }
+
+    /// Cycle /015: input longer than the model's 512-position window must be
+    /// truncated, not rejected. Before the fix this returned
+    /// `Err(Embedding inference failed: Invalid range 0..N for slicing 1,512)`.
+    #[test]
+    #[ignore = "requires LOOMEM_TEST_EMBED_MODEL"]
+    fn embed_truncates_oversized_input() {
+        let Some(embedder) = load_test_embedder() else {
+            return;
+        };
+
+        let long = "Ala ma kota i bardzo lubi spacery po lesie. ".repeat(240);
+        assert!(
+            long.len() > 10_000,
+            "fixture must exceed the 512-token window"
+        );
+
+        let vector = embedder.embed(&long).expect("oversized input must embed");
+        assert_eq!(vector.len(), 384, "truncated input must keep the model dim");
+        let norm: f32 = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-3, "vector must stay L2-normalized");
+    }
+
+    /// Cycle /015 regression for the "buried entity" incident: one oversized
+    /// chunk used to abort `embed_batch` at the first `?`, so the whole flush
+    /// batch (up to 50 chunks) was dropped without any embedding. The lenient
+    /// path must return one result per input.
+    #[test]
+    #[ignore = "requires LOOMEM_TEST_EMBED_MODEL"]
+    fn lenient_batch_survives_oversized_member() {
+        let Some(embedder) = load_test_embedder() else {
+            return;
+        };
+
+        let oversized = "Szczegółowy raport z zebrania zarządu w sprawie budżetu. ".repeat(90);
+        assert!(oversized.len() > 5_000, "fixture must be ~5000+ chars");
+        let texts: Vec<String> = vec![
+            "Pierwszy krótki fakt o projekcie.".to_string(),
+            "Drugi krótki fakt o projekcie.".to_string(),
+            oversized,
+            "Czwarty krótki fakt o projekcie.".to_string(),
+            "Piąty krótki fakt o projekcie.".to_string(),
+        ];
+
+        let results = embedder.embed_batch_lenient(&texts);
+        assert_eq!(results.len(), texts.len(), "one result per input");
+        let ok = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(ok, 5, "all five chunks must embed, not zero");
+        for result in &results {
+            let vector = result.as_ref().expect("every chunk embeds");
+            assert_eq!(vector.len(), 384);
+        }
     }
 }
