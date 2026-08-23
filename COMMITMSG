@@ -1,7 +1,0 @@
-fix: fix: treat empty OPENAI_API_KEY env as missing
-
-- loomem-core\src\llm.rs: treat empty env API key as missing
-
-Fixes #66
-
-Signed-off-by: Vedant Madane <6527493+VedantMadane@users.noreply.github.com>
