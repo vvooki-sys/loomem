@@ -206,6 +206,7 @@ fn token_error(error: &str, description: &str) -> axum::response::Response {
 /// Confidential-client secret check (constant-time). Public clients — those
 /// registered with `token_endpoint_auth_method=none` — skip this and rely on
 /// mandatory PKCE.
+#[allow(clippy::result_large_err)] // axum Response as the Err type is idiomatic here; boxing would churn every call site
 async fn verify_client_secret(
     state: &OAuthState,
     client_id: &str,
