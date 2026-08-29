@@ -113,6 +113,7 @@ const NOISE_TOPICS: &[&str] = &[
 
 // ─── fixture construction ────────────────────────────────────────────────────
 
+#[derive(Clone)]
 struct CaseSpec {
     stream: String,
     needle_id: String,
@@ -347,6 +348,18 @@ fn probe_config() -> loomem_core::config::Config {
         mcp: loomem_core::config::McpConfig::default(),
         dream: loomem_core::config::DreamConfig::default(),
     }
+}
+
+/// Cycle/014 WS-1 sweep: swap the fusion engine in place, keeping the (much
+/// more expensive) Tantivy index + RocksDB store built by `build_env`. Both
+/// knobs under test live purely in the fusion stage, so a single fixture
+/// build can carry the whole floor × relief grid.
+fn set_search_knobs(env: &mut Env, floor: f64, relief: f64) {
+    let mut config = probe_config();
+    config.search.vector_similarity_floor = floor;
+    config.search.decay_match_relief = relief;
+    env.top_k = config.search.top_k;
+    env.engine = HybridSearchEngine::new(config);
 }
 
 fn build_env(cases: &[CaseSpec]) -> Result<Env> {
@@ -701,6 +714,452 @@ fn incident_fixture_per_channel_tables() -> Result<()> {
                 "lane ON must keep the needle in the fused pool for {label}"
             );
         }
+    }
+    Ok(())
+}
+
+// ─── cycle/014 WS-1 tuning sweep (measurement, not an assertion) ────────────
+
+/// Cycle/014, WS-1(a)+(b): sweep `vector_similarity_floor` × `decay_match_relief`
+/// jointly — the floor reshapes the score distribution the relief then acts on,
+/// so a per-knob sweep would not compose.
+///
+/// Marked `#[ignore]` on purpose: this test prints a grid and asserts nothing
+/// beyond the baseline sanity check, so it must not slow down or destabilise
+/// the normal `cargo test` run. Run it with:
+///
+/// ```console
+/// cargo test -p loomem-core --test buried_entity_probe -- --ignored --nocapture ws1_floor_relief_grid
+/// ```
+///
+/// A loop inside one test (rather than env-var-driven re-runs) is deliberate:
+/// the fixture build — 50 streams × 35 chunks into Tantivy + RocksDB — is the
+/// only expensive part, and it is identical for every grid point.
+#[test]
+#[ignore = "cycle/014 WS-1 measurement sweep; run with --ignored"]
+fn ws1_floor_relief_grid() -> Result<()> {
+    const FLOORS: [f64; 4] = [0.0, 0.70, 0.75, 0.80];
+    const RELIEFS: [f64; 4] = [0.0, 0.3, 0.5, 0.7];
+
+    let cases = build_cases();
+    let mut env = build_env(&cases)?;
+    let lane_on = lane_cfg_on();
+
+    // How much of the (designed) vector channel each floor actually cuts —
+    // without this the grid below is uninterpretable.
+    for floor in FLOORS {
+        let mut kept = 0usize;
+        let mut total = 0usize;
+        for case in &cases {
+            let ch = vector_channel(case, env.top_k * 2);
+            total += ch.len();
+            kept += ch.iter().filter(|(_, s)| f64::from(*s) >= floor).count();
+        }
+        println!("WS1GRID floor {floor:.2}: vector candidates surviving {kept}/{total}");
+    }
+
+    println!("WS1GRID floor relief | full_r5 full_r10 | dim_r5 dim_r10 | full_r5_lane full_r10_lane | fresh_top5 stale_wins | needle rank | ms");
+    for floor in FLOORS {
+        for relief in RELIEFS {
+            set_search_knobs(&mut env, floor, relief);
+            let t0 = std::time::Instant::now();
+            let full = measure(&env, &cases, false, None)?;
+            let dim = measure(&env, &cases, true, None)?;
+            let full_lane = measure(&env, &cases, false, Some(&lane_on))?;
+            let fresh = measure_freshness(&env, &cases)?;
+            let rank = measure_rank(&env, &cases)?;
+            let ms = t0.elapsed().as_millis();
+            println!(
+                "WS1GRID {floor:.2} {relief:.2} | {:.2} {:.2} | {:.2} {:.2} | {:.2} {:.2} | {:.2} {:.2} | rank {:.2} found {} | {ms}",
+                full.r_at_5,
+                full.r_at_10,
+                dim.r_at_5,
+                dim.r_at_10,
+                full_lane.r_at_5,
+                full_lane.r_at_10,
+                fresh.0,
+                fresh.1,
+                rank.0,
+                rank.1
+            );
+            // Method gate: the (0.0, 0.0) corner must reproduce the cycle/012
+            // shipped-default baseline, otherwise the sweep is measuring
+            // something other than the probe it claims to.
+            if floor == 0.0 && relief == 0.0 {
+                assert!(
+                    (full.r_at_5 - 0.0).abs() < f64::EPSILON && (full.r_at_10 - 0.44).abs() < 1e-9,
+                    "baseline corner drifted: full-name R@5={:.2} R@10={:.2}, expected 0.00 / 0.44",
+                    full.r_at_5,
+                    full.r_at_10
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Cycle/014: the needle's mean rank for the full-name query, over the cases
+/// where it is in the pool at all. R@5 alone is a knife-edge metric on this
+/// fixture — each case has exactly four fresh distractors, so a needle sitting
+/// immediately behind them scores R@5 = 1.00 while being one distractor away
+/// from scoring 0. The mean rank says which of the two situations we are in.
+/// Returns `(mean rank when found, cases where found)`.
+fn measure_rank(env: &Env, cases: &[CaseSpec]) -> Result<(f64, usize)> {
+    let mut sum = 0usize;
+    let mut found = 0usize;
+    for case in cases {
+        let (full, _, surname) = &case.person_b;
+        let out = run_case(env, case, &format!("{full} {surname}"), None)?;
+        if let Some(p) = out.ranked_ids.iter().position(|id| *id == case.needle_id) {
+            sum += p + 1;
+            found += 1;
+        }
+    }
+    let mean = if found == 0 {
+        f64::NAN
+    } else {
+        sum as f64 / found as f64
+    };
+    Ok((mean, found))
+}
+
+/// Cycle/014 counter-metric for WS-1(b). `decay_match_relief` buys buried-fact
+/// recall by cancelling the age penalty, so it must be paid for somewhere: the
+/// same mechanism lets an old chunk climb over a fresh, genuinely-better one.
+/// This probe queries the *fresh* person (C) by full name — the four fresh
+/// chunks are the correct answers — and returns
+/// `(mean fresh chunks in top-5 out of 4, fraction of cases where the stale L1
+/// profile outranks every fresh chunk)`. The second number is the damage.
+fn measure_freshness(env: &Env, cases: &[CaseSpec]) -> Result<(f64, f64)> {
+    let mut fresh_in_top5 = 0usize;
+    let mut stale_wins = 0usize;
+    for (i, case) in cases.iter().enumerate() {
+        let (first, _, _) = &case.person_b;
+        let c_surname = COMMON_SURNAMES[(i + 1) % COMMON_SURNAMES.len()];
+        let out = run_case(env, case, &format!("{first} {c_surname}"), None)?;
+        fresh_in_top5 += out
+            .ranked_ids
+            .iter()
+            .take(5)
+            .filter(|id| id.contains("fresh"))
+            .count();
+        let needle_rank = out.ranked_ids.iter().position(|id| *id == case.needle_id);
+        let best_fresh = out.ranked_ids.iter().position(|id| id.contains("fresh"));
+        if let (Some(n), Some(f)) = (needle_rank, best_fresh) {
+            if n < f {
+                stale_wins += 1;
+            }
+        } else if needle_rank.is_some() && best_fresh.is_none() {
+            stale_wins += 1;
+        }
+    }
+    let n = cases.len().max(1);
+    Ok((
+        fresh_in_top5 as f64 / n as f64,
+        stale_wins as f64 / n as f64,
+    ))
+}
+
+/// Cycle/014, WS-1(a) calibration arm — the same grid, but with the designed
+/// vector channel replaced by **real multilingual-e5-small cosines**.
+///
+/// Why this arm exists: `vector_similarity_floor` is an *absolute* threshold
+/// on a raw cosine, while `build_case` hands the fusion stage designed
+/// similarities in the 0.05–0.72 band. A floor tuned against designed numbers
+/// says nothing about the value to ship, because the shipped local provider
+/// (`embedding_provider = "local"`, multilingual-e5-small, embedded without
+/// `query:`/`passage:` prefixes — see `local_embeddings.rs`) puts real cosines
+/// in a much narrower, much higher band. This arm measures that band and
+/// re-runs the sweep on it.
+///
+/// Skipped unless `LOOMEM_TEST_EMBED_MODEL` points at a model directory
+/// (`model.onnx` + `tokenizer.json`), same convention as the multilingual
+/// gate in `local_embeddings.rs`. Run in **release** — tract inference in a
+/// debug build is an order of magnitude slower.
+#[test]
+#[ignore = "cycle/014 WS-1 real-embedding calibration; run with --ignored"]
+fn ws1_floor_relief_grid_real_embeddings() -> Result<()> {
+    let Ok(model_dir) = std::env::var("LOOMEM_TEST_EMBED_MODEL") else {
+        eprintln!("skip: set LOOMEM_TEST_EMBED_MODEL=<dir> to run the calibration arm");
+        return Ok(());
+    };
+    let embedder = loomem_core::local_embeddings::try_load(&model_dir, 384)
+        .context("loading multilingual-e5-small")?;
+
+    let cases = build_cases();
+    let mut env = build_env(&cases)?;
+
+    // Two embedding regimes, measured side by side:
+    //   "prod"  — exactly what the shipped pipeline does: a chunk the local
+    //             model refuses (>~512 tokens) simply has no embedding, so it
+    //             is absent from the vector channel.
+    //   "trunc" — the same corpus with content truncated to a length the model
+    //             accepts, i.e. the counterfactual where every chunk *does*
+    //             have a vector. Needed to separate the floor's effect from
+    //             the effect of an unembeddable needle.
+    const TRUNC_BYTES: usize = 2400;
+    let t_embed = std::time::Instant::now();
+    let mut prod_full = cases.clone();
+    let mut prod_dim = cases.clone();
+    let mut trunc_full = cases.clone();
+    let mut trunc_dim = cases.clone();
+    let mut embed_failures = 0usize;
+    let mut needle_embed_failures = 0usize;
+    let mut all_cosines: Vec<f64> = Vec::new();
+    let mut needle_cosines: Vec<f64> = Vec::new();
+    let mut fresh_cosines: Vec<f64> = Vec::new();
+    for (idx, case) in cases.iter().enumerate() {
+        let (full, dim, surname) = &case.person_b;
+        let q_full = embedder.embed(&format!("{full} {surname}"))?;
+        let q_dim = embedder.embed(&format!("{dim} {surname}"))?;
+
+        let mut sims_prod_full = Vec::new();
+        let mut sims_prod_dim = Vec::new();
+        let mut sims_trunc_full = Vec::new();
+        let mut sims_trunc_dim = Vec::new();
+        for (id, content, _, _) in &case.chunks {
+            match embedder.embed(content) {
+                Ok(v) => {
+                    let cf = f64::from(cosine_f32(&q_full, &v));
+                    sims_prod_full.push((id.clone(), cf));
+                    sims_prod_dim.push((id.clone(), f64::from(cosine_f32(&q_dim, &v))));
+                    all_cosines.push(cf);
+                    if *id == case.needle_id {
+                        needle_cosines.push(cf);
+                    } else if id.contains("fresh") {
+                        fresh_cosines.push(cf);
+                    }
+                }
+                Err(_) => {
+                    embed_failures += 1;
+                    if *id == case.needle_id {
+                        needle_embed_failures += 1;
+                    }
+                }
+            }
+            let v = embed_truncated(&embedder, content, TRUNC_BYTES)?;
+            sims_trunc_full.push((id.clone(), f64::from(cosine_f32(&q_full, &v))));
+            sims_trunc_dim.push((id.clone(), f64::from(cosine_f32(&q_dim, &v))));
+        }
+        prod_full[idx].sims = sims_prod_full;
+        prod_dim[idx].sims = sims_prod_dim;
+        trunc_full[idx].sims = sims_trunc_full;
+        trunc_dim[idx].sims = sims_trunc_dim;
+    }
+    let total_chunks: usize = cases.iter().map(|c| c.chunks.len()).sum();
+    println!(
+        "WS1REAL embedded {total_chunks} chunks ×2 regimes in {:.1}s",
+        t_embed.elapsed().as_secs_f64()
+    );
+    println!(
+        "WS1REAL local-embedder failures (prod regime): {embed_failures}/{total_chunks} chunks, \
+         of which needles: {needle_embed_failures}/{}",
+        cases.len()
+    );
+    print_quantiles("WS1REAL cosines all      ", &mut all_cosines);
+    print_quantiles("WS1REAL cosines needle   ", &mut needle_cosines);
+    print_quantiles("WS1REAL cosines fresh(C) ", &mut fresh_cosines);
+
+    // Mandated grid + an extension into the band real cosines actually occupy.
+    const FLOORS: [f64; 8] = [0.0, 0.70, 0.75, 0.80, 0.82, 0.84, 0.86, 0.88];
+    const RELIEFS: [f64; 4] = [0.0, 0.3, 0.5, 0.7];
+    for (label, cs_full, cs_dim) in [
+        ("prod ", &prod_full, &prod_dim),
+        ("trunc", &trunc_full, &trunc_dim),
+    ] {
+        // Same diagnostic as the synthetic grid: a recall number is only
+        // interpretable next to how much of the vector channel the floor cut.
+        for floor in FLOORS {
+            let (mut kept, mut total, mut kept_fresh, mut total_fresh) = (0, 0, 0, 0);
+            for case in cs_full {
+                for (id, s) in &vector_channel(case, env.top_k * 2) {
+                    total += 1;
+                    let survives = f64::from(*s) >= floor;
+                    if survives {
+                        kept += 1;
+                    }
+                    if id.contains("fresh") {
+                        total_fresh += 1;
+                        if survives {
+                            kept_fresh += 1;
+                        }
+                    }
+                }
+            }
+            println!(
+                "WS1REAL[{label}] floor {floor:.2}: vector candidates surviving {kept}/{total} \
+                 (fresh distractors {kept_fresh}/{total_fresh})"
+            );
+        }
+        println!(
+            "WS1REAL[{label}] floor relief | full_r5 full_r10 | dim_r5 dim_r10 | needle rank | ms"
+        );
+        for floor in FLOORS {
+            for relief in RELIEFS {
+                set_search_knobs(&mut env, floor, relief);
+                let t0 = std::time::Instant::now();
+                let full = measure(&env, cs_full, false, None)?;
+                let dim = measure(&env, cs_dim, true, None)?;
+                let rank = measure_rank(&env, cs_full)?;
+                println!(
+                    "WS1REAL[{label}] {floor:.2} {relief:.2} | {:.2} {:.2} | {:.2} {:.2} | rank {:.2} found {} | {}",
+                    full.r_at_5,
+                    full.r_at_10,
+                    dim.r_at_5,
+                    dim.r_at_10,
+                    rank.0,
+                    rank.1,
+                    t0.elapsed().as_millis()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Embed `content`, shrinking it until the fixed-512-position local model
+/// accepts it. Character budgets differ per language (Polish tokenizes into
+/// more tokens per character than English), so the limit is found by retry
+/// rather than assumed.
+fn embed_truncated(
+    embedder: &loomem_core::local_embeddings::LocalEmbedder,
+    content: &str,
+    start_bytes: usize,
+) -> Result<Vec<f32>> {
+    let mut budget = start_bytes;
+    loop {
+        let cut = content
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|i| *i <= budget)
+            .last()
+            .unwrap_or(0);
+        match embedder.embed(&content[..cut]) {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if budget <= 200 {
+                    return Err(e).context("local embedder rejects even a 200-byte prefix");
+                }
+                budget = budget * 9 / 10;
+            }
+        }
+    }
+}
+
+/// Cycle/014 side finding: how long a text the shipped local embedder accepts.
+/// The buried-entity incident shape is a *long* consolidated profile, so the
+/// answer decides whether such a chunk can have a vector representation at all.
+#[test]
+#[ignore = "cycle/014 local-embedder length probe; run with --ignored"]
+fn ws1_local_embed_length_limit() -> Result<()> {
+    let Ok(model_dir) = std::env::var("LOOMEM_TEST_EMBED_MODEL") else {
+        eprintln!("skip: set LOOMEM_TEST_EMBED_MODEL=<dir> to run the length probe");
+        return Ok(());
+    };
+    let embedder = loomem_core::local_embeddings::try_load(&model_dir, 384)
+        .context("loading multilingual-e5-small")?;
+    let unit = "Sprint review covered the payment gateway migration. ";
+    let mut last_ok = 0usize;
+    let mut first_err: Option<(usize, String)> = None;
+    for reps in 1..=200 {
+        let text = unit.repeat(reps);
+        match embedder.embed(&text) {
+            Ok(_) => last_ok = text.len(),
+            Err(e) => {
+                first_err = Some((text.len(), format!("{e}")));
+                break;
+            }
+        }
+    }
+    println!("WS1EMBED longest accepted text: {last_ok} chars");
+    match first_err {
+        Some((len, e)) => println!("WS1EMBED first failure at {len} chars: {e}"),
+        None => println!("WS1EMBED no failure up to 200 repetitions"),
+    }
+    Ok(())
+}
+
+/// Cosine of two L2-normalized embeddings (the local embedder normalizes).
+fn cosine_f32(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+fn print_quantiles(label: &str, xs: &mut Vec<f64>) {
+    if xs.is_empty() {
+        println!("{label}: (empty)");
+        return;
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let q = |p: f64| -> f64 {
+        let i = (((xs.len() - 1) as f64) * p).round().max(0.0);
+        xs[usize::try_from(i as u64).unwrap_or(0).min(xs.len() - 1)]
+    };
+    println!(
+        "{label}: n={} min={:.4} p05={:.4} p25={:.4} p50={:.4} p75={:.4} p95={:.4} max={:.4}",
+        xs.len(),
+        q(0.0),
+        q(0.05),
+        q(0.25),
+        q(0.50),
+        q(0.75),
+        q(0.95),
+        q(1.0)
+    );
+}
+
+/// Cycle/014, WS-1(c): how far a probe query gets through the Tier-1 gate.
+///
+/// The tier's orchestration lives in `loomem-server` (graph lookup + chunk
+/// load), which this core-level probe cannot reach — but the *decision* half
+/// is pure and lives here, so the question "would Tier-1 even fire on these
+/// queries?" is answerable offline. Prints per-query-shape counts of the two
+/// pure gates: `QueryType::Factual` + non-empty detected entities, and
+/// non-empty attribute terms.
+#[test]
+#[ignore = "cycle/014 WS-1(c) gate probe; run with --ignored"]
+fn ws1_tier1_gate_probe() -> Result<()> {
+    use loomem_core::search::query_classifier::classify;
+    use loomem_core::search::tier1::attribute_terms;
+
+    let cases = build_cases();
+    for diminutive in [false, true] {
+        let (mut factual_with_entities, mut terms_non_empty) = (0usize, 0usize);
+        let mut sample = String::new();
+        for (i, case) in cases.iter().enumerate() {
+            let (full, dim, surname) = &case.person_b;
+            let query = if diminutive {
+                format!("{dim} {surname}")
+            } else {
+                format!("{full} {surname}")
+            };
+            let classified = classify(&query);
+            let gate_a = classified.query_type == loomem_core::search::QueryType::Factual
+                && !classified.features.entities.is_empty();
+            if gate_a {
+                factual_with_entities += 1;
+            }
+            let terms = attribute_terms(&query, &classified.features.entities);
+            if !terms.is_empty() {
+                terms_non_empty += 1;
+            }
+            if i == 0 {
+                sample = format!(
+                    "query='{query}' type={:?} entities={:?} attr_terms={terms:?}",
+                    classified.query_type, classified.features.entities
+                );
+            }
+        }
+        let label = if diminutive {
+            "diminutive"
+        } else {
+            "full name"
+        };
+        println!(
+            "WS1TIER1 {label}: factual+entities {factual_with_entities}/{}, attr_terms non-empty {terms_non_empty}/{}",
+            cases.len(),
+            cases.len()
+        );
+        println!("WS1TIER1 {label} sample: {sample}");
     }
     Ok(())
 }
