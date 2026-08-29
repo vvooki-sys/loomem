@@ -272,7 +272,7 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
     }
     let chunk_count = bytes.len() / 4;
     let mut out = Vec::with_capacity(chunk_count * 3);
-    for (index, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
+    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
         let pad = match (chunk[2], chunk[3]) {
             (b'=', b'=') => 2,
             (_, b'=') => 1,
