@@ -1,13 +1,10 @@
+# cargo-audit configuration — consciously accepted advisories.
+# Review quarterly.
+
 [advisories]
-# RUSTSEC-2026-0253: lru 0.12.5, unsound — missing panic safety in LruCache::pop()
-# can leave dangling pointers if a stored key's Drop panics during pop().
-#
-# lru is a transitive dependency via tantivy. The patched range is >= 0.18.2,
-# but every tantivy release (0.25 current, 0.26.1 latest) pins lru ^0.12 / ^0.16,
-# so the advisory is unfixable downstream until tantivy bumps lru. Practical
-# exploitability requires std::panic::catch_unwind plus a cached key type with a
-# panicking Drop impl — neither applies to tantivy's internal use of the cache.
-#
-# Remove this ignore in the tantivy-with-lru>=0.18.2 migration cycle
-# (see branch chore/tantivy-026-preview for the prepared 0.26 API adaptation).
-ignore = ["RUSTSEC-2026-0253"]
+ignore = [
+    "RUSTSEC-2025-0141",  # bincode unmaintained — migration to 2.x is on the backlog
+    "RUSTSEC-2024-0436",  # paste unmaintained — transitive via tokenizers
+    "RUSTSEC-2026-0002",  # lru unsound IterMut — transitive via tantivy
+    "RUSTSEC-2026-0097",  # rand unsound custom logger — transitive
+]
