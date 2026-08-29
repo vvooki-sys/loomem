@@ -28,7 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 
 # Storage
 rocksdb = { version = "0.24", default-features = false, features = ["snappy", "lz4"] }
-tantivy = "0.25"
+tantivy = "0.26"
 
 # HTTP client & serialization
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"] }

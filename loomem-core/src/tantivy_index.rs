@@ -573,7 +573,7 @@ impl TantivyIndex {
 
         // Execute search
         let top_docs = searcher
-            .search(&query, &TopDocs::with_limit(limit))
+            .search(&query, &TopDocs::with_limit(limit).order_by_score())
             .context("Failed to execute search")?;
 
         // Convert results
@@ -670,7 +670,10 @@ impl TantivyIndex {
 
         // Execute search
         let top_docs = searcher
-            .search(&combined_query, &TopDocs::with_limit(limit))
+            .search(
+                &combined_query,
+                &TopDocs::with_limit(limit).order_by_score(),
+            )
             .context("Failed to execute search with stream filter")?;
 
         // Convert results
@@ -782,7 +785,10 @@ impl TantivyIndex {
 
         // Execute search
         let top_docs = searcher
-            .search(&combined_query, &TopDocs::with_limit(limit))
+            .search(
+                &combined_query,
+                &TopDocs::with_limit(limit).order_by_score(),
+            )
             .context("Failed to execute search with entity filter")?;
 
         self.collect_results(&searcher, top_docs)
@@ -925,7 +931,7 @@ impl TantivyIndex {
         };
 
         let top_docs = searcher
-            .search(&query, &TopDocs::with_limit(limit))
+            .search(&query, &TopDocs::with_limit(limit).order_by_score())
             .context("Failed to execute rare-term candidate search")?;
 
         let mut results = Vec::new();
@@ -1023,7 +1029,10 @@ impl TantivyIndex {
 
         // Execute search
         let top_docs = searcher
-            .search(&combined_query, &TopDocs::with_limit(limit))
+            .search(
+                &combined_query,
+                &TopDocs::with_limit(limit).order_by_score(),
+            )
             .context("Failed to execute search with date range")?;
 
         let mut results = self.collect_results(&searcher, top_docs)?;
@@ -1125,7 +1134,7 @@ impl TantivyIndex {
 
         let query = BooleanQuery::new(clauses);
         let top_docs = searcher
-            .search(&query, &TopDocs::with_limit(params.limit))
+            .search(&query, &TopDocs::with_limit(params.limit).order_by_score())
             .context("Failed to execute agent-filtered search")?;
         self.collect_results(&searcher, top_docs)
     }
