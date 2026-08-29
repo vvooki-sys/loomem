@@ -30,3 +30,11 @@ Thumbs.db
 .vscode/
 *.swp
 .gstack/
+
+# Local-only reports, build markers and archives (never commit)
+RAPORT-BEZPIECZENSTWA-*.md
+SECURITY-AUDIT-REPORT.md
+.build_done*
+docs/CNAME
+archive/
+.claude/
