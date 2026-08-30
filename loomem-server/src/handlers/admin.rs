@@ -189,10 +189,11 @@ pub(crate) fn build_whoami_response(
     })
 }
 
-pub async fn health_handler() -> Json<HealthResponse> {
+pub async fn health_handler(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        llm_key_present: state.config.llm.get_api_key().is_some(),
     })
 }
 
