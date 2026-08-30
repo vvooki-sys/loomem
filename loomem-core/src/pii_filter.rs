@@ -56,7 +56,8 @@ pub struct PiiFilter {
 /// numeric series (`0 50 100 150 200 250` — chart data, measurement columns)
 /// is almost never a phone number. If the token immediately before or after
 /// the match (separated by a single ASCII space, and itself delimited by a
-/// space or the string edge on its far side) consists solely of digits,
+/// space, a comma, or the string edge on its far side) consists solely of
+/// digits,
 /// treat the match as data and leave it alone. Trade-off: a real phone number
 /// directly neighboured by a bare number survives unredacted; that is the
 /// cheaper error, because redaction destroys persisted content permanently.
@@ -72,7 +73,7 @@ fn adjacent_bare_number(text: &str, start: usize, end: usize) -> bool {
             while tok_start > 0 && bytes[tok_start - 1].is_ascii_digit() {
                 tok_start -= 1;
             }
-            tok_start < tok_end && (tok_start == 0 || bytes[tok_start - 1] == b' ')
+            tok_start < tok_end && (tok_start == 0 || matches!(bytes[tok_start - 1], b' ' | b','))
         });
     if before {
         return true;
@@ -86,7 +87,7 @@ fn adjacent_bare_number(text: &str, start: usize, end: usize) -> bool {
     while tok_end < bytes.len() && bytes[tok_end].is_ascii_digit() {
         tok_end += 1;
     }
-    tok_end > tok_start && (tok_end == bytes.len() || bytes[tok_end] == b' ')
+    tok_end > tok_start && (tok_end == bytes.len() || matches!(bytes[tok_end], b' ' | b','))
 }
 
 fn embedded_in_token(text: &str, start: usize, end: usize) -> bool {
@@ -644,5 +645,16 @@ mod tests {
         let (sanitized, redactions) = filter.sanitize("item-1 123 456 789");
         assert_eq!(sanitized, "item-1 [PHONE]");
         assert_eq!(redactions.len(), 1);
+    }
+
+    #[test]
+    fn comma_delimited_series_member_still_shields() {
+        // Greptile P1 (round 2) on #74: `100,` is a series member even though
+        // its far-side delimiter is a comma, not a space.
+        let filter = filter_all_on();
+        let text = "totals: 100, 123 456 789, 200";
+        let (sanitized, redactions) = filter.sanitize(text);
+        assert_eq!(sanitized, text);
+        assert!(redactions.is_empty(), "series redacted: {redactions:?}");
     }
 }
