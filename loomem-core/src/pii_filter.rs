@@ -55,7 +55,8 @@ pub struct PiiFilter {
 /// Issue #67: a phone-shaped match sitting inside a whitespace-separated
 /// numeric series (`0 50 100 150 200 250` — chart data, measurement columns)
 /// is almost never a phone number. If the token immediately before or after
-/// the match (separated by a single ASCII space) consists solely of digits,
+/// the match (separated by a single ASCII space, and itself delimited by a
+/// space or the string edge on its far side) consists solely of digits,
 /// treat the match as data and leave it alone. Trade-off: a real phone number
 /// directly neighboured by a bare number survives unredacted; that is the
 /// cheaper error, because redaction destroys persisted content permanently.
@@ -71,7 +72,7 @@ fn adjacent_bare_number(text: &str, start: usize, end: usize) -> bool {
             while tok_start > 0 && bytes[tok_start - 1].is_ascii_digit() {
                 tok_start -= 1;
             }
-            tok_start < tok_end && (tok_start == 0 || !bytes[tok_start - 1].is_ascii_alphanumeric())
+            tok_start < tok_end && (tok_start == 0 || bytes[tok_start - 1] == b' ')
         });
     if before {
         return true;
@@ -85,7 +86,7 @@ fn adjacent_bare_number(text: &str, start: usize, end: usize) -> bool {
     while tok_end < bytes.len() && bytes[tok_end].is_ascii_digit() {
         tok_end += 1;
     }
-    tok_end > tok_start && (tok_end == bytes.len() || !bytes[tok_end].is_ascii_alphanumeric())
+    tok_end > tok_start && (tok_end == bytes.len() || bytes[tok_end] == b' ')
 }
 
 fn embedded_in_token(text: &str, start: usize, end: usize) -> bool {
@@ -159,6 +160,29 @@ impl PiiFilter {
         let mut sanitized = text.to_string();
         let mut redactions = Vec::new();
 
+        // Redact emails FIRST — before the phone pass. A phone-shaped local
+        // part (`600000000@example.com`) would otherwise be rewritten to
+        // `[PHONE]@example.com`, leaving the domain unredacted because the
+        // email regex no longer matches. Positional rebuild, same as the
+        // phone branch — a global `str::replace` hits every identical
+        // substring and was the failure class behind issue #67.
+        if self.config.redact_emails {
+            let mut rebuilt = String::with_capacity(sanitized.len());
+            let mut last = 0usize;
+            for mat in self.email_regex.find_iter(&sanitized) {
+                rebuilt.push_str(&sanitized[last..mat.start()]);
+                rebuilt.push_str("[EMAIL]");
+                redactions.push(PiiRedaction {
+                    redaction_type: "email".to_string(),
+                    original_length: mat.as_str().len(),
+                    position: mat.start(),
+                });
+                last = mat.end();
+            }
+            rebuilt.push_str(&sanitized[last..]);
+            sanitized = rebuilt;
+        }
+
         // Redact phones. Each match is validated against its surrounding
         // bytes (issue #49: digit runs inside hex SHAs / UUIDs / timestamps
         // must survive), and the output is rebuilt in a single pass —
@@ -177,26 +201,6 @@ impl PiiFilter {
                 rebuilt.push_str("[PHONE]");
                 redactions.push(PiiRedaction {
                     redaction_type: "phone".to_string(),
-                    original_length: mat.as_str().len(),
-                    position: mat.start(),
-                });
-                last = mat.end();
-            }
-            rebuilt.push_str(&sanitized[last..]);
-            sanitized = rebuilt;
-        }
-
-        // Redact emails. Positional rebuild, same as the phone branch — a
-        // global `str::replace` hits every identical substring and was the
-        // failure class behind issue #67.
-        if self.config.redact_emails {
-            let mut rebuilt = String::with_capacity(sanitized.len());
-            let mut last = 0usize;
-            for mat in self.email_regex.find_iter(&sanitized) {
-                rebuilt.push_str(&sanitized[last..mat.start()]);
-                rebuilt.push_str("[EMAIL]");
-                redactions.push(PiiRedaction {
-                    redaction_type: "email".to_string(),
                     original_length: mat.as_str().len(),
                     position: mat.start(),
                 });
@@ -618,5 +622,27 @@ mod tests {
         assert_eq!(sanitized, "[EMAIL] wrote to [EMAIL]");
         assert_eq!(redactions.len(), 2);
         assert_ne!(redactions[0].position, redactions[1].position);
+    }
+
+    #[test]
+    fn phone_shaped_email_local_part_redacts_as_email() {
+        // Greptile P1 on #74: the email pass must run before the phone pass,
+        // otherwise `600000000@example.com` becomes `[PHONE]@example.com` and
+        // the domain leaks.
+        let filter = filter_all_on();
+        let (sanitized, redactions) = filter.sanitize("send it to 600000000@example.com today");
+        assert_eq!(sanitized, "send it to [EMAIL] today");
+        assert_eq!(redactions.len(), 1);
+        assert_eq!(redactions[0].redaction_type, "email");
+    }
+
+    #[test]
+    fn digit_suffixed_token_does_not_shield_a_phone() {
+        // Greptile P1 on #74: `item-1` ends in a digit but is not a bare
+        // number — the phone after it must still be redacted.
+        let filter = filter_all_on();
+        let (sanitized, redactions) = filter.sanitize("item-1 123 456 789");
+        assert_eq!(sanitized, "item-1 [PHONE]");
+        assert_eq!(redactions.len(), 1);
     }
 }
