@@ -739,7 +739,7 @@ fn incident_fixture_per_channel_tables() -> Result<()> {
 #[ignore = "cycle/014 WS-1 measurement sweep; run with --ignored"]
 fn ws1_floor_relief_grid() -> Result<()> {
     const FLOORS: [f64; 4] = [0.0, 0.70, 0.75, 0.80];
-    const RELIEFS: [f64; 4] = [0.0, 0.3, 0.5, 0.7];
+    const RELIEFS: [f64; 6] = [0.0, 0.3, 0.5, 0.7, 0.9, 1.0];
 
     let cases = build_cases();
     let mut env = build_env(&cases)?;
@@ -962,7 +962,7 @@ fn ws1_floor_relief_grid_real_embeddings() -> Result<()> {
 
     // Mandated grid + an extension into the band real cosines actually occupy.
     const FLOORS: [f64; 8] = [0.0, 0.70, 0.75, 0.80, 0.82, 0.84, 0.86, 0.88];
-    const RELIEFS: [f64; 4] = [0.0, 0.3, 0.5, 0.7];
+    const RELIEFS: [f64; 6] = [0.0, 0.3, 0.5, 0.7, 0.9, 1.0];
     for (label, cs_full, cs_dim) in [
         ("prod ", &prod_full, &prod_dim),
         ("trunc", &trunc_full, &trunc_dim),
@@ -1320,4 +1320,194 @@ fn lane_latency_p50_p95() -> Result<()> {
         "lane ON p95 ({on_p95}µs) blew past 3× OFF p95 ({off_p95}µs)"
     );
     Ok(())
+}
+
+// ─── cycle/015 KROK 3 — freshness probe on supersede pairs ──────────────────
+//
+// The cycle/014 counter-metric (`measure_freshness`) saturated in all 16 grid
+// points (fresh_top5 = 4/4, stale_wins = 0) — not because relief is safe, but
+// because that fixture cannot detect its cost: fresh chunks carry the full
+// surname, the needle does not, so BM25 separates them cleanly and decay has
+// nothing to spoil. This fixture removes the shortcut: each case is a
+// supersede-shaped PAIR — two chunks about the same person and the same fact,
+// lexically near-identical, differing only in age and the fact's value. The
+// question relief must answer before shipping: does cancelling the age
+// penalty lift the STALE version of a fact above its FRESH replacement?
+
+fn build_freshness_case(case: usize, rng: &mut Rng) -> CaseSpec {
+    let (first, dim) = NAME_PAIRS[case % NAME_PAIRS.len()];
+    let surname = surname_for_case(case);
+    let stream = format!("fresh{case:03}");
+    let stale_id = format!("f{case:03}-stale");
+    let fresh_id = format!("f{case:03}-fresh");
+
+    // Shared lexical frame; only the fact value and one trailing word differ.
+    let value = (case * 7) % 1000;
+    let stale_content = format!(
+        "Numer telefonu do {first} {surname}: 601 234 {value:03}. \
+         Notatka z rozmowy o dostepnosci."
+    );
+    let fresh_content = format!(
+        "Numer telefonu do {first} {surname}: 698 111 {value:03}. \
+         Notatka po aktualizacji danych."
+    );
+
+    let mut chunks: Vec<(String, String, i64, i32)> = vec![
+        (stale_id.clone(), stale_content, 45, 0),
+        (fresh_id.clone(), fresh_content, 1, 0),
+    ];
+    // Designed cosines: near-identical text -> near-identical vectors. The
+    // stale copy gets a hair MORE similarity — the worst case for relief
+    // (a strong old match is exactly what relief rewards).
+    let mut sims: Vec<(String, f64)> = vec![(stale_id.clone(), 0.63), (fresh_id.clone(), 0.61)];
+    for k in 0..8 {
+        let id = format!("f{case:03}-noise{k:02}");
+        let content = format!(
+            "{} {}",
+            NOISE_TOPICS[rng.below(NOISE_TOPICS.len())],
+            NOISE_TOPICS[rng.below(NOISE_TOPICS.len())]
+        );
+        let age = 3 + i64::try_from(rng.below(28)).unwrap_or(0);
+        chunks.push((id.clone(), content, age, 0));
+        sims.push((id, rng.range_f64(0.05, 0.35)));
+    }
+
+    CaseSpec {
+        stream,
+        // `needle_id` doubles as the stale-chunk id for this fixture.
+        needle_id: stale_id,
+        person_b: (first.to_string(), dim.to_string(), surname),
+        chunks,
+        sims,
+    }
+}
+
+struct SupersedeMetrics {
+    fresh_top1: f64,
+    stale_wins: f64,
+    mean_gap: f64,
+    missing_pairs: usize,
+}
+
+/// For each case: query the shared lexical core and compare the ranks of the
+/// fresh and stale copies. `stale_wins` is the freshness COST of relief;
+/// `mean_gap` = mean(rank_stale - rank_fresh), positive = fresh above stale.
+fn measure_supersede(env: &Env, cases: &[CaseSpec]) -> Result<SupersedeMetrics> {
+    let mut fresh_top1 = 0usize;
+    let mut stale_wins = 0usize;
+    let mut gaps: Vec<f64> = Vec::new();
+    let mut missing_pairs = 0usize;
+    for case in cases {
+        let (first, _, surname) = &case.person_b;
+        let out = run_case(env, case, &format!("telefon {first} {surname}"), None)?;
+        let stale_id = &case.needle_id;
+        let fresh_id = stale_id.replace("-stale", "-fresh");
+        let stale_rank = out.ranked_ids.iter().position(|id| id == stale_id);
+        let fresh_rank = out.ranked_ids.iter().position(|id| *id == fresh_id);
+        match (stale_rank, fresh_rank) {
+            (Some(s), Some(f)) => {
+                if f == 0 {
+                    fresh_top1 += 1;
+                }
+                if s < f {
+                    stale_wins += 1;
+                }
+                let s_i64 = i64::try_from(s).unwrap_or(i64::MAX);
+                let f_i64 = i64::try_from(f).unwrap_or(i64::MAX);
+                // truncation intentional: ranks are tiny
+                gaps.push((s_i64 - f_i64) as f64);
+            }
+            (Some(_), None) => {
+                // fresh fell out of the pool entirely — worst freshness loss
+                stale_wins += 1;
+                missing_pairs += 1;
+            }
+            _ => missing_pairs += 1,
+        }
+    }
+    let n = cases.len().max(1);
+    let mean_gap = if gaps.is_empty() {
+        0.0
+    } else {
+        gaps.iter().sum::<f64>() / gaps.len() as f64
+    };
+    Ok(SupersedeMetrics {
+        fresh_top1: fresh_top1 as f64 / n as f64,
+        stale_wins: stale_wins as f64 / n as f64,
+        mean_gap,
+        missing_pairs,
+    })
+}
+
+fn k3_grid(env: &mut Env, cases: &[CaseSpec], label: &str) -> Result<()> {
+    println!("K3[{label}] relief | fresh_top1 | stale_wins | mean_gap(stale-fresh) | missing");
+    for relief in [0.0, 0.3, 0.5, 0.7, 0.9, 1.0] {
+        set_search_knobs(env, 0.0, relief);
+        let m = measure_supersede(env, cases)?;
+        println!(
+            "K3[{label}] {relief:.2} | {:.2} | {:.2} | {:+.2} | {}",
+            m.fresh_top1, m.stale_wins, m.mean_gap, m.missing_pairs
+        );
+    }
+    Ok(())
+}
+
+/// Cycle/015 KROK 3, designed-cosine arm: grid over relief with floor = 0.
+/// Marked `#[ignore]` on purpose: prints a grid, asserts nothing.
+#[test]
+#[ignore = "cycle/015 KROK 3 freshness probe (designed cosines); run with --ignored"]
+fn k3_freshness_supersede_grid() -> Result<()> {
+    let mut rng = Rng(0xC015_0003);
+    let cases: Vec<CaseSpec> = (0..50).map(|i| build_freshness_case(i, &mut rng)).collect();
+    let mut env = build_env(&cases)?;
+    k3_grid(&mut env, &cases, "designed")
+}
+
+/// Cycle/015 KROK 3, real-embedding arm: the same pairs with cosines from
+/// multilingual-e5-small (every chunk here is short, so every chunk embeds —
+/// this is the post-fix production regime by construction).
+#[test]
+#[ignore = "cycle/015 KROK 3 freshness probe (real embeddings); run with --ignored"]
+fn k3_freshness_supersede_grid_real_embeddings() -> Result<()> {
+    let Ok(model_dir) = std::env::var("LOOMEM_TEST_EMBED_MODEL") else {
+        eprintln!("skip: set LOOMEM_TEST_EMBED_MODEL=<dir> to run the real-embedding arm");
+        return Ok(());
+    };
+    let embedder = loomem_core::local_embeddings::try_load(&model_dir, 384)
+        .context("loading multilingual-e5-small")?;
+
+    let mut rng = Rng(0xC015_0003);
+    let mut cases: Vec<CaseSpec> = (0..50).map(|i| build_freshness_case(i, &mut rng)).collect();
+
+    let t = std::time::Instant::now();
+    let mut pair_cos: Vec<(f64, f64)> = Vec::new();
+    for case in &mut cases {
+        let (first, _, surname) = &case.person_b;
+        let q = embedder.embed(&format!("telefon {first} {surname}"))?;
+        let mut sims = Vec::new();
+        let mut stale_cos = 0.0_f64;
+        let mut fresh_cos = 0.0_f64;
+        for (id, content, _, _) in &case.chunks {
+            let v = embedder.embed(content)?;
+            let c = f64::from(cosine_f32(&q, &v));
+            if id.ends_with("-stale") {
+                stale_cos = c;
+            } else if id.ends_with("-fresh") {
+                fresh_cos = c;
+            }
+            sims.push((id.clone(), c));
+        }
+        pair_cos.push((stale_cos, fresh_cos));
+        case.sims = sims;
+    }
+    let n_chunks: usize = cases.iter().map(|c| c.chunks.len()).sum();
+    println!(
+        "K3REAL embedded {n_chunks} chunks in {:.1}s",
+        t.elapsed().as_secs_f64()
+    );
+    let mut deltas: Vec<f64> = pair_cos.iter().map(|(s, f)| s - f).collect();
+    print_quantiles("K3REAL cosine(stale)-cosine(fresh)", &mut deltas);
+
+    let mut env = build_env(&cases)?;
+    k3_grid(&mut env, &cases, "real")
 }
