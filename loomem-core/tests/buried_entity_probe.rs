@@ -1511,3 +1511,88 @@ fn k3_freshness_supersede_grid_real_embeddings() -> Result<()> {
     let mut env = build_env(&cases)?;
     k3_grid(&mut env, &cases, "real")
 }
+
+// ─── cycle/015 KROK 4 — path-2 measurement: vector weight vs entity queries ─
+//
+// The dense channel with e5-small does not differentiate on pure-entity
+// queries (cosines live in a narrow 0.66–0.85 band), and an absolute floor is
+// a channel on/off switch. Path 2 of KROK 4 asks: what happens if pure-entity
+// queries simply get a LOWER vector weight in fusion? This grid measures the
+// benefit on the buried-needle fixture and the freshness cost on the
+// supersede-pair fixture — code changes only after these numbers.
+
+fn set_weight_knobs(env: &mut Env, relief: f64, w_vector: f64) {
+    let mut config = probe_config();
+    config.search.vector_similarity_floor = 0.0;
+    config.search.decay_match_relief = relief;
+    config.search.hybrid_weights.vector = w_vector;
+    config.search.hybrid_weights.bm25 = 1.0 - w_vector;
+    env.top_k = config.search.top_k;
+    env.engine = HybridSearchEngine::new(config);
+}
+
+#[test]
+#[ignore = "cycle/015 KROK 4 path-2 measurement (real embeddings); run with --ignored"]
+fn k4_entity_vector_weight_grid_real_embeddings() -> Result<()> {
+    let Ok(model_dir) = std::env::var("LOOMEM_TEST_EMBED_MODEL") else {
+        eprintln!("skip: set LOOMEM_TEST_EMBED_MODEL=<dir> to run the KROK 4 arm");
+        return Ok(());
+    };
+    let embedder = loomem_core::local_embeddings::try_load(&model_dir, 384)
+        .context("loading multilingual-e5-small")?;
+
+    // Arm 1: buried-needle fixture, full-name entity query, real cosines,
+    // post-fix regime (every chunk embeds).
+    let cases = build_cases();
+    let mut real = cases.clone();
+    for (idx, case) in cases.iter().enumerate() {
+        let (full, _, surname) = &case.person_b;
+        let q = embedder.embed(&format!("{full} {surname}"))?;
+        let mut sims = Vec::new();
+        for (id, content, _, _) in &case.chunks {
+            let v = embedder.embed(content)?;
+            sims.push((id.clone(), f64::from(cosine_f32(&q, &v))));
+        }
+        real[idx].sims = sims;
+    }
+    let mut env = build_env(&real)?;
+    println!("K4[needle] w_vec relief | full_r5 full_r10 | needle rank");
+    for w in [0.6, 0.4, 0.3, 0.2, 0.1, 0.0] {
+        for relief in [0.0, 0.7] {
+            set_weight_knobs(&mut env, relief, w);
+            let m = measure(&env, &real, false, None)?;
+            let (rank, found) = measure_rank(&env, &real)?;
+            println!(
+                "K4[needle] {w:.1} {relief:.1} | {:.2} {:.2} | rank {rank:.2} found {found}",
+                m.r_at_5, m.r_at_10
+            );
+        }
+    }
+
+    // Arm 2: freshness cost of lowered vector weight (supersede pairs).
+    let mut rng = Rng(0xC015_0003);
+    let mut fcases: Vec<CaseSpec> = (0..50).map(|i| build_freshness_case(i, &mut rng)).collect();
+    for case in &mut fcases {
+        let (first, _, surname) = &case.person_b;
+        let q = embedder.embed(&format!("telefon {first} {surname}"))?;
+        let mut sims = Vec::new();
+        for (id, content, _, _) in &case.chunks {
+            let v = embedder.embed(content)?;
+            sims.push((id.clone(), f64::from(cosine_f32(&q, &v))));
+        }
+        case.sims = sims;
+    }
+    let mut fenv = build_env(&fcases)?;
+    println!("K4[fresh] w_vec relief | fresh_top1 | stale_wins | mean_gap");
+    for w in [0.6, 0.4, 0.3, 0.2, 0.1, 0.0] {
+        for relief in [0.0, 0.7] {
+            set_weight_knobs(&mut fenv, relief, w);
+            let m = measure_supersede(&fenv, &fcases)?;
+            println!(
+                "K4[fresh] {w:.1} {relief:.1} | {:.2} | {:.2} | {:+.2}",
+                m.fresh_top1, m.stale_wins, m.mean_gap
+            );
+        }
+    }
+    Ok(())
+}
