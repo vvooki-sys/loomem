@@ -53,36 +53,46 @@ pub struct PiiFilter {
 /// identifier false-positive class is ASCII, and treating non-ASCII bytes as
 /// boundaries keeps redaction maximal for natural-language text.
 /// Issue #67: a phone-shaped match sitting inside a whitespace-separated
-/// numeric series (`0 50 100 150 200 250` — chart data, measurement columns)
-/// is almost never a phone number. If the token immediately before or after
-/// the match (separated by a single ASCII space, and itself delimited by a
-/// space, a comma, or the string edge on its far side) consists solely of
-/// digits,
-/// treat the match as data and leave it alone. Trade-off: a real phone number
+/// numeric series (`0 50 100 150 200 250`, `totals: 100, 123 456 789, 200` —
+/// chart data, measurement columns) is almost never a phone number. If the
+/// token next to the match — separated by a single ASCII space, with an
+/// optional comma hugging the digits (`100,`) — consists solely of digits and
+/// is itself delimited by a space, a comma, or the string edge on its far
+/// side, treat the match as data and leave it alone. Digit-suffixed
+/// identifiers (`item-1`) do not qualify. Trade-off: a real phone number
 /// directly neighboured by a bare number survives unredacted; that is the
 /// cheaper error, because redaction destroys persisted content permanently.
 fn adjacent_bare_number(text: &str, start: usize, end: usize) -> bool {
     let bytes = text.as_bytes();
-    // Token before: ... <digits>' '<match>
+    // Token before: ... <digits>[,]' '<match>
     let before = start
         .checked_sub(1)
         .and_then(|i| (bytes.get(i) == Some(&b' ')).then_some(i))
         .is_some_and(|space| {
-            let tok_end = space;
-            let mut tok_start = tok_end;
+            // An optional comma may hug the digits: `100, <match>`.
+            let digits_end = match space.checked_sub(1) {
+                Some(i) if bytes[i] == b',' => i,
+                _ => space,
+            };
+            let mut tok_start = digits_end;
             while tok_start > 0 && bytes[tok_start - 1].is_ascii_digit() {
                 tok_start -= 1;
             }
-            tok_start < tok_end && (tok_start == 0 || matches!(bytes[tok_start - 1], b' ' | b','))
+            tok_start < digits_end
+                && (tok_start == 0 || matches!(bytes[tok_start - 1], b' ' | b','))
         });
     if before {
         return true;
     }
-    // Token after: <match>' '<digits> ...
-    if bytes.get(end) != Some(&b' ') {
+    // Token after: <match>[,]' '<digits> ...
+    let mut cursor = end;
+    if bytes.get(cursor) == Some(&b',') {
+        cursor += 1;
+    }
+    if bytes.get(cursor) != Some(&b' ') {
         return false;
     }
-    let tok_start = end + 1;
+    let tok_start = cursor + 1;
     let mut tok_end = tok_start;
     while tok_end < bytes.len() && bytes[tok_end].is_ascii_digit() {
         tok_end += 1;
