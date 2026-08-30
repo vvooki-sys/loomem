@@ -44,7 +44,7 @@ implicit_access_boost_weight = 0.0  # Cycle/118: log-frequency boost for access_
 user_state_boost = 1.0  # Retrieval boost for user-authored state facts (attributed_to=="user" + PreferenceOrDecision/ProjectState). 1.0=disabled (byte-identical); 1.3-1.5 lifts latest user-state above agent-authored flooding for eval/production.
 agent_fact_damp = 1.0  # Retrieval damp for agent-authored facts (attributed_to=="assistant"). 1.0=neutral (default; no penalty). <1.0 only with A/B evidence the boost alone is insufficient and no regression on assistant/preference.
 vector_similarity_floor = 0.0  # WS-1(a) Spectron gap brief: raw-cosine floor for the vector channel — below-floor candidates get no vector weight (kills max-normalized noise). 0.0=disabled (byte-identical). e5-small cosines run high (~0.70-0.95); tune on the cycle/012 probe before enabling (0.75-0.80 starting range).
-decay_match_relief = 0.0  # WS-1(b) Spectron gap brief: strong lexical/vector match relieves the age penalty (effective = decay + (1-decay)*relief*strength). 0.0=disabled (byte-identical); 1.0=perfect match cancels decay. Tune with the floor on the cycle/012 probe.
+decay_match_relief = 0.70  # WS-1(b), enabled in cycle/015: strong lexical/vector match relieves the age penalty (effective = decay + (1-decay)*relief*strength). Benefit: buried-needle rank 13.9->5.0, full-name R@5 0.00->1.00 on the cycle/012 probe with real e5-small embeddings. Freshness gate (cycle/015 KROK 3, supersede-pair fixture): stale_wins = 0 at 0.70 in both arms; the order flips only at 1.0 with a +0.02 designed cosine edge - do NOT raise toward 1.0 without re-running k3_freshness_supersede_grid.
 
 [search.cache]
 enabled = true
