@@ -112,7 +112,9 @@ impl LlmConfig {
                 return Some(key.clone());
             }
         }
-        std::env::var(&self.api_key_env).ok().filter(|k| !k.is_empty())
+        std::env::var(&self.api_key_env)
+            .ok()
+            .filter(|k| !k.is_empty())
     }
 
     /// Per-instance env overrides for embeddings, so a cloud/Docker deployment
