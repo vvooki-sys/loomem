@@ -346,6 +346,29 @@ async fn main() -> Result<()> {
     let config = Config::load(&config_path)
         .with_context(|| format!("Failed to load config from {}", config_path))?;
 
+    // Issue #65: fail closed when LLM-backed subsystems are enabled but no API
+    // key resolves. A keyless engine silently builds a degraded corpus that is
+    // indistinguishable from a healthy one from the outside; refusing to start
+    // is safer. Deliberate keyless (laptop) use stays available behind an
+    // explicit LOOMEM_ALLOW_KEYLESS=1.
+    let keyless_subsystems = config.llm_dependent_enabled_without_key();
+    if !keyless_subsystems.is_empty() {
+        if std::env::var("LOOMEM_ALLOW_KEYLESS").as_deref() == Ok("1") {
+            tracing::warn!(
+                "Running WITHOUT an LLM API key while [{}] are enabled (LOOMEM_ALLOW_KEYLESS=1): \
+                 extraction falls back to regex and dream will fail on every use",
+                keyless_subsystems.join(", ")
+            );
+        } else {
+            anyhow::bail!(
+                "[{}] enabled but no LLM API key found: export {} (or set the [llm] api_key \
+                 config field), or start with LOOMEM_ALLOW_KEYLESS=1 to accept degraded keyless mode",
+                keyless_subsystems.join(", "),
+                config.llm.api_key_env
+            );
+        }
+    }
+
     config.log_summary();
 
     // Run resource guards
@@ -628,7 +651,7 @@ async fn main() -> Result<()> {
             Some(queue)
         } else {
             if config.entity_extraction.enabled {
-                info!("Entity extraction disabled (no API key)");
+                tracing::warn!("Entity extraction disabled (no API key)");
             }
             None
         };

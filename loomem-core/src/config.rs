@@ -331,6 +331,28 @@ impl Default for ResourceGuardsConfig {
 }
 
 impl Config {
+    /// Issue #65: names of the LLM-backed subsystems that are enabled while no
+    /// API key is resolvable. A non-empty result means the engine would come up
+    /// silently degraded — extraction falls back to regex and the dream worker
+    /// fails on every use — while `/health` still reports ok. Callers should
+    /// refuse to start unless the operator opted in via `LOOMEM_ALLOW_KEYLESS=1`.
+    pub fn llm_dependent_enabled_without_key(&self) -> Vec<&'static str> {
+        if self.llm.get_api_key().is_some() {
+            return Vec::new();
+        }
+        let mut enabled = Vec::new();
+        if self.entity_extraction.enabled {
+            enabled.push("entity_extraction");
+        }
+        if self.knowledge_extraction.enabled {
+            enabled.push("knowledge_extraction");
+        }
+        if self.dream.enabled {
+            enabled.push("dream");
+        }
+        enabled
+    }
+
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         let content = std::fs::read_to_string(path)
@@ -721,5 +743,29 @@ mod tests {
             cfg2.validate().is_err(),
             "zero aggregation default must fail"
         );
+    }
+
+    #[test]
+    fn keyless_detection_lists_enabled_llm_subsystems() {
+        // Issue #65: the startup fail-closed check keys off this method.
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+        let content = std::fs::read_to_string(path).expect("read config.toml");
+        let mut cfg: Config = toml::from_str(&content).expect("parse config.toml");
+        // Force key resolution to fail deterministically: no config key and an
+        // env var that does not exist.
+        cfg.llm.api_key = None;
+        cfg.llm.api_key_env = "LOOMEM_TEST_ISSUE65_NO_SUCH_VAR".to_string();
+        cfg.entity_extraction.enabled = true;
+        cfg.knowledge_extraction.enabled = true;
+        cfg.dream.enabled = false;
+        assert_eq!(
+            cfg.llm_dependent_enabled_without_key(),
+            vec!["entity_extraction", "knowledge_extraction"]
+        );
+        cfg.dream.enabled = true;
+        assert_eq!(cfg.llm_dependent_enabled_without_key().len(), 3);
+        // With a key present the list is empty regardless of the flags.
+        cfg.llm.api_key = Some("sk-test".to_string());
+        assert!(cfg.llm_dependent_enabled_without_key().is_empty());
     }
 }

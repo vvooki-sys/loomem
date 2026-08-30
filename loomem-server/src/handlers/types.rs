@@ -276,6 +276,10 @@ pub struct ConfigSummary {
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
+    /// Issue #65: whether an LLM API key resolves for this process — never the
+    /// key itself, never a prefix. Lets operators and benchmark pre-flights
+    /// detect silent keyless mode with a single GET.
+    pub llm_key_present: bool,
 }
 
 #[derive(Debug, Deserialize)]
