@@ -28,13 +28,23 @@ pub struct DashboardMemoryParams {
     pub q: Option<String>,
     pub entity_id: Option<String>,
     pub source_agent: Option<String>,
+    /// Brief 2026-09-02 B4: superseded versions (`is_latest = false`) are
+    /// hidden by default so the list shows one row per fact, not one per
+    /// version — listing old versions as peers of the current one is what
+    /// led a human to "clean up duplicates" and delete the current version.
+    /// `?include_superseded=true` opts back in (rows then carry
+    /// `is_latest` / `superseded_by` to tell them apart).
+    #[serde(default)]
+    pub include_superseded: bool,
 }
 
 /// GET /api/dashboard/memory
 ///
 /// Paginated memory browser. Query: `?page=1&per_page=50&layer=L0|L1&q=text&
-/// entity_id=<id>&source_agent=<agent>` (+ optional `scope=`, default shared —
-/// the single-user dashboard reads the instance's default stream).
+/// entity_id=<id>&source_agent=<agent>&include_superseded=false` (+ optional
+/// `scope=`, default shared — the single-user dashboard reads the instance's
+/// default stream). Superseded versions are omitted unless
+/// `include_superseded=true`; soft-deleted chunks never appear.
 pub async fn dashboard_memory_handler(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
@@ -51,6 +61,7 @@ pub async fn dashboard_memory_handler(
         query: query_lower.as_deref(),
         entity_id: params.entity_id.as_deref(),
         source_agent: params.source_agent.as_deref(),
+        include_superseded: params.include_superseded,
     };
     let items = collect_scoped_chunks(&state, &resolution, &filters);
     let total = items.len();
@@ -91,6 +102,7 @@ struct ScopedChunkFilters<'a> {
     query: Option<&'a str>,
     entity_id: Option<&'a str>,
     source_agent: Option<&'a str>,
+    include_superseded: bool,
 }
 
 /// True unless `filter` is set and the chunk's `source.agent` differs from it.
@@ -101,15 +113,19 @@ fn agent_matches(chunk: &loomem_core::storage::Chunk, filter: Option<&str>) -> b
     }
 }
 
-/// Per-chunk filter shared by both scan branches: drop soft-deleted chunks and
-/// those failing the layer / substring / source_agent filters. Scope
-/// membership (`resolution.source_for`) stays in the caller — it yields the
-/// `Source` label.
+/// Per-chunk filter shared by both scan branches: drop soft-deleted chunks,
+/// superseded versions (unless `include_superseded`) and those failing the
+/// layer / substring / source_agent filters. Scope membership
+/// (`resolution.source_for`) stays in the caller — it yields the `Source`
+/// label.
 fn chunk_passes_filters(
     chunk: &loomem_core::storage::Chunk,
     filters: &ScopedChunkFilters<'_>,
 ) -> bool {
     if chunk.deleted_at.is_some() {
+        return false;
+    }
+    if !filters.include_superseded && !chunk.is_latest {
         return false;
     }
     if let Some(l) = filters.layer {
@@ -267,6 +283,17 @@ pub async fn memory_chain_handler(
     Query(params): Query<MemoryChainParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let limit = params.limit.unwrap_or(20).min(100);
+
+    // Ownership is checked on the queried chunk *before* the walk, so a
+    // foreign id costs one read, not a chain traversal (same rule as the MCP
+    // memory_history tool).
+    if !auth.is_admin {
+        if let Some(queried) = state.store.get_chunk(&chunk_id)? {
+            if queried.stream != auth.stream_id {
+                return Err(AppError::Forbidden("access denied".into()));
+            }
+        }
+    }
 
     let chain = loomem_core::contradiction::get_memory_chain(&state.store, &chunk_id, limit)?;
 
@@ -426,6 +453,42 @@ mod tests {
         assert_eq!(v["total"], serde_json::json!(0));
     }
 
+    /// B4: a superseded version is hidden from the default list and shown —
+    /// flagged — only with `include_superseded=true`.
+    #[tokio::test]
+    async fn memory_list_hides_superseded_unless_requested() {
+        let (app, state) = make_test_app();
+        let mut v1 = fixture_chunk("sup-v1", "old version", 0);
+        v1.is_latest = false;
+        v1.superseded_by = Some("sup-v2".into());
+        let mut v2 = fixture_chunk("sup-v2", "new version", 0);
+        v2.version = 2;
+        v2.supersedes_id = Some("sup-v1".into());
+        state.store.store_chunk(&v1).unwrap();
+        state.store.store_chunk(&v2).unwrap();
+
+        let (status, body) = send(app.clone(), get("/api/dashboard/memory")).await;
+        assert_eq!(status, StatusCode::OK);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["total"], serde_json::json!(1));
+        assert_eq!(v["items"][0]["id"], serde_json::json!("sup-v2"));
+        assert_eq!(v["items"][0]["is_latest"], serde_json::json!(true));
+        assert!(v["items"][0]["superseded_by"].is_null());
+
+        let (status, body) = send(app, get("/api/dashboard/memory?include_superseded=true")).await;
+        assert_eq!(status, StatusCode::OK);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["total"], serde_json::json!(2));
+        let old = v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == "sup-v1")
+            .expect("superseded row present");
+        assert_eq!(old["is_latest"], serde_json::json!(false));
+        assert_eq!(old["superseded_by"], serde_json::json!("sup-v2"));
+    }
+
     #[tokio::test]
     async fn memory_list_requires_auth() {
         let (app, _state) = make_test_app();
@@ -460,6 +523,51 @@ mod tests {
         assert_eq!(chain[1]["id"], serde_json::json!("chain-v2"));
         assert_eq!(chain[1]["is_latest"], serde_json::json!(true));
         assert_eq!(chain[1]["supersedes_id"], serde_json::json!("chain-v1"));
+    }
+
+    /// B1 + B5 (brief 2026-09-02): store A → edit → B, delete A through the
+    /// dashboard endpoint. B must survive (no cascade along `supersedes`),
+    /// and A's content must not resurface through the chain of either id.
+    #[tokio::test]
+    async fn memory_chain_omits_soft_deleted_link_and_keeps_successor() {
+        let (app, state) = make_test_app();
+        let mut a = fixture_chunk("del-a", "version a (deleted)", 0);
+        a.is_latest = false;
+        a.superseded_by = Some("del-b".into());
+        let mut b = fixture_chunk("del-b", "version b", 0);
+        b.version = 2;
+        b.supersedes_id = Some("del-a".into());
+        state.store.store_chunk(&a).unwrap();
+        state.store.store_chunk(&b).unwrap();
+
+        let del = Request::builder()
+            .method(Method::DELETE)
+            .uri("/api/memories/del-a")
+            .header(header::AUTHORIZATION, "Bearer admin-token")
+            .body(Body::empty())
+            .unwrap();
+        let (status, _) = send(app.clone(), del).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Successor is untouched in the store.
+        let b_live = state.store.get_chunk("del-b").unwrap().expect("b exists");
+        assert!(b_live.deleted_at.is_none(), "delete must not cascade");
+
+        for id in ["del-a", "del-b"] {
+            let (status, body) = send(app.clone(), get(&format!("/v1/memory-chain/{id}"))).await;
+            assert_eq!(status, StatusCode::OK);
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(v["chain_length"], serde_json::json!(1), "queried {id}");
+            assert_eq!(v["chain"][0]["id"], serde_json::json!("del-b"));
+            assert!(
+                !body_contains(&body, "version a (deleted)"),
+                "deleted content leaked via chain of {id}"
+            );
+        }
+    }
+
+    fn body_contains(body: &[u8], needle: &str) -> bool {
+        String::from_utf8_lossy(body).contains(needle)
     }
 
     #[tokio::test]

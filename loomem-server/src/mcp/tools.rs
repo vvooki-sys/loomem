@@ -9,7 +9,7 @@ pub fn tool_definitions(mcp: &McpConfig) -> Vec<Value> {
     vec![
         json!({
             "name": "memory_store",
-            "description": "Store a single fact, decision, or preference in long-term memory.\n\nWhen to use vs siblings: use memory_store for one explicit fact the user just stated (name, preference, decision). Use memory_ingest instead when you have a full conversation transcript — it extracts multiple typed facts at once with contradiction detection. Do not use memory_store to dump raw conversation text.\n\nReturns: plain text confirmation — \"Stored: \\\"<first 80 chars>...\\\" (id: <uuid>)\".",
+            "description": "Store a single fact, decision, or preference in long-term memory.\n\nWhen to use vs siblings: use memory_store for one explicit fact the user just stated (name, preference, decision). Use memory_ingest instead when you have a full conversation transcript — it extracts multiple typed facts at once with contradiction detection. Do not use memory_store to dump raw conversation text. When the fact replaces an existing memory (a correction, a newer state of the same thing), pass its chunk_id as `supersedes` instead of writing a \"replaces chunk X\" note into the content — that links the versions for memory_history and hides the old one from memory_search.\n\nReturns: plain text confirmation — \"Stored: \\\"<first 80 chars>...\\\" (id: <uuid>)\"; with `supersedes`: \"... (id: <uuid>, supersedes: <old uuid>)\". Errors if the superseded memory is not found in your stream or already has a newer version (supersede that one instead).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -28,6 +28,10 @@ pub fn tool_definitions(mcp: &McpConfig) -> Vec<Value> {
                     "metadata": {
                         "type": "object",
                         "description": "Optional key-value metadata to attach to the memory."
+                    },
+                    "supersedes": {
+                        "type": "string",
+                        "description": "Optional chunk_id of the memory this one replaces (from memory_search '(id: <uuid>)' or a previous memory_store). Creates a real version link: the old memory becomes a superseded version (hidden from memory_search unless include_superseded=true, visible in memory_history), the new one becomes the current version. The target must be the current version of its chain — if it was already superseded, the call errors and names the newer version."
                     },
                     "relations": {
                         "type": "array",
