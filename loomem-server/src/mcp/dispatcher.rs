@@ -626,6 +626,13 @@ async fn tool_store(
     // persist (the stored chunk carries the chain fields); the old chunk is
     // flipped only *after* the replacement is durably stored, so a failed
     // persist cannot strand the old version as non-latest (Greptile P1).
+    // Calls that supersede are serialised process-wide so two overlapping
+    // replacements of the same head cannot both pass the head check and fork
+    // the chain (Greptile P1, round 3); plain stores never take the lock.
+    let _supersede_guard = match args.supersedes {
+        Some(_) => Some(SUPERSEDE_LOCK.lock().await),
+        None => None,
+    };
     let (chunk, supersede) = match args.supersedes.as_deref() {
         Some(old_id) => match plan_supersede(state, old_id, &stream, chunk) {
             Ok(planned) => planned,
@@ -669,11 +676,17 @@ async fn tool_store(
     }
 }
 
+/// Serialises `memory_store` calls that carry `supersedes` (plan → persist →
+/// flip) so the head check in [`plan_supersede`] still holds when
+/// [`commit_supersede`] flips the old chunk. A tokio mutex because the
+/// critical section spans the async persist. Plain stores never touch it.
+static SUPERSEDE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Brief 2026-09-02 O1: the old chunk `memory_store`'s `supersedes` points at,
 /// carried from [`plan_supersede`] (before persist) to [`commit_supersede`]
 /// (after persist) together with the replacement's trust tier.
 struct SupersedePlan {
-    old: loomem_core::storage::Chunk,
+    old_id: String,
     new_trust: Option<String>,
 }
 
@@ -724,7 +737,29 @@ fn plan_supersede(
     } else {
         loomem_core::contradiction::link_successor(&old, new_chunk)
     };
-    Ok((new_chunk, Some(SupersedePlan { old, new_trust })))
+    Ok((
+        new_chunk,
+        Some(SupersedePlan {
+            old_id: old.id,
+            new_trust,
+        }),
+    ))
+}
+
+/// Re-read the `supersedes` target right before flipping it. Another writer
+/// (the ingest contradiction path, a delete) may have moved the head since
+/// [`plan_supersede`]; the flip must come from the fresh copy, never from
+/// the planning snapshot. `Err` carries the human-readable reason.
+fn reload_head(state: &Arc<AppState>, old_id: &str) -> Result<loomem_core::storage::Chunk, String> {
+    match state.store.get_chunk(old_id) {
+        Ok(Some(c)) if c.deleted_at.is_none() && c.is_latest && c.superseded_by.is_none() => Ok(c),
+        Ok(Some(c)) => Err(format!(
+            "{old_id} changed while storing (now: {})",
+            c.superseded_by.as_deref().unwrap_or("deleted")
+        )),
+        Ok(None) => Err(format!("{old_id} vanished while storing")),
+        Err(e) => Err(format!("re-reading {old_id} failed ({e})")),
+    }
 }
 
 /// Brief 2026-09-02 O1: flip the old chunk (`is_latest=false`,
@@ -734,10 +769,17 @@ fn plan_supersede(
 /// when the flip itself failed — in that case the old version is still
 /// current and nothing has been lost.
 fn commit_supersede(state: &Arc<AppState>, plan: SupersedePlan, new_id: &str) -> String {
-    let old_id = plan.old.id.as_str();
+    let old_id = plan.old_id.as_str();
+    let old = match reload_head(state, old_id) {
+        Ok(c) => c,
+        Err(reason) => {
+            let detached = unlink_replacement(state, new_id);
+            return format!(" — WARNING: {reason}; not linked{detached}");
+        }
+    };
     match loomem_core::contradiction::try_supersede_with_guard(
         &state.store,
-        &plan.old,
+        &old,
         new_id,
         plan.new_trust.as_deref(),
         "memory_store",
@@ -3379,6 +3421,41 @@ mod tests {
         assert!(new.supersedes_id.is_none() && new.root_memory_id.is_none());
         assert_eq!(new.version, 1);
         assert!(unlink_replacement(&state, "no-such-id").contains("could not be found"));
+    }
+
+    /// Round-3 guard: if the head moved between plan and commit (another
+    /// writer superseded it), the flip is refused from the fresh copy and the
+    /// replacement is detached — no fork, no second head on the same chain.
+    #[tokio::test]
+    async fn commit_supersede_refuses_when_head_moved() {
+        let (_app, state) = crate::tests::make_test_app();
+        let stream = "sup_stream";
+        let a = stored_id(&store_ok(&state, json!({"content": "Head."}), stream).await);
+        let mut a_chunk = state.store.get_chunk(&a).unwrap().expect("a exists");
+
+        // Plan against the current head, persist the linked replacement.
+        let mut b = a_chunk.clone();
+        b.id = "b-replacement".to_string();
+        b.supersedes_id = None;
+        let (b, plan) = plan_supersede(&state, &a, stream, b).expect("plan ok");
+        assert_eq!(b.supersedes_id.as_deref(), Some(a.as_str()));
+        state.store.store_chunk(&b).unwrap();
+
+        // Another writer wins the race.
+        a_chunk.is_latest = false;
+        a_chunk.superseded_by = Some("other-writer".to_string());
+        state.store.store_chunk(&a_chunk).unwrap();
+
+        let note = commit_supersede(&state, plan.expect("plan"), &b.id);
+        assert!(
+            note.contains("changed while storing (now: other-writer)"),
+            "got: {note}"
+        );
+        assert!(note.contains("separate, unlinked"), "got: {note}");
+        let a_after = state.store.get_chunk(&a).unwrap().expect("a exists");
+        assert_eq!(a_after.superseded_by.as_deref(), Some("other-writer"));
+        let b_after = state.store.get_chunk(&b.id).unwrap().expect("b exists");
+        assert!(b_after.supersedes_id.is_none() && b_after.is_latest);
     }
 
     /// Unknown ids, soft-deleted targets and chunks in another stream all read
