@@ -365,11 +365,7 @@ fn append_trust_guard_audit(
 /// Trust hierarchy enforced: lower-trust content cannot supersede higher-trust.
 /// On guard violation, an audit entry with `action: "trust_guard_blocked"` and
 /// `context: "contradiction"` is appended for `old_chunk.stream`.
-pub fn apply_supersede(
-    store: &RocksDbStore,
-    old_chunk: &Chunk,
-    mut new_chunk: Chunk,
-) -> Result<Chunk> {
+pub fn apply_supersede(store: &RocksDbStore, old_chunk: &Chunk, new_chunk: Chunk) -> Result<Chunk> {
     // Trust hierarchy check: B cannot supersede A1/A2, A2 cannot supersede A1.
     let old_rank = trust_rank(old_chunk.trust_level.as_deref());
     let new_rank = trust_rank(new_chunk.trust_level.as_deref());
@@ -401,6 +397,23 @@ pub fn apply_supersede(
     store.store_chunk(&updated_old)?;
 
     // Update new chunk with version chain
+    let new_chunk = link_successor(old_chunk, new_chunk);
+
+    debug!(
+        "Superseded chunk {} (v{}) → {} (v{})",
+        old_chunk.id, old_chunk.version, new_chunk.id, new_chunk.version
+    );
+
+    Ok(new_chunk)
+}
+
+/// Set the version-chain fields on `new_chunk` so it becomes the successor of
+/// `old_chunk` (`supersedes_id`, `root_memory_id`, `version`). Pure — writes
+/// nothing. `apply_supersede` uses it after flipping the old chunk; callers
+/// that must persist the successor *before* flipping the old chunk (so a
+/// failed write cannot strand the old one as non-latest) use it directly and
+/// flip with `try_supersede_with_guard` afterwards.
+pub fn link_successor(old_chunk: &Chunk, mut new_chunk: Chunk) -> Chunk {
     new_chunk.supersedes_id = Some(old_chunk.id.clone());
     new_chunk.root_memory_id = Some(
         old_chunk
@@ -409,13 +422,7 @@ pub fn apply_supersede(
             .unwrap_or_else(|| old_chunk.id.clone()),
     );
     new_chunk.version = old_chunk.version + 1;
-
-    debug!(
-        "Superseded chunk {} (v{}) → {} (v{})",
-        old_chunk.id, old_chunk.version, new_chunk.id, new_chunk.version
-    );
-
-    Ok(new_chunk)
+    new_chunk
 }
 
 /// Try to mark `old_chunk` as superseded by `new_chunk_id` (with trust level
@@ -515,40 +522,55 @@ pub fn apply_extend(old_chunk: &Chunk, mut new_chunk: Chunk) -> Chunk {
 ///   The previous root-first walk followed the root's `superseded_by` pointer,
 ///   so when one chunk had two successors (a branch) the walk picked the last
 ///   writer and the queried id vanished from its own history.
+///
+/// `limit` bounds the walk itself, not just the output: at most `limit`
+/// versions are returned and the walk stops as soon as they are collected
+/// (older ones first, then newer), so a long chain never costs more than a
+/// handful of reads beyond `limit`.
 pub fn get_memory_chain(store: &RocksDbStore, chunk_id: &str, limit: usize) -> Result<Vec<Chunk>> {
-    let mut visited = std::collections::HashSet::new();
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let Some(queried) = store.get_chunk(chunk_id)? else {
+        return Ok(Vec::new());
+    };
+    let mut visited = std::collections::HashSet::from([queried.id.clone()]);
+    let mut backward_id = queried.supersedes_id.clone();
+    let mut forward_id = queried.superseded_by.clone();
     let mut chain: Vec<Chunk> = Vec::new();
+    if queried.deleted_at.is_none() {
+        chain.push(queried);
+    }
 
     // Backwards: chunk_id → root via `supersedes_id` (collected newest-first).
-    let mut current_id = Some(chunk_id.to_string());
-    while let Some(id) = current_id.take() {
-        if !visited.insert(id.clone()) {
-            break; // cycle detection
+    while let Some(id) = backward_id.take() {
+        if chain.len() >= limit || !visited.insert(id.clone()) {
+            break; // limit reached, or cycle
         }
         let Some(chunk) = store.get_chunk(&id)? else {
             break;
         };
-        current_id = chunk.supersedes_id.clone();
-        chain.push(chunk);
+        backward_id = chunk.supersedes_id.clone();
+        if chunk.deleted_at.is_none() {
+            chain.push(chunk);
+        }
     }
     chain.reverse();
 
     // Forwards: from the queried chunk's successor via `superseded_by`.
-    current_id = chain.last().and_then(|c| c.superseded_by.clone());
-    while let Some(id) = current_id.take() {
-        if !visited.insert(id.clone()) {
-            break; // cycle detection
+    while let Some(id) = forward_id.take() {
+        if chain.len() >= limit || !visited.insert(id.clone()) {
+            break; // limit reached, or cycle
         }
         let Some(chunk) = store.get_chunk(&id)? else {
             break;
         };
-        current_id = chunk.superseded_by.clone();
-        chain.push(chunk);
+        forward_id = chunk.superseded_by.clone();
+        if chunk.deleted_at.is_none() {
+            chain.push(chunk);
+        }
     }
 
-    // Tombstoned versions are linkage only — never output (B1).
-    chain.retain(|c| c.deleted_at.is_none());
-    chain.truncate(limit);
     Ok(chain)
 }
 
@@ -884,12 +906,38 @@ mod tests {
             let chain = get_memory_chain(&store, id, 20).expect("chain");
             assert_eq!(ids(&chain), vec!["v1", "v2", "v3"], "queried {id}");
         }
-        let chain = get_memory_chain(&store, "v1", 2).expect("chain");
+        // `limit` is a window anchored on the queried id: ancestors first,
+        // then successors — and it bounds the walk, not just the output.
         assert_eq!(
-            ids(&chain),
-            vec!["v1", "v2"],
-            "limit truncates from the root"
+            ids(&get_memory_chain(&store, "v1", 2).expect("chain")),
+            vec!["v1", "v2"]
         );
+        assert_eq!(
+            ids(&get_memory_chain(&store, "v3", 2).expect("chain")),
+            vec!["v2", "v3"]
+        );
+        assert_eq!(
+            ids(&get_memory_chain(&store, "v2", 1).expect("chain")),
+            vec!["v2"]
+        );
+        assert!(get_memory_chain(&store, "v2", 0).expect("chain").is_empty());
+    }
+
+    /// `link_successor` sets exactly the chain fields `apply_supersede` does,
+    /// inheriting the root and bumping the version.
+    #[test]
+    fn link_successor_sets_chain_fields() {
+        let mut root = chain_chunk("root", 1);
+        let v2 = link_successor(&root, chain_chunk("v2", 1));
+        assert_eq!(v2.supersedes_id.as_deref(), Some("root"));
+        assert_eq!(v2.root_memory_id.as_deref(), Some("root"));
+        assert_eq!(v2.version, 2);
+
+        root.root_memory_id = Some("elsewhere".to_string());
+        root.version = 7;
+        let v8 = link_successor(&root, chain_chunk("v8", 1));
+        assert_eq!(v8.root_memory_id.as_deref(), Some("elsewhere"));
+        assert_eq!(v8.version, 8);
     }
 
     /// B1: a soft-deleted version is invisible from every end of the chain,

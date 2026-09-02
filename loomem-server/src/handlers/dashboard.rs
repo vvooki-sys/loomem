@@ -284,6 +284,17 @@ pub async fn memory_chain_handler(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let limit = params.limit.unwrap_or(20).min(100);
 
+    // Ownership is checked on the queried chunk *before* the walk, so a
+    // foreign id costs one read, not a chain traversal (same rule as the MCP
+    // memory_history tool).
+    if !auth.is_admin {
+        if let Some(queried) = state.store.get_chunk(&chunk_id)? {
+            if queried.stream != auth.stream_id {
+                return Err(AppError::Forbidden("access denied".into()));
+            }
+        }
+    }
+
     let chain = loomem_core::contradiction::get_memory_chain(&state.store, &chunk_id, limit)?;
 
     if let Some(first) = chain.first() {

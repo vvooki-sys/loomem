@@ -622,15 +622,16 @@ async fn tool_store(
         provenance_role: loomem_core::storage::ProvenanceRole::Claim,
     };
 
-    // Brief 2026-09-02 O1: explicit versioning. Resolved before persist so the
-    // stored chunk already carries the chain fields (same order as the ingest
-    // contradiction path: `apply_supersede` first, then persist).
-    let (chunk, supersede_note) = match args.supersedes.as_deref() {
-        Some(old_id) => match resolve_supersede_target(state, old_id, &stream, chunk) {
-            Ok(resolved) => resolved,
+    // Brief 2026-09-02 O1: explicit versioning. Validated and linked before
+    // persist (the stored chunk carries the chain fields); the old chunk is
+    // flipped only *after* the replacement is durably stored, so a failed
+    // persist cannot strand the old version as non-latest (Greptile P1).
+    let (chunk, supersede) = match args.supersedes.as_deref() {
+        Some(old_id) => match plan_supersede(state, old_id, &stream, chunk) {
+            Ok(planned) => planned,
             Err(msg) => return Ok(ToolResult::error(msg)),
         },
-        None => (chunk, String::new()),
+        None => (chunk, None),
     };
 
     match handlers::ingest::persist_chunk(
@@ -655,6 +656,9 @@ async fn tool_store(
                     inject_caller_relations(state, &stored_id, &stream, relations);
                 }
             }
+            let supersede_note = supersede
+                .map(|plan| commit_supersede(state, plan, &stored_id))
+                .unwrap_or_default();
             let preview: String = content.chars().take(80).collect();
             Ok(ToolResult::text(format!(
                 "Stored: \"{}...\" (id: {}{})",
@@ -665,24 +669,35 @@ async fn tool_store(
     }
 }
 
-/// Brief 2026-09-02 O1 + B2 (API guard): resolve `memory_store`'s
-/// `supersedes` target. The target must exist in the caller's stream, be
-/// alive and be the head of its chain — superseding a chunk that already has
-/// a newer version would fork the chain (two successors of one version, the
-/// dashboard-edit branch from the brief), so that is refused with the newer
-/// id in the message. On success `new_chunk` carries the chain fields set by
-/// `apply_supersede` and the old chunk is written as superseded. The returned
-/// note is appended to the confirmation: the linked id, or the trust-guard
-/// notice when the link was refused and the chunk is stored standalone.
+/// Brief 2026-09-02 O1: the old chunk `memory_store`'s `supersedes` points at,
+/// carried from [`plan_supersede`] (before persist) to [`commit_supersede`]
+/// (after persist) together with the replacement's trust tier.
+struct SupersedePlan {
+    old: loomem_core::storage::Chunk,
+    new_trust: Option<String>,
+}
+
+/// Brief 2026-09-02 O1 + B2 (API guard): validate `memory_store`'s
+/// `supersedes` target and prepare the replacement. The target must exist in
+/// the caller's stream, be alive and be the head of its chain — superseding a
+/// chunk that already has a newer version would fork the chain (two
+/// successors of one version, the dashboard-edit branch from the brief), so
+/// that is refused with the newer id in the message.
+///
+/// Writes nothing. When the trust guard allows the link (same rule as
+/// `apply_supersede`) the returned chunk carries the chain fields from
+/// `link_successor`; otherwise it is returned unchanged and will be stored
+/// as a separate memory. The old chunk is flipped by [`commit_supersede`]
+/// once the replacement is durably stored.
 ///
 /// `Err(String)` is the tool-facing error text (no store details leak: a
 /// chunk in another stream reads as "not found").
-fn resolve_supersede_target(
+fn plan_supersede(
     state: &Arc<AppState>,
     old_id: &str,
     stream: &str,
     new_chunk: loomem_core::storage::Chunk,
-) -> Result<(loomem_core::storage::Chunk, String), String> {
+) -> Result<(loomem_core::storage::Chunk, Option<SupersedePlan>), String> {
     let old = match state.store.get_chunk(old_id) {
         Ok(Some(c)) if c.deleted_at.is_none() && c.stream == stream => c,
         Ok(_) => {
@@ -699,14 +714,49 @@ fn resolve_supersede_target(
              Supersede the current version instead — memory_history {old_id} shows the chain."
         ));
     }
-    let linked = loomem_core::contradiction::apply_supersede(&state.store, &old, new_chunk)
-        .map_err(|e| format!("supersedes: linking {old_id} failed: {e}"))?;
-    let note = if linked.supersedes_id.is_some() {
-        format!(", supersedes: {old_id}")
+    let new_trust = new_chunk.trust_level.clone();
+    // Decide the trust guard up front so the replacement never carries chain
+    // fields that the post-persist flip would refuse.
+    let old_rank = loomem_core::contradiction::trust_rank(old.trust_level.as_deref());
+    let new_rank = loomem_core::contradiction::trust_rank(new_trust.as_deref());
+    let new_chunk = if new_rank < old_rank {
+        new_chunk
     } else {
-        format!(" (link to {old_id} refused by trust guard; stored as a separate memory)")
+        loomem_core::contradiction::link_successor(&old, new_chunk)
     };
-    Ok((linked, note))
+    Ok((new_chunk, Some(SupersedePlan { old, new_trust })))
+}
+
+/// Brief 2026-09-02 O1: flip the old chunk (`is_latest=false`,
+/// `superseded_by=new_id`) now that the replacement is stored. Returns the
+/// note appended to the confirmation: the linked id, the trust-guard notice
+/// (audit entry written by `try_supersede_with_guard`), or a loud warning
+/// when the flip itself failed — in that case the old version is still
+/// current and nothing has been lost.
+fn commit_supersede(state: &Arc<AppState>, plan: SupersedePlan, new_id: &str) -> String {
+    let old_id = plan.old.id.as_str();
+    match loomem_core::contradiction::try_supersede_with_guard(
+        &state.store,
+        &plan.old,
+        new_id,
+        plan.new_trust.as_deref(),
+        "memory_store",
+        None,
+    ) {
+        Ok(true) => format!(", supersedes: {old_id}"),
+        Ok(false) => {
+            format!(" (link to {old_id} refused by trust guard; stored as a separate memory)")
+        }
+        Err(e) => {
+            tracing::warn!(
+                "memory_store supersedes: {new_id} stored but flipping {old_id} failed: {e:#}"
+            );
+            format!(
+                " — WARNING: stored, but marking {old_id} as superseded failed ({e}); \
+                 {old_id} is still the current version"
+            )
+        }
+    }
 }
 
 // ── memory_search ─────────────────────────────────────────────────
@@ -3150,8 +3200,10 @@ mod tests {
             .split("(id: ")
             .nth(1)
             .unwrap_or_else(|| panic!("no id in: {text}"));
+        // The id ends at ')' or ',' — or at ' ' when a trust-guard note
+        // follows in parentheses.
         after
-            .split([')', ','])
+            .split([')', ',', ' '])
             .next()
             .unwrap_or_default()
             .to_string()
@@ -3252,6 +3304,30 @@ mod tests {
         assert_eq!(live.len(), 2, "refused store must not persist");
         let head = state.store.get_chunk(&b).unwrap().expect("b exists");
         assert!(head.is_latest && head.superseded_by.is_none());
+    }
+
+    /// Trust guard: a lower-trust source (`external_web` → tier b) cannot
+    /// replace an a2 memory. The new chunk is stored standalone (no chain
+    /// fields), the old one stays current, and the confirmation says so.
+    #[tokio::test]
+    async fn store_supersedes_trust_guard_stores_standalone() {
+        let (_app, state) = crate::tests::make_test_app();
+        let stream = "sup_stream";
+        let a = stored_id(&store_ok(&state, json!({"content": "Trusted fact."}), stream).await);
+        let text = store_ok(
+            &state,
+            json!({"content": "Scraped claim.", "supersedes": a, "source": "external_web"}),
+            stream,
+        )
+        .await;
+        assert!(text.contains("refused by trust guard"), "got: {text}");
+        let b = stored_id(&text);
+
+        let old = state.store.get_chunk(&a).unwrap().expect("a exists");
+        assert!(old.is_latest && old.superseded_by.is_none());
+        let new = state.store.get_chunk(&b).unwrap().expect("b exists");
+        assert!(new.supersedes_id.is_none() && new.root_memory_id.is_none());
+        assert_eq!(new.version, 1);
     }
 
     /// Unknown ids, soft-deleted targets and chunks in another stream all read
