@@ -751,10 +751,38 @@ fn commit_supersede(state: &Arc<AppState>, plan: SupersedePlan, new_id: &str) ->
             tracing::warn!(
                 "memory_store supersedes: {new_id} stored but flipping {old_id} failed: {e:#}"
             );
+            // Greptile P1 (round 2): the replacement must not keep backward
+            // chain links to a chunk that is still current — that would leave
+            // two heads and an inconsistent history. Detach it so both are
+            // plain standalone memories.
+            let detached = unlink_replacement(state, new_id);
             format!(
                 " — WARNING: stored, but marking {old_id} as superseded failed ({e}); \
-                 {old_id} is still the current version"
+                 {old_id} is still the current version{detached}"
             )
+        }
+    }
+}
+
+/// Clear the chain fields on a stored replacement whose old version could
+/// not be flipped, so it no longer claims to supersede a chunk that is still
+/// current. Returns the note fragment describing the outcome.
+fn unlink_replacement(state: &Arc<AppState>, new_id: &str) -> &'static str {
+    let detached = state.store.get_chunk(new_id).and_then(|found| match found {
+        Some(mut chunk) => {
+            chunk.supersedes_id = None;
+            chunk.root_memory_id = None;
+            chunk.version = 1;
+            state.store.store_chunk(&chunk).map(|()| true)
+        }
+        None => Ok(false),
+    });
+    match detached {
+        Ok(true) => "; the new memory was stored as a separate, unlinked version",
+        Ok(false) => "; the new memory could not be found to unlink it",
+        Err(e) => {
+            tracing::warn!("memory_store supersedes: unlinking {new_id} failed: {e:#}");
+            "; unlinking the new memory also failed — memory_history may show an inconsistent chain until retried"
         }
     }
 }
@@ -3328,6 +3356,29 @@ mod tests {
         let new = state.store.get_chunk(&b).unwrap().expect("b exists");
         assert!(new.supersedes_id.is_none() && new.root_memory_id.is_none());
         assert_eq!(new.version, 1);
+    }
+
+    /// Flip-failure recovery: a stored replacement whose old version could not
+    /// be flipped is detached (no backward links, version 1) so two current
+    /// heads never share a chain.
+    #[tokio::test]
+    async fn unlink_replacement_clears_chain_fields() {
+        let (_app, state) = crate::tests::make_test_app();
+        let stream = "sup_stream";
+        let a = stored_id(&store_ok(&state, json!({"content": "Fact v1."}), stream).await);
+        let b = stored_id(
+            &store_ok(
+                &state,
+                json!({"content": "Fact v2.", "supersedes": a}),
+                stream,
+            )
+            .await,
+        );
+        assert!(unlink_replacement(&state, &b).contains("separate, unlinked"));
+        let new = state.store.get_chunk(&b).unwrap().expect("b exists");
+        assert!(new.supersedes_id.is_none() && new.root_memory_id.is_none());
+        assert_eq!(new.version, 1);
+        assert!(unlink_replacement(&state, "no-such-id").contains("could not be found"));
     }
 
     /// Unknown ids, soft-deleted targets and chunks in another stream all read
