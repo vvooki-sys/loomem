@@ -709,6 +709,11 @@ pub(crate) fn chunk_to_memory_item(
         "category": category,
         "entity_ids": entity_ids,
         "version": version,
+        // Brief 2026-09-02 B4: let the dashboard tell a superseded version
+        // from the current one (the list hides them by default; see
+        // `dashboard::DashboardMemoryParams::include_superseded`).
+        "is_latest": chunk.is_latest,
+        "superseded_by": chunk.superseded_by,
         "source_stream": chunk.stream,
         "source": source.as_str(),
         "source_agent": chunk.source.as_ref().map(|s| &s.agent),

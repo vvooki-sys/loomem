@@ -501,54 +501,54 @@ pub fn apply_extend(old_chunk: &Chunk, mut new_chunk: Chunk) -> Chunk {
     new_chunk
 }
 
-/// Get the full version chain for a chunk (root → v1 → v2 → ... → current).
+/// Get the version chain for a chunk (root → v1 → v2 → … → latest), restricted
+/// to the branch that contains `chunk_id`.
+///
+/// Walks `supersedes_id` backwards from `chunk_id` to the root, then
+/// `superseded_by` forwards from `chunk_id`. Two contracts (brief 2026-09-02,
+/// B1 + B2):
+///
+/// - Soft-deleted versions (`deleted_at` set) are traversed for linkage but
+///   never returned. A chunk a human deleted must not resurface through
+///   history — `memory_delete` promises removal from every read path.
+/// - The result always contains `chunk_id` when it exists and is not deleted.
+///   The previous root-first walk followed the root's `superseded_by` pointer,
+///   so when one chunk had two successors (a branch) the walk picked the last
+///   writer and the queried id vanished from its own history.
 pub fn get_memory_chain(store: &RocksDbStore, chunk_id: &str, limit: usize) -> Result<Vec<Chunk>> {
-    let mut chain = Vec::new();
-
-    // First, find the root by walking backwards
-    let mut current_id = chunk_id.to_string();
     let mut visited = std::collections::HashSet::new();
-    loop {
-        if visited.contains(&current_id) {
+    let mut chain: Vec<Chunk> = Vec::new();
+
+    // Backwards: chunk_id → root via `supersedes_id` (collected newest-first).
+    let mut current_id = Some(chunk_id.to_string());
+    while let Some(id) = current_id.take() {
+        if !visited.insert(id.clone()) {
             break; // cycle detection
         }
-        visited.insert(current_id.clone());
-
-        if let Some(chunk) = store.get_chunk(&current_id)? {
-            if let Some(ref prev_id) = chunk.supersedes_id {
-                current_id = prev_id.clone();
-            } else {
-                break; // reached root
-            }
-        } else {
+        let Some(chunk) = store.get_chunk(&id)? else {
             break;
-        }
+        };
+        current_id = chunk.supersedes_id.clone();
+        chain.push(chunk);
     }
+    chain.reverse();
 
-    // Now walk forward from root
-    let mut visited = std::collections::HashSet::new();
-    loop {
-        if chain.len() >= limit {
-            break;
-        }
-        if visited.contains(&current_id) {
+    // Forwards: from the queried chunk's successor via `superseded_by`.
+    current_id = chain.last().and_then(|c| c.superseded_by.clone());
+    while let Some(id) = current_id.take() {
+        if !visited.insert(id.clone()) {
             break; // cycle detection
         }
-        visited.insert(current_id.clone());
-
-        if let Some(chunk) = store.get_chunk(&current_id)? {
-            let next_id = chunk.superseded_by.clone();
-            chain.push(chunk);
-            if let Some(next) = next_id {
-                current_id = next;
-            } else {
-                break; // reached latest
-            }
-        } else {
+        let Some(chunk) = store.get_chunk(&id)? else {
             break;
-        }
+        };
+        current_id = chunk.superseded_by.clone();
+        chain.push(chunk);
     }
 
+    // Tombstoned versions are linkage only — never output (B1).
+    chain.retain(|c| c.deleted_at.is_none());
+    chain.truncate(limit);
     Ok(chain)
 }
 
@@ -795,5 +795,202 @@ mod tests {
         // absent dates fall back to a placeholder.
         let msg2 = build_rewrite_user_message("a", "b", None, None);
         assert!(msg2.contains("unknown date"));
+    }
+
+    // ── get_memory_chain: soft-delete + branch contracts (brief 2026-09-02) ──
+
+    fn chain_store() -> (tempfile::TempDir, RocksDbStore) {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg = crate::config::RocksDbConfig {
+            max_open_files: 100,
+            compression: "lz4".to_string(),
+            write_buffer_size: 4 * 1024 * 1024,
+            max_write_buffer_number: 2,
+        };
+        let store = RocksDbStore::open(tmp.path(), &cfg).expect("open store");
+        (tmp, store)
+    }
+
+    fn chain_chunk(id: &str, version: u32) -> Chunk {
+        Chunk {
+            id: id.to_string(),
+            content: format!("content for {id}"),
+            stream: "s".to_string(),
+            level: 0,
+            score: 1.0,
+            timestamp: 1000,
+            consolidated: false,
+            dormant: false,
+            in_progress: false,
+            prompt_version: None,
+            source_ids: None,
+            last_decay: None,
+            metadata: None,
+            importance: None,
+            persistent: false,
+            last_implicit_boost: None,
+            access_count: 0,
+            source: None,
+            created_by: None,
+            updated_at: None,
+            valid_from: None,
+            valid_until: None,
+            is_latest: true,
+            superseded_by: None,
+            supersedes_id: None,
+            root_memory_id: None,
+            version,
+            memory_type: None,
+            extraction_meta: None,
+            deleted_at: None,
+            trust_level: None,
+            ingester_user_id: None,
+            alpha: 1.0,
+            beta: 1.0,
+            harmful_count: 0,
+            n_ratings: 0,
+            last_rated_at: None,
+            provenance_role: crate::storage::ProvenanceRole::Claim,
+        }
+    }
+
+    /// Link `old` → `new` the way `apply_supersede` does, without the store
+    /// round-trip: old loses `is_latest`, new points back and forward.
+    fn link(old: &mut Chunk, new: &mut Chunk) {
+        old.is_latest = false;
+        old.superseded_by = Some(new.id.clone());
+        new.supersedes_id = Some(old.id.clone());
+        new.root_memory_id = Some(old.root_memory_id.clone().unwrap_or_else(|| old.id.clone()));
+    }
+
+    fn ids(chain: &[Chunk]) -> Vec<&str> {
+        chain.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    /// Linear chain v1 → v2 → v3: every end yields the same root→latest walk
+    /// (the pre-brief behaviour, preserved).
+    #[test]
+    fn chain_linear_same_from_any_version() {
+        let (_tmp, store) = chain_store();
+        let mut v1 = chain_chunk("v1", 1);
+        let mut v2 = chain_chunk("v2", 2);
+        let mut v3 = chain_chunk("v3", 3);
+        link(&mut v1, &mut v2);
+        link(&mut v2, &mut v3);
+        for c in [&v1, &v2, &v3] {
+            store.store_chunk(c).expect("store");
+        }
+        for id in ["v1", "v2", "v3"] {
+            let chain = get_memory_chain(&store, id, 20).expect("chain");
+            assert_eq!(ids(&chain), vec!["v1", "v2", "v3"], "queried {id}");
+        }
+        let chain = get_memory_chain(&store, "v1", 2).expect("chain");
+        assert_eq!(
+            ids(&chain),
+            vec!["v1", "v2"],
+            "limit truncates from the root"
+        );
+    }
+
+    /// B1: a soft-deleted version is invisible from every end of the chain,
+    /// while the surviving versions stay linked through it.
+    #[test]
+    fn chain_hides_soft_deleted_versions() {
+        let (_tmp, store) = chain_store();
+        let mut v1 = chain_chunk("v1", 1);
+        let mut v2 = chain_chunk("v2", 2);
+        let mut v3 = chain_chunk("v3", 3);
+        link(&mut v1, &mut v2);
+        link(&mut v2, &mut v3);
+        v2.deleted_at = Some(2000);
+        for c in [&v1, &v2, &v3] {
+            store.store_chunk(c).expect("store");
+        }
+        for id in ["v1", "v2", "v3"] {
+            let chain = get_memory_chain(&store, id, 20).expect("chain");
+            assert_eq!(ids(&chain), vec!["v1", "v3"], "queried {id}");
+            assert!(
+                chain.iter().all(|c| c.content != "content for v2"),
+                "deleted content must not resurface (queried {id})"
+            );
+        }
+    }
+
+    /// B1: deleting the head leaves the older version(s); deleting every
+    /// version yields an empty chain rather than a tombstone with content.
+    #[test]
+    fn chain_deleted_head_and_fully_deleted_chain() {
+        let (_tmp, store) = chain_store();
+        let mut v1 = chain_chunk("v1", 1);
+        let mut v2 = chain_chunk("v2", 2);
+        link(&mut v1, &mut v2);
+        v2.deleted_at = Some(2000);
+        store.store_chunk(&v1).expect("store");
+        store.store_chunk(&v2).expect("store");
+        assert_eq!(
+            ids(&get_memory_chain(&store, "v2", 20).expect("chain")),
+            vec!["v1"]
+        );
+        assert_eq!(
+            ids(&get_memory_chain(&store, "v1", 20).expect("chain")),
+            vec!["v1"]
+        );
+
+        v1.deleted_at = Some(2001);
+        store.store_chunk(&v1).expect("store");
+        assert!(get_memory_chain(&store, "v1", 20)
+            .expect("chain")
+            .is_empty());
+        assert!(get_memory_chain(&store, "v2", 20)
+            .expect("chain")
+            .is_empty());
+    }
+
+    /// B2: two successors of one chunk (a branch). The root's `superseded_by`
+    /// points at the last writer, but each successor's history must contain
+    /// itself — the old root-first walk returned root → last writer for both.
+    #[test]
+    fn chain_branch_follows_the_queried_branch() {
+        let (_tmp, store) = chain_store();
+        let mut root = chain_chunk("root", 1);
+        let mut first = chain_chunk("first", 2);
+        let mut second = chain_chunk("second", 2);
+        link(&mut root, &mut first);
+        link(&mut root, &mut second); // overwrites root.superseded_by → "second"
+        for c in [&root, &first, &second] {
+            store.store_chunk(c).expect("store");
+        }
+        assert_eq!(
+            ids(&get_memory_chain(&store, "first", 20).expect("chain")),
+            vec!["root", "first"]
+        );
+        assert_eq!(
+            ids(&get_memory_chain(&store, "second", 20).expect("chain")),
+            vec!["root", "second"]
+        );
+        // The root itself follows its own forward pointer (last writer).
+        assert_eq!(
+            ids(&get_memory_chain(&store, "root", 20).expect("chain")),
+            vec!["root", "second"]
+        );
+    }
+
+    /// Unknown ids and pointer cycles terminate with what could be resolved.
+    #[test]
+    fn chain_unknown_id_and_cycle_terminate() {
+        let (_tmp, store) = chain_store();
+        assert!(get_memory_chain(&store, "nope", 20)
+            .expect("chain")
+            .is_empty());
+
+        let mut a = chain_chunk("a", 1);
+        let mut b = chain_chunk("b", 2);
+        link(&mut a, &mut b);
+        a.supersedes_id = Some("b".to_string()); // corrupt: b → a → b
+        store.store_chunk(&a).expect("store");
+        store.store_chunk(&b).expect("store");
+        let chain = get_memory_chain(&store, "b", 20).expect("chain");
+        assert_eq!(chain.len(), 2);
+        assert!(chain.iter().any(|c| c.id == "b"));
     }
 }

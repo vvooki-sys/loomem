@@ -38,6 +38,7 @@ Store a single, confirmed fact.
 | `source` | string | no | Provenance (e.g., "user-stated") |
 | `subject` | string | no | Entity name (person, project) |
 | `metadata` | object | no | Custom JSON metadata |
+| `supersedes` | string | no | Chunk id this fact replaces. Links the versions: the old chunk becomes a superseded version (hidden from `memory_search` unless `include_superseded`), the new one is current. The target must be the current version of its chain — otherwise the call errors and names the newer version |
 
 **Example:**
 
@@ -53,6 +54,7 @@ memory_store(
 - Preferences automatically get `importance: 2.0`
 - Entity extraction runs (dictionary + LLM queue)
 - Contradiction detection checks against existing memories
+- With `supersedes`, the confirmation reads `Stored: "..." (id: <uuid>, supersedes: <old uuid>)` and `memory_history` shows both versions
 - Embedding generated asynchronously
 
 ---

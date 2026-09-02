@@ -246,6 +246,12 @@ a:hover{text-decoration:underline}
 <td>no</td>
 <td>Custom JSON metadata</td>
 </tr>
+<tr>
+<td><code>supersedes</code></td>
+<td>string</td>
+<td>no</td>
+<td>Chunk id this fact replaces. Links the versions: the old chunk becomes a superseded version (hidden from <code>memory_search</code> unless <code>include_superseded</code>), the new one is current. The target must be the current version of its chain — otherwise the call errors and names the newer version</td>
+</tr>
 </tbody>
 </table>
 <p><strong>Example:</strong></p>
@@ -259,6 +265,7 @@ a:hover{text-decoration:underline}
 - Preferences automatically get <code>importance: 2.0</code>
 - Entity extraction runs (dictionary + LLM queue)
 - Contradiction detection checks against existing memories
+- With <code>supersedes</code>, the confirmation reads <code>Stored: "..." (id: &lt;uuid&gt;, supersedes: &lt;old uuid&gt;)</code> and <code>memory_history</code> shows both versions
 - Embedding generated asynchronously</p>
 <hr />
 <h3 id="memory_ingest">memory_ingest</h3>
