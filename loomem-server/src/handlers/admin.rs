@@ -1986,12 +1986,26 @@ async fn decide_persist_action(
         .await
         {
             Ok(class) if class.relation == "updates" => {
-                let _ = loomem_core::contradiction::apply_supersede(
+                // Persist the chunk `apply_supersede` returns — it carries
+                // `supersedes_id` / `root_memory_id` / `version`. Persisting
+                // the original left the old chunk pointing at a successor
+                // that never pointed back (dangling link; found during the
+                // 2026-09-02 versioning brief, same fix shape as ingest.rs).
+                return match loomem_core::contradiction::apply_supersede(
                     &state.store,
                     &top.chunk,
                     new_chunk.clone(),
-                );
-                return PersistAction::Supersede(new_chunk);
+                ) {
+                    Ok(linked) => PersistAction::Supersede(linked),
+                    Err(e) => {
+                        tracing::warn!(
+                            "reprocess: apply_supersede {} → {} failed, storing unlinked: {e:#}",
+                            top.chunk.id,
+                            new_chunk.id
+                        );
+                        PersistAction::Store(new_chunk)
+                    }
+                };
             }
             Ok(class) if class.relation == "extends" => {
                 return PersistAction::Skip;
