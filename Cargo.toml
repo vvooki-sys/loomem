@@ -6,6 +6,9 @@ members = [
     "loomem-migrate",
     "loomem-cli",
 ]
+# Evidence tool with its own lockfile: the one place `bincode` may still
+# appear, kept out of the engine's dependency graph and audit on purpose.
+exclude = ["tools/legacy-fixture-gen"]
 
 [workspace.package]
 version = "0.5.3"
