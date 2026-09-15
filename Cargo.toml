@@ -28,7 +28,12 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 
 # Storage
 rocksdb = { version = "0.24", default-features = false, features = ["snappy", "lz4"] }
-tantivy = "0.25"
+# tantivy 0.25.0 exactly as released, plus a one-line bump of its `lru`
+# dependency (0.12 -> 0.18.2) to clear RUSTSEC-2026-0002 / RUSTSEC-2026-0253.
+# Every crates.io tantivy release (0.25.x, 0.26.x) still pins lru <0.18, so the
+# patched revision lives in our fork; `rev` is immutable and matches tag
+# 0.25.0-loomem.1. Drop back to crates.io once a release ships lru >= 0.18.2.
+tantivy = { git = "https://github.com/vvooki-sys/tantivy", rev = "af6363752f036fed6ce15eca65af353524db1d03" }
 
 # HTTP client
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"] }
