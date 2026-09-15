@@ -30,9 +30,8 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 rocksdb = { version = "0.24", default-features = false, features = ["snappy", "lz4"] }
 tantivy = "0.25"
 
-# HTTP client & serialization
+# HTTP client
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"] }
-bincode = "1.3"
 
 # HTTP server
 axum = "0.8"

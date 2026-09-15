@@ -23,7 +23,8 @@ use serde::Serialize;
 use sha2::Sha256;
 use zeroize::Zeroize;
 
-use crate::crypto::at_rest::{self, CryptoError, WrappedStreamDek};
+use crate::crypto::at_rest::{self, CryptoError};
+use crate::persisted_codec;
 use crate::storage::CF_KEYS;
 
 /// Env var carrying the base64-encoded 32-byte master key.
@@ -306,7 +307,7 @@ impl MasterKeyEnvProvider {
             return Ok(None);
         };
 
-        let wrapped: WrappedStreamDek = bincode::deserialize(&bytes).map_err(|e| {
+        let wrapped = persisted_codec::decode_wrapped_stream_dek(&bytes).map_err(|e| {
             tracing::error!(error = %e, scope, "failed deserializing wrapped DEK");
             CryptoError::DecryptionFailed
         })?;
@@ -354,7 +355,7 @@ impl MasterKeyEnvProvider {
         let dek = at_rest::generate_dek();
         let wrapped =
             at_rest::wrap_dek(&self.master_key, &dek, INITIAL_DEK_ID, MASTER_KEY_VERSION)?;
-        let serialized = bincode::serialize(&wrapped).map_err(|e| {
+        let serialized = persisted_codec::encode_wrapped_stream_dek(&wrapped).map_err(|e| {
             tracing::error!(error = %e, scope, "failed serializing wrapped DEK");
             CryptoError::EncryptionFailed
         })?;
@@ -645,6 +646,82 @@ mod tests {
             Err(CryptoError::DecryptionFailed) => {}
             other => panic!("expected DecryptionFailed, got {other:?}"),
         }
+    }
+
+    // Legacy `keys` row written by the pre-codec engine (bincode 1.3.3) must
+    // survive a cold reopen, decrypt a chunk it encrypted, and keep serving
+    // new writes under the same DEK — no replacement key is minted.
+    #[test]
+    fn legacy_wrapped_dek_row_survives_cold_reopen_and_decrypts() {
+        let fx = crate::persisted_codec::fixture::legacy_v1().dek;
+        let tmp = TempDir::new().expect("tempdir");
+        let row_key = dek_row_key(&fx.scope);
+        {
+            let store = RocksDbStore::open(tmp.path(), &rocks_cfg()).expect("open store");
+            let cf = store.db().cf_handle(CF_KEYS).expect("keys cf");
+            store
+                .db()
+                .put_cf(&cf, row_key.as_bytes(), &fx.row_bytes)
+                .expect("write legacy row");
+            // `store` drops here: the DB is closed before the reopen below.
+        }
+        let store = Arc::new(RocksDbStore::open(tmp.path(), &rocks_cfg()).expect("cold reopen"));
+        let provider = MasterKeyEnvProvider::new(fx.master_key, store.db_arc());
+
+        let plaintext = provider
+            .decrypt(&fx.scope, &fx.encrypted_blob)
+            .expect("decrypt chunk encrypted by the pre-codec engine");
+        assert_eq!(plaintext, fx.plaintext.as_bytes());
+
+        let blob = provider
+            .encrypt(&fx.scope, b"new write under the legacy DEK")
+            .expect("encrypt");
+        assert_eq!(
+            at_rest::read_dek_id(&blob).expect("dek id"),
+            fx.dek_id,
+            "new writes reuse the legacy DEK"
+        );
+        assert_eq!(keys_row_count(&store), 1, "no replacement key row");
+        let cf = store.db().cf_handle(CF_KEYS).expect("keys cf");
+        let row_after = store
+            .db()
+            .get_cf(&cf, row_key.as_bytes())
+            .expect("get")
+            .expect("legacy row still present");
+        assert_eq!(row_after, fx.row_bytes, "legacy row bytes untouched");
+    }
+
+    // A corrupt/truncated `keys` row is an error on both paths and is never
+    // silently replaced by a fresh DEK (which would orphan every chunk
+    // encrypted under the old one).
+    #[test]
+    fn corrupt_wrapped_dek_row_errors_without_minting_replacement() {
+        let fx = crate::persisted_codec::fixture::legacy_v1().dek;
+        let (_tmp, store) = test_store();
+        let row_key = dek_row_key(&fx.scope);
+        let truncated = &fx.row_bytes[..fx.row_bytes.len() - 5];
+        let cf = store.db().cf_handle(CF_KEYS).expect("keys cf");
+        store
+            .db()
+            .put_cf(&cf, row_key.as_bytes(), truncated)
+            .expect("write corrupt row");
+        let provider = MasterKeyEnvProvider::new(fx.master_key, store.db_arc());
+
+        match provider.decrypt(&fx.scope, &fx.encrypted_blob) {
+            Err(CryptoError::DecryptionFailed) => {}
+            other => panic!("decrypt on corrupt row: expected DecryptionFailed, got {other:?}"),
+        }
+        match provider.encrypt(&fx.scope, b"must not mint a replacement") {
+            Err(CryptoError::DecryptionFailed) => {}
+            other => panic!("encrypt on corrupt row: expected DecryptionFailed, got {other:?}"),
+        }
+        let row_after = store
+            .db()
+            .get_cf(&cf, row_key.as_bytes())
+            .expect("get")
+            .expect("row present");
+        assert_eq!(row_after, truncated, "corrupt row left untouched");
+        assert_eq!(keys_row_count(&store), 1, "no replacement key row");
     }
 
     // AC-E1: NoopProvider index_token returns plaintext.to_lowercase() (identity).

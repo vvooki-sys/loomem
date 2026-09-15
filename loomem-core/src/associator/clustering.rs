@@ -10,6 +10,7 @@ use tracing::{debug, info};
 use serde::{Deserialize, Serialize};
 
 use crate::config::AssociatorConfig;
+use crate::persisted_codec;
 use crate::storage::RocksDbStore;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,8 +56,8 @@ pub fn get_centroid(store: &RocksDbStore, cluster_id: u32) -> Result<Option<Vec<
     let key = format!("assoc:centroid:{}", cluster_id);
     match store.get(key.as_bytes())? {
         Some(bytes) => {
-            let centroid: Vec<f32> =
-                bincode::deserialize(&bytes).context("Failed to deserialize centroid")?;
+            let centroid = persisted_codec::decode_f32_vec(&bytes)
+                .context("Failed to deserialize centroid")?;
             Ok(Some(centroid))
         }
         None => Ok(None),
@@ -71,7 +72,7 @@ pub fn get_all_centroids(store: &RocksDbStore) -> Result<Vec<(u32, Vec<f32>)>> {
         let key_str = String::from_utf8_lossy(&key);
         if let Some(id_str) = key_str.strip_prefix("assoc:centroid:") {
             if let Ok(id) = id_str.parse::<u32>() {
-                if let Ok(centroid) = bincode::deserialize::<Vec<f32>>(&value) {
+                if let Ok(centroid) = persisted_codec::decode_f32_vec(&value) {
                     centroids.push((id, centroid));
                 }
             }
@@ -177,7 +178,8 @@ pub fn cluster_stream(
 
     for (cluster_id, centroid) in centroids.iter().enumerate() {
         let key = format!("assoc:centroid:{}", cluster_id);
-        let encoded = bincode::serialize(centroid).context("Failed to serialize centroid")?;
+        let encoded =
+            persisted_codec::encode_f32_vec(centroid).context("Failed to serialize centroid")?;
         store
             .put(key.as_bytes(), &encoded)
             .with_context(|| format!("Failed to store centroid {}", cluster_id))?;
@@ -354,6 +356,39 @@ mod tests {
             iters <= 10,
             "Should converge quickly, took {} iterations",
             iters
+        );
+    }
+
+    // Centroid rows written by the pre-codec engine (bincode 1.3.3) read
+    // back bit-exactly through `get_centroid`/`get_all_centroids`.
+    #[test]
+    fn legacy_centroid_rows_decode_bit_exactly() {
+        let fx = crate::persisted_codec::fixture::legacy_v1();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cfg = crate::config::RocksDbConfig {
+            max_open_files: 100,
+            compression: "lz4".to_string(),
+            write_buffer_size: 4 * 1024 * 1024,
+            max_write_buffer_number: 2,
+        };
+        let store = RocksDbStore::open(tmp.path(), &cfg).expect("open");
+        for (i, v) in fx.vectors.iter().enumerate() {
+            let key = format!("assoc:centroid:{i}");
+            store
+                .put(key.as_bytes(), &v.bytes)
+                .expect("write legacy row");
+        }
+        for (i, v) in fx.vectors.iter().enumerate() {
+            let got = get_centroid(&store, u32::try_from(i).expect("small index"))
+                .expect("get_centroid")
+                .expect("row present");
+            let got_bits: Vec<u32> = got.iter().map(|x| x.to_bits()).collect();
+            let want_bits: Vec<u32> = v.values.iter().map(|x| x.to_bits()).collect();
+            assert_eq!(got_bits, want_bits, "fixture {}", v.name);
+        }
+        assert_eq!(
+            get_all_centroids(&store).expect("get_all_centroids").len(),
+            fx.vectors.len()
         );
     }
 }
