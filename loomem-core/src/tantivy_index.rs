@@ -1689,3 +1689,121 @@ mod stream_scoping_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod store_cache_tests {
+    //! The doc-store block cache is the only place tantivy uses `lru`
+    //! (`src/store/reader.rs`). These tests push the cache past its capacity
+    //! and then reopen the index from disk, so a regression in the cache
+    //! (wrong block served, stale block after delete, panic on eviction)
+    //! surfaces as a content mismatch rather than going unnoticed.
+    use super::*;
+    use crate::config::TantivyConfig;
+    use tempfile::TempDir;
+
+    /// More documents than the store cache holds, each large and
+    /// incompressible enough to occupy its own store block.
+    const DOC_COUNT: usize = 300;
+    const FILLER_WORDS: usize = 1_200;
+
+    fn cfg() -> TantivyConfig {
+        TantivyConfig {
+            enabled: true,
+            heap_size_mb: 32,
+            drift_warn_pct: 5.0,
+            auto_rebuild_on_drift: false,
+        }
+    }
+
+    /// xorshift64* — deterministic filler so the stored blocks do not
+    /// compress down to a handful of cache entries.
+    fn filler(seed: u64) -> String {
+        let mut x = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+        let mut words = Vec::with_capacity(FILLER_WORDS);
+        for _ in 0..FILLER_WORDS {
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            let w = x.wrapping_mul(0x2545_f491_4f6c_dd1d);
+            words.push(format!("w{w:016x}"));
+        }
+        words.join(" ")
+    }
+
+    fn marker(i: usize) -> String {
+        format!("zqmarker{i:04}")
+    }
+
+    fn doc(i: usize) -> TextDocument {
+        TextDocument {
+            id: format!("doc-{i}"),
+            content: format!("{} {}", marker(i), filler(u64::try_from(i).expect("small"))),
+            user_id: "default".to_string(),
+            app_id: "default".to_string(),
+            level: 1,
+            timestamp: 1_000 + i64::try_from(i).expect("small"),
+            stream: "cache".to_string(),
+            entities: None,
+            relations: None,
+            event_date: None,
+            source_agent: None,
+        }
+    }
+
+    fn seeded() -> (TempDir, TantivyIndex) {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut idx = TantivyIndex::open(tmp.path().join("tantivy"), &cfg()).expect("open");
+        for i in 0..DOC_COUNT {
+            idx.index_document(doc(i)).expect("index");
+        }
+        idx.commit().expect("commit");
+        (tmp, idx)
+    }
+
+    /// Every stored document comes back with its own content, in an access
+    /// order that keeps evicting and refilling cache blocks.
+    fn assert_all_docs_served(idx: &TantivyIndex, skip: Option<usize>) {
+        for pass in 0..2 {
+            for k in 0..DOC_COUNT {
+                // 97 is coprime with DOC_COUNT, so this walks a permutation.
+                let i = (k * 97 + pass * 13) % DOC_COUNT;
+                let hits = idx.search(&marker(i), 3).expect("search");
+                if Some(i) == skip {
+                    assert!(hits.is_empty(), "deleted doc-{i} must not be served");
+                    continue;
+                }
+                assert_eq!(
+                    hits.len(),
+                    1,
+                    "marker {} must hit exactly one doc",
+                    marker(i)
+                );
+                assert_eq!(hits[0].id, format!("doc-{i}"));
+                assert!(
+                    hits[0].content.starts_with(&marker(i)),
+                    "doc-{i}: stored content served from the wrong block"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn store_cache_serves_correct_blocks_under_eviction() {
+        let (_tmp, idx) = seeded();
+        assert_all_docs_served(&idx, None);
+    }
+
+    #[test]
+    fn store_cache_survives_delete_commit_and_cold_reopen() {
+        let (tmp, mut idx) = seeded();
+        assert_all_docs_served(&idx, None);
+
+        idx.delete_document("doc-7").expect("delete");
+        idx.commit().expect("commit after delete");
+        assert_all_docs_served(&idx, Some(7));
+
+        drop(idx);
+        let reopened = TantivyIndex::open(tmp.path().join("tantivy"), &cfg()).expect("reopen");
+        assert_all_docs_served(&reopened, Some(7));
+    }
+}
