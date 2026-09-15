@@ -185,18 +185,20 @@ pub fn decode_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, CodecError> {
     // Validate the payload is present before allocating for it.
     let body = reader.take(body_len)?;
     reader.finish()?;
-    let mut out = Vec::with_capacity(len);
-    for chunk in body.chunks_exact(F32_SIZE) {
-        // `chunks_exact` yields exactly F32_SIZE bytes; the error arm only
-        // exists to avoid an indexing panic path in production code.
-        let bits = <[u8; F32_SIZE]>::try_from(chunk).map_err(|_| CodecError::UnexpectedEnd {
-            offset: LEN_PREFIX_SIZE,
+    let (chunks, rest) = body.as_chunks::<F32_SIZE>();
+    if !rest.is_empty() {
+        // Unreachable for a well-formed prefix (`body_len` is a multiple of
+        // `F32_SIZE`), kept as an error rather than a panic path.
+        return Err(CodecError::UnexpectedEnd {
+            offset: LEN_PREFIX_SIZE + chunks.len() * F32_SIZE,
             needed: F32_SIZE,
-            remaining: chunk.len(),
-        })?;
-        out.push(f32::from_bits(u32::from_le_bytes(bits)));
+            remaining: rest.len(),
+        });
     }
-    Ok(out)
+    Ok(chunks
+        .iter()
+        .map(|bits| f32::from_bits(u32::from_le_bytes(*bits)))
+        .collect())
 }
 
 /// Encode a wrapped stream DEK row: `dek_id u32 LE || master_key_version u8
@@ -345,8 +347,10 @@ pub(crate) mod fixture {
                 let bits = unhex(&v.values_bits_hex);
                 assert_eq!(bits.len(), v.len * 4, "fixture {}: bits length", v.name);
                 let values = bits
-                    .chunks_exact(4)
-                    .map(|c| f32::from_bits(u32::from_be_bytes([c[0], c[1], c[2], c[3]])))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| f32::from_bits(u32::from_be_bytes(*c)))
                     .collect();
                 VectorFixture {
                     name: v.name,
