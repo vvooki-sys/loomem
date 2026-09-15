@@ -138,17 +138,15 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn push_len_prefix(
-    out: &mut Vec<u8>,
+/// The `u64` LE length prefix for `len`, or `LengthOverLimit` when `len`
+/// exceeds `max`. Callers check this before reserving any output buffer.
+fn len_prefix_bytes(
     what: &'static str,
     len: usize,
     max: usize,
-) -> Result<(), CodecError> {
+) -> Result<[u8; LEN_PREFIX_SIZE], CodecError> {
     match u64::try_from(len).ok().filter(|_| len <= max) {
-        Some(raw) => {
-            out.extend_from_slice(&raw.to_le_bytes());
-            Ok(())
-        }
+        Some(raw) => Ok(raw.to_le_bytes()),
         None => Err(CodecError::LengthOverLimit {
             what,
             len: u64::try_from(len).unwrap_or(u64::MAX),
@@ -161,8 +159,11 @@ fn push_len_prefix(
 /// Errors only when the vector exceeds [`MAX_F32_VEC_LEN`], which the decoder
 /// would refuse to read back.
 pub fn encode_f32_vec(values: &[f32]) -> Result<Vec<u8>, CodecError> {
-    let mut out = Vec::with_capacity(LEN_PREFIX_SIZE + values.len().saturating_mul(F32_SIZE));
-    push_len_prefix(&mut out, "f32 vector", values.len(), MAX_F32_VEC_LEN)?;
+    // Check the limit before reserving anything, so an over-long input is
+    // refused without allocating for it (mirrors the decoder's order).
+    let prefix = len_prefix_bytes("f32 vector", values.len(), MAX_F32_VEC_LEN)?;
+    let mut out = Vec::with_capacity(LEN_PREFIX_SIZE + values.len() * F32_SIZE);
+    out.extend_from_slice(&prefix);
     for value in values {
         out.extend_from_slice(&value.to_bits().to_le_bytes());
     }
@@ -205,17 +206,17 @@ pub fn decode_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, CodecError> {
 /// || u64 LE blob length || blob || nonce[12] || tag[16] || created_at i64
 /// LE` — field order and widths of the serde struct as bincode 1.x wrote it.
 pub fn encode_wrapped_stream_dek(wrapped: &WrappedStreamDek) -> Result<Vec<u8>, CodecError> {
+    let blob_prefix = len_prefix_bytes(
+        "wrapped DEK blob",
+        wrapped.wrapped_blob.len(),
+        MAX_WRAPPED_BLOB_LEN,
+    )?;
     let mut out = Vec::with_capacity(
         4 + 1 + LEN_PREFIX_SIZE + wrapped.wrapped_blob.len() + NONCE_SIZE + TAG_SIZE + 8,
     );
     out.extend_from_slice(&wrapped.dek_id.to_le_bytes());
     out.push(wrapped.master_key_version);
-    push_len_prefix(
-        &mut out,
-        "wrapped DEK blob",
-        wrapped.wrapped_blob.len(),
-        MAX_WRAPPED_BLOB_LEN,
-    )?;
+    out.extend_from_slice(&blob_prefix);
     out.extend_from_slice(&wrapped.wrapped_blob);
     out.extend_from_slice(&wrapped.wrap_nonce);
     out.extend_from_slice(&wrapped.wrap_tag);
