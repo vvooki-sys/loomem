@@ -16,10 +16,12 @@ purpose, add a `v2` fixture next to it and keep this one.
   (the last commit with `bincode` in the dependency graph).
 - Serializer: `bincode 1.3.3` resolved from that revision's `Cargo.lock`;
   `rustc 1.97.0 (2d8144b78 2026-07-07)`, aarch64-apple-darwin.
-- Generated: 2026-09-15, by a throwaway integration test placed at
-  `loomem-core/tests/legacy_fixture_dump.rs` in a clean worktree of that
-  revision and deleted afterwards (it cannot compile once `bincode` is
-  gone). Essential body:
+- Generated: 2026-09-15, by the throwaway predecessor of
+  `tools/legacy-fixture-gen` run inside a clean worktree of that revision.
+  The committed tool reproduces the same procedure and the same vector bytes
+  (`cargo run --manifest-path tools/legacy-fixture-gen/Cargo.toml -- <out>`),
+  keeping `bincode` as its reference encoder outside the engine workspace.
+  Essential body of the generator:
 
   ```rust
   use loomem_core::crypto::{encrypt_blob, wrap_dek, WrappedStreamDek};
@@ -47,11 +49,16 @@ purpose, add a `v2` fixture next to it and keep this one.
 
 ## Independent cross-check
 
-Before the fixture was committed, every `bytes_hex` was re-derived from the
-recorded field values with a Python `struct` re-implementation of the
-bincode-1 layout (`<Q` length prefix, `<I` float bits, `<I`/`<B`/`<q` for the
-DEK row fields) and compared byte-for-byte: all 5 vectors and the 81-byte DEK
-row matched.
+`tools/legacy-fixture-gen/verify.py` re-derives every `bytes_hex` and the
+81-byte DEK row from the recorded field values with a Python `struct`
+re-implementation of the bincode-1 layout (`<Q` length prefix, `<I` float
+bits, `<I`/`<B`/`<q` for the DEK row fields) — no bincode, no loomem code —
+and, with the `cryptography` package installed, unwraps the DEK and decrypts
+the sample chunk. Run it against this file after any change to the codec:
+
+```sh
+python3 tools/legacy-fixture-gen/verify.py loomem-core/tests/fixtures/legacy_bincode_v1.json
+```
 
 ## Hashes
 
