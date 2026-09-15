@@ -35,6 +35,7 @@ pub mod memory_extractor;
 pub mod memory_generator;
 pub mod multi_query;
 pub mod onnx_reranker;
+pub mod persisted_codec;
 pub mod pii_filter;
 pub mod profile;
 pub mod query_cache;

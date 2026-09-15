@@ -15,8 +15,8 @@ use thiserror::Error;
 
 pub const MAGIC: [u8; 4] = [0xFF, 0x4C, 0x4F, 0x4F];
 pub const ENCRYPTION_VERSION_V1: u8 = 1;
-const NONCE_SIZE: usize = 12;
-const TAG_SIZE: usize = 16;
+pub(crate) const NONCE_SIZE: usize = 12;
+pub(crate) const TAG_SIZE: usize = 16;
 const DEK_SIZE: usize = 32;
 const HEADER_SIZE: usize = MAGIC.len() + 1 + 4 + NONCE_SIZE;
 pub const MIN_ENCRYPTED_BLOB_SIZE: usize = HEADER_SIZE + TAG_SIZE;

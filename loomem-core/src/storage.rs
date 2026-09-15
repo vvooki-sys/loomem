@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::intent_log::IntentLogConfig;
+use crate::persisted_codec;
 use crate::source_tag::{deserialize_source_compat, SourceTag};
 use crate::tantivy_index::TantivyConfig;
 
@@ -40,7 +41,7 @@ pub struct RocksDbConfig {
 const CF_EMBEDDINGS: &str = "embeddings";
 const CF_COSTS: &str = "costs";
 /// Cycle /134 §B: per-stream wrapped DEK storage for envelope encryption.
-/// Rows keyed `scope:{scope}` → bincode-serialized `WrappedStreamDek`.
+/// Rows keyed `scope:{scope}` → `WrappedStreamDek` encoded by `persisted_codec`.
 pub(crate) const CF_KEYS: &str = "keys";
 
 /// System-reserved default stream for single-user deployments.
@@ -477,8 +478,8 @@ impl RocksDbStore {
             .cf_handle(CF_EMBEDDINGS)
             .context("Embeddings column family not found")?;
 
-        let encoded =
-            bincode::serialize(&vector).context("Failed to serialize embedding vector")?;
+        let encoded = persisted_codec::encode_f32_vec(&vector)
+            .context("Failed to serialize embedding vector")?;
 
         self.db
             .put_cf(&cf, id.as_bytes(), &encoded)
@@ -514,7 +515,7 @@ impl RocksDbStore {
 
         match result {
             Some(bytes) => {
-                let vector: Vec<f32> = bincode::deserialize(&bytes)
+                let vector = persisted_codec::decode_f32_vec(&bytes)
                     .context("Failed to deserialize embedding vector")?;
                 Ok(Some(vector))
             }
@@ -523,7 +524,7 @@ impl RocksDbStore {
     }
 
     /// Cheap existence check for an embedding: reads the raw bytes but skips the
-    /// `bincode` deserialize (and `Vec<f32>` allocation) that `get_embedding`
+    /// vector decode (and `Vec<f32>` allocation) that `get_embedding`
     /// pays. Used by status reporting, which only needs "is it embedded?" across
     /// a full-stream scan.
     pub fn has_embedding(&self, id: &str) -> Result<bool> {
@@ -553,7 +554,7 @@ impl RocksDbStore {
             match item {
                 Ok((key, value)) => {
                     let id = String::from_utf8_lossy(&key).to_string();
-                    match bincode::deserialize::<Vec<f32>>(&value) {
+                    match persisted_codec::decode_f32_vec(&value) {
                         Ok(vector) => embeddings.push((id, vector)),
                         Err(e) => {
                             tracing::error!("Failed to deserialize embedding for {}: {}", id, e);
@@ -620,7 +621,7 @@ impl RocksDbStore {
             .context("Embeddings column family not found")?;
         if let Some(item) = self.db.iterator_cf(&cf, IteratorMode::Start).next() {
             let (_k, value) = item.context("iterate embeddings for dim sample")?;
-            let v: Vec<f32> = bincode::deserialize(&value).context("decode sampled embedding")?;
+            let v = persisted_codec::decode_f32_vec(&value).context("decode sampled embedding")?;
             return Ok(Some(v.len()));
         }
         Ok(None)
@@ -695,9 +696,10 @@ impl RocksDbStore {
     /// cleared. The routing envelope (id, stream, level, timestamps, flags,
     /// ...) stays plaintext so readers resolve scope + filter without
     /// decrypting. NoopProvider (encryption disabled) keeps the pre-/138
-    /// plaintext layout byte-identical. serde_json (not bincode) is used for
-    /// the payload because metadata is `serde_json::Value`, which bincode
-    /// cannot deserialize (non-self-describing). See ADR-013 §4.
+    /// plaintext layout byte-identical. serde_json (not a fixed binary
+    /// layout) is used for the payload because metadata is
+    /// `serde_json::Value`, which needs a self-describing format. See
+    /// ADR-013 §4.
     ///
     /// The zombie-level guards live here (not in `store_chunk`) so every
     /// write-path caller — including the feedback `WriteBatch` — gets the L2
@@ -2045,6 +2047,50 @@ mod tests {
             store.db().cf_handle(CF_KEYS).is_some(),
             "keys CF auto-created when opening a pre-/134 database"
         );
+    }
+
+    // Embedding rows written by the pre-codec engine (bincode 1.3.3) read
+    // back bit-exactly through every storage path, and `store_embedding`
+    // writes rows byte-identical to the legacy ones.
+    #[test]
+    fn legacy_embedding_rows_decode_bit_exactly_and_rewrite_identically() {
+        let fx = crate::persisted_codec::fixture::legacy_v1();
+        let tmp = TempDir::new().expect("tempdir");
+        let store = RocksDbStore::open(tmp.path(), &test_config()).expect("open");
+        let cf = store.db().cf_handle(CF_EMBEDDINGS).expect("embeddings cf");
+        for v in &fx.vectors {
+            store
+                .db()
+                .put_cf(&cf, v.name.as_bytes(), &v.bytes)
+                .expect("write legacy row");
+        }
+        for v in &fx.vectors {
+            let got = store
+                .get_embedding(&v.name)
+                .expect("get_embedding")
+                .expect("row present");
+            let got_bits: Vec<u32> = got.iter().map(|x| x.to_bits()).collect();
+            let want_bits: Vec<u32> = v.values.iter().map(|x| x.to_bits()).collect();
+            assert_eq!(got_bits, want_bits, "fixture {}", v.name);
+        }
+        assert_eq!(
+            store.get_all_embeddings().expect("get_all").len(),
+            fx.vectors.len(),
+            "every legacy row decodes in the full scan"
+        );
+        assert!(store.sampled_embedding_dim().expect("sample").is_some());
+        for v in &fx.vectors {
+            let id = format!("{}-rewritten", v.name);
+            store
+                .store_embedding(&id, v.values.clone())
+                .expect("store_embedding");
+            let raw = store
+                .db()
+                .get_cf(&cf, id.as_bytes())
+                .expect("get")
+                .expect("rewritten row");
+            assert_eq!(raw, v.bytes, "fixture {}: rewritten bytes", v.name);
+        }
     }
 
     fn make_user(id: &str) -> User {
