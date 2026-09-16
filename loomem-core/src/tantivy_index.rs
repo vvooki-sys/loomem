@@ -1793,6 +1793,122 @@ mod store_cache_tests {
         assert_all_docs_served(&idx, None);
     }
 
+    /// Direct proof that the block cache is exercised: a searcher with a
+    /// small, controlled capacity (`doc_store_cache_num_blocks`), one block
+    /// per document, and tantivy's own hit/miss counters
+    /// (`Searcher::doc_store_cache_stats`). Re-reading a cached document is a
+    /// hit; filling the cache to capacity and then loading one more block
+    /// evicts the least recently used block, whose document then misses
+    /// again. Every fetch also checks the stored content.
+    #[test]
+    fn store_cache_hits_on_reread_and_misses_after_eviction() {
+        const CAPACITY: usize = 3;
+        const DOCS: usize = 6;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut idx = TantivyIndex::open(tmp.path().join("tantivy"), &cfg()).expect("open");
+        for i in 0..DOCS {
+            idx.index_document(doc(i)).expect("index");
+        }
+        idx.commit().expect("commit");
+        // The writer indexes on several threads, so a fresh commit can hold
+        // several segments; merge them so the whole store sits behind one
+        // reader with one cache of exactly `CAPACITY` blocks.
+        let segment_ids = idx.index.searchable_segment_ids().expect("segment ids");
+        if segment_ids.len() > 1 {
+            idx.writer
+                .merge(&segment_ids)
+                .wait()
+                .expect("merge segments");
+        }
+
+        let reader = idx
+            .index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .doc_store_cache_num_blocks(CAPACITY)
+            .try_into()
+            .expect("reader with a small store cache");
+        let searcher = reader.searcher();
+        assert_eq!(
+            searcher.segment_readers().len(),
+            1,
+            "one segment, one store cache"
+        );
+        // Resolve the address through the postings (no doc-store access), then
+        // fetch the stored document — only that fetch touches the block cache.
+        let fetch = |i: usize| {
+            let query = tantivy::query::TermQuery::new(
+                tantivy::Term::from_field_text(idx.id_field, &format!("doc-{i}")),
+                IndexRecordOption::Basic,
+            );
+            let hits = searcher
+                .search(&query, &TopDocs::with_limit(1))
+                .expect("lookup by id");
+            let (_, address) = *hits.first().expect("doc indexed");
+            let stored: tantivy::TantivyDocument = searcher.doc(address).expect("fetch stored doc");
+            let content = stored
+                .get_first(idx.content_field)
+                .and_then(|v| v.as_str())
+                .expect("content stored");
+            assert!(
+                content.starts_with(&marker(i)),
+                "doc {i}: served content belongs to another document"
+            );
+        };
+        let stats = || {
+            let s = searcher.doc_store_cache_stats();
+            (s.cache_hits, s.cache_misses, s.num_entries)
+        };
+
+        assert_eq!(stats(), (0, 0, 0), "fresh cache");
+        fetch(0);
+        assert_eq!(
+            stats(),
+            (0, 1, 1),
+            "first read is a miss and fills one block"
+        );
+        fetch(0);
+        assert_eq!(stats(), (1, 1, 1), "re-read of a cached block is a hit");
+
+        fetch(1);
+        fetch(2);
+        assert_eq!(
+            stats(),
+            (1, 3, CAPACITY),
+            "three distinct docs occupy three blocks: cache is full"
+        );
+        fetch(0);
+        assert_eq!(
+            stats(),
+            (2, 3, CAPACITY),
+            "doc 0 still cached, now most recently used"
+        );
+
+        // One more block than the capacity: the least recently used block
+        // (doc 1) must be evicted; doc 0 was refreshed and must survive.
+        fetch(3);
+        assert_eq!(
+            stats(),
+            (2, 4, CAPACITY),
+            "loading a fourth block evicts one"
+        );
+        fetch(1);
+        assert_eq!(stats(), (2, 5, CAPACITY), "evicted doc 1 misses again");
+        fetch(0);
+        assert_eq!(stats(), (3, 5, CAPACITY), "doc 0 survived the eviction");
+        fetch(3);
+        assert_eq!(stats(), (4, 5, CAPACITY), "doc 3 is cached after its miss");
+
+        // Sweep the rest past capacity twice; only misses can grow now and
+        // the cache never exceeds its capacity.
+        for i in 0..DOCS {
+            fetch(i);
+        }
+        let (_, misses, entries) = stats();
+        assert_eq!(entries, CAPACITY, "cache never grows past its capacity");
+        assert!(misses > 5, "a full sweep past capacity keeps evicting");
+    }
+
     #[test]
     fn store_cache_survives_delete_commit_and_cold_reopen() {
         let (tmp, mut idx) = seeded();
