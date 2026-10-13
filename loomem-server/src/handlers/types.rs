@@ -227,27 +227,8 @@ pub struct SearchResult {
     pub content_type_source: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct TraceInfo {
-    pub level: String,
-    pub source: Option<String>,
-    pub is_latest: bool,
-    pub created_at: u64,
-    pub memory_type: Option<String>,
-    pub importance: f64,
-    pub access_count: u32,
-    pub version: u32,
-    pub superseded_by: Option<String>,
-    pub prompt_version: Option<u32>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TraceMetadata {
-    pub total_results_before_topk: usize,
-    pub dedup_removed: usize,
-    pub search_latency_us: u64,
-    pub query_complexity: Option<String>,
-}
+mod search_trace;
+pub use search_trace::{EvidenceStage, EvidenceTrace, TraceInfo, TraceMetadata};
 
 #[derive(Debug, Serialize)]
 pub struct StatusResponse {

@@ -12,6 +12,7 @@ use std::time::Instant;
 use tracing::warn;
 
 mod cache_policy;
+mod evidence;
 
 use super::date_filter::extract_date_filter;
 use super::types::{
@@ -248,6 +249,7 @@ struct ResponseMetrics {
     dedup_removed: usize,
     total_results_before_topk: usize,
     final_top_k: usize,
+    evidence: Option<super::types::EvidenceTrace>,
 }
 
 /// Output of `filter_candidates`. Bundles the filtered result list with
@@ -553,20 +555,15 @@ fn prepare_query_context(
         };
 
     tracing::debug!(
-        "Date filter: {:?}, cleaned query: '{}'",
-        date_filter,
-        query_without_date
+        has_date_filter = date_filter.is_some(),
+        "Date filter resolved"
     );
 
     // Step 1: Resolve entity aliases
     let entity_resolved = state.entity_extractor.resolve_aliases(&query_without_date);
 
     if entity_resolved != query_without_date {
-        tracing::debug!(
-            "Entity alias resolution: {:?} → {:?}",
-            query_without_date,
-            entity_resolved
-        );
+        tracing::debug!("Entity aliases resolved");
     }
 
     // Step 2: Apply query expansion (on entity-resolved query)
@@ -593,11 +590,7 @@ fn prepare_query_context(
         expanded_query.clone()
     };
 
-    tracing::debug!(
-        "Query: {} -> Expanded: {}",
-        query_without_date,
-        expanded_query
-    );
+    tracing::debug!("Query expansion complete");
 
     // Cache key (flat `limit` — see F-R1 note above). The cache key is keyed on
     // the *real* `top_k`, not the over-fetched retrieval pool: `source_agent` and
@@ -655,12 +648,7 @@ pub async fn search_handler(
         let mut cache = state.query_cache.lock().await;
         if let Some((is_reranked, cached)) = cache.get_best(key) {
             drop(cache); // release lock before building response
-            tracing::debug!(
-                "Cache hit for query '{}' (key={}, reranked={})",
-                ctx.query_without_date,
-                key,
-                is_reranked
-            );
+            tracing::debug!(reranked = is_reranked, "Search cache hit");
             let results: Vec<SearchResult> = cached
                 .iter()
                 .map(|r| {
@@ -795,25 +783,13 @@ pub async fn search_handler(
         diag.post_rank_top = fused_pool_hits(&hybrid_results);
     }
 
-    // RED-SD-1/SD-2 defense-in-depth: drop soft-deleted chunks before
-    // reranker spawn (external LLM) and before filter_candidates. Covers
-    // the vector path (no predicate push-down) and the stale-tantivy edge
-    // case (silent delete in legacy flows).
-    let hybrid_results: Vec<_> = hybrid_results
-        .into_iter()
-        .filter(|r| !crate::handlers::delete::is_deleted_in_store(&state, &r.id))
-        .collect();
-
-    // Filter the full rerank pool before selecting or caching any results.
-    // Bitemporal, superseded, extraction_meta filters +
-    // content dedup + aggregation dedup + source_agent/stream filters.
-    // Keep the eligible tail for reranking; apply final top-K afterward.
+    let (outcome, evidence) = evidence::filter_with_trace(hybrid_results, &ctx, &payload, &state);
     let FilterOutcome {
         results: mut hybrid_results,
         dedup_removed,
         total_results_before_topk,
         final_top_k,
-    } = filter_candidates(hybrid_results, &ctx, &payload, &state);
+    } = outcome;
 
     // ECA-31: Check cost budget for reranker
     let rerank_cost_ok = {
@@ -918,6 +894,7 @@ pub async fn search_handler(
         dedup_removed,
         total_results_before_topk,
         final_top_k,
+        evidence,
     };
     let mut response = build_response(
         metrics,
@@ -1130,11 +1107,7 @@ async fn tier1_lookup(
     if results.is_empty() {
         return None;
     }
-    tracing::debug!(
-        "Tier-1 direct lookup answered: {} results (entities={:?})",
-        results.len(),
-        classification.features.entities
-    );
+    tracing::debug!("Tier-1 direct lookup answered: {} results", results.len());
 
     let metrics = ResponseMetrics {
         start: ctx.start,
@@ -1142,6 +1115,7 @@ async fn tier1_lookup(
         dedup_removed,
         total_results_before_topk,
         final_top_k,
+        evidence: None, // Tier-1 coverage is not instrumented.
     };
     let mut response = build_response(metrics, results, state, auth, payload, classification).await;
     response.tier = Some(1);
@@ -1172,6 +1146,7 @@ async fn build_response(
         dedup_removed,
         total_results_before_topk,
         final_top_k,
+        evidence,
     } = metrics;
 
     // Implicit boost: top 3 results get +0.1 importance (cap 1.5, max once per 24h)
@@ -1313,6 +1288,7 @@ async fn build_response(
         Some(super::types::TraceMetadata {
             total_results_before_topk,
             dedup_removed,
+            evidence,
             search_latency_us: start.elapsed().as_micros() as u64,
             query_complexity: if state.config.search.complexity.enabled {
                 Some(format!("{}", complexity))
@@ -1326,20 +1302,7 @@ async fn build_response(
 
     let took_ms = start.elapsed().as_millis() as u64;
 
-    // Emit search event
-    if let Some(ref tx) = state.event_tx {
-        let top_scores: Vec<f32> = results.iter().take(5).map(|r| r.score as f32).collect();
-        loomem_core::event_log::emit(
-            tx,
-            loomem_core::event_log::MemoryEvent::Search {
-                query: payload.query.clone(),
-                stream_id: auth.stream_id.clone(),
-                top_scores,
-                latency_ms: took_ms,
-                result_count: results.len(),
-            },
-        );
-    }
+    evidence::emit_search_event(state, auth, &results, took_ms);
 
     // /150e-2 access-audit (ADR-018): metadata-only, no query text, aggregate
     // (target_id=None for search). No-op when the feature is disabled.
@@ -2148,7 +2111,7 @@ async fn vector_retrieve(
                                 }
                             });
                     }
-                    tracing::debug!("Vector multi-query: embedded sub-query '{}'", sub_q);
+                    tracing::debug!("Vector multi-query: embedded sub-query");
                 }
             }
         }

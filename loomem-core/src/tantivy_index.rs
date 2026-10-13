@@ -1,3 +1,5 @@
+mod lifecycle;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -101,18 +103,14 @@ fn parse_lexical_query(
 ) -> Option<(Box<dyn tantivy::query::Query>, LexicalParse)> {
     match parser.parse_query(query_text) {
         Ok(q) => Some((q, LexicalParse::Raw)),
-        Err(raw_err) => {
+        Err(_raw_err) => {
             let sanitized = sanitize_query(query_text);
             match parser.parse_query(&sanitized) {
                 Ok(q) => Some((q, LexicalParse::Sanitized)),
-                Err(sanitized_err) => match parser.parse_query(&sanitized.to_lowercase()) {
+                Err(_sanitized_err) => match parser.parse_query(&sanitized.to_lowercase()) {
                     Ok(q) => Some((q, LexicalParse::Folded)),
-                    Err(folded_err) => {
-                        warn!(
-                            "BM25 leg skipped: query unparsable raw ({raw_err}), sanitized \
-                             ({sanitized_err}) and keyword-folded ({folded_err}); degrading \
-                             to remaining search legs"
-                        );
+                    Err(_folded_err) => {
+                        warn!("BM25 leg skipped after raw, sanitized and folded parse failures");
                         None
                     }
                 },
@@ -542,16 +540,8 @@ impl TantivyIndex {
         Ok(())
     }
 
-    pub fn delete_document(&mut self, id: &str) -> Result<()> {
-        debug!("Deleting document from Tantivy: id={}", id);
-        let id_term = tantivy::Term::from_field_text(self.id_field, id);
-        self.writer.delete_term(id_term);
-        self.writer.commit().context("Failed to commit deletion")?;
-        Ok(())
-    }
-
     pub fn search(&self, query_text: &str, limit: usize) -> Result<Vec<SearchResult>> {
-        debug!("Searching: query='{}', limit={}", query_text, limit);
+        debug!(query_bytes = query_text.len(), limit, "Searching Tantivy");
 
         let searcher = self.reader.searcher();
 
@@ -645,8 +635,8 @@ impl TantivyIndex {
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         debug!(
-            "Searching with stream filter: query='{}', stream='{}', limit={}",
-            query_text, stream, limit
+            query_bytes = query_text.len(),
+            limit, "Searching with stream filter"
         );
 
         let searcher = self.reader.searcher();
@@ -743,8 +733,8 @@ impl TantivyIndex {
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         debug!(
-            "Searching with entity filter: query='{}', entity='{}', stream={:?}, limit={}",
-            query_text, entity, stream, limit
+            query_bytes = query_text.len(),
+            limit, "Searching with entity filter"
         );
 
         let searcher = self.reader.searcher();
@@ -978,8 +968,8 @@ impl TantivyIndex {
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         debug!(
-            "Searching with date range: query='{}', start={}, end={}, stream={:?}, limit={}",
-            query_text, start_ts, end_ts, stream, limit
+            query_bytes = query_text.len(),
+            start_ts, end_ts, limit, "Searching with date range"
         );
 
         let searcher = self.reader.searcher();

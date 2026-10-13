@@ -10,6 +10,8 @@ use crate::source_tag::{deserialize_source_compat, SourceTag};
 use crate::tantivy_index::TantivyConfig;
 
 mod consolidation;
+mod lifecycle;
+pub use lifecycle::EmbeddingTarget;
 pub mod persist;
 pub mod scan_log;
 pub use persist::{persist_chunk_with_index, PersistChunkArgs};
@@ -300,6 +302,7 @@ fn warn_if_zombie_level(chunk: &Chunk) {
 }
 
 pub struct RocksDbStore {
+    lifecycle: std::sync::Mutex<()>,
     db: Arc<DB>,
     /// Cycle /134 §B: encryption-at-rest provider. Held but NOT yet wired into
     /// read/write paths in §B (that is §C/§D). Defaults to `NoopProvider`.
@@ -380,6 +383,7 @@ impl RocksDbStore {
 
         info!("RocksDB opened successfully with embeddings, costs, and keys CFs");
         Ok(Self {
+            lifecycle: std::sync::Mutex::new(()),
             db: Arc::new(db),
             encryption: Arc::new(crate::crypto::provider::NoopProvider),
             last_scan_decode: std::sync::Mutex::new(None),
@@ -471,8 +475,14 @@ impl RocksDbStore {
         Ok(count)
     }
 
-    /// Store an embedding vector for a document
+    /// Unconditional compatibility writer for embedding-only migrations/fixtures.
+    /// Asynchronous inference must use `store_embedding_if_current` instead.
     pub fn store_embedding(&self, id: &str, vector: Vec<f32>) -> Result<()> {
+        let _guard = self.lock_lifecycle()?;
+        self.write_embedding(id, vector)
+    }
+
+    fn write_embedding(&self, id: &str, vector: Vec<f32>) -> Result<()> {
         let cf = self
             .db
             .cf_handle(CF_EMBEDDINGS)
@@ -491,6 +501,7 @@ impl RocksDbStore {
 
     /// Delete an embedding vector.
     pub fn delete_embedding(&self, id: &str) -> Result<()> {
+        let _guard = self.lock_lifecycle()?;
         let cf = self
             .db
             .cf_handle(CF_EMBEDDINGS)
@@ -732,19 +743,6 @@ impl RocksDbStore {
         }
     }
 
-    /// Store a chunk in RocksDB. Zombie-level guards run inside `encode_chunk`.
-    pub fn store_chunk(&self, chunk: &Chunk) -> Result<()> {
-        let key = format!("chunk:L{}:{}", chunk.level, chunk.id);
-        let value = self.encode_chunk(chunk)?;
-
-        self.db
-            .put(key.as_bytes(), &value)
-            .context("Failed to store chunk")?;
-
-        debug!("Stored chunk: {}", chunk.id);
-        Ok(())
-    }
-
     /// Get a chunk from RocksDB
     pub fn get_chunk(&self, id: &str) -> Result<Option<Chunk>> {
         // Try all levels
@@ -811,11 +809,12 @@ impl RocksDbStore {
 
     /// Mark chunks as consolidated
     pub fn mark_consolidated(&self, ids: &[String]) -> Result<()> {
+        let _guard = self.lock_lifecycle()?;
         for id in ids {
             if let Some(mut chunk) = self.get_chunk(id)? {
                 chunk.consolidated = true;
                 chunk.in_progress = false;
-                self.store_chunk(&chunk)?;
+                self.store_chunk_locked(&chunk)?;
             }
         }
         Ok(())
@@ -823,10 +822,11 @@ impl RocksDbStore {
 
     /// Mark chunks as in_progress
     pub fn mark_in_progress(&self, ids: &[String]) -> Result<()> {
+        let _guard = self.lock_lifecycle()?;
         for id in ids {
             if let Some(mut chunk) = self.get_chunk(id)? {
                 chunk.in_progress = true;
-                self.store_chunk(&chunk)?;
+                self.store_chunk_locked(&chunk)?;
             }
         }
         Ok(())
@@ -834,10 +834,11 @@ impl RocksDbStore {
 
     /// Clear in_progress flag
     pub fn clear_in_progress(&self, ids: &[String]) -> Result<()> {
+        let _guard = self.lock_lifecycle()?;
         for id in ids {
             if let Some(mut chunk) = self.get_chunk(id)? {
                 chunk.in_progress = false;
-                self.store_chunk(&chunk)?;
+                self.store_chunk_locked(&chunk)?;
             }
         }
         Ok(())
@@ -869,19 +870,21 @@ impl RocksDbStore {
 
     /// Update chunk score and last_decay timestamp
     pub fn update_score(&self, id: &str, new_score: f64, timestamp: u64) -> Result<()> {
+        let _guard = self.lock_lifecycle()?;
         if let Some(mut chunk) = self.get_chunk(id)? {
             chunk.score = new_score;
             chunk.last_decay = Some(timestamp);
-            self.store_chunk(&chunk)?;
+            self.store_chunk_locked(&chunk)?;
         }
         Ok(())
     }
 
     /// Mark chunk as dormant
     pub fn mark_dormant(&self, id: &str) -> Result<()> {
+        let _guard = self.lock_lifecycle()?;
         if let Some(mut chunk) = self.get_chunk(id)? {
             chunk.dormant = true;
-            self.store_chunk(&chunk)?;
+            self.store_chunk_locked(&chunk)?;
         }
         Ok(())
     }
@@ -889,21 +892,23 @@ impl RocksDbStore {
     /// Mark chunk as persistent — exempts from time-based decay.
     /// Idempotent: calling on already-persistent chunk is no-op.
     pub fn mark_persistent(&self, id: &str) -> Result<()> {
+        let _guard = self.lock_lifecycle()?;
         if let Some(mut chunk) = self.get_chunk(id)? {
             if chunk.persistent {
                 return Ok(()); // idempotent
             }
             chunk.persistent = true;
-            self.store_chunk(&chunk)?;
+            self.store_chunk_locked(&chunk)?;
         }
         Ok(())
     }
 
     /// Boost chunk score to 1.0 (access boost)
     pub fn boost_score(&self, id: &str) -> Result<()> {
+        let _guard = self.lock_lifecycle()?;
         if let Some(mut chunk) = self.get_chunk(id)? {
             chunk.score = 1.0;
-            self.store_chunk(&chunk)?;
+            self.store_chunk_locked(&chunk)?;
             debug!("Boosted score for chunk: {}", id);
         }
         Ok(())
@@ -911,10 +916,11 @@ impl RocksDbStore {
 
     /// Set importance to high (1.5) and reset score to 1.0
     pub fn boost_importance(&self, id: &str) -> Result<()> {
+        let _guard = self.lock_lifecycle()?;
         if let Some(mut chunk) = self.get_chunk(id)? {
             chunk.importance = Some(1.5);
             chunk.score = 1.0;
-            self.store_chunk(&chunk)?;
+            self.store_chunk_locked(&chunk)?;
             debug!("Boosted importance for chunk: {} to 1.5", id);
         }
         Ok(())
@@ -922,9 +928,10 @@ impl RocksDbStore {
 
     /// Increment access_count for a chunk (called on retrieval for adaptive decay)
     pub fn increment_access_count(&self, id: &str) -> Result<()> {
+        let _guard = self.lock_lifecycle()?;
         if let Some(mut chunk) = self.get_chunk(id)? {
             chunk.access_count = chunk.access_count.saturating_add(1);
-            self.store_chunk(&chunk)?;
+            self.store_chunk_locked(&chunk)?;
         }
         Ok(())
     }
@@ -938,6 +945,7 @@ impl RocksDbStore {
         max_importance: f64,
         cooldown_secs: u64,
     ) -> Result<bool> {
+        let _guard = self.lock_lifecycle()?;
         if let Some(mut chunk) = self.get_chunk(id)? {
             let now = chrono::Utc::now().timestamp() as u64;
 
@@ -957,7 +965,7 @@ impl RocksDbStore {
             let new_importance = (current + delta).min(max_importance);
             chunk.importance = Some(new_importance);
             chunk.last_implicit_boost = Some(now);
-            self.store_chunk(&chunk)?;
+            self.store_chunk_locked(&chunk)?;
             debug!(
                 "Implicit boost for {}: {:.2} → {:.2}",
                 id, current, new_importance
@@ -969,6 +977,7 @@ impl RocksDbStore {
     }
 
     pub fn reset_all_importance(&self) -> Result<u32> {
+        let _guard = self.lock_lifecycle()?;
         let mut count = 0u32;
         for prefix in &[b"chunk:L0:" as &[u8], b"chunk:L1:"] {
             for (_, value) in self.prefix_scan(prefix) {
@@ -979,7 +988,7 @@ impl RocksDbStore {
                         // /138 phase 2: write back through store_chunk so the
                         // field-level envelope is applied (NoopProvider =
                         // byte-identical to pre-/138). Recomputes the same key.
-                        self.store_chunk(&chunk)?;
+                        self.store_chunk_locked(&chunk)?;
                         count += 1;
                     }
                 }
@@ -991,6 +1000,7 @@ impl RocksDbStore {
 
     /// Recover orphaned chunks with in_progress=true
     pub fn recover_orphaned_chunks(&self) -> Result<usize> {
+        let _guard = self.lock_lifecycle()?;
         let mut count = 0;
         let mut scan = scan_log::ScanDecodeLog::new("recover_orphaned_chunks");
 
@@ -1004,7 +1014,7 @@ impl RocksDbStore {
                         }
                         if chunk.in_progress {
                             chunk.in_progress = false;
-                            self.store_chunk(&chunk)?;
+                            self.store_chunk_locked(&chunk)?;
                             count += 1;
                         }
                     }
@@ -1311,27 +1321,6 @@ impl RocksDbStore {
         Ok(())
     }
 
-    /// Soft-delete a memory — sets deleted_at timestamp, keeps data for recovery window.
-    /// Callers should also remove from Tantivy (no soft-delete in FTS) and clean graph refs.
-    pub fn delete_by_id(&self, id: &str) -> Result<bool> {
-        match self.get_chunk(id)? {
-            Some(mut chunk) => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                chunk.deleted_at = Some(now);
-                self.store_chunk(&chunk)?;
-                info!("Soft-deleted memory: {}", id);
-                Ok(true)
-            }
-            None => {
-                warn!("Memory not found for soft-delete: {}", id);
-                Ok(false)
-            }
-        }
-    }
-
     /// Find all soft-deleted chunks whose recovery window has expired.
     /// Returns chunk IDs where `deleted_at + retention_days < now`.
     pub fn find_expired_soft_deleted(&self, retention_days: u64) -> Result<Vec<String>> {
@@ -1360,114 +1349,6 @@ impl RocksDbStore {
         }
 
         Ok(expired)
-    }
-
-    /// Hard-delete a memory — physically removes chunk, embedding, entities, and relations.
-    /// Used by the retention purge worker after the recovery window expires.
-    pub fn hard_delete_by_id(&self, id: &str) -> Result<bool> {
-        let mut found = false;
-
-        // Try all levels for chunk keys
-        for level in 0..=2 {
-            let chunk_key = format!("chunk:L{}:{}", level, id);
-            if self.db.get(chunk_key.as_bytes())?.is_some() {
-                self.db
-                    .delete(chunk_key.as_bytes())
-                    .context("Failed to delete chunk")?;
-                found = true;
-                debug!("Hard-deleted chunk: {}", chunk_key);
-                break;
-            }
-        }
-
-        // Delete from embeddings column family
-        let cf = self
-            .db
-            .cf_handle(CF_EMBEDDINGS)
-            .context("Embeddings column family not found")?;
-        if self.db.get_cf(&cf, id.as_bytes())?.is_some() {
-            self.db
-                .delete_cf(&cf, id.as_bytes())
-                .context("Failed to delete embedding")?;
-        }
-
-        // Delete entities
-        let entity_key = format!("entity:{}", id);
-        if self.db.get(entity_key.as_bytes())?.is_some() {
-            self.db.delete(entity_key.as_bytes())?;
-        }
-
-        // Delete relations
-        let rel_key = format!("rel:{}", id);
-        if self.db.get(rel_key.as_bytes())?.is_some() {
-            self.db.delete(rel_key.as_bytes())?;
-        }
-
-        if found {
-            info!("Hard-deleted memory: {}", id);
-        }
-
-        Ok(found)
-    }
-
-    /// Purge all memories in a namespace (stream)
-    /// Returns list of deleted IDs
-    pub fn purge_namespace(&self, stream: &str, dry_run: bool) -> Result<Vec<String>> {
-        let mut deleted_ids = Vec::new();
-        let mut scan = scan_log::ScanDecodeLog::new("purge_namespace");
-
-        // Scan all chunk levels for matching stream
-        for level in 0..=2 {
-            let prefix = format!("chunk:L{}:", level);
-            for (key, value) in self.prefix_scan(prefix.as_bytes()) {
-                scan.saw_row();
-                match self.decode_chunk(&value) {
-                    Ok(chunk) => {
-                        if chunk.stream == stream {
-                            deleted_ids.push(chunk.id.clone());
-
-                            if !dry_run {
-                                // Delete chunk
-                                self.db.delete(&key).context("Failed to delete chunk")?;
-
-                                // Delete embedding
-                                let cf = self
-                                    .db
-                                    .cf_handle(CF_EMBEDDINGS)
-                                    .context("Embeddings column family not found")?;
-                                let _ = self.db.delete_cf(&cf, chunk.id.as_bytes());
-
-                                // Delete entities
-                                let entity_key = format!("entity:{}", chunk.id);
-                                let _ = self.db.delete(entity_key.as_bytes());
-
-                                // Delete relations
-                                let rel_key = format!("rel:{}", chunk.id);
-                                let _ = self.db.delete(rel_key.as_bytes());
-                            }
-                        }
-                    }
-                    Err(e) => scan.record(&key, &e),
-                }
-            }
-        }
-        let _ = scan.finish();
-
-        if dry_run {
-            info!(
-                "Dry run: would delete {} memories from stream {}",
-                deleted_ids.len(),
-                stream
-            );
-        } else {
-            info!(
-                "Deleted {} memories from stream {}",
-                deleted_ids.len(),
-                stream
-            );
-        }
-
-        Ok(deleted_ids)
     }
 
     // ── User store (multi-tenant auth) ─────────────────────────

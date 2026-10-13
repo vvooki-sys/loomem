@@ -30,6 +30,8 @@ impl Default for EventLogConfig {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MemoryEvent {
     Search {
+        // Accept legacy records, but never write user query content to telemetry.
+        #[serde(default, skip_serializing)]
         query: String,
         stream_id: String,
         top_scores: Vec<f32>,
@@ -354,3 +356,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "event_log_privacy_tests.rs"]
+mod privacy_tests;

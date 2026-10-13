@@ -2,6 +2,7 @@ pub mod admin;
 pub mod ambient;
 pub mod backfill_encrypt;
 pub mod bench;
+mod cache_invalidation;
 pub mod co_occur;
 pub mod context;
 pub mod dashboard;

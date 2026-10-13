@@ -236,11 +236,8 @@ pub async fn persist_chunk(
 
     tracing::debug!("Persisted chunk: id={}", id);
 
-    // Invalidate search cache
-    {
-        let mut cache = state.query_cache.lock().await;
-        cache.clear();
-    }
+    // Invalidate retrieval responses after the mutation.
+    super::cache_invalidation::clear(state).await;
 
     // Audit log
     {
@@ -343,6 +340,7 @@ fn maybe_trigger_auto_dream(state: &Arc<AppState>, stream: &str) {
             &state.tantivy,
             &state.http_client,
             loomem_core::dream::DreamRunContext {
+                pii_filter: &state.pii_filter,
                 llm_config: &state.config.llm,
                 dream_config: &state.config.dream,
                 intent_log: state.intent_log.as_deref(),
@@ -792,89 +790,13 @@ pub async fn store_handler(
     }))
 }
 
+#[path = "ingest_embeddings.rs"]
+mod embedding_backfill;
+
 pub async fn embed_missing_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if !state.config.storage.vector_enabled {
-        return Ok(Json(
-            serde_json::json!({"status": "skipped", "reason": "vector_enabled=false"}),
-        ));
-    }
-    // Local embedder takes precedence (keyless local default, 384-dim) and needs
-    // no API key; otherwise fall back to the OpenAI API. Fail fast if neither is
-    // available — previously this handler unconditionally demanded a key,
-    // returning 500 on keyless instances so chunks left without a vector (e.g.
-    // consolidated chunks stuck "pending") could never be back-filled.
-    let local_embedder = state.local_embedder.clone();
-    if local_embedder.is_none() && state.config.llm.get_api_key().is_none() {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    let all_chunks = state
-        .store
-        .get_all_chunks()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let existing_embeddings = state
-        .store
-        .get_all_embeddings()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let embedded_ids: std::collections::HashSet<String> =
-        existing_embeddings.into_iter().map(|(id, _)| id).collect();
-
-    let missing: Vec<_> = all_chunks
-        .iter()
-        .filter(|c| !embedded_ids.contains(&c.id))
-        .collect();
-    let total_missing = missing.len();
-    tracing::info!("embed-missing: {} chunks need embeddings", total_missing);
-
-    let mut embedded = 0u32;
-    let mut failed = 0u32;
-    for chunk in missing {
-        let embed_result = if let Some(ref embedder) = local_embedder {
-            embedder.embed(&chunk.content)
-        } else if let Some(api_key) = state.config.llm.get_api_key() {
-            embeddings::embed(
-                &state.http_client,
-                &api_key,
-                &state.config.llm.embedding_model,
-                &chunk.content,
-            )
-            .await
-        } else {
-            Err(anyhow::anyhow!("No embedding provider"))
-        };
-        match embed_result {
-            Ok(embedding) => {
-                if state.store.store_embedding(&chunk.id, embedding).is_ok() {
-                    embedded += 1;
-                } else {
-                    failed += 1;
-                }
-            }
-            Err(e) => {
-                tracing::warn!("embed-missing: failed for {}: {}", chunk.id, e);
-                failed += 1;
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            }
-        }
-        if embedded.is_multiple_of(50) && embedded > 0 {
-            tracing::info!("embed-missing: progress {}/{}", embedded, total_missing);
-        }
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-    }
-
-    tracing::info!(
-        "embed-missing complete: {} embedded, {} failed",
-        embedded,
-        failed
-    );
-    Ok(Json(serde_json::json!({
-        "status": "done",
-        "total_missing": total_missing,
-        "embedded": embedded,
-        "failed": failed,
-    })))
+    embedding_backfill::run(&state).await
 }
 
 pub async fn retag_all_handler(

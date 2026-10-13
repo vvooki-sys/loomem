@@ -1,3 +1,6 @@
+#[path = "derived_safety.rs"]
+pub(crate) mod derived_safety;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -601,12 +604,7 @@ pub async fn consolidate(
                             &llm_config.compression_model,
                         ) {
                             Some(e) => {
-                                debug!(
-                                    "Structured consolidation: type={}, event_date={:?}, confidence={:.2}",
-                                    e.memory_type,
-                                    e.extraction_meta.event_date,
-                                    e.extraction_meta.confidence,
-                                );
+                                debug!("Structured consolidation response parsed");
                                 Some(e)
                             }
                             None => {
@@ -654,7 +652,7 @@ pub async fn consolidate(
                         )
                     };
 
-                    let l1_chunk = Chunk {
+                    let mut l1_chunk = Chunk {
                         id: l1_id.clone(),
                         content: l1_content,
                         stream: stream.clone(),
@@ -685,7 +683,7 @@ pub async fn consolidate(
                         memory_type: l1_memory_type,
                         extraction_meta: l1_extraction_meta,
                         deleted_at: None,
-                        trust_level: None,
+                        trust_level: Some(derived_safety::derived_trust(sub_group.iter()).into()),
                         ingester_user_id: None,
                         alpha: 1.0,
                         beta: 1.0,
@@ -695,12 +693,8 @@ pub async fn consolidate(
                         provenance_role: crate::storage::ProvenanceRole::Claim,
                     };
 
-                    // Use enriched or raw summary for embedding + entity extraction
-                    let summary_for_index = if enrichment.is_some() {
-                        l1_chunk.content.clone()
-                    } else {
-                        summary.clone()
-                    };
+                    derived_safety::protect_derived_chunk(&mut l1_chunk, pii_filter);
+                    let summary_for_index = l1_chunk.content.clone();
 
                     // Generate embedding for L1 BEFORE storing (needed for quality gate).
                     // Route through the SAME embedder the rest of the system uses: the
@@ -850,7 +844,9 @@ pub async fn consolidate(
 
                     // Store L1 embedding (already generated above)
                     if let Some(embedding) = l1_embedding {
-                        if let Err(e) = storage.store_embedding(&l1_id, embedding) {
+                        if let Err(e) = derived_safety::store_generated_embedding(
+                            &storage, &l1_chunk, embedding,
+                        ) {
                             warn!("Failed to store L1 embedding: {}", e);
                         }
                     }

@@ -241,6 +241,9 @@ pub async fn api_purge_memory_handler(
         existing_chunk.as_ref(),
     )
     .await?;
+    if outcome.purge_executed {
+        super::cache_invalidation::clear(&state).await;
+    }
 
     // Mark WAL pending committed regardless of `purge_executed` — recovery is a
     // no-op on missing chunk (symmetric replay), and leaving the pending entry
@@ -248,9 +251,6 @@ pub async fn api_purge_memory_handler(
     if let (Some(seq), Some(ref ilog)) = (intent_seq, &state.intent_log) {
         let mut log = ilog.lock().await;
         log.mark_committed(seq, OpType::PurgeChunk, &id)?;
-    }
-    if outcome.purge_executed {
-        state.query_cache.lock().await.clear();
     }
 
     if outcome.purge_executed {

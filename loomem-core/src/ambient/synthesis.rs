@@ -9,7 +9,7 @@
 //! MVP scope per `cycles/cycle-103a-layer1-endpoint-brief.md` Q1=C:
 //! - **High / Medium / Low tier** — single-source deterministic template:
 //!   normalize first-person → third-person, strip leading metaword phrases,
-//!   truncate at first sentence boundary, enforce 200-token per-snippet cap.
+//!   preserve complete content, enforce 200-token per-snippet cap.
 //! - **Conflict tier** — deterministic fallback template: "User has
 //!   expressed conflicting preferences about X — said Y on date D1 and Z on
 //!   date D2." LLM synthesis for conflict-tier deferred to /103a-full per
@@ -67,7 +67,7 @@ fn metaword_regex() -> &'static Regex {
 ///
 /// Steps (all deterministic, MVP):
 /// 1. Trim whitespace.
-/// 2. Truncate at first sentence boundary (`. `, `? `, `! `).
+/// 2. Preserve all sentences, including later corrections and qualifiers.
 /// 3. Apply first-person → third-person rewrite via prefix table.
 /// 4. Validate no metaword phrases remain (`validate_no_metawords`); fail
 ///    closed by returning `Err` if validation trips — caller drops the
@@ -92,8 +92,7 @@ pub fn render_text(content: &str) -> Result<String> {
     if trimmed.is_empty() {
         return Err(anyhow!("empty content cannot synthesize snippet"));
     }
-    let first_sentence = first_sentence(trimmed);
-    let rewritten = rewrite_first_person(first_sentence);
+    let rewritten = rewrite_sentence_prefixes(trimmed);
     if !validate_no_metawords(&rewritten) {
         return Err(anyhow!(
             "synthesized text violates plain-fact constraint (metaword detected)"
@@ -106,6 +105,22 @@ pub fn render_text(content: &str) -> Result<String> {
         ));
     }
     Ok(rewritten)
+}
+
+/// Rewrite sentence-leading first-person prefixes without discarding content.
+/// Boundary detection only controls rewrites; abbreviations cannot lose text.
+fn rewrite_sentence_prefixes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        let sentence = first_sentence(remaining);
+        out.push_str(&rewrite_first_person(sentence));
+        remaining = &remaining[sentence.len()..];
+        let trimmed = remaining.trim_start();
+        out.push_str(&remaining[..remaining.len() - trimmed.len()]);
+        remaining = trimmed;
+    }
+    out
 }
 
 /// Conflict-tier deterministic template per AC-4 + Q1=C MVP.
@@ -298,10 +313,29 @@ mod tests {
     }
 
     #[test]
-    fn render_text_strips_trailing_sentence() {
+    fn render_text_preserves_abbreviations_and_later_qualifiers() {
         let out = render_text("My dentist is Dr. Kowalski. The next visit is in March.").unwrap();
-        assert_eq!(out, "User's dentist is Dr.");
-        // Caveat: imperfect with "Dr." abbreviation — documented MVP limitation.
+        assert_eq!(
+            out,
+            "User's dentist is Dr. Kowalski. The next visit is in March."
+        );
+    }
+
+    #[test]
+    fn render_text_preserves_second_sentence_correction() {
+        assert_eq!(
+            render_text("I previously preferred blue. I now prefer red.").unwrap(),
+            "User previously preferred blue. User now prefer red."
+        );
+    }
+
+    #[test]
+    fn oversized_correction_drops_whole_chunk_instead_of_emitting_old_claim() {
+        let content = format!(
+            "I preferred blue. {} I now prefer red.",
+            "detail ".repeat(500)
+        );
+        assert!(render_text(&content).is_err());
     }
 
     #[test]

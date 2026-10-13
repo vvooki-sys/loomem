@@ -13,6 +13,8 @@ use loomem_core::TextDocument;
 use std::sync::Arc;
 use tracing::warn;
 
+mod reembed;
+
 /// Local duplicate of `search.rs::prepare_llm_input` — kept in sync by construction.
 /// Both wrap `sanitize_with_sources` + emit one warn per detection (with source tag
 /// `raw`/`stripped`/`both` for observability). Drift risk is low because
@@ -282,6 +284,7 @@ pub async fn delete_handler(
     };
 
     let found = state.store.delete_by_id(&payload.id)?;
+    super::cache_invalidation::clear(&state).await;
 
     // Also remove from Tantivy index
     let mut tantivy = state.tantivy.lock().await;
@@ -296,7 +299,6 @@ pub async fn delete_handler(
         let mut log = ilog.lock().await;
         log.mark_committed(seq, OpType::Delete, &payload.id)?;
     }
-    state.query_cache.lock().await.clear();
 
     let status = if found { "deleted" } else { "not_found" };
 
@@ -353,22 +355,16 @@ pub async fn purge_namespace_handler(
         .store
         .purge_namespace(&payload.stream, payload.dry_run)?;
 
-    // Remove from Tantivy index if not dry run
+    // Primary deletion is already durable: invalidate even if indexing fails.
     if !payload.dry_run {
-        let mut tantivy = state.tantivy.lock().await;
-        for id in &deleted_ids {
-            let _ = tantivy.delete_document(id);
-        }
-        drop(tantivy);
+        super::cache_invalidation::clear(&state).await;
+        state.tantivy.lock().await.delete_stream(&payload.stream)?;
     }
 
     // Intent log: mark committed
     if let (Some(seq), Some(ref ilog)) = (intent_seq, &state.intent_log) {
         let mut log = ilog.lock().await;
         log.mark_committed(seq, OpType::Purge, &payload.stream)?;
-    }
-    if !payload.dry_run {
-        state.query_cache.lock().await.clear();
     }
 
     Ok(Json(PurgeNamespaceResponse {
@@ -456,7 +452,7 @@ pub async fn api_delete_memory_handler(
         let mut log = ilog.lock().await;
         let _ = log.mark_committed(seq, OpType::Delete, &id);
     }
-    state.query_cache.lock().await.clear();
+    super::cache_invalidation::clear(&state).await;
 
     if !outcome.store_deleted {
         return Err((
@@ -618,7 +614,7 @@ pub async fn api_update_memory_handler(
     }
 
     // Invalidate query cache
-    state.query_cache.lock().await.clear();
+    super::cache_invalidation::clear(&state).await;
 
     Ok((
         StatusCode::OK,
@@ -784,7 +780,7 @@ pub async fn api_purge_namespace_handler(
         log.mark_committed(seq, OpType::Purge, &stream_id)?;
     }
     if !dry_run {
-        state.query_cache.lock().await.clear();
+        super::cache_invalidation::clear(&state).await;
     }
 
     Ok(Json(ApiPurgeResponse {
@@ -1334,88 +1330,8 @@ pub async fn re_embed_all_handler(
         ));
     }
 
-    let store = state.store.clone();
-    let http_client = state.http_client.clone();
-    let llm_config = state.config.llm.clone();
-    let local_embedder = state.local_embedder.clone();
-
     tokio::spawn(async move {
-        tracing::info!("Re-embed-all: starting (provider={})", llm_config.provider);
-
-        // Step 1: Get all chunks
-        let chunks = match store.get_all_chunks() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Re-embed-all: failed to get chunks: {}", e);
-                RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
-                return;
-            }
-        };
-
-        // Step 2: Clear all existing embeddings
-        let existing = store.get_all_embeddings().unwrap_or_default();
-        let mut cleared = 0_u32;
-        for (id, _) in &existing {
-            if store.delete_embedding(id).is_ok() {
-                cleared += 1;
-            }
-        }
-        tracing::info!("Re-embed-all: cleared {} old embeddings", cleared);
-
-        // Step 3: Re-embed all chunks
-        let total = chunks.len();
-        let mut embedded = 0_u32;
-        let mut failed = 0_u32;
-        let batch_size = 50;
-
-        for batch in chunks.chunks(batch_size) {
-            let texts: Vec<String> = batch.iter().map(|c| c.content.clone()).collect();
-
-            let embed_result = if let Some(ref embedder) = local_embedder {
-                embedder.embed_batch(&texts)
-            } else if let Some(_api_key) = llm_config.get_api_key() {
-                // Inline OpenAI batch call
-                let config_for_embed = llm_config.clone();
-                loomem_core::llm::embed_batch(&http_client, &config_for_embed, &texts).await
-            } else {
-                tracing::error!("Re-embed-all: no embedding provider");
-                break;
-            };
-
-            match embed_result {
-                Ok(embeddings) => {
-                    for (chunk, embedding) in batch.iter().zip(embeddings) {
-                        match store.store_embedding(&chunk.id, embedding) {
-                            Ok(()) => embedded += 1,
-                            Err(e) => {
-                                tracing::warn!("Re-embed-all: failed to store {}: {}", chunk.id, e);
-                                failed += 1;
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Re-embed-all: batch embed failed: {}", e);
-                    failed += batch.len() as u32;
-                }
-            }
-
-            if embedded.is_multiple_of(500) && embedded > 0 {
-                tracing::info!("Re-embed-all: {}/{} embedded", embedded, total);
-            }
-
-            // Rate limiting
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        }
-
-        tracing::info!(
-            "Re-embed-all complete: {}/{} embedded, {} failed, {} cleared",
-            embedded,
-            total,
-            failed,
-            cleared
-        );
-
+        reembed::run(state).await;
         RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
     });
 
@@ -2208,6 +2124,7 @@ pub async fn dream_handler(
         &state.tantivy,
         &state.http_client,
         loomem_core::dream::DreamRunContext {
+            pii_filter: &state.pii_filter,
             llm_config: &state.config.llm,
             dream_config: &state.config.dream,
             intent_log: state.intent_log.as_deref(),

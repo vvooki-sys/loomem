@@ -4,7 +4,13 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
+
+mod recovery;
+pub use recovery::recover;
+
+#[cfg(test)]
+mod recovery_tests;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntentLogConfig {
@@ -92,7 +98,10 @@ impl IntentLog {
         }
 
         let log_path = dir.join("current.log");
-        let existing_seq = Self::scan_max_seq(&log_path).unwrap_or(0);
+        let existing_seq = Self::scan_directory_max_seq(&dir)?;
+        let next_seq = existing_seq
+            .checked_add(1)
+            .context("Intent sequence exhausted")?;
 
         let file = OpenOptions::new()
             .create(true)
@@ -106,14 +115,14 @@ impl IntentLog {
             "Intent log opened at {} (size={}B, next_seq={})",
             log_path.display(),
             file_size,
-            existing_seq + 1
+            next_seq
         );
 
         Ok(Self {
             dir,
             file,
             file_size,
-            next_seq: AtomicU64::new(existing_seq + 1),
+            next_seq: AtomicU64::new(next_seq),
             rotate_counter: AtomicU64::new(0),
             max_size_bytes: (config.max_size_mb as u64) * 1024 * 1024,
             sync_on_write: config.sync_on_write,
@@ -152,22 +161,24 @@ impl IntentLog {
     /// Scan all log files for pending entries without matching committed marker.
     pub fn scan_pending(&self) -> Result<Vec<IntentEntry>> {
         let mut pending = std::collections::HashMap::<u64, IntentEntry>::new();
+        let mut committed = std::collections::HashSet::new();
 
         // Scan archived logs first (oldest to newest)
         let mut archives: Vec<_> = self.archived_logs()?;
-        archives.sort();
+        archives.sort_by_key(|path| archive_order(path));
 
         for path in &archives {
-            Self::scan_file(path, &mut pending)?;
+            Self::scan_file(path, &mut pending, &mut committed)?;
         }
 
         // Then scan current log
         let current = self.dir.join("current.log");
         if current.exists() {
-            Self::scan_file(&current, &mut pending)?;
+            Self::scan_file(&current, &mut pending, &mut committed)?;
         }
 
-        let result: Vec<_> = pending.into_values().collect();
+        let mut result: Vec<_> = pending.into_values().collect();
+        result.sort_by_key(|entry| entry.seq);
         Ok(result)
     }
 
@@ -248,9 +259,14 @@ impl IntentLog {
         }
 
         let ts = now_millis();
-        let rot = self.rotate_counter.fetch_add(1, Ordering::SeqCst);
-        let archive_name = format!("wal_{}_{}.log", ts, rot);
-        let archive_path = self.dir.join(&archive_name);
+        let (archive_name, archive_path) = loop {
+            let rot = self.rotate_counter.fetch_add(1, Ordering::SeqCst);
+            let name = format!("wal_{}_{}.log", ts, rot);
+            let path = self.dir.join(&name);
+            if !path.exists() {
+                break (name, path);
+            }
+        };
         let current_path = self.dir.join("current.log");
 
         // Flush before rename
@@ -287,6 +303,7 @@ impl IntentLog {
     fn scan_file(
         path: &Path,
         pending: &mut std::collections::HashMap<u64, IntentEntry>,
+        committed: &mut std::collections::HashSet<u64>,
     ) -> Result<()> {
         let file = File::open(path)
             .with_context(|| format!("Failed to open log file: {}", path.display()))?;
@@ -305,9 +322,10 @@ impl IntentLog {
 
             match serde_json::from_str::<IntentEntry>(&line) {
                 Ok(entry) => {
-                    if entry.status == OpStatus::Pending {
+                    if entry.status == OpStatus::Pending && !committed.contains(&entry.seq) {
                         pending.insert(entry.seq, entry);
                     } else if entry.status == OpStatus::Committed {
+                        committed.insert(entry.seq);
                         pending.remove(&entry.seq);
                     }
                 }
@@ -320,6 +338,19 @@ impl IntentLog {
         Ok(())
     }
 
+    fn scan_directory_max_seq(dir: &Path) -> Result<u64> {
+        let mut max_seq = 0;
+        for entry in fs::read_dir(dir).context("Failed to list intent logs")? {
+            let entry = entry.context("Failed to read intent log directory entry")?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name == "current.log" || (name.starts_with("wal_") && name.ends_with(".log")) {
+                max_seq = max_seq.max(Self::scan_max_seq(&entry.path())?);
+            }
+        }
+        Ok(max_seq)
+    }
+
     fn scan_max_seq(path: &Path) -> Result<u64> {
         if !path.exists() {
             return Ok(0);
@@ -329,7 +360,8 @@ impl IntentLog {
         let mut max_seq: u64 = 0;
 
         for line in BufReader::new(file).lines() {
-            let Ok(line) = line else { continue };
+            let line =
+                line.with_context(|| format!("Failed to read log file: {}", path.display()))?;
             if line.trim().is_empty() {
                 continue;
             }
@@ -342,168 +374,6 @@ impl IntentLog {
 
         Ok(max_seq)
     }
-}
-
-/// Replay a single chunk's Tantivy state from RocksDB. Used by recover()
-/// for both Store and Consolidate replay paths.
-///
-/// Returns Ok(true) if the chunk existed in RocksDB and was re-indexed,
-/// Ok(false) if the chunk was missing (caller increments report.skipped).
-fn replay_chunk_to_tantivy(
-    store: &crate::storage::RocksDbStore,
-    tantivy: &mut crate::tantivy_index::TantivyIndex,
-    chunk_id: &str,
-) -> Result<bool> {
-    match store.get_chunk(chunk_id)? {
-        Some(chunk) => {
-            let doc = build_recovery_text_doc(store, &chunk)?;
-            tantivy.upsert_document(doc)?;
-            Ok(true)
-        }
-        None => Ok(false),
-    }
-}
-
-/// Build a Tantivy TextDocument for a chunk, fetching entities/relations from RocksDB.
-/// Used by recover() for both Store and Consolidate replay paths.
-fn build_recovery_text_doc(
-    store: &crate::storage::RocksDbStore,
-    chunk: &crate::storage::Chunk,
-) -> Result<crate::tantivy_index::TextDocument> {
-    let entities = store.get_entities(&chunk.id, &chunk.stream)?;
-    let relations = store.get_relations(&chunk.id, &chunk.stream)?;
-
-    let entity_text = entities.join(" ");
-    let relation_text = relations
-        .iter()
-        .map(|(s, r, o)| format!("{} {} {}", s, r, o))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    let event_date_ts: Option<i64> = chunk
-        .extraction_meta
-        .as_ref()
-        .and_then(|m| m.event_date.as_ref())
-        .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-        .and_then(|d| d.and_hms_opt(12, 0, 0))
-        .map(|dt| dt.and_utc().timestamp());
-
-    Ok(crate::tantivy_index::TextDocument {
-        id: chunk.id.clone(),
-        content: chunk.content.clone(),
-        user_id: String::new(),
-        app_id: String::new(),
-        level: chunk.level,
-        stream: chunk.stream.clone(),
-        timestamp: chunk.timestamp as i64,
-        entities: Some(entity_text),
-        relations: Some(relation_text),
-        event_date: event_date_ts,
-        source_agent: chunk.source.as_ref().map(|s| s.agent.clone()),
-    })
-}
-
-/// Recovery: replay pending operations after crash.
-pub fn recover(
-    intent_log: &mut IntentLog,
-    store: &crate::storage::RocksDbStore,
-    tantivy: &mut crate::tantivy_index::TantivyIndex,
-) -> Result<RecoveryReport> {
-    let pending = intent_log.scan_pending()?;
-
-    if pending.is_empty() {
-        debug!("Intent log recovery: no pending entries");
-        return Ok(RecoveryReport::default());
-    }
-
-    info!(
-        "Intent log recovery: {} pending entries to process",
-        pending.len()
-    );
-
-    let mut report = RecoveryReport::default();
-
-    for entry in &pending {
-        match entry.op {
-            OpType::Store => {
-                // RocksDB has it? Re-index in Tantivy. Doesn't have it? Skip.
-                if replay_chunk_to_tantivy(store, tantivy, &entry.id)? {
-                    info!("Recovery: re-indexed store op for chunk {}", entry.id);
-                    report.replayed += 1;
-                } else {
-                    warn!(
-                        "Recovery: pending store for {} but not in RocksDB, skipping",
-                        entry.id
-                    );
-                    report.skipped += 1;
-                }
-            }
-            OpType::Delete => {
-                // Ensure chunk is gone from both stores
-                if store.get_chunk(&entry.id)?.is_some() {
-                    store.delete_by_id(&entry.id)?;
-                    info!("Recovery: completed delete for chunk {}", entry.id);
-                }
-                tantivy.delete_document(&entry.id)?;
-                report.replayed += 1;
-            }
-            OpType::Purge => {
-                // entry.id holds the stream ID for purge ops
-                let deleted = store.purge_namespace(&entry.id, false)?;
-                for id in &deleted {
-                    tantivy.delete_document(id)?;
-                }
-                info!(
-                    "Recovery: replayed purge for stream {} ({} chunks)",
-                    entry.id,
-                    deleted.len()
-                );
-                report.replayed += 1;
-            }
-            OpType::PurgeChunk => {
-                // cycle/135: single-chunk hard-delete replay. entry.id is the
-                // chunk UUID. `hard_delete_by_id` cascades to RocksDB primary,
-                // CF_EMBEDDINGS, entity, and relation keys. Tantivy delete is
-                // idempotent — safe to issue regardless of store outcome so a
-                // crash between store and tantivy cascade steps still converges.
-                let found = store.hard_delete_by_id(&entry.id)?;
-                tantivy.delete_document(&entry.id)?;
-                if found {
-                    info!("Recovery: replayed purge_chunk for {}", entry.id);
-                } else {
-                    debug!(
-                        "Recovery: purge_chunk for {} no-op (already gone)",
-                        entry.id
-                    );
-                }
-                report.replayed += 1;
-            }
-            OpType::Consolidate => {
-                // If L1 chunk doesn't exist, source chunks' in_progress flags
-                // are already cleared by recover_orphaned_chunks
-                if replay_chunk_to_tantivy(store, tantivy, &entry.id)? {
-                    info!("Recovery: re-indexed consolidate op for chunk {}", entry.id);
-                    report.replayed += 1;
-                } else {
-                    warn!(
-                        "Recovery: pending consolidation for {} but L1 not in RocksDB, skipping",
-                        entry.id
-                    );
-                    report.skipped += 1;
-                }
-            }
-        }
-
-        intent_log.mark_committed(entry.seq, entry.op, &entry.id)?;
-    }
-
-    tantivy.commit()?;
-
-    info!(
-        "Intent log recovery complete: {} replayed, {} skipped",
-        report.replayed, report.skipped
-    );
-    Ok(report)
 }
 
 #[derive(Debug, Default)]
@@ -539,6 +409,17 @@ fn count_pending_in_archive(path: &Path) -> usize {
         }
     }
     count
+}
+
+fn archive_order(path: &Path) -> (u64, u64) {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let mut parts = stem.strip_prefix("wal_").unwrap_or_default().split('_');
+    let timestamp = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let rotation = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (timestamp, rotation)
 }
 
 /// Extract the rotation timestamp encoded in `wal_<ts_millis>_<rot>.log` and

@@ -418,6 +418,12 @@ async fn test_dream_run_e2e_blocks_a1_supersede() -> Result<()> {
         DreamApplyContext {
             stream,
             subject: "back pain",
+            pii_filter: &loomem_core::pii_filter::PiiFilter::new(
+                loomem_core::pii_filter::PiiConfig {
+                    blocklist_file: String::new(),
+                    ..Default::default()
+                },
+            )?,
             chunks: &chunks_in_group,
             model: "gpt-4.1-mini",
             intent_log: None,
