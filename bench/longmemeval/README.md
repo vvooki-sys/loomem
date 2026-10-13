@@ -312,3 +312,29 @@ earlier pilot failures and results remain immutable.
 Malformed/truncated calls are failures and remain in the expected denominator.
 `experiment.qa_metrics` and `paired_metrics` report category/abstention slices and
 uncertainty; a small development pilot cannot establish a general quality gain.
+
+### Opt-in context selection experiment
+
+`qa_selection.select_context(question, records, token_budget, reader_model)` selects
+whole returned records before the existing QA runner. It returns the canonical
+packed-context fields plus `selected_records` and `selection` metadata. The default
+`qa_context.pack_context` and reader/judge prompts remain unchanged.
+
+Policy `rank_query_novelty_sqrt_cost_v1` anchors the first record that fits, then
+selects by original rank and coverage of question terms divided by square-root
+incremental token cost. Term weights come only from the current candidate pool;
+repetition within one record does not increase its term coverage. Selected records
+retain their original text and engine order. All records are retained unchanged
+when they fit. Every trial counts the full serialized, HTML-escaped evidence with
+the reader tokenizer; record-token estimates are not summed as a budget surrogate.
+
+This is an evaluation helper, not a production retrieval default. It accepts no
+reference answer, question category, source annotations or correctness labels.
+Opaque IDs remain part of serialization/token cost, but are not relevance signals.
+Lexical matching does not establish resistance to malicious or keyword-stuffed
+memories. A custom experiment must bind the selector source/policy, all original
+candidates, selected records, exact resulting context and unchanged reader/judge
+configuration before calling the QA runner. Save selection diagnostics separately
+from the runner's subsequent first-fit packing of the already selected records.
+Previously observed development questions support diagnostics only; evaluate a
+frozen candidate on untouched data before claiming a general improvement.
