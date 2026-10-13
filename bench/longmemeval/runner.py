@@ -33,8 +33,10 @@ def local_endpoint(value):
 def settings_from(config):
     settings = decode(Path(config).read_text(), "config").get("runner")
     required = {"endpoint", "instance_id", "data_dir", "run_id", "top_k", "mode"}
-    if not isinstance(settings, dict) or not required.issubset(settings) or set(settings) - required - {"local_engine", "facts_path", "facts_sha256"}:
+    if not isinstance(settings, dict) or not required.issubset(settings) or set(settings) - required - {"local_engine", "facts_path", "facts_sha256", "capture_context"}:
         fail("Config runner must contain exactly endpoint/instance_id/data_dir/run_id/top_k/mode")
+    if "capture_context" in settings and type(settings["capture_context"]) is not bool:
+        fail("capture_context must be a JSON boolean")
     local_endpoint(settings["endpoint"])
     for key in ("instance_id", "run_id", "data_dir"):
         if not isinstance(settings[key], str) or not settings[key].strip():
@@ -140,10 +142,60 @@ def check_evidence(evidence, expected, retrieved):
         fail("Response evidence does not match retrieval order")
 
 
-def retrieve(adapter, row, manifest_hash):
+def context_records(value, ids):
+    """Validate exact returned evidence; never fill fields from source records."""
+    if not isinstance(value, list):
+        fail("Missing actual returned context records")
+    for record in value:
+        if (not isinstance(record, dict) or set(record) != {"record_id", "content"}
+                or not isinstance(record["content"], str)):
+            fail("Context records require only record_id and actual content")
+    if id_list([record["record_id"] for record in value]) != ids:
+        fail("Actual context does not preserve returned IDs and rank")
+    return value
+
+
+def context_artifact(found, row, manifest_hash, ids):
+    return {"schema_version": 1, "question_id": row["question_id"],
+            "manifest_sha256": manifest_hash,
+            "records": context_records(found.get("retrieved_records"), ids)}
+
+
+def save_context_artifact(directory, artifact):
+    """Write immutable content-addressed evidence only on explicit opt-in."""
+    digest = canonical_hash(artifact)
+    path = Path(directory) / (digest + ".json")
+    if path.exists():
+        if canonical_hash(decode(path.read_text(), "context artifact")) != digest:
+            fail("Existing context artifact is corrupt")
+        return
+    with path.open("x") as handle:
+        handle.write(json.dumps(artifact, ensure_ascii=False, allow_nan=False) + "\n")
+
+
+def load_context_artifact(path, trace, manifest_hash):
+    """Verify immutable context against its manifest-bound ID-only trace."""
+    artifact = decode(Path(path).read_text(), "context artifact")
+    if (not isinstance(artifact, dict) or set(artifact) != {
+            "schema_version", "question_id", "manifest_sha256", "records"}
+            or type(artifact["schema_version"]) is not int or artifact["schema_version"] != 1
+            or artifact["question_id"] != trace.get("question_id")
+            or artifact["manifest_sha256"] != manifest_hash
+            or trace.get("manifest_sha256") != manifest_hash
+            or trace.get("status") != "retrieval_complete"
+            or canonical_hash(artifact) != trace.get("context_sha256")):
+        fail("Context artifact scope, content or manifest mismatch")
+    context_records(artifact["records"], trace["retrieved_ids"])
+    return artifact
+
+
+def retrieve(adapter, row, manifest_hash, *, context_sink=None):
     result = {"question_id": row["question_id"], "manifest_sha256": manifest_hash,
               "status": "failed", "failure_stage": "prepare"}
     try:
+        capture = adapter.settings.get("capture_context", False)
+        if capture != (context_sink is not None):
+            fail("Context capture requires both manifest opt-in and an explicit sink")
         records, query = question_payload(row, adapter.settings)
         scope = canonical_hash([manifest_hash, row["question_id"]])
         expected = [record["record_id"] for record in records]
@@ -162,13 +214,21 @@ def retrieve(adapter, row, manifest_hash):
                 or set(id_list(ready.get("indexed_ids"))) != set(expected)):
             fail("Readiness unproven")
         result["failure_stage"] = "retrieval"
-        found = adapter.request("/search", {"scope": scope, "query": query,
-                                "top_k": adapter.settings["top_k"], "trace": True})
+        search = {"scope": scope, "query": query,
+                  "top_k": adapter.settings["top_k"], "trace": True}
+        if capture:
+            search["capture_context"] = True
+        found = adapter.request("/search", search)
         ids = id_list(found.get("retrieved_ids"))
         if not set(ids).issubset(expected) or len(ids) > adapter.settings["top_k"]:
             fail("Retrieved IDs outside question scope or top_k")
         evidence = trace_projection(found)
         check_evidence(evidence, expected, ids)
+        if capture:
+            artifact = context_artifact(found, row, manifest_hash, ids)
+            digest = canonical_hash(artifact)
+            context_sink(artifact)
+            result["context_sha256"] = digest
         result.update({"status": "retrieval_complete", "retrieved_ids": ids,
                        "evidence": evidence})
         result.pop("failure_stage")
@@ -185,7 +245,7 @@ def load_resume(path, rows, manifest_hash, settings):
         return {}
     index, seen = {row["question_id"] for row in rows}, {}
     allowed = {"question_id", "manifest_sha256", "status", "failure_stage", "ingested_ids",
-               "retrieved_ids", "evidence"}
+               "retrieved_ids", "evidence", "context_sha256"}
     for line in path.read_text().splitlines():
         record = decode(line, "trace sidecar")
         qid = record.get("question_id")
@@ -196,9 +256,16 @@ def load_resume(path, rows, manifest_hash, settings):
         if record["status"] == "failed" and record.get("failure_stage") not in (
                 "prepare", "identity", "ingest", "readiness", "retrieval"):
             fail("Invalid failure stage")
-        if record["status"] == "failed" and ({"retrieved_ids", "evidence"} & set(record)):
+        if record["status"] == "failed" and ({"retrieved_ids", "evidence", "context_sha256"} & set(record)):
             fail("Failed resume rows cannot carry retrieval evidence")
         if record["status"] == "retrieval_complete":
+            capture = settings.get("capture_context", False)
+            digest = record.get("context_sha256")
+            if capture != (digest is not None):
+                fail("Resume context capture differs from frozen configuration")
+            if capture and (not isinstance(digest, str) or len(digest) != 64
+                            or any(char not in "0123456789abcdef" for char in digest)):
+                fail("Invalid context artifact digest")
             id_list(record.get("retrieved_ids"))
             if "failure_stage" in record:
                 fail("Completed retrieval cannot carry failure stage")
@@ -224,6 +291,9 @@ def load_resume(path, rows, manifest_hash, settings):
 def run(args):
     manifest_hash = check_manifest(args.manifest, args.dataset, args.config)
     settings = settings_from(args.config)
+    contexts = getattr(args, "contexts", None)
+    if settings.get("capture_context", False) != (contexts is not None):
+        fail("--contexts requires frozen runner.capture_context=true and vice versa")
     rows = decode(args.dataset.read_text(), "dataset")
     # Validate every projection before the first network call or write.
     for row in rows:
@@ -234,6 +304,12 @@ def run(args):
     if args.trace.exists() and not args.resume:
         fail("Existing trace requires --resume")
     seen = load_resume(args.trace, rows, manifest_hash, settings)
+    if contexts is not None:
+        for record in seen.values():
+            if record["status"] == "retrieval_complete":
+                load_context_artifact(Path(contexts) / (record["context_sha256"] + ".json"),
+                                      record, manifest_hash)
+        Path(contexts).mkdir(parents=True, exist_ok=True)
     if "local_engine" in settings:
         from runner_local import LocalEngineAdapter
         adapter = LocalEngineAdapter(settings)
@@ -243,7 +319,8 @@ def run(args):
         for row in rows:
             if row["question_id"] in seen:
                 continue
-            record = retrieve(adapter, row, manifest_hash)
+            sink = None if contexts is None else lambda artifact: save_context_artifact(contexts, artifact)
+            record = retrieve(adapter, row, manifest_hash, context_sink=sink)
             handle.write(json.dumps(record, allow_nan=False) + "\n")
             handle.flush()
             seen[row["question_id"]] = record
@@ -257,6 +334,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("dataset", "config", "manifest", "trace"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--contexts", type=Path, help="Explicit directory for actual returned evidence")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)

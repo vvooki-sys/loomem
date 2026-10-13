@@ -12,8 +12,9 @@ import socket
 import subprocess
 import time
 from urllib.request import Request
+from urllib.parse import quote
 
-from runner import Adapter
+from runner import Adapter, context_records, id_list
 from validate import fail, sha256
 
 
@@ -112,6 +113,7 @@ class LocalEngineAdapter(Adapter):
         self.token = secrets.token_hex(32)
         # Fail before launching when another listener occupies the requested port.
         with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", int(self.endpoint.rsplit(":", 1)[1])))
         env = {"PATH": os.defpath, "HOME": str(work), "LOOMEM_CONFIG": str(work / "config.toml"),
                "LOOMEM_AUTH_TOKEN": self.token, "RUST_LOG": "error"}
@@ -138,14 +140,44 @@ class LocalEngineAdapter(Adapter):
         if path == "/ready":
             return self.ready(payload)
         if path == "/search":
-            found = self.engine_request("/v1/search", {key: payload[key] for key in
-                                         ("query", "top_k", "trace")})
+            search = {key: payload[key] for key in ("query", "top_k", "trace")}
+            # Benchmark arms must not boost importance/access state for later arms.
+            search["dry_run"] = True
+            found = self.engine_request("/v1/search", search)
             ids = [self.mapping[hit["id"]] for hit in found["results"]]
             trace = found.get("trace_metadata", {})
             for stage in trace.get("evidence", {}).get("stages", []):
                 stage["chunk_ids"] = [self.mapping[item] for item in stage["chunk_ids"]]
-            return {"retrieved_ids": ids, "trace_metadata": trace}
+            result = {"retrieved_ids": ids, "trace_metadata": trace}
+            if payload.get("capture_context") is True:
+                result["retrieved_records"] = [
+                    {"record_id": self.mapping[hit["id"]], "content": hit["content"]}
+                    for hit in found["results"]]
+            return result
         fail("Unsupported local adapter operation")
+
+    def fetch_records(self, record_ids):
+        """Read actual sanitized stored evidence for scoped neighbor IDs, in order.
+
+        Call before close(); opt-in is manifest-bound. Metadata already present
+        in the stored content envelope is retained verbatim, never reconstructed.
+        """
+        if self.settings.get("capture_context") is not True:
+            fail("Fetching text requires explicit context capture opt-in")
+        if self.process is None or self.process.poll() is not None:
+            fail("Owned engine unavailable")
+        ids = id_list(record_ids)
+        reverse = {record_id: engine_id for engine_id, record_id in self.mapping.items()}
+        if len(reverse) != len(self.mapping) or set(ids) - set(reverse):
+            fail("Requested neighbor ID outside current question")
+        records = []
+        for record_id in ids:
+            engine_id = reverse[record_id]
+            item = self.engine_request("/api/memories/" + quote(engine_id, safe=""))
+            if item.get("id") != engine_id:
+                fail("Stored evidence identity mismatch")
+            records.append({"record_id": record_id, "content": item.get("content")})
+        return context_records(records, ids)
 
     def ingest(self, payload):
         accepted = []

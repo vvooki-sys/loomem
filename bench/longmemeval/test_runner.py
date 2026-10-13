@@ -44,6 +44,8 @@ def fixture(settings, behavior="ok"):
                           "indexes_ready": True, "indexed_ids": ids}
             else:
                 result = {"retrieved_ids": ids, "content": "DO_NOT_PERSIST", "answer": "GOLD"}
+                if body.get("capture_context") is True:
+                    result["retrieved_records"] = [{"record_id": item, "content": "Actual sanitized [REDACTED]"} for item in ids]
                 if behavior == "foreign":
                     result["retrieved_ids"] = ["other-question"]
             self.send_response(200)
@@ -150,6 +152,109 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.trace_projection({"trace_metadata": {"evidence": {"schema_version": 1,
                 "coverage": "post_rank_to_response", "stages": []}}})
+
+    def test_explicit_context_capture_and_verified_resume(self):
+        self.settings["capture_context"] = True
+        self.args.contexts = self.args.dataset.parent / "contexts"
+        with fixture(self.settings) as requests:
+            self.freeze()
+            self.assertEqual(runner.run(self.args)["failed"], 0)
+            trace = json.loads(self.args.trace.read_text())
+            self.assertNotIn("Actual sanitized", self.args.trace.read_text())
+            path = self.args.contexts / (trace["context_sha256"] + ".json")
+            artifact = runner.load_context_artifact(path, trace, trace["manifest_sha256"])
+            self.assertEqual(artifact["records"][0]["content"], "Actual sanitized [REDACTED]")
+            self.assertNotIn("Synthetic blue widget", path.read_text())
+            self.assertNotIn("GOLD", path.read_text())
+            self.args.resume = True
+            before = len(requests)
+            self.assertEqual(runner.run(self.args)["failed"], 0)
+            self.assertEqual(len(requests), before)
+            artifact["records"][0]["content"] = "Tampered actual evidence"
+            path.write_text(json.dumps(artifact))
+            with self.assertRaises(ValueError):
+                runner.run(self.args)
+            self.assertEqual(len(requests), before)
+
+    def test_context_capture_requires_manifest_opt_in(self):
+        self.args.contexts = self.args.dataset.parent / "contexts"
+        self.freeze()
+        with self.assertRaises(ValueError):
+            runner.run(self.args)
+        self.assertFalse(self.args.contexts.exists())
+
+    def test_context_capture_requires_explicit_sink(self):
+        self.settings["capture_context"] = True
+        self.freeze()
+        with self.assertRaises(ValueError):
+            runner.run(self.args)
+
+    def test_context_record_shape_and_rank_are_exact(self):
+        for records in ([{"record_id": "b", "content": "B"}, {"record_id": "a", "content": "A"}],
+                        [{"record_id": "a", "content": "A", "answer": "GOLD"}],
+                        [{"record_id": "a", "content": None}]):
+            with self.subTest(records=records), self.assertRaises(ValueError):
+                runner.context_records(records, ["a", "b"])
+
+    def test_local_capture_uses_actual_sanitized_engine_return(self):
+        from types import SimpleNamespace
+        adapter = runner_local.LocalEngineAdapter.__new__(runner_local.LocalEngineAdapter)
+        adapter.process = SimpleNamespace(poll=lambda: None)
+        adapter.mapping = {"engine-a": "record-a", "engine-b": "record-b"}
+        forwarded = []
+        def search_request(path, payload):
+            self.assertEqual(path, "/v1/search")
+            forwarded.append(payload)
+            return {"results": [
+                {"id": "engine-b", "content": "Actual sanitized B"},
+                {"id": "engine-a", "content": "Actual sanitized A"}]}
+        adapter.engine_request = search_request
+        result = adapter.request("/search", {"query": "test", "top_k": 2,
+                                           "trace": True, "capture_context": True})
+        self.assertEqual(result["retrieved_records"], [
+            {"record_id": "record-b", "content": "Actual sanitized B"},
+            {"record_id": "record-a", "content": "Actual sanitized A"}])
+        result = adapter.request("/search", {"query": "test", "top_k": 2, "trace": True})
+        self.assertNotIn("retrieved_records", result)
+        self.assertEqual(len(forwarded), 2)
+        self.assertTrue(all(payload["dry_run"] is True for payload in forwarded))
+        self.assertTrue(all(payload["trace"] is True for payload in forwarded))
+
+    def test_owned_adapter_refuses_active_listener_even_with_reuse(self):
+        with fixture(self.settings):
+            adapter = runner_local.LocalEngineAdapter.__new__(runner_local.LocalEngineAdapter)
+            adapter.settings = self.settings
+            adapter.endpoint = self.settings["endpoint"]
+            adapter.process = None
+            adapter.counter = 0
+            adapter.invocation = self.args.dataset.parent
+            with patch.object(runner_local, "effective_config", return_value=""), \
+                    patch.object(runner_local.subprocess, "Popen", side_effect=AssertionError("spawn")), \
+                    self.assertRaises(OSError):
+                adapter.identity()
+
+    def test_neighbor_fetch_is_scoped_ordered_actual_content(self):
+        from types import SimpleNamespace
+        adapter = runner_local.LocalEngineAdapter.__new__(runner_local.LocalEngineAdapter)
+        adapter.settings = {"capture_context": True}
+        adapter.process = SimpleNamespace(poll=lambda: None)
+        adapter.mapping = {"engine-a": "record-a", "engine-b": "record-b"}
+        requests = []
+        def request(path):
+            requests.append(path)
+            engine_id = path.rsplit("/", 1)[1]
+            return {"id": engine_id, "content": "Actual stored " + engine_id}
+        adapter.engine_request = request
+        self.assertEqual(adapter.fetch_records(["record-b", "record-a"]), [
+            {"record_id": "record-b", "content": "Actual stored engine-b"},
+            {"record_id": "record-a", "content": "Actual stored engine-a"}])
+        self.assertEqual(requests, ["/api/memories/engine-b", "/api/memories/engine-a"])
+        with self.assertRaises(ValueError):
+            adapter.fetch_records(["another-question"])
+        self.assertEqual(len(requests), 2)
+        adapter.settings["capture_context"] = False
+        with self.assertRaises(ValueError):
+            adapter.fetch_records(["record-a"])
 
     def test_raw_facts_are_manifest_bound(self):
         from validate import sha256

@@ -238,3 +238,60 @@ contain no source text, query, exception body, answer or model output. Original
 record IDs demonstrate provenance only: a later reader must consume actual
 sanitized engine evidence, not reconstruct potentially different pre-sanitization
 text from those IDs.
+
+## Budget-bound reader/judge pilot
+
+`experiment.py` freezes a seed-based, category-balanced development/pilot/evaluation
+split from the dataset. Default sizes are 120/18/380 for the 500-question dataset.
+Exact full-history groups stay together, but individual source sessions can overlap;
+this is not a source-unseen generalization split. Never tune on the evaluation set.
+
+Opt in to actual returned evidence with frozen `runner.capture_context: true` and
+`runner.py --contexts /absolute/path/contexts`. Content-addressed artifacts retain
+engine-returned sanitized strings; their hashes and ordered IDs are verified on
+resume. Keep artifacts outside the repository. Controlled local searches always use
+`dry_run: true`, avoiding search-induced boosts between experimental arms.
+
+`qa.py` runs separate reader and judge stages over those artifacts. Its optional
+tokenizer dependency is `tiktoken` (pilot verified with 0.12.0, o200k_base). Freeze
+its version and the dated model ID in experiment artifacts. `qa_context.py` packs
+whole returned records and counts the HTML-escaped evidence actually sent to the
+reader. The configured budget covers evidence; question/system/framing and output
+are accounted separately. `qa_variants.py` offers baseline20, expanded60 and
+expanded60_neighbors. Neighbors require actual scoped GET results; original corpus
+text is never substituted for engine output.
+
+The frozen pilot model is `gpt-4.1-2025-04-14` for both stages. Config includes
+`qa.reader` and `qa.judge`, each with `model`, `context_window_tokens` (1047576),
+`max_completion_tokens` (512 reader / 8 judge), `input_usd_per_million` (`"2"`),
+`output_usd_per_million` (`"8"`), `temperature` (0), `seed` (42), and
+`timeout_seconds` (90). Top-level model/prompt hashes, engine/harness revisions,
+execution-config digest, context budget and seed remain mandatory. Verify pricing
+against [official model documentation](https://developers.openai.com/api/docs/models/gpt-4.1)
+before a new paid campaign. The current allowlist rejects unsupported models and
+understated context/price bounds.
+
+```sh
+python3 bench/longmemeval/qa.py \
+  --dataset /absolute/path/pilot.json --config /absolute/path/config.json \
+  --manifest /absolute/path/manifest.json --traces /absolute/path/trace.jsonl \
+  --contexts /absolute/path/contexts --ledger /absolute/path/campaign-ledger.json \
+  --cache /absolute/path/completion-cache --output /absolute/path/qa-results
+```
+
+This command makes paid calls using `OPENAI_API_KEY`. Use the **same canonical
+ledger path for every arm and stage**. The CLI fixes the campaign ceiling at
+100 USD. `budget.py` reserves a full-model-window input bound plus maximum output
+before HTTP, persists reservations atomically under a process lock, and settles
+from returned usage at the frozen uncached rates. Cache discounts are not assumed,
+so estimates may exceed invoiced cost. Uncertain failures retain their reservation;
+there are no automatic retries. Never delete/recreate a ledger to bypass its cap.
+Local cost accounting does not set an account-wide provider spending limit.
+
+Judge prompts are attributed to a pinned MIT-licensed upstream LongMemEval revision
+in `qa_prompts.py`. Parsing requires exact yes/no, unlike upstream substring parsing;
+report scores as **modified strict-evaluator results** with reader/judge IDs, not
+as an official leaderboard score. Gold answers are sent only to the separate judge.
+Malformed/truncated calls are failures and remain in the expected denominator.
+`experiment.qa_metrics` and `paired_metrics` report category/abstention slices and
+uncertainty; a small development pilot cannot establish a general quality gain.
