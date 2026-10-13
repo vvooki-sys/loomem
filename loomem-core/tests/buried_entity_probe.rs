@@ -286,6 +286,7 @@ fn probe_config() -> loomem_core::config::Config {
             intent_log: loomem_core::config::IntentLogConfig::default(),
         },
         search: loomem_core::config::SearchConfig {
+            max_request_top_k: 1000,
             top_k: 10,
             surprise_boost: 1.5,
             hybrid_weights: loomem_core::config::HybridWeightsConfig {

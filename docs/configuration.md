@@ -77,6 +77,7 @@ sync_on_write = false
 ```toml
 [search]
 top_k = 10
+max_request_top_k = 1000      # HTTP top_k must be 1..this limit; MCP caps are separate
 surprise_boost = 1.5
 synonyms_file = "synonyms.toml"
 entities_file = "entities.toml"
@@ -90,6 +91,7 @@ stem_polish = true
 | Key | Type | Description |
 |-----|------|-------------|
 | `top_k` | int | Default number of search results |
+| `max_request_top_k` | int | HTTP result limit ceiling (default 1000); zero or requests above it return 400 before retrieval. MCP caps remain separate. |
 | `surprise_boost` | f64 | Novelty multiplier on ingest (Titans-inspired) |
 | `synonyms_file` | string | Path to synonym expansion map |
 | `entities_file` | string | Path to entity dictionary |

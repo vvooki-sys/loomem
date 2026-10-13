@@ -8,7 +8,8 @@ use crate::config::Config;
 use crate::decay::DecayConfig;
 use crate::graph::GraphSearchConfig;
 use crate::tantivy_index::SearchResult;
-use crate::vector_search;
+mod candidate_budget;
+pub use candidate_budget::{SearchCandidateBudget, VectorSearchOptions};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchConfig {
@@ -16,6 +17,9 @@ pub struct SearchConfig {
     pub decay: DecayConfig,
     pub surprise_boost: f64,
     pub top_k: usize,
+    /// HTTP request ceiling; default preserves old config-file readability.
+    #[serde(default = "candidate_budget::default_max_request_top_k")]
+    pub max_request_top_k: usize,
     pub synonyms_file: String,
     pub stem_polish: bool,
     pub entities_file: String,
@@ -219,19 +223,17 @@ impl HybridSearchEngine {
     /// in the candidate pool handed to downstream boosting/reranking even
     /// when their fused score falls below the `top_k * 3` cut. Their score
     /// is computed by the exact same formula as every other candidate; the
-    /// exemption changes *membership*, never ordering. With `guaranteed =
-    /// None` this is byte-identical to the pre-cycle path (the public
-    /// wrapper above delegates with `None`).
-    pub fn fuse_with_vector_guaranteed(
+    /// exemption changes *membership*, never ordering. `budget` controls the
+    /// candidate pool independently of the final response count. The legacy
+    /// wrapper retains the configured budget and existing ranking formula.
+    pub fn fuse_with_vector_budget(
         &self,
         bm25_results: Vec<SearchResult>,
         vector_scores: Vec<(String, f32)>,
         store: Option<&crate::storage::RocksDbStore>,
         guaranteed: Option<&std::collections::HashSet<String>>,
+        budget: SearchCandidateBudget,
     ) -> Result<Vec<HybridSearchResult>> {
-        let weights = &self.config.search.hybrid_weights;
-        let decay_config = &self.config.search.decay;
-
         // WS-1(a) (Spectron gap brief 2026-07-09): absolute-similarity floor.
         // Drop vector candidates whose *raw* cosine sits below the floor
         // before max-normalization — otherwise the top hit of a noise-only
@@ -294,8 +296,8 @@ impl HybridSearchEngine {
             let vector_score = *vector_map.get(&id).unwrap_or(&0.0);
 
             // Weighted fusion
-            let fusion_score =
-                weights.bm25 * bm25_score as f64 + weights.vector * vector_score as f64;
+            let fusion_score = self.config.search.hybrid_weights.bm25 * f64::from(bm25_score)
+                + self.config.search.hybrid_weights.vector * f64::from(vector_score);
 
             // Cycle /001 (MemIR): fetch the chunk once for trust/provenance
             // weighting; it also supplies metadata for vector-only hits.
@@ -328,7 +330,7 @@ impl HybridSearchEngine {
                 // either channel relieves the age penalty. Neutral (identity)
                 // with the default `decay_match_relief == 0.0`.
                 let time_decay = relieve_decay(
-                    self.compute_time_decay(timestamp, level, decay_config),
+                    self.compute_time_decay(timestamp, level, &self.config.search.decay),
                     f64::from(bm25_score.max(vector_score)),
                     self.config.search.decay_match_relief,
                 );
@@ -381,7 +383,7 @@ impl HybridSearchEngine {
 
         // Keep a larger pool for downstream boosting/reranking (3x top_k).
         // Cycle/012: guaranteed ids survive the cut (rare-term lane).
-        let pool_size = self.config.search.top_k * 3;
+        let pool_size = budget.pool_size();
         retain_pool_with_guaranteed(&mut fused_results, pool_size, guaranteed);
 
         debug!(
@@ -427,54 +429,6 @@ impl HybridSearchEngine {
             stream_filter,
             None,
         )
-    }
-
-    /// Cycle/012 rare-term lane variant of [`Self::search_with_vector`]:
-    /// forwards `guaranteed` ids to the fusion pool cut (see
-    /// [`Self::fuse_with_vector_guaranteed`]). `None` == pre-cycle path.
-    pub fn search_with_vector_guaranteed(
-        &self,
-        bm25_results: Vec<SearchResult>,
-        all_embeddings: &[(String, Vec<f32>)],
-        query_embedding: &[f32],
-        store: Option<&crate::storage::RocksDbStore>,
-        stream_filter: Option<&[String]>,
-        guaranteed: Option<&std::collections::HashSet<String>>,
-    ) -> Result<Vec<HybridSearchResult>> {
-        // Fetch extra candidates when stream filtering (some will be filtered out)
-        let fetch_k = if stream_filter.is_some() {
-            self.config.search.top_k * 4
-        } else {
-            self.config.search.top_k * 2
-        };
-
-        // Perform vector search
-        let vector_results = vector_search::vector_search(all_embeddings, query_embedding, fetch_k);
-
-        // Post-filter vector results by stream to enforce namespace isolation
-        let vector_results = if let (Some(streams), Some(s)) = (stream_filter, store) {
-            vector_results
-                .into_iter()
-                .filter(|(id, _)| {
-                    match s.get_chunk(id) {
-                        Ok(Some(chunk)) => streams.contains(&chunk.stream),
-                        _ => false, // Can't verify stream -> exclude
-                    }
-                })
-                .collect()
-        } else {
-            vector_results
-        };
-
-        debug!(
-            "Vector search returned {} results (stream_filter={:?}), fusing with {} BM25 results",
-            vector_results.len(),
-            stream_filter,
-            bm25_results.len()
-        );
-
-        // Fuse with BM25 results
-        self.fuse_with_vector_guaranteed(bm25_results, vector_results, store, guaranteed)
     }
 
     /// Fuse BM25 and vector scores (legacy version for compatibility)
@@ -577,64 +531,6 @@ impl HybridSearchEngine {
     /// Simple BM25-only search (for Phase 2, before vector embeddings are ready)
     pub fn bm25_only(&self, bm25_results: Vec<SearchResult>) -> Result<Vec<HybridSearchResult>> {
         self.bm25_only_guaranteed(bm25_results, None)
-    }
-
-    /// Cycle/012 rare-term lane variant of [`Self::bm25_only`]: `guaranteed`
-    /// ids survive the pool cut (see [`Self::fuse_with_vector_guaranteed`]).
-    /// `None` == pre-cycle path.
-    pub fn bm25_only_guaranteed(
-        &self,
-        bm25_results: Vec<SearchResult>,
-        guaranteed: Option<&std::collections::HashSet<String>>,
-    ) -> Result<Vec<HybridSearchResult>> {
-        let decay_config = &self.config.search.decay;
-
-        // Normalize BM25 scores
-        let max_bm25 = bm25_results
-            .iter()
-            .map(|r| r.score)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap_or(1.0);
-
-        let mut results = Vec::new();
-        for doc in bm25_results {
-            let normalized_score = doc.score / max_bm25;
-            // WS-1(b): same match-quality decay relief as the fused path —
-            // identity with the default `decay_match_relief == 0.0`.
-            let time_decay = relieve_decay(
-                self.compute_time_decay(doc.timestamp, doc.level, decay_config),
-                f64::from(normalized_score),
-                self.config.search.decay_match_relief,
-            );
-            let final_score = normalized_score as f64 * time_decay;
-
-            results.push(HybridSearchResult {
-                id: doc.id.clone(),
-                content: doc.content.clone(),
-                user_id: doc.user_id.clone(),
-                app_id: doc.app_id.clone(),
-                level: doc.level,
-                timestamp: doc.timestamp,
-                score: final_score,
-                bm25_score: normalized_score,
-                vector_score: 0.0,
-                time_decay_factor: time_decay,
-            });
-        }
-
-        // Sort by final score descending
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Keep larger pool for downstream boosting/reranking.
-        // Cycle/012: guaranteed ids survive the cut (rare-term lane).
-        let pool_size = self.config.search.top_k * 3;
-        retain_pool_with_guaranteed(&mut results, pool_size, guaranteed);
-
-        Ok(results)
     }
 }
 
@@ -754,7 +650,7 @@ pub fn attribution_multiplier(
 mod tests {
     use super::*;
 
-    fn test_config() -> Config {
+    pub(super) fn test_config() -> Config {
         Config {
             storage: crate::config::StorageConfig {
                 data_dir: "./data".into(),
@@ -775,6 +671,7 @@ mod tests {
             },
             search: crate::config::SearchConfig {
                 top_k: 10,
+                max_request_top_k: 1000,
                 surprise_boost: 1.5,
                 hybrid_weights: crate::config::HybridWeightsConfig {
                     vector: 0.6,
@@ -1013,7 +910,7 @@ mod tests {
 
     /// Minimal `Chunk` with neutral fields; tests clone + mutate the one field
     /// under test so they isolate the multiplier from every other input.
-    fn base_chunk() -> crate::storage::Chunk {
+    pub(super) fn base_chunk() -> crate::storage::Chunk {
         crate::storage::Chunk {
             id: "c1".to_string(),
             content: "identical content".to_string(),

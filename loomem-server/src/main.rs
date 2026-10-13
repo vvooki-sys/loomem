@@ -1394,6 +1394,7 @@ mod tests {
                 intent_log: cfg::IntentLogConfig::default(),
             },
             search: cfg::SearchConfig {
+                max_request_top_k: 1000,
                 top_k: 10,
                 surprise_boost: 1.5,
                 hybrid_weights: cfg::HybridWeightsConfig {

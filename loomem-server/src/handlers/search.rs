@@ -12,6 +12,10 @@ use std::time::Instant;
 use tracing::warn;
 
 mod cache_policy;
+#[cfg(test)]
+#[path = "search_candidate_limit_tests.rs"]
+mod candidate_limit_tests;
+mod candidates;
 mod evidence;
 
 use super::date_filter::extract_date_filter;
@@ -481,25 +485,7 @@ fn prepare_query_context(
         QueryComplexity::Complex // full pipeline when disabled
     };
 
-    let _limit = if state.config.search.complexity.enabled {
-        match complexity {
-            QueryComplexity::Simple => payload
-                .top_k
-                .unwrap_or(state.config.search.complexity.simple_top_k),
-            QueryComplexity::Medium => payload
-                .top_k
-                .unwrap_or(state.config.search.complexity.medium_top_k),
-            QueryComplexity::Complex | QueryComplexity::Temporal => payload
-                .top_k
-                .unwrap_or(state.config.search.complexity.complex_top_k),
-            QueryComplexity::Aggregation => payload.top_k.unwrap_or(30),
-            QueryComplexity::Profile => payload.top_k.unwrap_or(state.config.search.top_k),
-        }
-    } else {
-        payload.top_k.unwrap_or(state.config.search.top_k)
-    };
-
-    tracing::debug!(complexity = %complexity, top_k = _limit, "Query classified");
+    let limit = candidates::request_limit(state, payload, complexity)?;
 
     // Extract date filter from query (implicit) or use explicit params
     let (query_without_date, date_filter) =
@@ -597,7 +583,6 @@ fn prepare_query_context(
     // `exclude_source_agents` are already part of the key (below), so two requests
     // that differ only in agent filter never collide, and the stored result set is
     // post-filter + post-truncate either way.
-    let limit = payload.top_k.unwrap_or(state.config.search.top_k);
     let stream_list: Option<Vec<String>> = validated_streams;
     let cache_key = cache_policy::cache_key(
         &state.config.search.cache,
@@ -1904,109 +1889,18 @@ async fn vector_retrieve(
     // replacing #257's per-embedding `get_chunk`).
     let agent_set = agent_id_set(state, payload).await;
 
-    // Try hybrid search with vector embeddings
-    // Simple queries skip vector search for lower latency (BM25 only)
-    let skip_vector = ctx.complexity == QueryComplexity::Simple;
-    let hybrid_results = if state.config.storage.vector_enabled && !skip_vector {
-        // Embed query — local model or OpenAI
-        let embed_result = if let Some(ref embedder) = state.local_embedder {
-            embedder.embed(&payload.query)
-        } else if let Some(api_key) = state.config.llm.get_api_key() {
-            embeddings::embed(
-                &state.http_client,
-                &api_key,
-                &state.config.llm.embedding_model,
-                &payload.query,
-            )
-            .await
-        } else {
-            Err(anyhow::anyhow!("No embedding provider available"))
-        };
-        match embed_result {
-            Ok(query_embedding) => {
-                match state.store.get_all_embeddings() {
-                    Ok(all_embeddings) => {
-                        // Cycle/258: pre-filter the vector pool by the agent
-                        // id-set before scoring/truncation (parity with the BM25
-                        // source-level filter). No-op when no agent filter.
-                        let all_embeddings =
-                            retain_by_agent_set(all_embeddings, agent_set.as_ref());
-                        if !all_embeddings.is_empty() {
-                            let vector_stream_filter: Option<Vec<String>> = ctx.stream_list.clone();
-
-                            // Pre-filter embeddings by stream BEFORE vector search
-                            // Without this, vector search picks top-K from ALL streams,
-                            // then post-filter removes most results → vector_score=0
-                            let filtered_embeddings =
-                                if let Some(ref streams) = vector_stream_filter {
-                                    all_embeddings
-                                        .into_iter()
-                                        .filter(|(id, _)| {
-                                            state
-                                                .store
-                                                .get_chunk(id)
-                                                .ok()
-                                                .flatten()
-                                                .map(|c| streams.contains(&c.stream))
-                                                .unwrap_or(false)
-                                        })
-                                        .collect::<Vec<_>>()
-                                } else {
-                                    all_embeddings
-                                };
-
-                            tracing::info!(
-                                "Performing hybrid search with {} embeddings (stream-filtered)",
-                                filtered_embeddings.len()
-                            );
-
-                            if filtered_embeddings.is_empty() {
-                                state
-                                    .hybrid_search
-                                    .bm25_only_guaranteed(bm25_results, guaranteed)?
-                            } else {
-                                // Cycle/012 diagnostics: pre-fusion vector
-                                // channel view (same inputs the fusion sees).
-                                if let Some(diag) = channel_diag {
-                                    diag.vector_top =
-                                        vector_channel_hits(&filtered_embeddings, &query_embedding);
-                                }
-                                state.hybrid_search.search_with_vector_guaranteed(
-                                    bm25_results,
-                                    &filtered_embeddings,
-                                    &query_embedding,
-                                    Some(&state.store),
-                                    None, // already filtered, no need for post-filter
-                                    guaranteed,
-                                )?
-                            }
-                        } else {
-                            tracing::info!("No embeddings found, falling back to BM25 only");
-                            state
-                                .hybrid_search
-                                .bm25_only_guaranteed(bm25_results, guaranteed)?
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to retrieve embeddings: {}, falling back to BM25", e);
-                        state
-                            .hybrid_search
-                            .bm25_only_guaranteed(bm25_results, guaranteed)?
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to embed query: {}, falling back to BM25", e);
-                state
-                    .hybrid_search
-                    .bm25_only_guaranteed(bm25_results, guaranteed)?
-            }
-        }
-    } else {
-        state
-            .hybrid_search
-            .bm25_only_guaranteed(bm25_results, guaranteed)?
-    };
+    let hybrid_results = candidates::retrieve_primary(
+        state,
+        bm25_results,
+        agent_set.as_ref(),
+        candidates::PrimaryRequest {
+            ctx,
+            payload,
+            guaranteed,
+            channel_diag,
+        },
+    )
+    .await?;
 
     // Vector multi-query: embed each sub-query, search vectors, merge results
     let hybrid_results = if state.config.search.vector_multi_query
@@ -4138,6 +4032,7 @@ mod tests {
 
         fn fixture_search_cfg() -> SearchConfig {
             SearchConfig {
+                max_request_top_k: 1000,
                 top_k: 10,
                 surprise_boost: 1.5,
                 hybrid_weights: HybridWeightsConfig {

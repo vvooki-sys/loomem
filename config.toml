@@ -30,6 +30,7 @@ sync_on_write = false  # true = fsync every write (safer, slower)
 
 [search]
 top_k = 10
+max_request_top_k = 1000  # HTTP request ceiling; MCP retains its separate lower caps
 surprise_boost = 1.5  # Surprise boost multiplier from Titans intelligence
 synonyms_file = "synonyms.toml"
 entities_file = "entities.toml"
