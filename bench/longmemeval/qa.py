@@ -65,6 +65,11 @@ class QARunner:
                        "question_id": row["question_id"], "context_sha256": trace["context_sha256"],
                        "reader_prompt_sha256": reader_prompt_sha256(),
                        "judge_prompt_sha256": judge_prompt_sha256()}
+            # Validate judge-only inputs before any paid reader request. The
+            # reference stays local here and is never added to reader messages.
+            phase = "judge_preflight"
+            judge_messages(row["question_type"], row["question"], row["answer"], "",
+                           abstention=is_abstention(row["question_id"]))
             phase = "reader"
             reader = self.stage("reader", reader_messages(row["question"], row["question_date"],
                                                            packed["context"]), binding)

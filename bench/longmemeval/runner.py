@@ -33,8 +33,10 @@ def local_endpoint(value):
 def settings_from(config):
     settings = decode(Path(config).read_text(), "config").get("runner")
     required = {"endpoint", "instance_id", "data_dir", "run_id", "top_k", "mode"}
-    if not isinstance(settings, dict) or not required.issubset(settings) or set(settings) - required - {"local_engine", "facts_path", "facts_sha256", "capture_context"}:
+    if not isinstance(settings, dict) or not required.issubset(settings) or set(settings) - required - {"local_engine", "facts_path", "facts_sha256", "capture_context", "input_normalization"}:
         fail("Config runner must contain exactly endpoint/instance_id/data_dir/run_id/top_k/mode")
+    if settings.get("input_normalization") not in (None, "occurrence-v1"):
+        fail("Unknown input normalization")
     if "capture_context" in settings and type(settings["capture_context"]) is not bool:
         fail("capture_context must be a JSON boolean")
     local_endpoint(settings["endpoint"])
@@ -100,7 +102,8 @@ def question_payload(row, settings=None):
         for session in row["haystack_sessions"]]
     mode = settings["mode"] if settings else "raw"
     facts = settings["_facts"][row["question_id"]] if mode != "raw" else None
-    records = build_records(clean, mode, facts)
+    normalization = settings.get("input_normalization") if settings else None
+    records = build_records(clean, mode, facts, input_normalization=normalization)
     question = row.get("question")
     if not isinstance(question, str) or not question.strip() or not records:
         fail("Question and source records must be nonempty")
@@ -189,10 +192,29 @@ def load_context_artifact(path, trace, manifest_hash):
     return artifact
 
 
+def normalization_fields(row, settings, manifest_hash):
+    """Automatically bind the text-free normalization ledger to each question."""
+    if settings.get("input_normalization") != "occurrence-v1":
+        return {}
+    from representations import normalization_report
+    report = {**normalization_report(row), "manifest_sha256": manifest_hash}
+    return {"normalization_report": report, "normalization_sha256": canonical_hash(report)}
+
+
+def verify_normalization(record, row, settings, manifest_hash):
+    expected = normalization_fields(row, settings, manifest_hash)
+    actual = {key: record[key] for key in ("normalization_report", "normalization_sha256")
+              if key in record}
+    # Recompute from the frozen input, not just an attacker-supplied report/hash pair.
+    if canonical_hash(actual) != canonical_hash(expected):
+        fail("Resume normalization ledger missing or differs from frozen input")
+
+
 def retrieve(adapter, row, manifest_hash, *, context_sink=None):
     result = {"question_id": row["question_id"], "manifest_sha256": manifest_hash,
               "status": "failed", "failure_stage": "prepare"}
     try:
+        result.update(normalization_fields(row, adapter.settings, manifest_hash))
         capture = adapter.settings.get("capture_context", False)
         if capture != (context_sink is not None):
             fail("Context capture requires both manifest opt-in and an explicit sink")
@@ -245,7 +267,8 @@ def load_resume(path, rows, manifest_hash, settings):
         return {}
     index, seen = {row["question_id"] for row in rows}, {}
     allowed = {"question_id", "manifest_sha256", "status", "failure_stage", "ingested_ids",
-               "retrieved_ids", "evidence", "context_sha256"}
+               "retrieved_ids", "evidence", "context_sha256",
+               "normalization_report", "normalization_sha256"}
     for line in path.read_text().splitlines():
         record = decode(line, "trace sidecar")
         qid = record.get("question_id")
@@ -270,6 +293,7 @@ def load_resume(path, rows, manifest_hash, settings):
             if "failure_stage" in record:
                 fail("Completed retrieval cannot carry failure stage")
         source = next(row for row in rows if row["question_id"] == qid)
+        verify_normalization(record, source, settings, manifest_hash)
         expected = {item["record_id"] for item in question_payload(source, settings)[0]}
         if "ingested_ids" in record and set(id_list(record["ingested_ids"])) != expected:
             fail("Resume ingest IDs mismatch")

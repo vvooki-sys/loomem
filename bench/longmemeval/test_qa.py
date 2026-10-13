@@ -170,6 +170,60 @@ class QATests(unittest.TestCase):
         self.assertEqual(result, runner.run_question(row, path, trace))
         self.assertEqual(len(calls), 2)
 
+    def test_numeric_gold_reaches_judge_without_reader_leakage(self):
+        calls = []
+        def fake(payload, timeout):
+            calls.append(copy.deepcopy(payload))
+            return response("two" if len(calls) == 1 else "yes")
+        runner, row, path, trace = self.fixture(fake)
+        row["answer"] = 2
+        result = runner.run_question(row, path, trace)
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result["correct"])
+        self.assertEqual(len(calls), 2)
+        self.assertIn("Correct Answer: 2", calls[1]["messages"][0]["content"])
+        self.assertNotIn("Correct Answer:", json.dumps(calls[0]))
+        self.assertEqual(result, runner.run_question(row, path, trace))
+        self.assertEqual(len(calls), 2)
+
+    def test_unsupported_judge_inputs_fail_preflight_without_paid_reader(self):
+        cases = [("answer", value) for value in [None, True, [], {}, float("nan"), float("inf")]]
+        cases += [("question_type", "unknown"), ("question_type", []), ("question", None)]
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                calls = []
+                def fake(payload, timeout):
+                    calls.append(payload)
+                    return response()
+                runner, row, path, trace = self.fixture(fake)
+                row[field] = value
+                result = runner.run_question(row, path, trace)
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["failure_stage"], "judge_preflight")
+                self.assertEqual(result["error_type"], "ValueError")
+                self.assertNotIn("reader", result)
+                self.assertNotIn("correct", result)
+                self.assertEqual(calls, [])
+                self.assertEqual(self.ledger.totals()["request_count"], 0)
+
+    def test_missing_gold_fails_preflight_and_invalid_date_is_reader_failure(self):
+        calls = []
+        def fake(payload, timeout):
+            calls.append(payload)
+            return response()
+        runner, row, path, trace = self.fixture(fake)
+        del row["answer"]
+        result = runner.run_question(row, path, trace)
+        self.assertEqual(result["failure_stage"], "judge_preflight")
+        self.assertEqual(result["error_type"], "KeyError")
+        runner, row, path, trace = self.fixture(fake)
+        row["question_date"] = None
+        result = runner.run_question(row, path, trace)
+        self.assertEqual(result["failure_stage"], "reader")
+        self.assertEqual(result["error_type"], "ValueError")
+        self.assertEqual(calls, [])
+        self.assertEqual(self.ledger.totals()["request_count"], 0)
+
     def test_malformed_judge_is_failure_not_incorrect_label(self):
         calls = []
         def fake(payload, timeout):

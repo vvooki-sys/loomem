@@ -29,12 +29,13 @@ No network access, model calls, heuristics, or reference-dependent reader hints.
 import hashlib
 import html
 import json
+import math
 from types import MappingProxyType
 
 UPSTREAM_COMMIT = '9e0b455f4ef0e2ab8f2e582289761153549043fc'
 UPSTREAM_EVALUATOR_SHA256 = "ecce9c4c79dc89d99534ac17b383a5cbb5b9f0c69ee98adaf0684742e3d95251"
 UPSTREAM_URL = f"https://github.com/xiaowu0162/LongMemEval/blob/{UPSTREAM_COMMIT}/src/evaluation/evaluate_qa.py"
-PROTOCOL = "loomem-longmemeval-strict-v1"
+PROTOCOL = "loomem-longmemeval-strict-v2"
 JUDGE_TEMPLATES = MappingProxyType({
     'single-session-user': 'I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. \n\nQuestion: {}\n\nCorrect Answer: {}\n\nModel Response: {}\n\nIs the model response correct? Answer yes or no only.',
     'single-session-assistant': 'I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. \n\nQuestion: {}\n\nCorrect Answer: {}\n\nModel Response: {}\n\nIs the model response correct? Answer yes or no only.',
@@ -85,17 +86,27 @@ def reader_messages(question: str, question_date: str, evidence: str) -> list[di
     return [{"role": "system", "content": READER_SYSTEM}, {"role": "user", "content": payload}]
 
 
+def _reference_answer(value: str | int | float) -> str:
+    """Match upstream format() for JSON string/numeric references only."""
+    if isinstance(value, str):
+        return value
+    if type(value) is int or (type(value) is float and math.isfinite(value)):
+        return str(value)
+    raise ValueError("answer must be a string or finite number")
+
+
 def judge_messages(
-    question_type: str, question: str, answer: str, hypothesis: str, *, abstention: bool = False
+    question_type: str, question: str, answer: str | int | float, hypothesis: str, *, abstention: bool = False
 ) -> list[dict[str, str]]:
     """One user message, exactly as upstream; reference is visible only here."""
     if not isinstance(abstention, bool):
         raise ValueError("abstention must be a boolean")
+    _text(question_type, "question_type")
     if question_type not in JUDGE_TEMPLATES or question_type == "abstention":
         raise ValueError("unknown LongMemEval question_type")
     template = JUDGE_TEMPLATES["abstention" if abstention else question_type]
     prompt = template.format(
-        _text(question, "question"), _text(answer, "answer"), _text(hypothesis, "hypothesis")
+        _text(question, "question"), _reference_answer(answer), _text(hypothesis, "hypothesis")
     )
     return [{"role": "user", "content": prompt}]
 
@@ -126,6 +137,7 @@ def reader_prompt_sha256() -> str:
 def judge_prompt_sha256() -> str:
     return _digest({"templates": dict(JUDGE_TEMPLATES), "roles": ["user"],
                     "abstention": "_abs substring in question_id",
+                    "reference_answer": "string unchanged; exact int or finite float str(); reject other types",
                     "parser": "strip+lower; exactly yes/no; otherwise ValueError"})
 
 

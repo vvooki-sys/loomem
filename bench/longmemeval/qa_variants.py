@@ -22,15 +22,22 @@ def _record(value):
     return result
 
 
+def _location(source):
+    session, turn = source["session_id"], source["turn_index"]
+    occurrence = source.get("session_occurrence")
+    if (not isinstance(session, str) or not session or type(turn) is not int or turn < 0
+            or (occurrence is not None and (type(occurrence) is not int or occurrence < 0))):
+        raise ValueError("Invalid source provenance")
+    return (session, occurrence), turn
+
+
 def _neighbors(records, engine_sources):
     if engine_sources is None:
         raise ValueError("Neighbor variant requires actual engine-fetched source text")
     by_id, by_turn = {}, {}
     for item in engine_sources:
         record = _record(item)
-        session, turn = item["session_id"], item["turn_index"]
-        if not isinstance(session, str) or not session or type(turn) is not int or turn < 0:
-            raise ValueError("Source provenance must identify a session and nonnegative turn")
+        session, turn = _location(item)
         if record["record_id"] in by_id or (session, turn) in by_turn:
             raise ValueError("Ambiguous source provenance")
         by_id[record["record_id"]] = (session, turn, record)
@@ -76,10 +83,7 @@ def neighbor_request_ids(retrieved_ids, provenance_records):
         if item.get("kind") != "source" or len(sources) != 1:
             raise ValueError("Neighbor expansion requires single-turn raw provenance")
         source = sources[0]
-        location = (source["session_id"], source["turn_index"])
-        if (not isinstance(location[0], str) or not location[0]
-                or type(location[1]) is not int or location[1] < 0):
-            raise ValueError("Invalid source provenance")
+        location = _location(source)
         if item["record_id"] in by_id or location in by_turn:
             raise ValueError("Ambiguous source provenance")
         by_id[item["record_id"]] = location

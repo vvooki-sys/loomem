@@ -1,4 +1,5 @@
 """Evaluation-only provenance diagnostics. Labels must never enter generation."""
+from collections import Counter, defaultdict
 import argparse
 import json
 from pathlib import Path
@@ -26,13 +27,16 @@ def evidence_coverage(question, records):
     expected_turns = set()
     original_content = {}
     labels_complete = len(turns) == len(ids)
+    counts, occurrences = Counter(ids), defaultdict(int)
     for session_id, session in zip(ids, turns):
+        occurrence = occurrences[session_id] if counts[session_id] > 1 else None
+        occurrences[session_id] += 1
         for index, turn in enumerate(session):
-            original_content[(session_id, index)] = turn.get("content")
+            original_content[(session_id, occurrence, index)] = turn.get("content")
             if type(turn.get("has_answer")) is not bool:
                 labels_complete = False
             elif turn["has_answer"]:
-                expected_turns.add((session_id, index))
+                expected_turns.add((session_id, occurrence, index))
     if not labels_complete:
         expected_turns = None
     present_sessions, present_turns, raw_turns = set(), set(), set()
@@ -44,17 +48,19 @@ def evidence_coverage(question, records):
         for source in sources:
             session = source.get("session_id")
             index = source.get("turn_index")
-            if not isinstance(session, str) or type(index) is not int or index < 0:
+            occurrence = source.get("session_occurrence")
+            if (not isinstance(session, str) or type(index) is not int or index < 0
+                    or (occurrence is not None and (type(occurrence) is not int or occurrence < 0))):
                 complete = False
                 continue
-            if (session, index) not in original_content:
+            if (session, occurrence, index) not in original_content:
                 complete = False
                 continue
             present_sessions.add(session)
-            present_turns.add((session, index))
+            present_turns.add((session, occurrence, index))
             if (record.get("kind") == "source"
-                    and record.get("content") == original_content[(session, index)]):
-                raw_turns.add((session, index))
+                    and record.get("content") == original_content[(session, occurrence, index)]):
+                raw_turns.add((session, occurrence, index))
     return {"provenance_complete": complete,
             "session_provenance": _coverage(expected_sessions, present_sessions, complete),
             "turn_provenance": _coverage(expected_turns, present_turns, complete),

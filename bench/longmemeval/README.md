@@ -261,6 +261,19 @@ are accounted separately. `qa_variants.py` offers baseline20, expanded60 and
 expanded60_neighbors. Neighbors require actual scoped GET results; original corpus
 text is never substituted for engine output.
 
+Variant names describe requested candidate limits, not guaranteed result counts.
+Record actual returned counts and engine-side caps before interpreting comparisons.
+For source inputs with repeated session IDs or exactly empty turns, a new frozen
+run may opt in to `runner.input_normalization: "occurrence-v1"`. Repeated sessions
+retain separate occurrence ordinals and their original dates; empty turns are
+excluded without renumbering later turns. Fact links and neighbor lookups preserve
+the occurrence identity. Legacy behavior remains the default; never enable this
+normalization retrospectively for an existing run.
+The runner embeds a text-free exclusion report and its hash in each normalized
+retrieval trace, bound to the manifest. Resume recomputes it from the frozen input
+and rejects missing or altered reports. Custom neighbor drivers must carry the
+optional `session_occurrence` into engine-fetched source descriptors.
+
 The frozen pilot model is `gpt-4.1-2025-04-14` for both stages. Config includes
 `qa.reader` and `qa.judge`, each with `model`, `context_window_tokens` (1047576),
 `max_completion_tokens` (512 reader / 8 judge), `input_usd_per_million` (`"2"`),
@@ -292,6 +305,10 @@ Judge prompts are attributed to a pinned MIT-licensed upstream LongMemEval revis
 in `qa_prompts.py`. Parsing requires exact yes/no, unlike upstream substring parsing;
 report scores as **modified strict-evaluator results** with reader/judge IDs, not
 as an official leaderboard score. Gold answers are sent only to the separate judge.
+Protocol `loomem-longmemeval-strict-v2` accepts string and finite numeric reference
+answers with upstream-compatible formatting. Unsupported judge inputs fail local
+preflight before a paid reader call. The changed judge hash requires a new manifest;
+earlier pilot failures and results remain immutable.
 Malformed/truncated calls are failures and remain in the expected denominator.
 `experiment.qa_metrics` and `paired_metrics` report category/abstention slices and
 uncertainty; a small development pilot cannot establish a general quality gain.

@@ -50,6 +50,18 @@ class FrozenJudgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             prompts.judge_messages("multi-session", "Q", "A", "H", abstention="false")
 
+    def test_numeric_reference_matches_official_formatting(self):
+        for answer in [0, 2, -7, 1.5, -0.0, 1e20]:
+            with self.subTest(answer=answer):
+                actual = prompts.judge_messages("multi-session", "Q", answer, "H")
+                expected = prompts.JUDGE_TEMPLATES["multi-session"].format("Q", answer, "H")
+                self.assertEqual(actual, [{"role": "user", "content": expected}])
+
+    def test_invalid_reference_types_are_not_silently_stringified(self):
+        for answer in [True, False, None, [], {}, float("inf"), float("-inf"), float("nan")]:
+            with self.subTest(answer=answer), self.assertRaises(ValueError):
+                prompts.judge_messages("multi-session", "Q", answer, "H")
+
     def test_gold_only_appears_at_judge_boundary(self):
         messages = prompts.judge_messages("multi-session", "QUESTION", "GOLD_CANARY", "READER_CANARY")
         self.assertIn("GOLD_CANARY", messages[0]["content"])
@@ -90,7 +102,7 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(prompts.reader_prompt_sha256(),
                          "881ad61cf90f48dd385ee704fd5f9e3fe29423a7457f60a973b137cf7e074597")
         self.assertEqual(prompts.judge_prompt_sha256(),
-                         "032b266dc19c7e3352045cff6098ca7a4bf645b4df74f5f6ea6a58d174f4a098")
+                         "c307a688c138de1db1356efd91df793ea66fc679f58a411cf822f27281e61232")
         self.assertIn("not an official", prompts.prompt_provenance()["score_claim"])
 
 
