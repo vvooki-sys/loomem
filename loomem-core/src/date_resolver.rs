@@ -231,14 +231,8 @@ pub fn resolve_date(raw: &str, anchor: NaiveDate) -> Option<NaiveDate> {
 
     // "last week" / "w zeszłym tygodniu" → Monday of previous week
     if s == "last week" || s == "w zeszłym tygodniu" || s == "w zeszlym tygodniu" {
-        return Some(
-            last_weekday(anchor, Weekday::Mon)
-                - chrono::Days::new(
-                    last_weekday(anchor, Weekday::Mon)
-                        .weekday()
-                        .num_days_from_monday() as u64,
-                ),
-        );
+        let days_back = u64::from(anchor.weekday().num_days_from_monday()) + 7;
+        return anchor.checked_sub_days(chrono::Days::new(days_back));
     }
 
     // "last month" / "w zeszłym miesiącu"
@@ -529,10 +523,33 @@ mod tests {
 
     #[test]
     fn last_week_en() {
-        let result = resolve_date("last week", a());
-        assert!(result.is_some());
-        // Should be Monday of previous week
-        assert!(result.unwrap() < a());
+        assert_eq!(resolve_date("last week", a()), Some(d(2026, 3, 23)));
+    }
+
+    #[test]
+    fn last_week_all_weekdays_and_languages() {
+        for day in 5..=11 {
+            for expression in ["last week", "w zeszłym tygodniu", "w zeszlym tygodniu"] {
+                assert_eq!(
+                    resolve_date(expression, d(2026, 10, day)),
+                    Some(d(2026, 9, 28)),
+                    "expression={expression}, anchor day={day}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn last_week_crosses_year_boundary() {
+        assert_eq!(
+            resolve_date("last week", d(2026, 1, 1)),
+            Some(d(2025, 12, 22))
+        );
+    }
+
+    #[test]
+    fn last_week_outside_calendar_returns_none() {
+        assert_eq!(resolve_date("last week", NaiveDate::MIN), None);
     }
 
     #[test]

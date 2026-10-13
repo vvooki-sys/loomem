@@ -1,6 +1,5 @@
 use axum::{extract::State, Json};
 use chrono::{NaiveDate, Utc};
-use loomem_core::query_cache::QueryCache;
 use loomem_core::query_expansion::polish_stem;
 #[cfg(test)]
 use loomem_core::sanitizer::sanitize_for_llm;
@@ -11,6 +10,8 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::warn;
+
+mod cache_policy;
 
 use super::date_filter::extract_date_filter;
 use super::types::{
@@ -249,7 +250,7 @@ struct ResponseMetrics {
     final_top_k: usize,
 }
 
-/// Output of `filter_and_truncate`. Bundles the filtered result list with
+/// Output of `filter_candidates`. Bundles the filtered result list with
 /// the counters that feed into `ResponseMetrics`. Introduced in cycle/02
 /// Iter 3 so the helper can return multiple related values without a tuple
 /// explosion at the call site.
@@ -394,7 +395,7 @@ where
 /// The agent-matching chunk id set for the vector path, or `None` when no agent
 /// filter is set (embeddings left untouched). One Tantivy full-collect query
 /// (`ids_matching_agent`) replaces #257's per-embedding `get_chunk`. Fails open
-/// (`None` + WARN) on a Tantivy error — `filter_and_truncate` is the safety net.
+/// (`None` + WARN) on a Tantivy error — `filter_candidates` is the safety net.
 async fn agent_id_set(
     state: &Arc<AppState>,
     payload: &SearchRequest,
@@ -605,20 +606,13 @@ fn prepare_query_context(
     // post-filter + post-truncate either way.
     let limit = payload.top_k.unwrap_or(state.config.search.top_k);
     let stream_list: Option<Vec<String>> = validated_streams;
-    let cache_key = if state.config.search.cache.enabled {
-        Some(QueryCache::hash_query_with_source(
-            &original_query_stemmed,
-            stream_list.as_deref(),
-            payload.entity.as_deref(),
-            payload.date_from.as_deref(),
-            payload.date_to.as_deref(),
-            limit,
-            payload.source_agent.as_deref(),
-            payload.exclude_source_agents.as_deref(),
-        ))
-    } else {
-        None
-    };
+    let cache_key = cache_policy::cache_key(
+        &state.config.search.cache,
+        payload,
+        stream_list.as_deref(),
+        date_filter.as_ref(),
+        limit,
+    );
 
     Ok(QueryContext {
         start,
@@ -647,6 +641,7 @@ pub async fn search_handler(
     // helpers can borrow the prepared fields via `&ctx` without duplicating
     // arguments.
     let ctx = prepare_query_context(&state, &auth, &payload)?;
+    let cache_generation = state.query_cache.lock().await.generation();
 
     // Cycle/85: deterministic query classification. Sub-ms, regex-only,
     // no LLM. Surfaced in the response only when the request flag is set;
@@ -801,13 +796,24 @@ pub async fn search_handler(
     }
 
     // RED-SD-1/SD-2 defense-in-depth: drop soft-deleted chunks before
-    // reranker spawn (external LLM) and before filter_and_truncate. Covers
+    // reranker spawn (external LLM) and before filter_candidates. Covers
     // the vector path (no predicate push-down) and the stale-tantivy edge
     // case (silent delete in legacy flows).
     let hybrid_results: Vec<_> = hybrid_results
         .into_iter()
         .filter(|r| !crate::handlers::delete::is_deleted_in_store(&state, &r.id))
         .collect();
+
+    // Filter the full rerank pool before selecting or caching any results.
+    // Bitemporal, superseded, extraction_meta filters +
+    // content dedup + aggregation dedup + source_agent/stream filters.
+    // Keep the eligible tail for reranking; apply final top-K afterward.
+    let FilterOutcome {
+        results: mut hybrid_results,
+        dedup_removed,
+        total_results_before_topk,
+        final_top_k,
+    } = filter_candidates(hybrid_results, &ctx, &payload, &state);
 
     // ECA-31: Check cost budget for reranker
     let rerank_cost_ok = {
@@ -832,7 +838,7 @@ pub async fn search_handler(
             let candidates = hybrid_results
                 .len()
                 .min(state.config.search.rerank_candidates);
-            let top_k = payload.top_k.unwrap_or(state.config.search.top_k);
+            let top_k = final_top_k;
             // Cycle/012: the reranker slice is the head of the ranked pool
             // plus — when the rare-term lane is active — any guaranteed ids
             // that survived the pool cut but fell below the head. Lane off
@@ -843,6 +849,7 @@ pub async fn search_handler(
                 lane.as_ref(),
                 state.config.search.rare_term_lane.candidate_cap,
             );
+            let eligible_results = hybrid_results.clone();
             let chunks: Vec<String> = results_for_rerank
                 .iter()
                 .map(|r| r.content.clone())
@@ -872,19 +879,15 @@ pub async fn search_handler(
 
                 match rerank_result {
                     Ok(indices) => {
-                        let reranked: Vec<_> = indices
-                            .into_iter()
-                            .filter_map(|i| results_for_rerank.get(i).cloned())
-                            .collect();
-                        if !reranked.is_empty() {
-                            let mut c = cache.lock().await;
-                            c.insert_reranked(key, reranked.clone());
-                            tracing::info!(
-                                "Async rerank complete: {} → {} results, cached",
-                                candidates,
-                                reranked.len()
-                            );
-                        }
+                        cache_policy::publish_reranked(
+                            &cache,
+                            (key, cache_generation),
+                            indices,
+                            &results_for_rerank,
+                            &eligible_results,
+                            top_k,
+                        )
+                        .await;
                     }
                     Err(e) => {
                         tracing::debug!("Async rerank failed (non-blocking): {}", e);
@@ -894,16 +897,7 @@ pub async fn search_handler(
         }
     }
 
-    // Filter + truncate: bitemporal, superseded, extraction_meta filters +
-    // content dedup + aggregation dedup + source_agent filters + truncate to
-    // final top-K. Returns the result list plus the counters that feed into
-    // `ResponseMetrics`. See `filter_and_truncate` below.
-    let FilterOutcome {
-        results: hybrid_results,
-        dedup_removed,
-        total_results_before_topk,
-        final_top_k,
-    } = filter_and_truncate(hybrid_results, &ctx, &payload, &state);
+    hybrid_results.truncate(final_top_k);
 
     // Cache store — post-boost, post-filter, post-truncate. Warm-path cache
     // hits (line ~216) now return the same Vec<HybridSearchResult> that the
@@ -911,7 +905,7 @@ pub async fn search_handler(
     // cold/warm divergence diagnosed in cycles/N7-cli-nondeterminism.md §3.
     if let Some(key) = ctx.cache_key {
         let mut cache = state.query_cache.lock().await;
-        cache.insert(key, hybrid_results.clone());
+        cache.insert_if_current(key, cache_generation, hybrid_results.clone());
     }
 
     // Iter 1 (cycle/02): implicit boost + response serialization + sufficiency
@@ -1012,7 +1006,7 @@ fn classify_and_trace(query: &str) -> ClassifiedQuery {
 /// cached copy would come back through the warm path without its tier stamp.
 /// Candidates are ordered newest-first (`timestamp` desc) — for mutable
 /// entity attributes the latest fact wins — and given descending rank-marker
-/// scores (1.0, 0.999, …) so the order survives `filter_and_truncate`, which
+/// scores (1.0, 0.999, …) so the order survives `filter_candidates`, which
 /// retains but never re-sorts.
 async fn tier1_lookup(
     ctx: &QueryContext,
@@ -1132,7 +1126,7 @@ async fn tier1_lookup(
         dedup_removed,
         total_results_before_topk,
         final_top_k,
-    } = filter_and_truncate(matched, ctx, payload, state);
+    } = cache_policy::truncate(filter_candidates(matched, ctx, payload, state));
     if results.is_empty() {
         return None;
     }
@@ -2469,14 +2463,14 @@ fn filter_superseded(
 /// filter (is_latest), extraction_meta filter (fact_type/subject/min_confidence),
 /// content-prefix dedup (150-char fingerprint, 80% prefix overlap), aggregation
 /// dedup (keep highest-scored chunk per subject), source_agent include/exclude
-/// filters, and truncate to final top-K (30 for Aggregation, config.top_k
+/// filters, and calculate final top-K (30 for Aggregation, config.top_k
 /// otherwise, overridable via payload.top_k).
 ///
 /// Returns `FilterOutcome` bundling the result list with `dedup_removed`,
 /// `total_results_before_topk`, and `final_top_k` — the three counters that
 /// feed into `ResponseMetrics` for trace metadata. Sync because every filter
 /// is a `retain` over a `Vec`.
-fn filter_and_truncate(
+fn filter_candidates(
     mut hybrid_results: Vec<loomem_core::HybridSearchResult>,
     ctx: &QueryContext,
     payload: &SearchRequest,
@@ -2641,8 +2635,6 @@ fn filter_and_truncate(
     } else {
         payload.top_k.unwrap_or(state.config.search.top_k)
     };
-    hybrid_results.truncate(final_top_k);
-
     FilterOutcome {
         results: hybrid_results,
         dedup_removed,
@@ -3440,7 +3432,7 @@ mod tests {
     // ── Cycle /42 — bitemporal + supersede filter unit tests ──────────────
     //
     // Lock the bitemporal (`valid_at`) and supersede (`is_latest`) filter
-    // semantics that `filter_and_truncate` delegates to via the two pure
+    // semantics that `filter_candidates` delegates to via the two pure
     // helpers `filter_bitemporal` and `filter_superseded` (search.rs §1500).
     // Mirror `mod scope_tests` style: tempdir + real `RocksDbStore`, no
     // `AppState`. See `cycles/42-audit-findings.md` §E for placement
@@ -4322,6 +4314,8 @@ mod agent_filter_tests {
             debug_channels: false,
         }
     }
+
+    mod rerank_cache_tests;
 
     // ── e2e: full search path fills top_k under an agent filter ───────────────
     // Cycle/258 replaced #257's over-fetch arithmetic (`agent_filtered_retrieval_limit`

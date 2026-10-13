@@ -11,6 +11,9 @@ use tracing::{debug, warn};
 
 use crate::config::LlmConfig;
 
+mod config_validation;
+use config_validation::transcript_chunks;
+
 /// /153: an operator-defined extraction category. `fact_type` is the wire key
 /// used in the `## Types` list and the JSON `fact_type` enum; when absent,
 /// `name` is used as the key. `description` is the LLM-facing definition.
@@ -86,7 +89,7 @@ Facts may be authored by any party in the conversation. Extract them from the us
 7. "subject": The main entity this fact is about (person name, project name, etc.), null if unclear
 8. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
 9. Preserve original language and diacritics
-10. Maximum 20 facts per conversation
+10. Maximum {max_facts} facts per conversation
 11. AUTHORED CONTENT: Recommendations, plans, schedules, and researched answers are extractable regardless of which party authored them — but extract an assistant-authored fact only when it records a concrete commitment or action for this user: a specific recommendation the assistant actually made, a plan or schedule it created, an action it took or confirmed ("the assistant scheduled the dentist for 2026-03-15", "the assistant booked the campsite"), or a researched answer to the user's specific question. Capture that as a first-class fact (e.g. "The user was recommended the books 'Project Hail Mary' and 'Children of Time'", "A weekly meal plan was created starting Monday with overnight oats"). Do NOT extract generic assistant output that carries no such commitment: open-ended menus of options ("you could try A, B, C, D, or E", "you might enjoy…"), how-to or storage tips, general advice, or encyclopedic background ("Halloween Time offers themed events and dining") — these are not facts about the user. Do NOT extract pure echoes, acknowledgements, or restatements of what the user already said (rule 5).
 12. ATTRIBUTION: When the transcript carries role markers (e.g. lines prefixed "user:" or "assistant:"), set "attributed_to" to the speaker of the source statement ("user" or "assistant"). When the transcript is unlabeled, set it to null.
 
@@ -98,19 +101,22 @@ Return ONLY valid JSON (no markdown, no code blocks):
 /// /153: build the extraction system prompt for one request.
 ///
 /// With no (or empty) `config.topics` the result is **byte-identical** to
-/// [`EXTRACTION_PROMPT`] with `{conversation_date}` substituted — the pre-/153
-/// behavior (AC-2). With operator-defined topics, the `## Types` list and the
+/// [`EXTRACTION_PROMPT`] with the date and configured fact cap substituted.
+/// The default cap preserves the pre-/153 behavior (AC-2). With topics, the `## Types` list and the
 /// JSON `fact_type` enum are rebuilt from them (each topic's `fact_type` field,
 /// or `name` as the wire key); every other prompt section is preserved.
 pub fn build_extraction_prompt(
     config: &KnowledgeExtractionConfig,
     conversation_date: &str,
 ) -> String {
+    let max_facts = config.max_facts_per_transcript;
     let topics = match config.topics.as_ref() {
         Some(t) if !t.is_empty() => t,
         _ => {
             return prefix_untrusted_notice(
-                &EXTRACTION_PROMPT.replace("{conversation_date}", conversation_date),
+                &EXTRACTION_PROMPT
+                    .replace("{conversation_date}", conversation_date)
+                    .replace("{max_facts}", &max_facts.to_string()),
             )
         }
     };
@@ -152,7 +158,7 @@ Facts may be authored by any party in the conversation. Extract them from the us
 6. "subject": The main entity this fact is about (person name, project name, etc.), null if unclear
 7. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
 8. Preserve original language and diacritics
-9. Maximum 20 facts per conversation
+9. Maximum {max_facts} facts per conversation
 10. AUTHORED CONTENT: Extract an assistant-authored fact only when it records a concrete commitment or action for this user — a specific recommendation the assistant actually made, a plan or schedule it created, an action it took or confirmed, or a researched answer to the user's specific question. Do NOT extract generic assistant output that carries no such commitment: open-ended menus of options ("you could try A, B, C, D, or E"), how-to or storage tips, general advice, or encyclopedic background — these are not facts about the user. Do NOT extract pure echoes, acknowledgements, or restatements of what the user already said.
 11. ATTRIBUTION: When the transcript carries role markers (e.g. lines prefixed "user:" or "assistant:"), set "attributed_to" to the speaker of the source statement ("user" or "assistant"). When the transcript is unlabeled, set it to null.
 
@@ -355,12 +361,14 @@ fn first_reason(failures: &[ChunkFailure]) -> &str {
 }
 
 /// Extraction produced no usable result (/157 S1): either the API key is
-/// missing or every transcript chunk failed. Partial failures (some chunks
+/// missing, configuration is invalid, or every transcript chunk failed. Partial failures (some chunks
 /// succeeded) are NOT an error; they surface as [`ExtractionOutcome::failures`].
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractionError {
     #[error("OpenAI API key not configured for knowledge extraction")]
     NoApiKey,
+    #[error("invalid knowledge extraction configuration: {0}")]
+    InvalidConfig(&'static str),
     #[error(
         "knowledge extraction failed: {}/{} chunk(s) failed; first: ({}) {}",
         .failures.len(),
@@ -383,6 +391,7 @@ impl ExtractionError {
                 "config".to_string(),
                 "OpenAI API key not configured".to_string(),
             ),
+            Self::InvalidConfig(reason) => ("config".to_string(), (*reason).to_string()),
             Self::AllChunksFailed { failures, .. } => (
                 first_status_label(failures),
                 first_reason(failures).to_string(),
@@ -549,15 +558,8 @@ pub async fn extract_knowledge_with(
     conversation_text: &str,
     conversation_date: &str,
 ) -> Result<ExtractionOutcome, ExtractionError> {
+    let chunks = transcript_chunks(extraction_config, conversation_text)?;
     let system_prompt = build_extraction_prompt(extraction_config, conversation_date);
-
-    // Split into chunks if too long (rough estimate: 4 chars ≈ 1 token)
-    let max_chars = extraction_config.max_transcript_tokens * 4;
-    let chunks = if conversation_text.len() > max_chars {
-        split_with_overlap(conversation_text, max_chars, max_chars / 10)
-    } else {
-        vec![conversation_text.to_string()]
-    };
 
     let mut outcome = ExtractionOutcome::default();
     let mut succeeded_chunks = 0usize;
@@ -760,7 +762,7 @@ mod tests {
                 assert_eq!(failures.len(), 1);
                 assert_eq!(failures[0].status, Some(429));
             }
-            ExtractionError::NoApiKey => panic!("wrong variant: NoApiKey"),
+            other => panic!("unexpected error: {other}"),
         }
     }
 
@@ -1010,30 +1012,6 @@ mod tests {
         assert_eq!(back, crate::storage::FactType::Experience);
     }
 
-    /// /153 AC-2: no topics ⇒ the inline EXTRACTION_PROMPT body, prefixed with the
-    /// shared untrusted-data notice (the data/instruction boundary carried by every
-    /// prompt variant).
-    #[test]
-    fn build_prompt_no_topics_is_byte_identical() {
-        let date = "2026-06-11";
-        assert_eq!(
-            build_extraction_prompt(&cfg(), date),
-            prefix_untrusted_notice(&EXTRACTION_PROMPT.replace("{conversation_date}", date))
-        );
-    }
-
-    /// /153 AC-2: an explicitly empty topics list resolves to the same body.
-    #[test]
-    fn build_prompt_empty_topics_is_byte_identical() {
-        let date = "2026-06-11";
-        let mut config = cfg();
-        config.topics = Some(vec![]);
-        assert_eq!(
-            build_extraction_prompt(&config, date),
-            prefix_untrusted_notice(&EXTRACTION_PROMPT.replace("{conversation_date}", date))
-        );
-    }
-
     /// Every extraction prompt variant carries the data-only notice so stored
     /// content cannot be re-interpreted as instructions (second-order injection).
     #[test]
@@ -1226,3 +1204,7 @@ mod tests {
         assert!(fact.attributed_to.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "memory_extractor_config_tests.rs"]
+mod config_tests;

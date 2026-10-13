@@ -9,6 +9,7 @@ use crate::intent_log::IntentLogConfig;
 use crate::source_tag::{deserialize_source_compat, SourceTag};
 use crate::tantivy_index::TantivyConfig;
 
+mod consolidation;
 pub mod persist;
 pub mod scan_log;
 pub use persist::{persist_chunk_with_index, PersistChunkArgs};
@@ -794,12 +795,7 @@ impl RocksDbStore {
 
             match self.decode_chunk(&value) {
                 Ok(chunk) => {
-                    if !chunk.consolidated
-                        && !chunk.in_progress
-                        && !chunk.dormant
-                        && chunk.deleted_at.is_none()
-                        && (now - chunk.timestamp) >= min_age_secs
-                    {
+                    if consolidation::eligible(&chunk, now, min_age_secs) {
                         chunks.push(chunk);
                     }
                 }

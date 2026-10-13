@@ -2,6 +2,7 @@ mod access_hook;
 mod auth;
 mod content_type;
 mod handlers;
+mod local_embedding;
 mod manifest;
 mod mcp;
 mod oauth;
@@ -550,15 +551,7 @@ async fn main() -> Result<()> {
     // Load local embedding model if the embedding provider is "local".
     // Model dir comes from `embedding_model_path` (falls back to
     // `embedding_model`, treated as a path) when local.
-    let local_embedder: Option<Arc<LocalEmbedder>> = if config.llm.embedding_provider == "local" {
-        let model_dir = config.llm.embedding_model_path.clone().unwrap_or_else(|| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{home}/.loomem/models/multilingual-e5-small")
-        });
-        loomem_core::local_embeddings::try_load(&model_dir, config.llm.embedding_dim).map(Arc::new)
-    } else {
-        None
-    };
+    let local_embedder = local_embedding::load(&config.llm)?;
 
     // Spawn embedding queue worker (if vector search enabled)
     let has_embedder = local_embedder.is_some() || config.llm.get_api_key().is_some();

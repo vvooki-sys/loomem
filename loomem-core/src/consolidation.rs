@@ -208,15 +208,12 @@ fn parse_structured_response(
     model: &str,
 ) -> Option<Enrichment> {
     // Strip markdown code fences if present
-    let cleaned = summary
-        .trim()
+    let trimmed = summary.trim();
+    let unfenced = trimmed
         .strip_prefix("```json")
-        .unwrap_or(summary.trim())
-        .strip_prefix("```")
-        .unwrap_or(summary.trim())
-        .strip_suffix("```")
-        .unwrap_or(summary.trim())
-        .trim();
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed);
+    let cleaned = unfenced.strip_suffix("```").unwrap_or(unfenced).trim();
 
     let response: StructuredResponse = serde_json::from_str(cleaned).ok()?;
 
@@ -416,6 +413,10 @@ impl Drop for InProgressGuard {
     }
 }
 
+fn is_consolidation_source(chunk: &Chunk) -> bool {
+    chunk.is_latest && chunk.deleted_at.is_none()
+}
+
 pub async fn consolidate(
     storage: Arc<RocksDbStore>,
     tantivy: Arc<tokio::sync::Mutex<TantivyIndex>>,
@@ -442,7 +443,11 @@ pub async fn consolidate(
     );
 
     // Scan RocksDB for L0 chunks that are unconsolidated and old enough
-    let candidates = storage.scan_l0_unconsolidated(config.min_age_secs, config.batch_size * 10)?;
+    let candidates: Vec<_> = storage
+        .scan_l0_unconsolidated(config.min_age_secs, config.batch_size * 10)?
+        .into_iter()
+        .filter(is_consolidation_source)
+        .collect();
 
     if candidates.is_empty() {
         info!("No L0 chunks eligible for consolidation");
@@ -499,20 +504,8 @@ pub async fn consolidate(
         // Sub-group by topic similarity so unrelated facts don't merge into one L1 chunk.
         // Each sub-group gets its own LLM compress call → its own L1 chunk.
         //
-        // Bypass for lme_* eval streams: their content is deliberately heterogeneous
-        // (multi-topic per stream by design). Topic clustering splits them into 1-2 chunk
-        // sub-groups that fail min_chunks_to_consolidate. Treat the whole stream as one
-        // group and let the structured prompt extract multiple typed observations.
-        let sub_groups = if stream.starts_with("lme_") {
-            debug!(
-                "Stream {}: bypassing topic sub-grouping for eval stream ({} chunks → 1 group)",
-                stream,
-                chunks.len()
-            );
-            vec![chunks.clone()]
-        } else {
-            cluster_by_similarity(&storage, &chunks, config.similarity_threshold)
-        };
+        // Apply the same grouping policy to every stream, including benchmarks.
+        let sub_groups = cluster_by_similarity(&storage, &chunks, config.similarity_threshold);
 
         info!(
             "Stream {}: {} chunks → {} sub-groups",
@@ -753,26 +746,20 @@ pub async fn consolidate(
                     };
 
                     // ECA-15: Quality gate — reject if consolidated chunk lost too much meaning.
-                    // Bypass for lme_* eval streams: their content is deliberately heterogeneous
-                    // (multiple topics per stream), so the gate's homogeneity assumption produces
-                    // false negatives. Production streams unaffected.
-                    let skip_quality_gate = stream.starts_with("lme_");
-                    if !skip_quality_gate {
-                        if let Some(ref emb) = l1_embedding {
-                            if !quality_gate(
-                                &storage,
-                                &summary,
-                                emb,
-                                &sub_group,
-                                config.quality_gate_threshold,
-                            ) {
-                                warn!(
-                                    "Consolidation quality gate rejected sub-group in stream {} ({} chunks)",
-                                    stream, sub_group.len()
-                                );
-                                skipped_count += sub_group.len();
-                                continue;
-                            }
+                    if let Some(ref emb) = l1_embedding {
+                        if !quality_gate(
+                            &storage,
+                            &summary,
+                            emb,
+                            &sub_group,
+                            config.quality_gate_threshold,
+                        ) {
+                            warn!(
+                                "Consolidation quality gate rejected sub-group in stream {} ({} chunks)",
+                                stream, sub_group.len()
+                            );
+                            skipped_count += sub_group.len();
+                            continue;
                         }
                     }
 
@@ -1052,3 +1039,7 @@ mod tests {
         assert_eq!(cfg.interval_secs, 21600);
     }
 }
+
+#[cfg(test)]
+#[path = "consolidation_regression_tests.rs"]
+mod regression_tests;

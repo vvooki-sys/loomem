@@ -30,6 +30,7 @@ pub struct QueryCache {
     entries: HashMap<u64, CacheEntry>,
     access_order: Vec<u64>,
     config: QueryCacheConfig,
+    generation: u64,
 }
 
 impl QueryCache {
@@ -38,6 +39,7 @@ impl QueryCache {
             entries: HashMap::new(),
             access_order: Vec::new(),
             config,
+            generation: 0,
         }
     }
 
@@ -118,6 +120,7 @@ impl QueryCache {
 
     /// Clear all cached entries.
     pub fn clear(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         self.entries.clear();
         self.access_order.clear();
     }
@@ -191,6 +194,39 @@ impl QueryCache {
         self.access_order.push(reranked_key);
     }
 
+    /// Snapshot invalidation state before starting asynchronous reranking.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Publish ordinary retrieval only if its source snapshot is still current.
+    pub fn insert_if_current(
+        &mut self,
+        key: u64,
+        generation: u64,
+        results: Vec<HybridSearchResult>,
+    ) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        self.insert(key, results);
+        true
+    }
+
+    /// Publish background work only if no invalidation occurred since it started.
+    pub fn insert_reranked_if_current(
+        &mut self,
+        key: u64,
+        generation: u64,
+        results: Vec<HybridSearchResult>,
+    ) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        self.insert_reranked(key, results);
+        true
+    }
+
     const RERANKED_SALT: u64 = 0xDEAD_BEEF_CAFE_BABE;
 }
 
@@ -221,6 +257,28 @@ mod tests {
                 time_decay_factor: 0.99,
             })
             .collect()
+    }
+
+    #[test]
+    fn invalidation_rejects_in_flight_retrieval() {
+        let mut cache = QueryCache::new(test_config());
+        let generation = cache.generation();
+        assert!(cache.insert_if_current(1, generation, mock_results(1)));
+        cache.clear();
+        assert!(!cache.insert_if_current(1, generation, mock_results(1)));
+        assert!(cache.get_best(1).is_none());
+        assert!(cache.insert_if_current(1, cache.generation(), mock_results(1)));
+    }
+
+    #[test]
+    fn invalidation_rejects_in_flight_rerank() {
+        let mut cache = QueryCache::new(test_config());
+        let generation = cache.generation();
+        assert!(cache.insert_reranked_if_current(1, generation, mock_results(1)));
+        cache.clear();
+        assert!(!cache.insert_reranked_if_current(1, generation, mock_results(1)));
+        assert!(cache.get_best(1).is_none());
+        assert!(cache.insert_reranked_if_current(1, cache.generation(), mock_results(1)));
     }
 
     #[test]

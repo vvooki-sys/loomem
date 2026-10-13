@@ -115,13 +115,7 @@ mod inner {
 
             // Mean pooling with attention mask
             let output_shape = output.shape();
-            let actual_dim = if output_shape.len() == 3 {
-                output_shape[2]
-            } else if output_shape.len() == 2 {
-                output_shape[1]
-            } else {
-                anyhow::bail!("Unexpected output shape: {:?}", output_shape);
-            };
+            let actual_dim = super::validate_output_dimension(output_shape, self.dim)?;
 
             let mut pooled = vec![0.0_f32; actual_dim];
 
@@ -188,6 +182,49 @@ mod inner {
         pub fn dim(&self) -> usize {
             self.dim
         }
+    }
+}
+
+/// Check actual model output before pooling or returning a vector to storage.
+#[cfg(any(feature = "local-embeddings", test))]
+fn validate_output_dimension(shape: &[usize], expected_dim: usize) -> anyhow::Result<usize> {
+    let actual_dim = match shape {
+        [_, _, dim] | [_, dim] => *dim,
+        _ => anyhow::bail!("Unexpected embedding output shape: {shape:?}"),
+    };
+    anyhow::ensure!(
+        actual_dim > 0 && actual_dim == expected_dim,
+        "Local embedding dimension mismatch: model returned {actual_dim}-dim vectors \
+         but configuration expects {expected_dim}; check embedding_model_path and embedding_dim"
+    );
+    Ok(actual_dim)
+}
+
+#[cfg(test)]
+mod dimension_tests {
+    use super::validate_output_dimension;
+
+    #[test]
+    fn accepts_matching_pooled_and_sequence_outputs() {
+        assert_eq!(validate_output_dimension(&[1, 384], 384).unwrap(), 384);
+        assert_eq!(validate_output_dimension(&[1, 12, 384], 384).unwrap(), 384);
+    }
+
+    #[test]
+    fn rejects_actual_model_dimension_mismatch() {
+        for shape in [vec![1, 384], vec![1, 12, 384]] {
+            let error = validate_output_dimension(&shape, 1536).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("model returned 384-dim"));
+            assert!(message.contains("configuration expects 1536"));
+        }
+    }
+
+    #[test]
+    fn rejects_empty_dimensions_and_unsupported_output_shapes() {
+        assert!(validate_output_dimension(&[1, 0], 0).is_err());
+        assert!(validate_output_dimension(&[384], 384).is_err());
+        assert!(validate_output_dimension(&[1, 1, 1, 384], 384).is_err());
     }
 }
 
@@ -305,6 +342,20 @@ mod tests {
             LocalEmbedder::load(std::path::Path::new(&model_dir), 384)
                 .expect("load local embedding model"),
         )
+    }
+
+    /// A wrong configured dimension must never escape as a valid vector.
+    #[test]
+    #[ignore = "requires LOOMEM_TEST_EMBED_MODEL (384-dimensional model)"]
+    fn embed_rejects_configured_dimension_mismatch() {
+        let Ok(model_dir) = std::env::var("LOOMEM_TEST_EMBED_MODEL") else {
+            eprintln!("skip: set LOOMEM_TEST_EMBED_MODEL=<dir> to run this test");
+            return;
+        };
+        let embedder = LocalEmbedder::load(std::path::Path::new(&model_dir), 1536)
+            .expect("load local embedding model");
+        let error = embedder.embed("A short memory.").unwrap_err();
+        assert!(error.to_string().contains("model returned 384-dim"));
     }
 
     /// Cycle /015: input longer than the model's 512-position window must be
