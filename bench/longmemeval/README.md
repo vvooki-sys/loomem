@@ -338,3 +338,22 @@ configuration before calling the QA runner. Save selection diagnostics separatel
 from the runner's subsequent first-fit packing of the already selected records.
 Previously observed development questions support diagnostics only; evaluate a
 frozen candidate on untouched data before claiming a general improvement.
+
+`qa_selection_v2.select_context` is a separate bounded experiment built on the
+canonical first-fit result. It preserves every selected engine result from ranks
+1–20 and may promote at most two later full records. Promotions may add at most
+800 rendered evidence tokens, measured as the exact canonical context difference
+with and without promoted records. A promoted record must outrank every evicted
+tail record under the frozen rank/query-novelty utility. Query novelty is capped
+by rank prior and stops receiving credit after a term appears in two selected
+records. The final context retains engine order and the exact 8000-token check.
+These bounds limit selector-created exposure; they do not establish resistance to
+malicious memories or prompt injection.
+
+`qa_prompts_advice` provides an opt-in reader prompt for controlled evaluation.
+It changes only the frozen reader's missing-evidence policy: advice and possible
+explanations may apply supported user facts conditionally, while factual recall
+still requires direct evidence or abstention. The function accepts only question,
+date, and evidence. The user-message template, escaping, judge, and default
+`qa_prompts` module remain unchanged. This prompt is not wired into the default
+`QARunner`; an experiment must inject it explicitly and bind its prompt hash.
