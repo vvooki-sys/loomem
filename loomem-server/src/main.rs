@@ -15,7 +15,6 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use futures::stream::StreamExt;
 use loomem_core::embedding_queue::{self, EmbeddingQueue};
 use loomem_core::entity_extraction_queue::{self, EntityExtractionQueue};
 use loomem_core::graph::GraphStore;
@@ -27,8 +26,6 @@ use loomem_core::workers_registry::{build_registry, WorkerRegistry};
 use loomem_core::{
     Config, CostTracker, EntityExtractor, HybridSearchEngine, PiiFilter, RocksDbStore, TantivyIndex,
 };
-use signal_hook::consts::{SIGINT, SIGTERM};
-use signal_hook_tokio::Signals;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
@@ -826,10 +823,7 @@ async fn main() -> Result<()> {
     .with_state(state);
 
     // Setup graceful shutdown
-    let signals = Signals::new([SIGTERM, SIGINT])?;
-    let signals_handle = signals.handle();
-
-    let signals_task = tokio::spawn(handle_signals(signals));
+    let signals_task = tokio::spawn(shutdown_signal());
 
     // Start server — respect PORT env var (Railway, Render, etc.)
     let port = std::env::var("PORT")
@@ -911,7 +905,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    signals_handle.close();
     info!("Loomem shutdown complete");
 
     Ok(())
@@ -946,19 +939,51 @@ fn init_logging() {
     }
 }
 
-async fn handle_signals(mut signals: Signals) {
-    while let Some(signal) = signals.next().await {
-        match signal {
-            SIGTERM | SIGINT => {
-                info!(
-                    "Received shutdown signal ({}), starting graceful shutdown...",
-                    signal
-                );
-                break;
-            }
-            _ => {}
+/// Resolves when the process is asked to stop: Ctrl+C on every platform,
+/// plus SIGTERM on Unix and console close on Windows.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::warn!("Failed to listen for Ctrl+C: {}", e);
+            std::future::pending::<()>().await;
         }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to listen for SIGTERM: {}", e);
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(windows)]
+    let terminate = async {
+        match tokio::signal::windows::ctrl_close() {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to listen for console close: {}", e);
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(any(unix, windows)))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
     }
+    info!("Received shutdown signal, starting graceful shutdown...");
 }
 
 /// Per-connection make-service that injects `ConnectInfo<SocketAddr>` into
