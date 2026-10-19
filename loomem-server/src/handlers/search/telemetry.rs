@@ -104,9 +104,9 @@ impl E2OperationKind {
 
     fn structural_plan_sha256(self) -> &'static str {
         match self {
-            Self::Plain => "d78fccba08d3caf087d5c120d42cb834a3a04f60f09fa3992d4116f45e7f9dc0",
+            Self::Plain => "4fb0b3e206babc36b5a1469b03cf5e92eef8bffa2e952cd32fd1000986f0d631",
             Self::PreferenceAdvice => {
-                "5d5aabd7d5658a50e5dc173c2d39ee1386e2e17c6943970797b5c03f11593558"
+                "8b161493e53f31a6b4c4fd7eb2b6209e115f47692bb7ee68974a5fb5000f9ef1"
             }
             Self::TemporalCompare => {
                 "5154ed433f0d10e7d0f815e1c0dbc2158ad481a6730cfaed1ab4e01fc81cc697"
