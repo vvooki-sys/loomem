@@ -48,6 +48,8 @@ pub enum OperationPolicy {
     E2C,
     #[serde(rename = "E4")]
     E4,
+    #[serde(rename = "E5")]
+    E5,
 }
 
 impl OperationPolicy {
@@ -512,27 +514,6 @@ mod tests {
     }
 
     #[test]
-    fn policies_register_exact_ablation_matrix() {
-        assert_eq!(
-            serde_json::to_string(&OperationPolicy::E4).unwrap(),
-            "\"E4\""
-        );
-        assert!(!OperationPolicy::E4.date_enabled());
-        assert!(!OperationPolicy::E4.facets_enabled());
-        assert!(!OperationPolicy::E4.is_e2());
-        assert_eq!(
-            serde_json::to_string(&OperationPolicy::E0).unwrap(),
-            "\"E0\""
-        );
-        assert!(OperationPolicy::E1D.date_enabled());
-        assert!(!OperationPolicy::E1D.facets_enabled());
-        assert!(OperationPolicy::E1F.facets_enabled());
-        assert!(!OperationPolicy::E1F.date_enabled());
-        assert!(OperationPolicy::E1C.date_enabled());
-        assert!(OperationPolicy::E1C.facets_enabled());
-    }
-
-    #[test]
     fn plan_identity_hash_is_canonical_and_binds_facets() {
         let plain = OperationPlan::plain();
         assert_eq!(plain.kind(), "Plain");
@@ -748,3 +729,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod policy_tests;

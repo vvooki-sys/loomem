@@ -289,10 +289,14 @@ fn primary_outcome(
     query: &str,
 ) -> LaneOutcome {
     LaneOutcome {
-        results: if policy == loomem_core::search::operation::OperationPolicy::E4 {
-            loomem_core::search::context_selection::select(query, primary)
-        } else {
-            primary
+        results: match policy {
+            loomem_core::search::operation::OperationPolicy::E4 => {
+                loomem_core::search::context_selection::select(query, primary)
+            }
+            loomem_core::search::operation::OperationPolicy::E5 => {
+                loomem_core::search::context_relevance::select(query, primary)
+            }
+            _ => primary,
         },
         observation: None,
         #[cfg(feature = "evaluation")]
