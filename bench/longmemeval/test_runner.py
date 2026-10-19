@@ -135,6 +135,26 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn("reference_time", search)
         self.assertNotIn("reference_time_sha256", json.loads(self.args.trace.read_text()))
 
+    def test_e2_policies_validate_without_legacy_local_adapter(self):
+        for policy in sorted(runner.E2_POLICIES):
+            with self.subTest(policy=policy):
+                self.settings["operation_policy"] = policy
+                self.freeze()
+                self.assertEqual(runner.settings_from(self.args.config)["operation_policy"], policy)
+                with self.assertRaises(ValueError):
+                    runner.validate_operation_settings({**self.settings, "local_engine": {}})
+
+    def test_e2_resume_rejected_before_adapter_or_write(self):
+        for policy in sorted(runner.E2_POLICIES):
+            with self.subTest(policy=policy):
+                self.settings["operation_policy"] = policy
+                self.freeze()
+                self.args.resume = True
+                with patch.object(runner, "Adapter", side_effect=AssertionError("adapter")):
+                    with self.assertRaises(ValueError):
+                        runner.run(self.args)
+                self.assertFalse(self.args.trace.exists())
+
     def test_failed_stages_never_search(self):
         for behavior, stage in [("identity", "identity"), ("partial", "ingest"), ("pending", "readiness")]:
             with self.subTest(behavior=behavior), fixture(self.settings, behavior) as requests:

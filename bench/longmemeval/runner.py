@@ -13,8 +13,9 @@ from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHand
 from validate import canonical_hash, check_manifest, decode, fail, sha256
 
 
-OPERATION_POLICIES = {"E0", "E1-D", "E1-F", "E1-C"}
-DATE_AWARE_POLICIES = {"E1-D", "E1-C"}
+E2_POLICIES = {"E2-D", "E2-F", "E2-C"}
+OPERATION_POLICIES = {"E0", "E1-D", "E1-F", "E1-C"} | E2_POLICIES
+DATE_AWARE_POLICIES = {"E1-D", "E1-C", "E2-D", "E2-C"}
 QUESTION_DATE = re.compile(
     r"^(\d{4})/(\d{2})/(\d{2}) \((Mon|Tue|Wed|Thu|Fri|Sat|Sun)\) (\d{2}):(\d{2})$"
 )
@@ -85,6 +86,8 @@ def validated_runner_settings(config):
 def validate_operation_settings(settings):
     if settings.get("operation_policy") not in (None, *OPERATION_POLICIES):
         fail("Unknown operation policy")
+    if settings.get("operation_policy") in E2_POLICIES and "local_engine" in settings:
+        fail("E2 requires an adapter that preserves operation fields")
     if "debug_operation" in settings and type(settings["debug_operation"]) is not bool:
         fail("debug_operation must be a JSON boolean")
 
@@ -153,7 +156,7 @@ def reference_time(row):
 
 
 def operation_fields(row, settings):
-    """Return opt-in E1 wire fields and their text-free trace binding."""
+    """Return opt-in wire fields; E2 anchors stay out of trace digests."""
     policy = settings.get("operation_policy")
     if policy is None:
         return {}, {}
@@ -163,7 +166,10 @@ def operation_fields(row, settings):
         wire["debug_operation"] = True
     if policy in DATE_AWARE_POLICIES:
         anchor = reference_time(row)
-        trace["reference_time_sha256"] = canonical_hash(anchor)
+        # E2 input identity is already bound by the frozen manifest. Its exact
+        # interval proof belongs only in the external fresh-key HMAC evidence.
+        if policy not in E2_POLICIES:
+            trace["reference_time_sha256"] = canonical_hash(anchor)
         if anchor is not None:
             wire["reference_time"] = anchor
     return wire, trace
@@ -398,6 +404,8 @@ def load_resume(path, rows, manifest_hash, settings):
 def run(args):
     manifest_hash = check_manifest(args.manifest, args.dataset, args.config)
     settings = settings_from(args.config)
+    if settings.get("operation_policy") in E2_POLICIES and args.resume:
+        fail("E2 runs are create-only and cannot resume partial evidence")
     contexts = getattr(args, "contexts", None)
     if settings.get("capture_context", False) != (contexts is not None):
         fail("--contexts requires frozen runner.capture_context=true and vice versa")

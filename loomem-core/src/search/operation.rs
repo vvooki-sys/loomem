@@ -1,9 +1,9 @@
 //! Deterministic, bounded operation facets for opt-in search experiments.
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 pub const MAX_FACETS: usize = 2;
 pub const MAX_ADDED_TERMS: usize = 6;
@@ -17,6 +17,17 @@ pub const MAX_RECORD_SCAN_BYTES: usize = 16 * 1024;
 pub const MAX_REQUEST_SCAN_BYTES: usize = 512 * 1024;
 pub const MAX_QUERY_BYTES: usize = 16 * 1024;
 
+static LAST_MONTH_REGEX: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:last month|ostatni miesiąc|yesterday|today|tomorrow|last week|\d+ (?:days?|weeks?|months?) ago)\b").ok()
+});
+static RELATIVE_REGEX: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(\d{1,3})\s+(day|days|week|weeks|month|months)\s+ago\b|\b(\d{1,3})\s+(dzień|dni|tydzień|tygodnie|miesiąc|miesiące)\s+temu\b",
+    )
+    .ok()
+});
+static COUNT_REGEX: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"\b(\d{1,2})\b").ok());
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OperationPolicy {
     #[default]
@@ -28,17 +39,39 @@ pub enum OperationPolicy {
     E1F,
     #[serde(rename = "E1-C")]
     E1C,
+    #[serde(rename = "E2-D")]
+    E2D,
+    #[serde(rename = "E2-F")]
+    E2F,
+    #[serde(rename = "E2-C")]
+    E2C,
 }
 
 impl OperationPolicy {
     #[must_use]
     pub fn date_enabled(self) -> bool {
-        matches!(self, Self::E1D | Self::E1C)
+        matches!(self, Self::E1D | Self::E1C | Self::E2D | Self::E2C)
     }
 
     #[must_use]
     pub fn facets_enabled(self) -> bool {
-        matches!(self, Self::E1F | Self::E1C)
+        matches!(self, Self::E1F | Self::E1C | Self::E2F | Self::E2C)
+    }
+
+    pub fn is_e2(self) -> bool {
+        matches!(self, Self::E2D | Self::E2F | Self::E2C)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct HalfOpenInterval {
+    pub start: i64,
+    pub end: i64,
+}
+
+impl HalfOpenInterval {
+    pub fn inclusive_bounds(self) -> Option<(i64, i64)> {
+        (self.start < self.end).then_some((self.start, self.end.checked_sub(1)?))
     }
 }
 
@@ -61,6 +94,9 @@ pub enum QueryOperation {
         topic: String,
         interval: (i64, i64),
         explicit_anchor: bool,
+    },
+    TemporalCalendarWindow {
+        interval: HalfOpenInterval,
     },
 }
 
@@ -99,6 +135,14 @@ impl OperationPlan {
             QueryOperation::TemporalCompare { .. } => "TemporalCompare",
             QueryOperation::TemporalEnumerate { .. } => "TemporalEnumerate",
             QueryOperation::TemporalWindow { .. } => "TemporalWindow",
+            QueryOperation::TemporalCalendarWindow { .. } => "TemporalWindow",
+        }
+    }
+
+    pub fn half_open_interval(&self) -> Option<HalfOpenInterval> {
+        match self.operation {
+            QueryOperation::TemporalCalendarWindow { interval, .. } => Some(interval),
+            _ => None,
         }
     }
 
@@ -115,12 +159,14 @@ impl OperationPlan {
     }
 }
 
-#[must_use]
 pub fn plan(
     query: &str,
     reference_time: Option<DateTime<Utc>>,
     policy: OperationPolicy,
 ) -> OperationPlan {
+    if policy.is_e2() {
+        return plan_e2(query, reference_time, policy);
+    }
     if !policy.facets_enabled() || query.trim().is_empty() || query.len() > MAX_QUERY_BYTES {
         return OperationPlan::plain();
     }
@@ -174,6 +220,50 @@ pub fn plan(
         );
     }
     OperationPlan::plain()
+}
+
+fn plan_e2(
+    query: &str,
+    reference_time: Option<DateTime<Utc>>,
+    policy: OperationPolicy,
+) -> OperationPlan {
+    if query.trim().is_empty() || query.len() > MAX_QUERY_BYTES {
+        return OperationPlan::plain();
+    }
+    let interval = reference_time
+        .filter(|_| policy.date_enabled())
+        .and_then(|anchor| last_month_interval(query, anchor));
+    if let Some(interval) = interval {
+        let operation = QueryOperation::TemporalCalendarWindow { interval };
+        return if policy.facets_enabled() {
+            make_plan(operation, query, &["happened", "event", "date"])
+        } else {
+            OperationPlan {
+                operation,
+                facets: Vec::new(),
+                added_terms: Vec::new(),
+            }
+        };
+    }
+    if policy.facets_enabled() {
+        plan(query, None, OperationPolicy::E1F)
+    } else {
+        OperationPlan::plain()
+    }
+}
+
+fn last_month_interval(query: &str, reference: DateTime<Utc>) -> Option<HalfOpenInterval> {
+    let mut markers = LAST_MONTH_REGEX.as_ref()?.find_iter(query);
+    let marker = markers.next()?.as_str().to_lowercase();
+    (markers.next().is_none() && matches!(marker.as_str(), "last month" | "ostatni miesiąc"))
+        .then_some(())?;
+    let end_date = reference.date_naive().with_day(1)?;
+    let start_date = end_date.pred_opt()?.with_day(1)?;
+    let end = end_date.and_hms_opt(0, 0, 0)?.and_utc().timestamp();
+    Some(HalfOpenInterval {
+        start: start_date.and_hms_opt(0, 0, 0)?.and_utc().timestamp(),
+        end,
+    })
 }
 
 fn match_count(
@@ -404,13 +494,9 @@ fn relative_days(amount: i64, unit: &str) -> Option<i64> {
         "day" | "days" | "dzień" | "dni" => 1,
         "week" | "weeks" | "tydzień" | "tygodnie" => 7,
         "month" | "months" | "miesiąc" | "miesiące" => 30,
-        _ => 0,
+        _ => return None,
     };
-    if multiplier == 0 {
-        None
-    } else {
-        amount.checked_mul(multiplier)
-    }
+    amount.checked_mul(multiplier)
 }
 
 fn day_interval(target: DateTime<Utc>) -> Option<(i64, i64)> {
@@ -420,22 +506,11 @@ fn day_interval(target: DateTime<Utc>) -> Option<(i64, i64)> {
 }
 
 fn relative_regex() -> Option<&'static Regex> {
-    static REGEX: OnceLock<Option<Regex>> = OnceLock::new();
-    REGEX
-        .get_or_init(|| {
-        Regex::new(
-            r"(?i)\b(\d{1,3})\s+(day|days|week|weeks|month|months)\s+ago\b|\b(\d{1,3})\s+(dzień|dni|tydzień|tygodnie|miesiąc|miesiące)\s+temu\b",
-        )
-        .ok()
-    })
-        .as_ref()
+    RELATIVE_REGEX.as_ref()
 }
 
 fn count_regex() -> Option<&'static Regex> {
-    static REGEX: OnceLock<Option<Regex>> = OnceLock::new();
-    REGEX
-        .get_or_init(|| Regex::new(r"\b(\d{1,2})\b").ok())
-        .as_ref()
+    COUNT_REGEX.as_ref()
 }
 
 #[cfg(test)]

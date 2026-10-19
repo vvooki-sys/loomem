@@ -40,15 +40,20 @@ pub(super) fn cache_key(
     if operation_plan_identity.is_some() {
         identity["operation_plan"] = json!(operation_plan_identity);
     }
+    let streams = canonical_scope(streams, payload.operation_policy.is_e2());
+    let excluded = canonical_scope(
+        payload.exclude_source_agents.as_deref(),
+        payload.operation_policy.is_e2(),
+    );
     Some(QueryCache::hash_query_with_source(
         &identity.to_string(),
-        streams,
+        streams.as_deref(),
         payload.entity.as_deref(),
         payload.date_from.as_deref(),
         payload.date_to.as_deref(),
         limit,
         payload.source_agent.as_deref(),
-        payload.exclude_source_agents.as_deref(),
+        excluded.as_deref(),
     ))
 }
 
@@ -219,4 +224,95 @@ mod tests {
             .is_none());
         }
     }
+}
+
+#[cfg(test)]
+mod e2_union_cache_tests {
+    use super::*;
+    use crate::handlers::search::operation_lane::{merge, E2LaneMetrics};
+
+    fn result(id: String) -> HybridSearchResult {
+        HybridSearchResult {
+            id: id.clone(),
+            content: id,
+            user_id: String::new(),
+            app_id: String::new(),
+            level: 0,
+            timestamp: 0,
+            score: 1.0,
+            bm25_score: 1.0,
+            vector_score: 0.0,
+            time_decay_factor: 1.0,
+        }
+    }
+
+    #[test]
+    fn e2_union_preserves_complete_prefix_and_cache_roundtrip() {
+        for count in 1..=60 {
+            let primary: Vec<_> = (0..count).map(|i| result(format!("primary-{i}"))).collect();
+            let lane = vec![
+                primary[0].clone(),
+                result("extra-a".into()),
+                result("extra-b".into()),
+                result("extra-c".into()),
+            ];
+            let mut metrics = E2LaneMetrics::primary(&primary, 0);
+            metrics.lane_candidate_count = lane.len();
+            let merged = merge(primary.clone(), lane, &mut metrics);
+            let prefix = count.min(20);
+            assert_eq!(
+                serde_json::to_value(&merged[..prefix]).unwrap(),
+                serde_json::to_value(&primary[..prefix]).unwrap()
+            );
+            assert_eq!(merged.len(), count);
+            assert_eq!(metrics.actual_admissions, count.saturating_sub(20).min(2));
+            assert_eq!(metrics.actual_admissions, metrics.actual_removals);
+            assert_eq!(
+                metrics.merge_unique_candidates + metrics.merge_duplicate_candidates,
+                count + 4
+            );
+            let mut cache = QueryCache::new(QueryCacheConfig::default());
+            cache.insert_if_current(1, cache.generation(), merged.clone());
+            let (_, cached) = cache.get_best(1).unwrap();
+            assert_eq!(
+                serde_json::to_value(cached).unwrap(),
+                serde_json::to_value(merged).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn exhausted_union_budget_returns_exact_primary() {
+        let primary: Vec<_> = (0..60).map(|i| result(format!("primary-{i}"))).collect();
+        let mut metrics = E2LaneMetrics::primary(&primary, 0);
+        metrics.scan_temporary_bytes_upper_bound = 1024 * 1024;
+        let output = merge(
+            primary.clone(),
+            vec![result("outsider".into())],
+            &mut metrics,
+        );
+        assert_eq!(
+            serde_json::to_value(output).unwrap(),
+            serde_json::to_value(primary).unwrap()
+        );
+        assert_eq!(metrics.actual_admissions, 0);
+    }
+}
+
+fn canonical_scope(values: Option<&[String]>, normalize: bool) -> Option<Vec<String>> {
+    values.map(|items| {
+        let mut items = items.to_vec();
+        if normalize {
+            items.sort();
+            items.dedup();
+        }
+        items
+    })
+}
+
+pub(super) fn complete_response(metrics: &super::telemetry::ResponseMetrics) -> bool {
+    metrics
+        .retrieval_v2
+        .as_ref()
+        .is_none_or(|observation| !observation.fallback.used)
 }

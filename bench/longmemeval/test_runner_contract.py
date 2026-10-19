@@ -102,6 +102,64 @@ class RunnerContractTests(unittest.TestCase):
             self.assertNotEqual(runner.operation_fields(question(), {"operation_policy": policy}),
                                 runner.operation_fields(changed, {"operation_policy": policy}))
 
+    def test_e2_wire_clock_and_debug_are_explicit(self):
+        for policy in sorted(runner.E2_POLICIES):
+            for debug in (False, True):
+                with self.subTest(policy=policy, debug=debug):
+                    adapter = SyntheticAdapter("ok")
+                    adapter.settings.update(operation_policy=policy, debug_operation=debug)
+                    result = runner.retrieve(adapter, question(), "f" * 64)
+                    self.assertEqual(result["status"], "retrieval_complete")
+                    wire = next(body for path, body in adapter.calls if path == "/search")
+                    expected = {"scope", "query", "top_k", "trace", "operation_policy"}
+                    if debug:
+                        expected.add("debug_operation")
+                        self.assertIs(wire["debug_operation"], True)
+                    if policy != "E2-F":
+                        expected.add("reference_time")
+                        self.assertEqual(wire["reference_time"], "2026-10-01T08:15:00Z")
+                    self.assertEqual(set(wire), expected)
+                    self.assertNotIn("reference_time_sha256", result)
+                    self.assertNotIn("2026-10-01T08:15:00Z", json.dumps(result))
+                    self.assertTrue(adapter.closed)
+
+    def test_e2_invalid_or_absent_clock_never_gets_fallback(self):
+        for value in (None, "", "2026/10/01 (Fri) 08:15", "2026/02/30 (Mon) 08:15",
+                      "2026/10/01 (Thu) 25:00", "2026-10-01T08:15:00Z"):
+            for policy in ("E2-D", "E2-C"):
+                with self.subTest(value=value, policy=policy):
+                    row = {**question(), "question_date": value}
+                    wire, trace = runner.operation_fields(row, {"operation_policy": policy})
+                    self.assertEqual(wire, {"operation_policy": policy})
+                    self.assertEqual(trace, {"operation_policy": policy})
+
+    def test_e2_gold_id_category_mutation_cannot_change_wire(self):
+        changed = copy.deepcopy(question())
+        changed.update(question_id="other", question_type="temporal-reasoning",
+                       answer="changed", answer_session_ids=[])
+        changed["haystack_sessions"][0][0]["has_answer"] = False
+        for policy in sorted(runner.E2_POLICIES):
+            settings = {"operation_policy": policy}
+            self.assertEqual(runner.operation_fields(question(), settings),
+                             runner.operation_fields(changed, settings))
+
+    def test_e2_clock_changes_wire_but_never_public_trace(self):
+        changed = {**question(), "question_date": "2026/10/02 (Fri) 08:15"}
+        for policy in sorted(runner.E2_POLICIES):
+            before = runner.operation_fields(question(), {"operation_policy": policy})
+            after = runner.operation_fields(changed, {"operation_policy": policy})
+            self.assertEqual(before[1], after[1])
+            self.assertEqual(before[0] == after[0], policy == "E2-F")
+
+    def test_e2_identity_rejects_policy_switch_and_legacy_anchor_hash(self):
+        for policy in sorted(runner.E2_POLICIES):
+            settings = {"operation_policy": policy}
+            runner.verify_operation({"operation_policy": policy}, question(), settings)
+            for changed in ({"operation_policy": "E0"},
+                            {"operation_policy": policy, "reference_time_sha256": "a" * 64}):
+                with self.subTest(policy=policy, changed=changed), self.assertRaises(ValueError):
+                    runner.verify_operation(changed, question(), settings)
+
     def test_dataset_digest_change_rejected_before_adapter(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

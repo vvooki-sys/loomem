@@ -17,6 +17,7 @@ mod candidate_limit_tests;
 mod candidates;
 mod evidence;
 mod operation;
+mod operation_lane;
 mod telemetry;
 
 use telemetry::{stage_timer, Bm25Runner, RequestTelemetry, ResponseMetrics, TraceCounters};
@@ -452,25 +453,7 @@ fn prepare_query_context(
     // Scope branch: mutually exclusive with stream/streams.
     // resolve_scope handles membership + leak-protection — do not wrap its
     // errors in BadRequest (that would destroy the 404 leak-protection).
-    let validated_streams = if let Some(scope) = payload.scope {
-        if payload.stream.is_some() || payload.streams.is_some() {
-            return Err(AppError::BadRequest(
-                "specify scope or stream/streams, not both".into(),
-            ));
-        }
-        let resolution = scope_mod::resolve_scope(scope, auth, &state.store)?;
-        Some(resolution.streams.into_iter().map(|(id, _)| id).collect())
-    } else {
-        // Existing path — byte-identical behaviour for pre-existing callers.
-        auth::validate_streams(
-            auth,
-            payload
-                .streams
-                .as_deref()
-                .or(payload.stream.as_ref().map(std::slice::from_ref)),
-        )
-        .map_err(|_| AppError::BadRequest("Access denied: cannot search this stream".into()))?
-    };
+    let validated_streams = validated_search_streams(state, auth, payload)?;
     let start = Instant::now();
     let telemetry = telemetry::request_telemetry(payload);
 
@@ -488,7 +471,7 @@ fn prepare_query_context(
         payload,
         limit,
         validated_streams.as_deref(),
-    );
+    )?;
     telemetry::record_prepare_stage(telemetry.as_deref(), classify_plan_started, false);
     let prepared_date = operation::resolve_date(payload, &operation);
     let query_without_date = prepared_date.query.clone();
@@ -508,9 +491,8 @@ fn prepare_query_context(
     }
 
     // Step 2: Apply query expansion (on entity-resolved query)
-    let expanded_query = operation
-        .plan
-        .expand(&state.query_expander.expand(&entity_resolved));
+    let expanded_query =
+        operation.primary_expansion(&state.query_expander.expand(&entity_resolved));
 
     // Apply Polish stemming to both original and expanded queries
     let (original_query_stemmed, expanded_query_stemmed) = prepared_stems(
@@ -672,6 +654,7 @@ pub async fn search_handler(
     // Cycle/258 (Option A): the source_agent filter is now pushed into Tantivy
     // inside `bm25_retrieve` (`bm25_leaf`), so the BM25 pool is already
     // agent-scoped at the source — no post-retrieval pre-filter pass needed.
+    let primary_started = Instant::now();
     let bm25_results = bm25_retrieve(&ctx, &sub_queries, &payload, &state).await?;
 
     // Cycle/012: channel diagnostics (request-flag gated, None on the
@@ -750,21 +733,7 @@ pub async fn search_handler(
     } = outcome;
 
     // ECA-31: Check cost budget for reranker
-    let rerank_cost_ok = {
-        let cost_status = loomem_core::cost_tracker::check_cost_budget_for_stream(
-            &state.store,
-            &auth.stream_id,
-            state.config.cost.daily_cap_usd,
-        );
-        if !cost_status.allow_reranker() {
-            tracing::warn!(
-                "Reranker disabled for stream {}: cost budget tier={} (ECA-31)",
-                auth.stream_id,
-                cost_status.description()
-            );
-        }
-        cost_status.allow_reranker()
-    };
+    let rerank_cost_ok = rerank_budget_allows(&state, &auth);
 
     // Async reranking: spawn in background, results cached for next identical query
     if state.config.search.rerank_enabled && rerank_cost_ok && !hybrid_results.is_empty() {
@@ -832,12 +801,24 @@ pub async fn search_handler(
     }
 
     hybrid_results.truncate(final_top_k);
+    let lane = operation_lane::finalize(
+        hybrid_results,
+        primary_started.elapsed().as_micros(),
+        &ctx,
+        &payload,
+        &state,
+    )
+    .await;
+    let (hybrid_results, metrics) = lane.finish(metrics);
 
     // Cache store — post-boost, post-filter, post-truncate. Warm-path cache
     // hits (line ~216) now return the same Vec<HybridSearchResult> that the
     // cold path is about to build into SearchResult. This closes the
     // cold/warm divergence diagnosed in cycles/N7-cli-nondeterminism.md §3.
-    if let Some(key) = ctx.cache_key {
+    if let Some(key) = ctx
+        .cache_key
+        .filter(|_| cache_policy::complete_response(&metrics))
+    {
         let mut cache = state.query_cache.lock().await;
         cache.insert_if_current(key, cache_generation, hybrid_results.clone());
     }
@@ -1087,6 +1068,7 @@ async fn build_response(
         final_top_k,
         evidence,
         operation,
+        retrieval_v2,
     } = metrics;
 
     // Implicit boost: top 3 results get +0.1 importance (cap 1.5, max once per 24h)
@@ -1234,6 +1216,7 @@ async fn build_response(
             dedup_removed,
             evidence,
             operation,
+            retrieval_v2,
         },
     );
 
@@ -1451,7 +1434,7 @@ fn date_bm25_results(
     let lanes = bounded_date_queries(
         &ctx.original_query_stemmed,
         &ctx.expanded_query_stemmed,
-        !ctx.operation.plan.added_terms.is_empty(),
+        ctx.operation.uses_operation_primary_merge(),
     );
     let original = date_bm25_leaf(
         runner,
@@ -1514,7 +1497,7 @@ enum ExpandedMergeMode {
 }
 
 fn expanded_merge_mode(ctx: &QueryContext) -> ExpandedMergeMode {
-    if ctx.operation.plan.added_terms.is_empty() {
+    if !ctx.operation.uses_operation_primary_merge() {
         ExpandedMergeMode::Legacy
     } else {
         ExpandedMergeMode::Operation
@@ -1528,7 +1511,7 @@ fn merge_expanded_results(
 ) -> Vec<loomem_core::SearchResult> {
     match mode {
         ExpandedMergeMode::Legacy => merge_weighted_results(original, expanded),
-        ExpandedMergeMode::Operation => merge_operation_results(original, expanded),
+        ExpandedMergeMode::Operation => operation::merge_expanded_results(original, expanded),
     }
 }
 
@@ -1539,33 +1522,6 @@ fn merge_expanded_results_timed(
 ) -> Vec<loomem_core::SearchResult> {
     let _timer = stage_timer(ctx.telemetry.as_deref().map(|meter| &meter.merge_us));
     merge_expanded_results(original, expanded, expanded_merge_mode(ctx))
-}
-
-fn merge_operation_results(
-    original: Vec<loomem_core::SearchResult>,
-    expanded: Vec<loomem_core::SearchResult>,
-) -> Vec<loomem_core::SearchResult> {
-    let mut merged: std::collections::HashMap<_, _> = original
-        .into_iter()
-        .enumerate()
-        .map(|(rank, item)| (item.id.clone(), (item, rank)))
-        .collect();
-    for mut result in expanded {
-        result.score *= 0.5;
-        merged
-            .entry(result.id.clone())
-            .and_modify(|(existing, _)| existing.score = existing.score.max(result.score))
-            .or_insert((result, usize::MAX));
-    }
-    let mut results: Vec<_> = merged.into_values().collect();
-    results.sort_by(|(left, left_rank), (right, right_rank)| {
-        right
-            .score
-            .total_cmp(&left.score)
-            .then_with(|| left_rank.cmp(right_rank))
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    results.into_iter().map(|(item, _)| item).collect()
 }
 
 fn merge_weighted_results(
@@ -4617,10 +4573,13 @@ mod stream_scoping_e2e_tests {
         } else {
             vec![bm25_result("b", 2.0), bm25_result("a", 2.0)]
         };
-        merge_operation_results(vec![bm25_result("z", 1.0), bm25_result("y", 1.0)], expanded)
-            .into_iter()
-            .map(|item| item.id)
-            .collect()
+        operation::merge_expanded_results(
+            vec![bm25_result("z", 1.0), bm25_result("y", 1.0)],
+            expanded,
+        )
+        .into_iter()
+        .map(|item| item.id)
+        .collect()
     }
 
     /// A chunk in an explicit stream. `1_700_000_000` = 2023-11-14, so a
@@ -5048,4 +5007,46 @@ mod stream_scoping_e2e_tests {
             response_projection(&state, oversized).await
         );
     }
+}
+
+fn validated_search_streams(
+    state: &Arc<AppState>,
+    auth: &AuthContext,
+    payload: &SearchRequest,
+) -> Result<Option<Vec<String>>, AppError> {
+    Ok(if let Some(scope) = payload.scope {
+        if payload.stream.is_some() || payload.streams.is_some() {
+            return Err(AppError::BadRequest(
+                "specify scope or stream/streams, not both".into(),
+            ));
+        }
+        let resolution = scope_mod::resolve_scope(scope, auth, &state.store)?;
+        Some(resolution.streams.into_iter().map(|(id, _)| id).collect())
+    } else {
+        // Existing path — byte-identical behaviour for pre-existing callers.
+        auth::validate_streams(
+            auth,
+            payload
+                .streams
+                .as_deref()
+                .or(payload.stream.as_ref().map(std::slice::from_ref)),
+        )
+        .map_err(|_| AppError::BadRequest("Access denied: cannot search this stream".into()))?
+    })
+}
+
+fn rerank_budget_allows(state: &Arc<AppState>, auth: &AuthContext) -> bool {
+    let cost_status = loomem_core::cost_tracker::check_cost_budget_for_stream(
+        &state.store,
+        &auth.stream_id,
+        state.config.cost.daily_cap_usd,
+    );
+    if !cost_status.allow_reranker() {
+        tracing::warn!(
+            "Reranker disabled for stream {}: cost budget tier={} (ECA-31)",
+            auth.stream_id,
+            cost_status.description()
+        );
+    }
+    cost_status.allow_reranker()
 }

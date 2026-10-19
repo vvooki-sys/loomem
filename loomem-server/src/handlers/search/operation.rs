@@ -1,16 +1,30 @@
 //! Bounded, deterministic operation-stage reranking.
-use chrono::{DateTime, NaiveDate, Utc};
+pub(super) use super::operation_lane::rerank;
+use super::telemetry::{base_temporary_bytes, temporary_bytes};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use loomem_core::hybrid_search::SearchConfig;
 use loomem_core::search::operation::{
-    OperationPlan, OperationPolicy, MAX_ADDED_BYTES, MAX_CANDIDATES, MAX_CHANGED_ADMISSIONS,
-    MAX_QUERY_BYTES, MAX_RECORD_SCAN_BYTES, MAX_REQUEST_SCAN_BYTES, MAX_RETURNED, PROTECTED_RANKS,
+    OperationPlan, OperationPolicy, MAX_QUERY_BYTES, MAX_RETURNED,
+};
+#[cfg(test)]
+use loomem_core::search::operation::{
+    MAX_CANDIDATES, MAX_RECORD_SCAN_BYTES, MAX_REQUEST_SCAN_BYTES,
 };
 use loomem_core::HybridSearchResult;
 use std::collections::HashMap;
-use std::time::Instant;
 
 use crate::handlers::date_filter::{extract_date_filter, extract_date_filter_at};
 use crate::handlers::types::{DateFilter, SearchRequest};
+use crate::handlers::AppError;
+
+const DATE_SOURCE_POLICY: &str = "event-date-only-v1";
+const E2_CACHE_VERSION: &str = "e2-two-lane-v1";
+
+#[derive(Debug, Clone)]
+pub(super) struct E2LaneSpec {
+    pub query: String,
+    pub inclusive_range: Option<(i64, i64)>,
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct PreparedOperation {
@@ -18,6 +32,9 @@ pub(super) struct PreparedOperation {
     pub plan: OperationPlan,
     reference_time: Option<DateTime<Utc>>,
     fallback: Option<&'static str>,
+    e2_lane: Option<E2LaneSpec>,
+    e2_fallback: Option<&'static str>,
+    explicit_range: Option<DateFilter>,
 }
 
 pub(super) struct PreparedDate {
@@ -33,10 +50,16 @@ impl PreparedOperation {
             plan: OperationPlan::plain(),
             reference_time: None,
             fallback,
+            e2_lane: None,
+            e2_fallback: None,
+            explicit_range: None,
         }
     }
 
     pub fn cache_identity(&self, date: &PreparedDate) -> Option<String> {
+        if self.policy.is_e2() {
+            return Some(self.e2_cache_identity());
+        }
         let plan_active = !self.plan.added_terms.is_empty();
         if self.policy == OperationPolicy::E0 || (!plan_active && !date.anchored) {
             return None;
@@ -47,6 +70,37 @@ impl PreparedOperation {
     pub fn fallback_reason(&self) -> Option<&'static str> {
         self.fallback
     }
+
+    pub(super) fn e2_lane_spec(&self) -> Option<&E2LaneSpec> {
+        self.e2_lane.as_ref()
+    }
+
+    pub(super) fn e2_fallback_reason(&self) -> Option<&'static str> {
+        self.e2_fallback
+    }
+
+    pub(super) fn primary_expansion(&self, expanded: &str) -> String {
+        if self.policy.is_e2() {
+            expanded.to_string()
+        } else {
+            self.plan.expand(expanded)
+        }
+    }
+
+    pub(super) fn uses_operation_primary_merge(&self) -> bool {
+        !self.policy.is_e2() && !self.plan.added_terms.is_empty()
+    }
+
+    fn e2_cache_identity(&self) -> String {
+        let range = self.e2_lane.as_ref().and_then(|lane| lane.inclusive_range);
+        serde_json::json!({
+            "version": E2_CACHE_VERSION, "policy": self.policy,
+            "plan": self.plan.identity(), "range": range,
+            "anchor": self.reference_time, "date_source": DATE_SOURCE_POLICY,
+            "explicit_precedence": "intersection", "caps": [60, 180, 20, 2, 524288, 1048576],
+        })
+        .to_string()
+    }
 }
 
 pub(super) fn prepare(
@@ -54,10 +108,13 @@ pub(super) fn prepare(
     payload: &SearchRequest,
     limit: usize,
     streams: Option<&[String]>,
-) -> PreparedOperation {
+) -> Result<PreparedOperation, AppError> {
+    if payload.operation_policy.is_e2() {
+        return prepare_e2(config, payload, limit, streams);
+    }
     let Some(fallback) = gate(config, payload, limit, streams) else {
         let reference_time = normalized_reference_time(payload);
-        return PreparedOperation {
+        return Ok(PreparedOperation {
             policy: payload.operation_policy,
             plan: loomem_core::search::plan_operation(
                 &payload.query,
@@ -66,9 +123,89 @@ pub(super) fn prepare(
             ),
             reference_time,
             fallback: None,
-        };
+            e2_lane: None,
+            e2_fallback: None,
+            explicit_range: None,
+        });
     };
-    PreparedOperation::baseline(fallback)
+    Ok(PreparedOperation::baseline(fallback))
+}
+
+fn prepare_e2(
+    config: &SearchConfig,
+    payload: &SearchRequest,
+    limit: usize,
+    streams: Option<&[String]>,
+) -> Result<PreparedOperation, AppError> {
+    let explicit_range = strict_explicit_date_filter(payload)?;
+    let reference_time = normalized_reference_time(payload);
+    let plan = loomem_core::search::plan_operation(
+        &payload.query,
+        reference_time,
+        payload.operation_policy,
+    );
+    let gate_fallback = gate(config, payload, limit, streams).flatten();
+    let mut prepared = PreparedOperation {
+        policy: payload.operation_policy,
+        plan,
+        reference_time,
+        fallback: gate_fallback,
+        e2_lane: None,
+        e2_fallback: None,
+        explicit_range,
+    };
+    if gate_fallback.is_some() || unsupported_e2_filters(payload) {
+        return Ok(prepared);
+    }
+    prepare_e2_lane(payload, &mut prepared);
+    Ok(prepared)
+}
+
+fn prepare_e2_lane(payload: &SearchRequest, prepared: &mut PreparedOperation) {
+    let interval = prepared.plan.half_open_interval();
+    if payload.operation_policy.date_enabled() && prepared.reference_time.is_none() {
+        prepared.e2_fallback = Some("no_reference_time");
+        return;
+    }
+    let range = interval.and_then(|value| value.inclusive_bounds());
+    if payload.operation_policy.date_enabled() && range.is_none() {
+        prepared.e2_fallback = Some("unsupported_date_expression");
+        return;
+    }
+    let Ok(range) = effective_lane_range(range, prepared.explicit_range.as_ref()) else {
+        return;
+    };
+    let facet_query = prepared.plan.expand(&payload.query);
+    let query = if payload.operation_policy.facets_enabled() {
+        facet_query
+    } else {
+        payload.query.clone()
+    };
+    if payload.operation_policy.facets_enabled()
+        && !payload.operation_policy.date_enabled()
+        && prepared.plan.kind() == "Plain"
+    {
+        return;
+    }
+    prepared.e2_lane = Some(E2LaneSpec {
+        query,
+        inclusive_range: range,
+    });
+}
+
+fn effective_lane_range(
+    range: Option<(i64, i64)>,
+    explicit: Option<&DateFilter>,
+) -> Result<Option<(i64, i64)>, ()> {
+    match (range, explicit) {
+        (Some(derived), Some(DateFilter::Range(start, end))) => {
+            super::operation_lane::intersect_ranges(derived, (*start, *end))
+                .map(Some)
+                .ok_or(())
+        }
+        (None, Some(DateFilter::Range(start, end))) => Ok(Some((*start, *end))),
+        (range, _) => Ok(range),
+    }
 }
 
 fn gate(
@@ -134,9 +271,25 @@ fn normalized_reference_time(payload: &SearchRequest) -> Option<DateTime<Utc>> {
         .as_deref()
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc))
+        .filter(|value| !payload.operation_policy.is_e2() || (1970..=9999).contains(&value.year()))
 }
 
 pub(super) fn resolve_date(payload: &SearchRequest, operation: &PreparedOperation) -> PreparedDate {
+    if operation.policy.is_e2() {
+        if payload.date_from.is_some() || payload.date_to.is_some() {
+            return PreparedDate {
+                query: payload.query.clone(),
+                filter: explicit_date_filter(payload),
+                anchored: false,
+            };
+        }
+        let (query, filter) = extract_date_filter(&payload.query);
+        return PreparedDate {
+            query,
+            filter,
+            anchored: false,
+        };
+    }
     if payload.date_from.is_some() || payload.date_to.is_some() {
         return PreparedDate {
             query: payload.query.clone(),
@@ -153,6 +306,72 @@ pub(super) fn resolve_date(payload: &SearchRequest, operation: &PreparedOperatio
         filter,
         anchored: false,
     }
+}
+
+fn strict_explicit_date_filter(payload: &SearchRequest) -> Result<Option<DateFilter>, AppError> {
+    if payload.date_from.is_none() && payload.date_to.is_none() {
+        return Ok(None);
+    }
+    let start = strict_bound(payload.date_from.as_deref(), false)?;
+    let end = strict_bound(payload.date_to.as_deref(), true)?;
+    if start > end {
+        return Err(invalid_explicit_date());
+    }
+    Ok(Some(DateFilter::Range(start, end)))
+}
+
+fn strict_bound(value: Option<&str>, end: bool) -> Result<i64, AppError> {
+    let value = value.unwrap_or(if end { "9999-12-31" } else { "1970-01-01" });
+    let parsed = if value.len() == 10 {
+        let date =
+            NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| invalid_explicit_date())?;
+        if date.to_string() != value {
+            return Err(invalid_explicit_date());
+        }
+        let time = if end { (23, 59, 59) } else { (0, 0, 0) };
+        date.and_hms_opt(time.0, time.1, time.2)
+            .map(|value| value.and_utc())
+            .ok_or_else(invalid_explicit_date)?
+    } else {
+        DateTime::parse_from_rfc3339(value)
+            .map_err(|_| invalid_explicit_date())?
+            .with_timezone(&Utc)
+    };
+    if !(1970..=9999).contains(&parsed.year()) {
+        return Err(invalid_explicit_date());
+    }
+    Ok(parsed.timestamp())
+}
+
+fn invalid_explicit_date() -> AppError {
+    AppError::BadRequest("invalid explicit date range".to_string())
+}
+
+pub(super) fn merge_expanded_results(
+    original: Vec<loomem_core::SearchResult>,
+    expanded: Vec<loomem_core::SearchResult>,
+) -> Vec<loomem_core::SearchResult> {
+    let mut merged: HashMap<_, _> = original
+        .into_iter()
+        .enumerate()
+        .map(|(rank, item)| (item.id.clone(), (item, rank)))
+        .collect();
+    for mut result in expanded {
+        result.score *= 0.5;
+        merged
+            .entry(result.id.clone())
+            .and_modify(|(existing, _)| existing.score = existing.score.max(result.score))
+            .or_insert((result, usize::MAX));
+    }
+    let mut results: Vec<_> = merged.into_values().collect();
+    results.sort_by(|(left, left_rank), (right, right_rank)| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left_rank.cmp(right_rank))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    results.into_iter().map(|(item, _)| item).collect()
 }
 
 fn anchored_date(payload: &SearchRequest, anchor: Option<DateTime<Utc>>) -> PreparedDate {
@@ -207,7 +426,7 @@ pub(super) struct OperationMetrics {
     pub elapsed_us: u128,
     pub temporary_bytes: usize,
     pub fallback: Option<&'static str>,
-    max_record_bytes: usize,
+    pub(super) max_record_bytes: usize,
 }
 
 pub(super) fn apply(
@@ -215,6 +434,9 @@ pub(super) fn apply(
     prepared: &PreparedOperation,
     debug: bool,
 ) -> (Vec<HybridSearchResult>, OperationMetrics) {
+    if prepared.policy.is_e2() {
+        return (candidates, OperationMetrics::default());
+    }
     let (ranked, mut metrics) = if prepared.policy.facets_enabled() {
         rerank(candidates, &prepared.plan)
     } else {
@@ -249,179 +471,6 @@ fn trace(policy: OperationPolicy, metrics: &OperationMetrics, enabled: bool) {
         fallback = metrics.fallback,
         "operation search stage"
     );
-}
-
-struct CandidateCredit {
-    index: usize,
-    utility: f64,
-    terms: Vec<String>,
-}
-
-pub(super) fn rerank(
-    candidates: Vec<HybridSearchResult>,
-    plan: &OperationPlan,
-) -> (Vec<HybridSearchResult>, OperationMetrics) {
-    let started = Instant::now();
-    let mut metrics = OperationMetrics {
-        planned_terms: plan.added_terms.len(),
-        ..Default::default()
-    };
-    if plan.added_terms.is_empty() {
-        metrics.elapsed_us = started.elapsed().as_micros();
-        return (candidates, metrics);
-    }
-    if candidates.len() > MAX_CANDIDATES {
-        metrics.fallback = Some("candidate_limit");
-        metrics.elapsed_us = started.elapsed().as_micros();
-        return (candidates, metrics);
-    }
-    let Some(credits) = scan(&candidates, plan, &mut metrics) else {
-        metrics.fallback = Some("scan_limit");
-        metrics.elapsed_us = started.elapsed().as_micros();
-        return (candidates, metrics);
-    };
-    let promoted = choose(credits);
-    metrics.changed_admissions = promoted.len();
-    metrics.elapsed_us = started.elapsed().as_micros();
-    (move_after_anchors(candidates, &promoted), metrics)
-}
-
-fn scan(
-    candidates: &[HybridSearchResult],
-    plan: &OperationPlan,
-    metrics: &mut OperationMetrics,
-) -> Option<Vec<CandidateCredit>> {
-    let mut credits = Vec::new();
-    for (index, candidate) in candidates.iter().enumerate() {
-        let scan_bytes = candidate.content.len().min(MAX_RECORD_SCAN_BYTES);
-        let next_scanned_bytes = metrics.scanned_bytes.checked_add(scan_bytes)?;
-        if next_scanned_bytes > MAX_REQUEST_SCAN_BYTES {
-            return None;
-        }
-        metrics.scanned_bytes = next_scanned_bytes;
-        metrics.max_record_bytes = metrics.max_record_bytes.max(scan_bytes);
-        metrics.scanned_candidates += 1;
-        if index < PROTECTED_RANKS {
-            continue;
-        }
-        let prefix = String::from_utf8_lossy(&candidate.content.as_bytes()[..scan_bytes]);
-        let lower = prefix.to_lowercase();
-        let terms: Vec<String> = plan
-            .added_terms
-            .iter()
-            .filter(|term| {
-                lower
-                    .split(|c: char| !c.is_alphanumeric())
-                    .any(|word| word == term.as_str())
-            })
-            .cloned()
-            .collect();
-        if terms.is_empty() {
-            continue;
-        }
-        metrics.matched_candidates += 1;
-        let rank_prior = 1.0 / f64::from(u32::try_from(index + 1).ok()?);
-        let novelty = f64::from(u32::try_from(terms.len()).ok()?)
-            / f64::from(u32::try_from(plan.added_terms.len()).ok()?);
-        credits.push(CandidateCredit {
-            index,
-            utility: rank_prior + novelty.min(rank_prior),
-            terms,
-        });
-    }
-    Some(credits)
-}
-
-fn temporary_bytes(metrics: &OperationMetrics, plan: &OperationPlan) -> usize {
-    let scan_buffer = metrics.max_record_bytes.saturating_mul(8);
-    let credit_slots = allocation_slots(metrics.matched_candidates);
-    let credits = credit_slots.saturating_mul(
-        std::mem::size_of::<CandidateCredit>()
-            .saturating_add(MAX_ADDED_BYTES)
-            .saturating_add(8usize.saturating_mul(std::mem::size_of::<String>())),
-    );
-    let reorder = allocation_slots(metrics.scanned_candidates).saturating_mul(
-        std::mem::size_of::<Option<HybridSearchResult>>()
-            .saturating_add(std::mem::size_of::<HybridSearchResult>()),
-    );
-    let term_map = 8usize.saturating_mul(
-        std::mem::size_of::<(String, usize)>()
-            .saturating_add(MAX_ADDED_BYTES)
-            .saturating_add(128),
-    );
-    let promoted = MAX_CHANGED_ADMISSIONS.saturating_mul(std::mem::size_of::<HybridSearchResult>());
-    base_temporary_bytes(plan)
-        .saturating_add(scan_buffer)
-        .saturating_add(credits)
-        .saturating_add(reorder)
-        .saturating_add(term_map)
-        .saturating_add(promoted)
-        .saturating_add(MAX_ADDED_BYTES.saturating_mul(4))
-}
-
-fn base_temporary_bytes(plan: &OperationPlan) -> usize {
-    // The plan identity String and its 64-byte hexadecimal SHA-256 digest are
-    // materialized when debug telemetry is finalized. Four bytes per identity
-    // byte conservatively covers UTF-8 growth and allocator capacity.
-    plan.identity().len().saturating_mul(4).saturating_add(64)
-}
-
-fn allocation_slots(items: usize) -> usize {
-    items.max(1).next_power_of_two()
-}
-
-fn choose(mut credits: Vec<CandidateCredit>) -> Vec<usize> {
-    credits.sort_by(|left, right| {
-        right
-            .utility
-            .total_cmp(&left.utility)
-            .then_with(|| left.index.cmp(&right.index))
-    });
-    let mut term_uses: HashMap<String, usize> = HashMap::new();
-    let mut selected = Vec::new();
-    for credit in credits {
-        let earns_credit = credit
-            .terms
-            .iter()
-            .any(|term| term_uses.get(term).copied().unwrap_or(0) < MAX_CHANGED_ADMISSIONS);
-        if !earns_credit {
-            continue;
-        }
-        for term in credit.terms {
-            let count = term_uses.entry(term).or_default();
-            *count = (*count + 1).min(MAX_CHANGED_ADMISSIONS);
-        }
-        selected.push(credit.index);
-        if selected.len() == MAX_CHANGED_ADMISSIONS {
-            break;
-        }
-    }
-    selected.sort_unstable();
-    selected
-}
-
-fn move_after_anchors(
-    candidates: Vec<HybridSearchResult>,
-    promoted: &[usize],
-) -> Vec<HybridSearchResult> {
-    if promoted.is_empty() {
-        return candidates;
-    }
-    let mut slots: Vec<Option<HybridSearchResult>> = candidates.into_iter().map(Some).collect();
-    let promoted_records: Vec<_> = promoted
-        .iter()
-        .filter_map(|index| slots.get_mut(*index).and_then(Option::take))
-        .collect();
-    let mut output = Vec::with_capacity(slots.len());
-    output.extend(
-        slots
-            .iter_mut()
-            .take(PROTECTED_RANKS)
-            .filter_map(Option::take),
-    );
-    output.extend(promoted_records);
-    output.extend(slots.into_iter().skip(PROTECTED_RANKS).flatten());
-    output
 }
 
 #[cfg(test)]
@@ -461,6 +510,9 @@ mod tests {
             plan: plan(),
             reference_time: None,
             fallback: None,
+            e2_lane: None,
+            e2_fallback: None,
+            explicit_range: None,
         }
     }
 
@@ -580,6 +632,9 @@ mod tests {
             plan: OperationPlan::plain(),
             reference_time: None,
             fallback: None,
+            e2_lane: None,
+            e2_fallback: None,
+            explicit_range: None,
         };
         let no_scan_metrics = apply(Vec::new(), &no_scan, true).1;
         assert!(no_scan_metrics.temporary_bytes >= 64);
@@ -652,6 +707,9 @@ mod tests {
             plan: OperationPlan::plain(),
             reference_time: Utc.with_ymd_and_hms(2026, 10, 19, hour, 0, 0).single(),
             fallback: None,
+            e2_lane: None,
+            e2_fallback: None,
+            explicit_range: None,
         };
         let date = PreparedDate {
             query: "yesterday".into(),
@@ -680,4 +738,12 @@ mod tests {
             .iter()
             .all(|item| originals.get(&item.id) == Some(&&item.content)));
     }
+}
+
+fn unsupported_e2_filters(payload: &SearchRequest) -> bool {
+    payload.entity.is_some()
+        || payload.user_id.is_some()
+        || payload.filters.is_some()
+        || payload.debug_channels
+        || payload.debug_signal_breakdown
 }
