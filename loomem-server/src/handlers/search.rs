@@ -1,5 +1,4 @@
 use axum::{extract::State, Json};
-use chrono::{NaiveDate, Utc};
 use loomem_core::query_expansion::polish_stem;
 #[cfg(test)]
 use loomem_core::sanitizer::sanitize_for_llm;
@@ -17,8 +16,8 @@ mod cache_policy;
 mod candidate_limit_tests;
 mod candidates;
 mod evidence;
+mod operation;
 
-use super::date_filter::extract_date_filter;
 use super::types::{
     AssociateRequest, AssociateResponse, Association, ChannelDiagnostics, ChannelHit,
     ContextSufficiency, DateFilter, FusedPoolHit, RareTermLaneDiag, SearchRequest, SearchResponse,
@@ -240,6 +239,7 @@ struct QueryContext {
     stream_list: Option<Vec<String>>,
     cache_key: Option<u64>,
     limit: usize,
+    operation: operation::PreparedOperation,
 }
 
 /// Pipeline metrics collected between retrieval and response building.
@@ -486,59 +486,15 @@ fn prepare_query_context(
     };
 
     let limit = candidates::request_limit(state, payload, complexity)?;
-
-    // Extract date filter from query (implicit) or use explicit params
-    let (query_without_date, date_filter) =
-        if payload.date_from.is_some() || payload.date_to.is_some() {
-            let filter = if let (Some(from), Some(to)) = (&payload.date_from, &payload.date_to) {
-                if let (Ok(from_date), Ok(to_date)) = (
-                    NaiveDate::parse_from_str(from, "%Y-%m-%d"),
-                    NaiveDate::parse_from_str(to, "%Y-%m-%d"),
-                ) {
-                    let start_ts = from_date
-                        .and_hms_opt(0, 0, 0)
-                        .expect("valid static HMS values")
-                        .and_utc()
-                        .timestamp();
-                    let end_ts = to_date
-                        .and_hms_opt(23, 59, 59)
-                        .expect("valid static HMS values")
-                        .and_utc()
-                        .timestamp();
-                    Some(DateFilter::Range(start_ts, end_ts))
-                } else {
-                    None
-                }
-            } else if let Some(from) = &payload.date_from {
-                if let Ok(from_date) = NaiveDate::parse_from_str(from, "%Y-%m-%d") {
-                    let start_ts = from_date
-                        .and_hms_opt(0, 0, 0)
-                        .expect("valid static HMS values")
-                        .and_utc()
-                        .timestamp();
-                    let now = Utc::now().timestamp();
-                    Some(DateFilter::Range(start_ts, now))
-                } else {
-                    None
-                }
-            } else if let Some(to) = &payload.date_to {
-                if let Ok(to_date) = NaiveDate::parse_from_str(to, "%Y-%m-%d") {
-                    let end_ts = to_date
-                        .and_hms_opt(23, 59, 59)
-                        .expect("valid static HMS values")
-                        .and_utc()
-                        .timestamp();
-                    Some(DateFilter::Range(0, end_ts))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            (payload.query.clone(), filter)
-        } else {
-            extract_date_filter(&payload.query)
-        };
+    let operation = operation::prepare(
+        &state.config.search,
+        payload,
+        limit,
+        validated_streams.as_deref(),
+    );
+    let prepared_date = operation::resolve_date(payload, &operation);
+    let query_without_date = prepared_date.query.clone();
+    let date_filter = prepared_date.filter.clone();
 
     tracing::debug!(
         has_date_filter = date_filter.is_some(),
@@ -553,28 +509,16 @@ fn prepare_query_context(
     }
 
     // Step 2: Apply query expansion (on entity-resolved query)
-    let expanded_query = state.query_expander.expand(&entity_resolved);
+    let expanded_query = operation
+        .plan
+        .expand(&state.query_expander.expand(&entity_resolved));
 
     // Apply Polish stemming to both original and expanded queries
-    let original_query_stemmed = if state.config.search.stem_polish {
-        let words: Vec<String> = query_without_date
-            .split_whitespace()
-            .flat_map(polish_stem)
-            .collect();
-        words.join(" ")
-    } else {
-        query_without_date.clone()
-    };
-
-    let expanded_query_stemmed = if state.config.search.stem_polish {
-        let words: Vec<String> = expanded_query
-            .split_whitespace()
-            .flat_map(polish_stem)
-            .collect();
-        words.join(" ")
-    } else {
-        expanded_query.clone()
-    };
+    let (original_query_stemmed, expanded_query_stemmed) = prepared_stems(
+        state.config.search.stem_polish,
+        &query_without_date,
+        &expanded_query,
+    );
 
     tracing::debug!("Query expansion complete");
 
@@ -584,12 +528,14 @@ fn prepare_query_context(
     // that differ only in agent filter never collide, and the stored result set is
     // post-filter + post-truncate either way.
     let stream_list: Option<Vec<String>> = validated_streams;
+    let operation_identity = operation.cache_identity(&prepared_date);
     let cache_key = cache_policy::cache_key(
         &state.config.search.cache,
         payload,
         stream_list.as_deref(),
         date_filter.as_ref(),
         limit,
+        operation_identity.as_deref(),
     );
 
     Ok(QueryContext {
@@ -605,7 +551,26 @@ fn prepare_query_context(
         // Tantivy (`bm25_leaf` / `agent_id_set`), so the candidate pool is
         // agent-scoped at the source — #257's over-fetch is no longer needed.
         limit,
+        operation,
     })
+}
+
+fn prepared_stems(enabled: bool, original: &str, expanded: &str) -> (String, String) {
+    (
+        stem_if_enabled(original, enabled),
+        stem_if_enabled(expanded, enabled),
+    )
+}
+
+fn stem_if_enabled(query: &str, enabled: bool) -> String {
+    if !enabled {
+        return query.to_string();
+    }
+    query
+        .split_whitespace()
+        .flat_map(polish_stem)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub async fn search_handler(
@@ -760,7 +725,7 @@ pub async fn search_handler(
     // Score + rank: graph boost + level boost + tier/importance/preference +
     // complexity-aware final sort. Sync (no await — `graph.find_related_chunks`
     // and `state.store.get_chunk` are blocking). See `score_and_rank` below.
-    let hybrid_results = score_and_rank(hybrid_results, &ctx, &payload, &auth, &state);
+    let hybrid_results = score_and_apply_operation(hybrid_results, &ctx, &payload, &auth, &state);
 
     // Cycle/012 diagnostics: post-rank snapshot (after graph/level/tier
     // boosts, before soft-delete filter + truncate).
@@ -1389,14 +1354,7 @@ async fn bm25_retrieve(
         let (start_ts, end_ts) = match date_filter {
             DateFilter::Range(start, end) => (*start, *end),
         };
-
-        bm25_over_streams(streams, |s| {
-            bm25_leaf(
-                &tantivy,
-                payload,
-                Bm25Leaf::date(oq, s, (start_ts, end_ts), ctx.limit * 2),
-            )
-        })?
+        date_bm25_results(&tantivy, payload, streams, ctx, (start_ts, end_ts))?
     } else if let Some(ref entity) = payload.entity {
         bm25_over_streams(streams, |s| {
             bm25_leaf(
@@ -1418,38 +1376,11 @@ async fn bm25_retrieve(
         if ctx.original_query_stemmed == ctx.expanded_query_stemmed {
             original_results
         } else {
-            let expanded_results = search_query(&ctx.expanded_query_stemmed, ctx.limit * 2)?;
-
-            let mut merged_map: std::collections::HashMap<String, loomem_core::SearchResult> =
-                std::collections::HashMap::new();
-
-            for result in original_results {
-                merged_map.insert(result.id.clone(), result);
-            }
-
-            for result in expanded_results {
-                let adjusted_score = result.score * 0.5;
-                merged_map
-                    .entry(result.id.clone())
-                    .and_modify(|e| {
-                        if adjusted_score > e.score {
-                            e.score = adjusted_score;
-                        }
-                    })
-                    .or_insert_with(|| {
-                        let mut r = result;
-                        r.score = adjusted_score;
-                        r
-                    });
-            }
-
-            let mut merged: Vec<_> = merged_map.into_values().collect();
-            merged.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            merged
+            merge_expanded_results(
+                original_results,
+                search_query(&ctx.expanded_query_stemmed, ctx.limit * 2)?,
+                expanded_merge_mode(ctx),
+            )
         }
     };
 
@@ -1532,6 +1463,162 @@ async fn bm25_retrieve(
 
     drop(tantivy);
     Ok(bm25_results)
+}
+
+fn date_bm25_results(
+    tantivy: &loomem_core::TantivyIndex,
+    payload: &SearchRequest,
+    streams: Option<&[String]>,
+    ctx: &QueryContext,
+    range: (i64, i64),
+) -> anyhow::Result<Vec<loomem_core::SearchResult>> {
+    let lanes = bounded_date_queries(
+        &ctx.original_query_stemmed,
+        &ctx.expanded_query_stemmed,
+        !ctx.operation.plan.added_terms.is_empty(),
+    );
+    let original = date_bm25_leaf(
+        tantivy,
+        payload,
+        streams,
+        DateBm25Leaf {
+            query: &ctx.original_query_stemmed,
+            range,
+            limit: ctx.limit,
+        },
+    )?;
+    let Some(expanded_query) = lanes[1] else {
+        return Ok(original);
+    };
+    let expanded = date_bm25_leaf(
+        tantivy,
+        payload,
+        streams,
+        DateBm25Leaf {
+            query: expanded_query,
+            range,
+            limit: ctx.limit,
+        },
+    )?;
+    Ok(merge_expanded_results(
+        original,
+        expanded,
+        expanded_merge_mode(ctx),
+    ))
+}
+
+fn bounded_date_queries<'a>(
+    original: &'a str,
+    expanded: &'a str,
+    operation_facets: bool,
+) -> [Option<&'a str>; 2] {
+    let expanded = (operation_facets && original != expanded).then_some(expanded);
+    [Some(original), expanded]
+}
+
+fn date_bm25_leaf(
+    tantivy: &loomem_core::TantivyIndex,
+    payload: &SearchRequest,
+    streams: Option<&[String]>,
+    leaf: DateBm25Leaf<'_>,
+) -> anyhow::Result<Vec<loomem_core::SearchResult>> {
+    bm25_over_streams(streams, |stream| {
+        bm25_leaf(
+            tantivy,
+            payload,
+            Bm25Leaf::date(leaf.query, stream, leaf.range, leaf.limit * 2),
+        )
+    })
+}
+
+struct DateBm25Leaf<'a> {
+    query: &'a str,
+    range: (i64, i64),
+    limit: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExpandedMergeMode {
+    Legacy,
+    Operation,
+}
+
+fn expanded_merge_mode(ctx: &QueryContext) -> ExpandedMergeMode {
+    if ctx.operation.plan.added_terms.is_empty() {
+        ExpandedMergeMode::Legacy
+    } else {
+        ExpandedMergeMode::Operation
+    }
+}
+
+fn merge_expanded_results(
+    original: Vec<loomem_core::SearchResult>,
+    expanded: Vec<loomem_core::SearchResult>,
+    mode: ExpandedMergeMode,
+) -> Vec<loomem_core::SearchResult> {
+    match mode {
+        ExpandedMergeMode::Legacy => merge_weighted_results(original, expanded),
+        ExpandedMergeMode::Operation => merge_operation_results(original, expanded),
+    }
+}
+
+fn merge_operation_results(
+    original: Vec<loomem_core::SearchResult>,
+    expanded: Vec<loomem_core::SearchResult>,
+) -> Vec<loomem_core::SearchResult> {
+    let mut merged: std::collections::HashMap<_, _> = original
+        .into_iter()
+        .enumerate()
+        .map(|(rank, item)| (item.id.clone(), (item, rank)))
+        .collect();
+    for mut result in expanded {
+        result.score *= 0.5;
+        merged
+            .entry(result.id.clone())
+            .and_modify(|(existing, _)| existing.score = existing.score.max(result.score))
+            .or_insert((result, usize::MAX));
+    }
+    let mut results: Vec<_> = merged.into_values().collect();
+    results.sort_by(|(left, left_rank), (right, right_rank)| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left_rank.cmp(right_rank))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    results.into_iter().map(|(item, _)| item).collect()
+}
+
+fn merge_weighted_results(
+    original: Vec<loomem_core::SearchResult>,
+    expanded: Vec<loomem_core::SearchResult>,
+) -> Vec<loomem_core::SearchResult> {
+    let mut merged: std::collections::HashMap<String, loomem_core::SearchResult> = original
+        .into_iter()
+        .map(|item| (item.id.clone(), item))
+        .collect();
+    for mut result in expanded {
+        result.score *= 0.5;
+        merge_weighted_result(&mut merged, result);
+    }
+    let mut results: Vec<_> = merged.into_values().collect();
+    results.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results
+}
+
+fn merge_weighted_result(
+    merged: &mut std::collections::HashMap<String, loomem_core::SearchResult>,
+    result: loomem_core::SearchResult,
+) {
+    merged
+        .entry(result.id.clone())
+        .and_modify(|existing| existing.score = existing.score.max(result.score))
+        .or_insert(result);
 }
 
 // ─── Cycle/012: rare-term guarantee lane + per-channel diagnostics ──────────
@@ -2063,6 +2150,17 @@ fn compute_access_boost_multiplier(access_count: u32, weight: f64) -> f64 {
 /// are blocking. Sort/boost is pure CPU work once chunks are loaded. Pulling
 /// this out of the orchestrator isolates the scoring policy from I/O and
 /// makes it easier to swap strategies (see cycles/02-brief.md §score_and_rank).
+fn score_and_apply_operation(
+    results: Vec<loomem_core::HybridSearchResult>,
+    ctx: &QueryContext,
+    payload: &SearchRequest,
+    auth: &AuthContext,
+    state: &Arc<AppState>,
+) -> Vec<loomem_core::HybridSearchResult> {
+    let ranked = score_and_rank(results, ctx, payload, auth, state);
+    operation::apply(ranked, &ctx.operation, payload.debug_operation)
+}
+
 fn score_and_rank(
     mut hybrid_results: Vec<loomem_core::HybridSearchResult>,
     ctx: &QueryContext,
@@ -3255,6 +3353,9 @@ mod tests {
             // Verify SearchRequest accepts both fields (compile-time AC-1 proof).
             let payload = SearchRequest {
                 query: "test".into(),
+                reference_time: None,
+                operation_policy: loomem_core::search::OperationPolicy::E0,
+                debug_operation: false,
                 user_id: None,
                 top_k: None,
                 stream: Some("X".into()),
@@ -3590,6 +3691,9 @@ mod tests {
         fn payload(query: &str, debug: bool) -> SearchRequest {
             SearchRequest {
                 query: query.to_string(),
+                reference_time: None,
+                operation_policy: loomem_core::search::OperationPolicy::E0,
+                debug_operation: false,
                 user_id: None,
                 top_k: None,
                 stream: None,
@@ -3710,6 +3814,9 @@ mod tests {
         fn payload(query: &str, debug: bool) -> SearchRequest {
             SearchRequest {
                 query: query.to_string(),
+                reference_time: None,
+                operation_policy: loomem_core::search::OperationPolicy::E0,
+                debug_operation: false,
                 user_id: None,
                 top_k: None,
                 stream: None,
@@ -4071,6 +4178,7 @@ mod tests {
                 vector_similarity_floor: 0.0,
                 decay_match_relief: 0.0,
                 tier1: loomem_core::search::tier1::Tier1Config::default(),
+                operation: loomem_core::hybrid_search::OperationSearchConfig::default(),
             }
         }
 
@@ -4148,6 +4256,9 @@ mod agent_filter_tests {
     fn req(source_agent: Option<&str>, exclude: Option<Vec<&str>>) -> SearchRequest {
         SearchRequest {
             query: "q".into(),
+            reference_time: None,
+            operation_policy: loomem_core::search::OperationPolicy::E0,
+            debug_operation: false,
             user_id: None,
             top_k: None,
             stream: None,
@@ -4487,6 +4598,31 @@ mod stream_scoping_e2e_tests {
     use loomem_core::storage::{Chunk, UserRole};
     use loomem_core::{SourceTag, TextDocument};
 
+    fn bm25_result(id: &str, score: f32) -> loomem_core::SearchResult {
+        loomem_core::SearchResult {
+            id: id.into(),
+            content: id.into(),
+            user_id: String::new(),
+            app_id: String::new(),
+            level: 0,
+            timestamp: 0,
+            stream: "streamA".into(),
+            score,
+        }
+    }
+
+    fn equal_score_operation_ids(reversed: bool) -> Vec<String> {
+        let expanded = if reversed {
+            vec![bm25_result("a", 2.0), bm25_result("b", 2.0)]
+        } else {
+            vec![bm25_result("b", 2.0), bm25_result("a", 2.0)]
+        };
+        merge_operation_results(vec![bm25_result("z", 1.0), bm25_result("y", 1.0)], expanded)
+            .into_iter()
+            .map(|item| item.id)
+            .collect()
+    }
+
     /// A chunk in an explicit stream. `1_700_000_000` = 2023-11-14, so a
     /// 2023 date window covers it.
     fn chunk(id: &str, stream: &str, content: &str) -> Chunk {
@@ -4563,6 +4699,48 @@ mod stream_scoping_e2e_tests {
         tv.commit().unwrap();
     }
 
+    async fn seed_at(
+        state: &std::sync::Arc<AppState>,
+        id: &str,
+        stream: &str,
+        content: &str,
+        timestamp: u64,
+    ) {
+        let mut c = chunk(id, stream, content);
+        c.timestamp = timestamp;
+        state.store.store_chunk(&c).unwrap();
+        let mut tv = state.tantivy.lock().await;
+        tv.upsert_document(index_doc(&c, None)).unwrap();
+        tv.commit().unwrap();
+    }
+
+    fn configured_state(operation_enabled: bool) -> std::sync::Arc<AppState> {
+        let (app, state) = crate::tests::make_test_app();
+        drop(app);
+        let Ok(mut state) = std::sync::Arc::try_unwrap(state) else {
+            panic!("test router must release its AppState clone")
+        };
+        state.config.search.operation.enabled = operation_enabled;
+        state.config.search.cache.enabled = true;
+        std::sync::Arc::new(state)
+    }
+
+    async fn response_projection(
+        state: &std::sync::Arc<AppState>,
+        payload: SearchRequest,
+    ) -> serde_json::Value {
+        let response = search_handler(
+            axum::extract::State(state.clone()),
+            axum::Extension(admin_auth()),
+            axum::Json(payload),
+        )
+        .await
+        .expect("search_handler");
+        let mut value = serde_json::to_value(response.0).unwrap();
+        value.as_object_mut().unwrap().remove("took_ms");
+        value
+    }
+
     /// Twins: identical content + entity, one in each stream.
     async fn seed_twins(state: &std::sync::Arc<AppState>) {
         seed_one(state, "a1", "streamA", "budget review notes", Some("Anna")).await;
@@ -4584,6 +4762,9 @@ mod stream_scoping_e2e_tests {
     fn base_req() -> SearchRequest {
         SearchRequest {
             query: "budget".into(),
+            reference_time: None,
+            operation_policy: loomem_core::search::OperationPolicy::E0,
+            debug_operation: false,
             user_id: None,
             top_k: Some(10),
             stream: None,
@@ -4685,6 +4866,186 @@ mod stream_scoping_e2e_tests {
         assert!(
             entity_ids.contains(&"b1".to_string()),
             "streamB twin must be retrievable via entity filter scoped to streamB, got {entity_ids:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn e1c_anchored_date_executes_the_combined_facet_leaf() {
+        let state = configured_state(true);
+        seed_at(&state, "facet-only", "streamA", "event", 1_791_158_400).await;
+
+        let mut baseline = base_req();
+        baseline.streams = Some(vec!["streamA".into()]);
+        baseline.query = "What happened 2 weeks ago?".into();
+        assert!(run(&state, baseline).await.is_empty());
+
+        let mut combined = base_req();
+        combined.streams = Some(vec!["streamA".into()]);
+        combined.query = "What happened 2 weeks ago?".into();
+        combined.reference_time = Some("2026-10-19T12:00:00Z".into());
+        combined.operation_policy = loomem_core::search::OperationPolicy::E1C;
+        let ids = run(&state, combined).await;
+        assert_eq!(ids, vec!["facet-only"]);
+        assert_eq!(
+            bounded_date_queries(
+                "what happened 2 weeks ago",
+                "what happened 2 weeks ago event",
+                true
+            )
+            .into_iter()
+            .flatten()
+            .count(),
+            2
+        );
+        assert_eq!(
+            bounded_date_queries(
+                "what happened 2 weeks ago",
+                "what happened 2 weeks ago event",
+                false
+            )
+            .into_iter()
+            .flatten()
+            .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn e1_equal_score_merge_has_a_total_deterministic_order() {
+        let expected = vec!["z", "y", "a", "b"];
+        for iteration in 0..100 {
+            assert_eq!(equal_score_operation_ids(iteration % 2 == 1), expected);
+        }
+    }
+
+    #[test]
+    fn production_merge_router_covers_e1f_nondate_e1c_and_e0() {
+        let enabled = configured_state(true);
+        for policy in [
+            loomem_core::search::OperationPolicy::E1F,
+            loomem_core::search::OperationPolicy::E1C,
+        ] {
+            let mut request = base_request_for("Recommend a guitar");
+            request.operation_policy = policy;
+            let ctx = prepare_query_context(&enabled, &admin_auth(), &request).unwrap();
+            assert!(!ctx.operation.plan.added_terms.is_empty());
+            assert_ne!(ctx.original_query_stemmed, ctx.expanded_query_stemmed);
+            assert_eq!(expanded_merge_mode(&ctx), ExpandedMergeMode::Operation);
+            let ids: Vec<_> = merge_expanded_results(
+                vec![bm25_result("z", 1.0), bm25_result("y", 1.0)],
+                vec![bm25_result("b", 2.0), bm25_result("a", 2.0)],
+                expanded_merge_mode(&ctx),
+            )
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
+            assert_eq!(ids, ["z", "y", "a", "b"]);
+        }
+
+        let e0 = prepare_query_context(
+            &enabled,
+            &admin_auth(),
+            &base_request_for("Recommend a guitar"),
+        )
+        .unwrap();
+        assert_eq!(expanded_merge_mode(&e0), ExpandedMergeMode::Legacy);
+
+        let disabled = configured_state(false);
+        let mut fallback = base_request_for("Recommend a guitar");
+        fallback.operation_policy = loomem_core::search::OperationPolicy::E1C;
+        let fallback_ctx = prepare_query_context(&disabled, &admin_auth(), &fallback).unwrap();
+        assert_eq!(
+            expanded_merge_mode(&fallback_ctx),
+            ExpandedMergeMode::Legacy
+        );
+    }
+
+    #[test]
+    fn e1_equal_score_merge_child_process() {
+        assert_eq!(equal_score_operation_ids(false), ["z", "y", "a", "b"]);
+    }
+
+    #[test]
+    fn e1_equal_score_merge_is_stable_across_processes() {
+        let executable = std::env::current_exe().expect("current test executable");
+        let test_name =
+            "handlers::search::stream_scoping_e2e_tests::e1_equal_score_merge_child_process";
+        for _ in 0..30 {
+            let output = std::process::Command::new(&executable)
+                .args(["--exact", test_name])
+                .output()
+                .expect("spawn deterministic merge child");
+            assert!(
+                output.status.success(),
+                "child failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn default_off_absent_disabled_and_explicit_e0_are_identical() {
+        let state = configured_state(false);
+        seed_twins(&state).await;
+        for query in ["budget", "budget 2023-11-14"] {
+            let absent: SearchRequest = serde_json::from_value(serde_json::json!({
+                "query": query,
+                "top_k": 10,
+                "streams": ["streamA"]
+            }))
+            .unwrap();
+            let mut explicit_e0 = base_req();
+            explicit_e0.query = query.into();
+            explicit_e0.streams = Some(vec!["streamA".into()]);
+            explicit_e0.operation_policy = loomem_core::search::OperationPolicy::E0;
+            let mut disabled = base_req();
+            disabled.query = query.into();
+            disabled.streams = Some(vec!["streamA".into()]);
+            disabled.operation_policy = loomem_core::search::OperationPolicy::E1C;
+            disabled.reference_time = Some("2026-10-19T12:00:00Z".into());
+
+            let absent_ctx = prepare_query_context(&state, &admin_auth(), &absent).unwrap();
+            let e0_ctx = prepare_query_context(&state, &admin_auth(), &explicit_e0).unwrap();
+            let disabled_ctx = prepare_query_context(&state, &admin_auth(), &disabled).unwrap();
+            assert_eq!(absent_ctx.cache_key, e0_ctx.cache_key);
+            assert_eq!(absent_ctx.cache_key, disabled_ctx.cache_key);
+
+            state.query_cache.lock().await.clear();
+            let _cold = response_projection(&state, base_request_for(query)).await;
+            let absent_response = response_projection(&state, absent).await;
+            let e0_response = response_projection(&state, explicit_e0).await;
+            let disabled_response = response_projection(&state, disabled).await;
+            assert_eq!(
+                absent_response, e0_response,
+                "absent and explicit E0 must share the complete warm-cache response"
+            );
+            assert_eq!(e0_response, disabled_response);
+        }
+    }
+
+    fn base_request_for(query: &str) -> SearchRequest {
+        let mut request = base_req();
+        request.query = query.into();
+        request.streams = Some(vec!["streamA".into()]);
+        request
+    }
+
+    #[tokio::test]
+    async fn top_k_above_e1_cap_executes_byte_identical_e0_fallback() {
+        let state = configured_state(true);
+        seed_one(&state, "a1", "streamA", "guitar preference", None).await;
+        let mut baseline = base_request_for("Recommend a guitar");
+        baseline.top_k = Some(61);
+        let mut oversized = base_request_for("Recommend a guitar");
+        oversized.top_k = Some(61);
+        oversized.operation_policy = loomem_core::search::OperationPolicy::E1C;
+        state.query_cache.lock().await.clear();
+        let mut cold = base_request_for("Recommend a guitar");
+        cold.top_k = Some(61);
+        let _cold = response_projection(&state, cold).await;
+        assert_eq!(
+            response_projection(&state, baseline).await,
+            response_projection(&state, oversized).await
         );
     }
 }

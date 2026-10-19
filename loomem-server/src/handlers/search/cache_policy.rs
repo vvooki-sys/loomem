@@ -11,19 +11,21 @@ pub(super) fn cache_key(
     streams: Option<&[String]>,
     date_filter: Option<&DateFilter>,
     limit: usize,
+    operation_plan_identity: Option<&str>,
 ) -> Option<u64> {
     // These responses need fresh pipeline metadata or explicit side-effect control.
     if !config.enabled
         || payload.trace
         || payload.debug_channels
         || payload.debug_signal_breakdown
+        || payload.debug_operation
         || payload.include_associations
         || payload.dry_run
     {
         return None;
     }
     let dates = date_filter.map(|DateFilter::Range(start, end)| (*start, *end));
-    let identity = json!({
+    let mut identity = json!({
         "query": payload.query,
         "dates": dates,
         "valid_at": payload.valid_at,
@@ -35,6 +37,9 @@ pub(super) fn cache_key(
         "requested_top_k": payload.top_k,
         "user_id": payload.user_id,
     });
+    if operation_plan_identity.is_some() {
+        identity["operation_plan"] = json!(operation_plan_identity);
+    }
     Some(QueryCache::hash_query_with_source(
         &identity.to_string(),
         streams,
@@ -106,7 +111,14 @@ mod tests {
     #[test]
     fn cache_identity_covers_filters_and_raw_query() {
         let config = QueryCacheConfig::default();
-        let base = cache_key(&config, &request(json!({"query": "apple"})), None, None, 10);
+        let base = cache_key(
+            &config,
+            &request(json!({"query": "apple"})),
+            None,
+            None,
+            10,
+            Some("plain"),
+        );
         for extra in [
             json!({"valid_at": 100}),
             json!({"fact_type": "event"}),
@@ -121,7 +133,10 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .extend(extra.as_object().unwrap().clone());
-            assert_ne!(base, cache_key(&config, &request(value), None, None, 10));
+            assert_ne!(
+                base,
+                cache_key(&config, &request(value), None, None, 10, Some("plain"))
+            );
         }
         assert_ne!(
             base,
@@ -130,8 +145,54 @@ mod tests {
                 &request(json!({"query": "apple"})),
                 None,
                 Some(&DateFilter::Range(0, 100)),
-                10
+                10,
+                Some("plain")
             )
+        );
+        assert_ne!(
+            base,
+            cache_key(
+                &config,
+                &request(json!({"query": "apple"})),
+                None,
+                None,
+                10,
+                Some("preference")
+            )
+        );
+    }
+
+    #[test]
+    fn raw_reference_time_never_creates_cache_churn() {
+        let config = QueryCacheConfig::default();
+        let first = request(json!({
+            "query": "apple",
+            "reference_time": "invalid-a",
+            "operation_policy": "E1-F"
+        }));
+        let second = request(json!({
+            "query": "apple",
+            "reference_time": "invalid-b",
+            "operation_policy": "E1-F"
+        }));
+        assert_eq!(
+            cache_key(&config, &first, None, None, 10, Some("E1-F|none|plan")),
+            cache_key(&config, &second, None, None, 10, Some("E1-F|none|plan"))
+        );
+    }
+
+    #[test]
+    fn ineffective_operation_fields_preserve_e0_identity() {
+        let config = QueryCacheConfig::default();
+        let baseline = request(json!({"query": "apple"}));
+        let disabled = request(json!({
+            "query": "apple",
+            "reference_time": "2026-10-19T12:00:00Z",
+            "operation_policy": "E1-C"
+        }));
+        assert_eq!(
+            cache_key(&config, &baseline, None, None, 10, None),
+            cache_key(&config, &disabled, None, None, 10, None)
         );
     }
 
@@ -141,6 +202,7 @@ mod tests {
             "trace",
             "debug_channels",
             "debug_signal_breakdown",
+            "debug_operation",
             "include_associations",
             "dry_run",
         ] {
@@ -151,7 +213,8 @@ mod tests {
                 &request(value),
                 None,
                 None,
-                10
+                10,
+                Some("plain")
             )
             .is_none());
         }

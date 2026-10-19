@@ -11,6 +11,13 @@ use crate::tantivy_index::SearchResult;
 mod candidate_budget;
 pub use candidate_budget::{SearchCandidateBudget, VectorSearchOptions};
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OperationSearchConfig {
+    /// Master gate for the request-level E1 policies. Off preserves E0.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchConfig {
     pub hybrid_weights: HybridWeightsConfig,
@@ -93,6 +100,10 @@ pub struct SearchConfig {
     /// server-side search handler). Default fully disabled.
     #[serde(default)]
     pub tier1: crate::search::tier1::Tier1Config,
+    /// Phase 7 E1 operation-aware search. Disabled unless both config and
+    /// request opt in.
+    #[serde(default)]
+    pub operation: OperationSearchConfig,
 }
 
 fn default_rerank_candidates() -> usize {
@@ -701,6 +712,7 @@ mod tests {
                 vector_similarity_floor: 0.0,
                 decay_match_relief: 0.0,
                 tier1: crate::search::tier1::Tier1Config::default(),
+                operation: OperationSearchConfig::default(),
             },
             advisor: crate::config::AdvisorConfig::default(),
             worker: crate::config::WorkerConfig::default(),

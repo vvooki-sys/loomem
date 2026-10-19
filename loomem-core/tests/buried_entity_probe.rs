@@ -317,6 +317,7 @@ fn probe_config() -> loomem_core::config::Config {
             vector_similarity_floor: 0.0,
             decay_match_relief: 0.0,
             tier1: loomem_core::search::tier1::Tier1Config::default(),
+            operation: loomem_core::hybrid_search::OperationSearchConfig::default(),
         },
         advisor: loomem_core::config::AdvisorConfig::default(),
         worker: loomem_core::config::WorkerConfig::default(),

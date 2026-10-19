@@ -72,6 +72,9 @@ bm25 = 0.4
 enabled = false        # WS-1(c) Spectron gap brief: Tier-1 direct entity→attribute lookup — factual query naming a graph entity + attribute term answers straight from the entity chunk index (no embeddings, no fusion, no LLM). Off = execution path identical to pre-cycle. Response carries "tier": 1 when the lane answered.
 candidate_cap = 64     # max entity chunks inspected per query (cost stays O(cap) chunk reads)
 
+[search.operation]
+enabled = false        # Phase 7 E1: request-level E1-D/E1-F/E1-C policies remain inert unless explicitly enabled here.
+
 [search.rare_term_lane]
 enabled = false        # Cycle/012: force-include chunks holding a rare query token in the reranker candidate pool. Off = execution path identical to pre-cycle.
 df_absolute_max = 3    # token is "rare" when df <= max(df_absolute_max, ceil(df_ratio_max * n_docs))

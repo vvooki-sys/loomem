@@ -15,6 +15,7 @@ from validate import build_manifest
 def question():
     return {"question_id": "synthetic_contract", "question_type": "single-session-user",
             "question": "What changed?", "answer": "SECRET_GOLD",
+            "question_date": "2026/10/01 (Thu) 08:15",
             "answer_session_ids": ["session"], "haystack_session_ids": ["session"],
             "haystack_dates": ["2026-10-01"], "haystack_sessions": [[
                 {"role": "user", "content": "I chose blue. Now I choose red.",
@@ -80,6 +81,26 @@ class RunnerContractTests(unittest.TestCase):
         changed["answer_session_ids"] = []
         changed["haystack_sessions"][0][0]["has_answer"] = False
         self.assertEqual(runner.question_payload(question()), runner.question_payload(changed))
+
+    def test_gold_and_id_mutation_do_not_change_e1_wire_plan(self):
+        settings = {"operation_policy": "E1-C"}
+        original = question()
+        changed = copy.deepcopy(original)
+        changed.update(question_id="other", question_type="temporal-reasoning",
+                       answer="changed", answer_session_ids=[])
+        changed["haystack_sessions"][0][0]["has_answer"] = False
+        self.assertEqual(runner.operation_fields(original, settings),
+                         runner.operation_fields(changed, settings))
+
+    def test_question_clock_mutation_is_bound_only_for_date_cells(self):
+        changed = copy.deepcopy(question())
+        changed["question_date"] = "2026/10/02 (Fri) 08:15"
+        for policy in ("E0", "E1-F"):
+            self.assertEqual(runner.operation_fields(question(), {"operation_policy": policy}),
+                             runner.operation_fields(changed, {"operation_policy": policy}))
+        for policy in ("E1-D", "E1-C"):
+            self.assertNotEqual(runner.operation_fields(question(), {"operation_policy": policy}),
+                                runner.operation_fields(changed, {"operation_policy": policy}))
 
     def test_dataset_digest_change_rejected_before_adapter(self):
         with tempfile.TemporaryDirectory() as directory:

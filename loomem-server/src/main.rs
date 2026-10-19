@@ -1425,6 +1425,7 @@ mod tests {
                 vector_similarity_floor: 0.0,
                 decay_match_relief: 0.0,
                 tier1: loomem_core::search::tier1::Tier1Config::default(),
+                operation: loomem_core::hybrid_search::OperationSearchConfig::default(),
             },
             advisor: cfg::AdvisorConfig::default(),
             worker: cfg::WorkerConfig::default(),

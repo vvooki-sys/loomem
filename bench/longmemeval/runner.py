@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
 """Local, retrieval-only benchmark adapter runner (no reader or judge)."""
 import argparse
+from datetime import datetime, timezone
 import ipaddress
 import json
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 
 from validate import canonical_hash, check_manifest, decode, fail, sha256
+
+
+OPERATION_POLICIES = {"E0", "E1-D", "E1-F", "E1-C"}
+DATE_AWARE_POLICIES = {"E1-D", "E1-C"}
+QUESTION_DATE = re.compile(
+    r"^(\d{4})/(\d{2})/(\d{2}) \((Mon|Tue|Wed|Thu|Fri|Sat|Sun)\) (\d{2}):(\d{2})$"
+)
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -31,10 +41,7 @@ def local_endpoint(value):
 
 
 def settings_from(config):
-    settings = decode(Path(config).read_text(), "config").get("runner")
-    required = {"endpoint", "instance_id", "data_dir", "run_id", "top_k", "mode"}
-    if not isinstance(settings, dict) or not required.issubset(settings) or set(settings) - required - {"local_engine", "facts_path", "facts_sha256", "capture_context", "input_normalization"}:
-        fail("Config runner must contain exactly endpoint/instance_id/data_dir/run_id/top_k/mode")
+    settings = validated_runner_settings(config)
     if settings.get("input_normalization") not in (None, "occurrence-v1"):
         fail("Unknown input normalization")
     if "capture_context" in settings and type(settings["capture_context"]) is not bool:
@@ -61,6 +68,25 @@ def settings_from(config):
         from runner_local import verify_artifacts
         verify_artifacts(settings)
     return settings
+
+
+def validated_runner_settings(config):
+    settings = decode(Path(config).read_text(), "config").get("runner")
+    required = {"endpoint", "instance_id", "data_dir", "run_id", "top_k", "mode"}
+    optional = {"local_engine", "facts_path", "facts_sha256", "capture_context",
+                "input_normalization", "operation_policy", "debug_operation"}
+    if (not isinstance(settings, dict) or not required.issubset(settings)
+            or set(settings) - required - optional):
+        fail("Config runner must contain exactly endpoint/instance_id/data_dir/run_id/top_k/mode")
+    validate_operation_settings(settings)
+    return settings
+
+
+def validate_operation_settings(settings):
+    if settings.get("operation_policy") not in (None, *OPERATION_POLICIES):
+        fail("Unknown operation policy")
+    if "debug_operation" in settings and type(settings["debug_operation"]) is not bool:
+        fail("debug_operation must be a JSON boolean")
 
 
 class Adapter:
@@ -108,6 +134,66 @@ def question_payload(row, settings=None):
     if not isinstance(question, str) or not question.strip() or not records:
         fail("Question and source records must be nonempty")
     return records, question
+
+
+def reference_time(row):
+    """Convert the frozen question clock without reading labels or host time."""
+    value = row.get("question_date")
+    match = QUESTION_DATE.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        return None
+    try:
+        stamp = datetime(*(int(match.group(i)) for i in (1, 2, 3, 5, 6)),
+                         tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    if WEEKDAYS[stamp.weekday()] != match.group(4):
+        return None
+    return stamp.isoformat().replace("+00:00", "Z")
+
+
+def operation_fields(row, settings):
+    """Return opt-in E1 wire fields and their text-free trace binding."""
+    policy = settings.get("operation_policy")
+    if policy is None:
+        return {}, {}
+    wire = {"operation_policy": policy}
+    trace = {"operation_policy": policy}
+    if settings.get("debug_operation", False):
+        wire["debug_operation"] = True
+    if policy in DATE_AWARE_POLICIES:
+        anchor = reference_time(row)
+        trace["reference_time_sha256"] = canonical_hash(anchor)
+        if anchor is not None:
+            wire["reference_time"] = anchor
+    return wire, trace
+
+
+def verify_operation(record, row, settings):
+    _, expected = operation_fields(row, settings)
+    actual = {key: record[key] for key in (
+        "operation_policy", "reference_time_sha256") if key in record}
+    if canonical_hash(actual) != canonical_hash(expected):
+        fail("Resume operation identity differs from frozen input")
+
+
+def operation_search(row, settings, result, scope, query):
+    wire, trace = operation_fields(row, settings)
+    result.update(trace)
+    search = {"scope": scope, "query": query, "top_k": settings["top_k"], "trace": True}
+    search.update(wire)
+    return search
+
+
+def verify_resume_identity(record, row, settings, manifest_hash):
+    verify_normalization(record, row, settings, manifest_hash)
+    verify_operation(record, row, settings)
+
+
+def resume_fields():
+    return {"question_id", "manifest_sha256", "status", "failure_stage", "ingested_ids",
+            "retrieved_ids", "evidence", "context_sha256", "normalization_report",
+            "normalization_sha256", "operation_policy", "reference_time_sha256"}
 
 
 def id_list(value):
@@ -236,8 +322,7 @@ def retrieve(adapter, row, manifest_hash, *, context_sink=None):
                 or set(id_list(ready.get("indexed_ids"))) != set(expected)):
             fail("Readiness unproven")
         result["failure_stage"] = "retrieval"
-        search = {"scope": scope, "query": query,
-                  "top_k": adapter.settings["top_k"], "trace": True}
+        search = operation_search(row, adapter.settings, result, scope, query)
         if capture:
             search["capture_context"] = True
         found = adapter.request("/search", search)
@@ -266,9 +351,7 @@ def load_resume(path, rows, manifest_hash, settings):
     if not path.exists():
         return {}
     index, seen = {row["question_id"] for row in rows}, {}
-    allowed = {"question_id", "manifest_sha256", "status", "failure_stage", "ingested_ids",
-               "retrieved_ids", "evidence", "context_sha256",
-               "normalization_report", "normalization_sha256"}
+    allowed = resume_fields()
     for line in path.read_text().splitlines():
         record = decode(line, "trace sidecar")
         qid = record.get("question_id")
@@ -293,7 +376,7 @@ def load_resume(path, rows, manifest_hash, settings):
             if "failure_stage" in record:
                 fail("Completed retrieval cannot carry failure stage")
         source = next(row for row in rows if row["question_id"] == qid)
-        verify_normalization(record, source, settings, manifest_hash)
+        verify_resume_identity(record, source, settings, manifest_hash)
         expected = {item["record_id"] for item in question_payload(source, settings)[0]}
         if "ingested_ids" in record and set(id_list(record["ingested_ids"])) != expected:
             fail("Resume ingest IDs mismatch")

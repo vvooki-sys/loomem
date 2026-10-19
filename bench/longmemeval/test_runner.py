@@ -72,7 +72,8 @@ class RunnerTests(unittest.TestCase):
         self.args = argparse.Namespace(dataset=root / "dataset.json", config=root / "config.json",
             manifest=root / "manifest.json", trace=root / "trace.jsonl", dry_run=False, resume=False)
         self.row = {"question_id": "synthetic_abs", "question_type": "single-session-user",
-                    "question": "Which color?", "answer": "GOLD", "haystack_session_ids": ["s1"],
+                    "question": "Which color?", "question_date": "2024/01/01 (Mon) 12:34",
+                    "answer": "GOLD", "haystack_session_ids": ["s1"],
                     "haystack_dates": ["2024-01-01"], "haystack_sessions": [[{
                         "role": "user", "content": "Synthetic blue widget", "has_answer": True}]]}
         self.settings = {"endpoint": "http://127.0.0.1:1", "instance_id": "synthetic",
@@ -99,6 +100,40 @@ class RunnerTests(unittest.TestCase):
             self.args.resume = True
             self.assertEqual(runner.run(self.args)["failed"], 0)
             self.assertEqual(len(requests), before)
+
+    def test_e1_reference_time_is_utc_hash_bound_and_opt_in(self):
+        self.settings.update(operation_policy="E1-C", debug_operation=True)
+        with fixture(self.settings) as requests:
+            self.freeze()
+            self.assertEqual(runner.run(self.args)["failed"], 0)
+        search = next(body for path, body in requests if path == "/search")
+        self.assertEqual(search["reference_time"], "2024-01-01T12:34:00Z")
+        self.assertEqual(search["operation_policy"], "E1-C")
+        self.assertIs(search["debug_operation"], True)
+        trace = json.loads(self.args.trace.read_text())
+        self.assertEqual(trace["operation_policy"], "E1-C")
+        self.assertEqual(trace["reference_time_sha256"],
+                         canonical_hash("2024-01-01T12:34:00Z"))
+
+    def test_malformed_reference_time_disables_date_treatment(self):
+        self.row["question_date"] = "2024/01/01 (Tue) 12:34"
+        self.settings["operation_policy"] = "E1-D"
+        with fixture(self.settings) as requests:
+            self.freeze()
+            self.assertEqual(runner.run(self.args)["failed"], 0)
+        search = next(body for path, body in requests if path == "/search")
+        self.assertNotIn("reference_time", search)
+        self.assertEqual(json.loads(self.args.trace.read_text())["reference_time_sha256"],
+                         canonical_hash(None))
+
+    def test_e1_f_does_not_propagate_question_clock(self):
+        self.settings["operation_policy"] = "E1-F"
+        with fixture(self.settings) as requests:
+            self.freeze()
+            self.assertEqual(runner.run(self.args)["failed"], 0)
+        search = next(body for path, body in requests if path == "/search")
+        self.assertNotIn("reference_time", search)
+        self.assertNotIn("reference_time_sha256", json.loads(self.args.trace.read_text()))
 
     def test_failed_stages_never_search(self):
         for behavior, stage in [("identity", "identity"), ("partial", "ingest"), ("pending", "readiness")]:

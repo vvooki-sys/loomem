@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // Date filter types
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DateFilter {
     Range(i64, i64), // from..to as unix timestamps
 }
@@ -63,6 +63,16 @@ pub struct StoreResponse {
 #[allow(dead_code)]
 pub struct SearchRequest {
     pub query: String,
+    /// Optional replay/reference clock. It is consumed only by explicit
+    /// date-aware E1 policies; absent input never changes the baseline path.
+    #[serde(default)]
+    pub reference_time: Option<String>,
+    /// Registered Phase 7 engine cell. E0 is the backward-compatible default.
+    #[serde(default)]
+    pub operation_policy: loomem_core::search::OperationPolicy,
+    /// Emit structured operation-stage counters to tracing.
+    #[serde(default)]
+    pub debug_operation: bool,
     pub user_id: Option<String>,
     pub top_k: Option<usize>,
     pub stream: Option<String>,

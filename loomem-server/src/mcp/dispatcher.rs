@@ -929,6 +929,9 @@ async fn tool_search(
 
     let req = handlers::types::SearchRequest {
         query: args.query,
+        reference_time: None,
+        operation_policy: loomem_core::search::OperationPolicy::E0,
+        debug_operation: false,
         user_id: None,
         top_k: Some(top_k),
         stream: Some(stream_id.to_string()),
