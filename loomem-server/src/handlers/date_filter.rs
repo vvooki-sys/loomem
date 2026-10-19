@@ -58,7 +58,7 @@ fn parse_polish_month(month_name: &str) -> Option<u32> {
 /// Returns (cleaned query without date terms, optional date filter).
 pub fn extract_date_filter(query: &str) -> (String, Option<DateFilter>) {
     let query_lower = query.to_lowercase();
-    let now = Utc::now();
+    let now = crate::evaluation_clock::now();
     legacy_named_relative(&query_lower, now)
         .or_else(|| legacy_absolute_date(&query_lower, now.year()))
         .unwrap_or_else(|| (query.to_string(), None))

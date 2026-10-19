@@ -71,6 +71,11 @@ impl PreparedOperation {
         self.fallback
     }
 
+    #[cfg(feature = "evaluation")]
+    pub(super) fn evidence_reference_time(&self) -> Option<DateTime<Utc>> {
+        self.reference_time
+    }
+
     pub(super) fn e2_lane_spec(&self) -> Option<&E2LaneSpec> {
         self.e2_lane.as_ref()
     }
@@ -395,7 +400,7 @@ fn explicit_date_filter(payload: &SearchRequest) -> Option<DateFilter> {
         (Some(from), Some(to)) => Some(DateFilter::Range(start_of_day(from)?, end_of_day(to)?)),
         (Some(from), None) => Some(DateFilter::Range(
             start_of_day(from)?,
-            Utc::now().timestamp(),
+            crate::evaluation_clock::now().timestamp(),
         )),
         (None, Some(to)) => Some(DateFilter::Range(0, end_of_day(to)?)),
         (None, None) => None,

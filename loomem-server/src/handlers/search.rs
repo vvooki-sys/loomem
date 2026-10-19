@@ -15,10 +15,14 @@ mod cache_policy;
 #[path = "search_candidate_limit_tests.rs"]
 mod candidate_limit_tests;
 mod candidates;
+#[cfg(feature = "evaluation")]
+mod evaluation_evidence;
 mod evidence;
 mod operation;
 mod operation_lane;
+mod request_scope;
 mod telemetry;
+use request_scope::validated_search_streams;
 
 use telemetry::{stage_timer, Bm25Runner, RequestTelemetry, ResponseMetrics, TraceCounters};
 
@@ -110,9 +114,8 @@ fn is_counting_query(query: &str) -> bool {
     ];
     patterns.iter().any(|p| q.contains(p))
 }
-use super::scope as scope_mod;
 use super::AppError;
-use crate::auth::{self, AuthContext};
+use crate::auth::AuthContext;
 use crate::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -5007,32 +5010,6 @@ mod stream_scoping_e2e_tests {
             response_projection(&state, oversized).await
         );
     }
-}
-
-fn validated_search_streams(
-    state: &Arc<AppState>,
-    auth: &AuthContext,
-    payload: &SearchRequest,
-) -> Result<Option<Vec<String>>, AppError> {
-    Ok(if let Some(scope) = payload.scope {
-        if payload.stream.is_some() || payload.streams.is_some() {
-            return Err(AppError::BadRequest(
-                "specify scope or stream/streams, not both".into(),
-            ));
-        }
-        let resolution = scope_mod::resolve_scope(scope, auth, &state.store)?;
-        Some(resolution.streams.into_iter().map(|(id, _)| id).collect())
-    } else {
-        // Existing path — byte-identical behaviour for pre-existing callers.
-        auth::validate_streams(
-            auth,
-            payload
-                .streams
-                .as_deref()
-                .or(payload.stream.as_ref().map(std::slice::from_ref)),
-        )
-        .map_err(|_| AppError::BadRequest("Access denied: cannot search this stream".into()))?
-    })
 }
 
 fn rerank_budget_allows(state: &Arc<AppState>, auth: &AuthContext) -> bool {

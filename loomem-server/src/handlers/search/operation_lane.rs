@@ -1,4 +1,7 @@
 //! Bounded E2 retrieval lane and deterministic post-primary union.
+mod resources;
+pub(super) use resources::hybrid_result_bytes;
+use resources::{charge_chunk, charge_hit, search_result_bytes};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
@@ -153,6 +156,8 @@ fn bounded_us(value: u128) -> u64 {
 pub(super) struct LaneOutcome {
     pub results: Vec<HybridSearchResult>,
     observation: Option<E2RetrievalObservation>,
+    #[cfg(feature = "evaluation")]
+    evidence: Option<super::evaluation_evidence::Capture>,
 }
 
 impl LaneOutcome {
@@ -160,6 +165,12 @@ impl LaneOutcome {
         self,
         metrics: super::telemetry::ResponseMetrics,
     ) -> (Vec<HybridSearchResult>, super::telemetry::ResponseMetrics) {
+        #[cfg(feature = "evaluation")]
+        if let Some(evidence) = self.evidence {
+            if evidence.write(&self.results).is_err() {
+                tracing::error!("private evaluation evidence write failed");
+            }
+        }
         let metrics = match self.observation {
             Some(observation) => metrics.with_retrieval_v2(observation),
             None => metrics,
@@ -189,8 +200,12 @@ pub(super) async fn finalize(
         return LaneOutcome {
             results: primary,
             observation: None,
+            #[cfg(feature = "evaluation")]
+            evidence: None,
         };
     }
+    #[cfg(feature = "evaluation")]
+    let mut evidence = super::evaluation_evidence::Capture::new(&primary, &ctx.operation);
     let mut metrics = E2LaneMetrics::primary(&primary, primary_elapsed_us);
     let request = LaneRequest {
         ctx,
@@ -205,26 +220,37 @@ pub(super) async fn finalize(
             metrics,
             request.prepared,
             primary_attempts(request.ctx),
+            #[cfg(feature = "evaluation")]
+            evidence,
         );
     };
     let attempts = primary_attempts(request.ctx);
     if primary.len() <= PROTECTED_PREFIX || attempts >= 2 {
-        return observed(primary, metrics, request.prepared, attempts);
+        return observed(
+            primary,
+            metrics,
+            request.prepared,
+            attempts,
+            #[cfg(feature = "evaluation")]
+            evidence,
+        );
     }
     let started = Instant::now();
-    let attempts_before = request
-        .ctx
-        .telemetry
-        .as_deref()
-        .map(|meter| meter.e2_lane_attempts().1)
-        .unwrap_or_default();
+    let attempts_before = lane_attempts(request.ctx, 0);
     let hits = match retrieve(&request, spec).await {
         Ok(hits) => hits,
         Err(()) => {
             metrics.lane_elapsed_us = started.elapsed().as_micros();
             metrics.lane_leaf_attempts = lane_attempts(request.ctx, attempts_before);
             metrics.fail(FallbackStage::DateLane, FallbackReason::DateLeafError);
-            return observed(primary, metrics, request.prepared, attempts);
+            return observed(
+                primary,
+                metrics,
+                request.prepared,
+                attempts,
+                #[cfg(feature = "evaluation")]
+                evidence,
+            );
         }
     };
     metrics.lane_leaf_attempts = lane_attempts(request.ctx, attempts_before);
@@ -233,15 +259,33 @@ pub(super) async fn finalize(
         None => {
             metrics.lane_elapsed_us = started.elapsed().as_micros();
             metrics.fail(FallbackStage::ResourceLimit, FallbackReason::ResourceLimit);
-            return observed(primary, metrics, request.prepared, attempts);
+            return observed(
+                primary,
+                metrics,
+                request.prepared,
+                attempts,
+                #[cfg(feature = "evaluation")]
+                evidence,
+            );
         }
     };
     metrics.lane_candidate_count = candidates.len();
     metrics.lane_candidate_bytes = charged_bytes(candidates.iter().map(|item| item.content.len()));
     metrics.lane_elapsed_us = started.elapsed().as_micros();
     metrics.lane_status = LaneStatus::Completed;
+    #[cfg(feature = "evaluation")]
+    if let Some(capture) = evidence.as_mut() {
+        capture.date(&candidates);
+    }
     let results = merge(primary, candidates, &mut metrics);
-    observed(results, metrics, request.prepared, attempts)
+    observed(
+        results,
+        metrics,
+        request.prepared,
+        attempts,
+        #[cfg(feature = "evaluation")]
+        evidence,
+    )
 }
 
 fn observed(
@@ -249,10 +293,13 @@ fn observed(
     metrics: E2LaneMetrics,
     prepared: &PreparedOperation,
     primary_leaf_attempts: usize,
+    #[cfg(feature = "evaluation")] evidence: Option<super::evaluation_evidence::Capture>,
 ) -> LaneOutcome {
     LaneOutcome {
         results,
         observation: Some(metrics.observation(prepared, primary_leaf_attempts)),
+        #[cfg(feature = "evaluation")]
+        evidence,
     }
 }
 
@@ -320,16 +367,6 @@ fn hydrate(
             .then_with(|| left.id.cmp(&right.id))
     });
     Some(candidates.into_iter().map(|(item, _)| item).collect())
-}
-
-fn search_result_bytes(result: &SearchResult) -> usize {
-    result
-        .id
-        .capacity()
-        .saturating_add(result.content.capacity())
-        .saturating_add(result.user_id.capacity())
-        .saturating_add(result.app_id.capacity())
-        .saturating_add(result.stream.capacity())
 }
 
 fn eligible(chunk: &Chunk, request: &LaneRequest<'_>, spec: &E2LaneSpec) -> bool {
@@ -646,22 +683,6 @@ fn move_after_anchors(
     output
 }
 
-fn charge_hit(
-    hit: &loomem_core::SearchResult,
-    metrics: &mut super::operation_lane::E2LaneMetrics,
-) -> Option<()> {
-    if hit.content.len() > RECORD_SCAN_BYTES_MAX {
-        return None;
-    }
-    let bytes = metrics.scanned_bytes.checked_add(hit.content.len())?;
-    if bytes > REQUEST_SCAN_BYTES_MAX {
-        return None;
-    }
-    metrics.scanned_bytes = bytes;
-    metrics.scanned_candidates = metrics.scanned_candidates.saturating_add(1);
-    Some(())
-}
-
 fn hydrate_one(
     hit: SearchResult,
     request: &LaneRequest<'_>,
@@ -689,50 +710,7 @@ fn hydrate_one(
     Some(None)
 }
 
-// Serialization into a counting sink bounds every metadata field without
-// allocating a second copy of a potentially oversized record.
-struct RecordBudget(usize);
-impl std::io::Write for RecordBudget {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let size = self.0.saturating_add(bytes.len());
-        if size > RECORD_SCAN_BYTES_MAX {
-            return Err(std::io::Error::other("record budget"));
-        }
-        self.0 = size;
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-fn charge_chunk(chunk: &Chunk, metrics: &mut E2LaneMetrics, bytes: &mut usize) -> Option<()> {
-    let mut record = RecordBudget(0);
-    serde_json::to_writer(&mut record, chunk).ok()?;
-    let scanned = metrics.scanned_bytes.checked_add(record.0)?;
-    if scanned > REQUEST_SCAN_BYTES_MAX {
-        return None;
-    }
-    metrics.scanned_bytes = scanned;
-    *bytes = bytes
-        .saturating_add(record.0.saturating_mul(4))
-        .saturating_add(std::mem::size_of::<Chunk>());
-    if *bytes > TEMPORARY_BYTES_MAX {
-        return None;
-    }
-    metrics.scan_temporary_bytes_upper_bound = *bytes;
-    Some(())
-}
-
 pub(super) fn intersect_ranges(left: (i64, i64), right: (i64, i64)) -> Option<(i64, i64)> {
     let range = (left.0.max(right.0), left.1.min(right.1));
     (range.0 <= range.1).then_some(range)
-}
-
-pub(super) fn hybrid_result_bytes(result: &loomem_core::HybridSearchResult) -> usize {
-    result
-        .id
-        .capacity()
-        .saturating_add(result.content.capacity())
-        .saturating_add(result.user_id.capacity())
-        .saturating_add(result.app_id.capacity())
 }

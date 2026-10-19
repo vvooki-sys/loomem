@@ -1,6 +1,7 @@
 mod access_hook;
 mod auth;
 mod content_type;
+mod evaluation_clock;
 mod handlers;
 mod local_embedding;
 mod maintenance;
@@ -387,8 +388,7 @@ async fn main() -> Result<()> {
 
     maintenance::check_index_drift(&config.storage.tantivy, &store, &mut tantivy)?;
 
-    // Initialize hybrid search engine
-    let hybrid_search = HybridSearchEngine::new(config.clone());
+    let hybrid_search = evaluation_clock::engine(config.clone())?;
 
     // Shared HTTP client for all OpenAI-bound calls (extraction, embeddings,
     // rerank, consolidation, …). Long-running instances degrade silently when

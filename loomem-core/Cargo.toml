@@ -38,6 +38,8 @@ sha2 = "0.10"
 zeroize.workspace = true
 
 [features]
+# Opt-in deterministic scoring clock for isolated evaluation binaries.
+evaluation = []
 # Local ONNX embeddings ship in the default build so a fresh install runs
 # keyless out of the box. Disable with --no-default-features for an
 # API-only (OpenAI) build without the tract-onnx/tokenizers deps.

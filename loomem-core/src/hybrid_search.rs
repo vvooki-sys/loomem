@@ -1,4 +1,5 @@
 use anyhow::Result;
+#[cfg(test)]
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,6 +10,7 @@ use crate::decay::DecayConfig;
 use crate::graph::GraphSearchConfig;
 use crate::tantivy_index::SearchResult;
 mod candidate_budget;
+mod clock;
 pub use candidate_budget::{SearchCandidateBudget, VectorSearchOptions};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -180,35 +182,15 @@ pub struct HybridSearchResult {
 
 pub struct HybridSearchEngine {
     config: Config,
+    clock: clock::SearchClock,
 }
 
 impl HybridSearchEngine {
     pub fn new(config: Config) -> Self {
-        Self { config }
-    }
-
-    /// Compute time decay factor based on age and level-specific lambda
-    fn compute_time_decay(&self, timestamp: i64, level: i32, decay_config: &DecayConfig) -> f64 {
-        let now = Utc::now().timestamp();
-        let age_seconds = (now - timestamp) as f64;
-
-        // Select lambda based on level
-        let lambda = match level {
-            0 => decay_config.l0_lambda,
-            _ => decay_config.l1_lambda,
-        };
-
-        // Exponential decay: e^(-lambda * age)
-        // age is in seconds, so we normalize by dividing by 86400 (seconds per day)
-        let age_days = age_seconds / 86400.0;
-        let decay = (-lambda * age_days).exp();
-
-        debug!(
-            "Time decay: level={}, age_days={:.2}, lambda={}, decay={:.4}",
-            level, age_days, lambda, decay
-        );
-
-        decay
+        Self {
+            config,
+            clock: clock::SearchClock::default(),
+        }
     }
 
     /// Fuse BM25 and vector scores using vector_search results.
