@@ -307,10 +307,13 @@ sha256sum -c --ignore-missing SHA256SUMS        # Linux
 <pre><code class="language-bash">git clone https://github.com/vvooki-sys/loomem.git
 cd loomem
 cp entities.toml.example entities.toml
+(cd loomem-dashboard &amp;&amp; npm ci &amp;&amp; npm run build)   # dashboard, embedded at compile time
+./scripts/fetch-embedding-model.sh                 # local embedding model → ~/.loomem/models
 cargo build --release -p loomem-server -p loomem-cli -p loomem-migrate
 # binaries in target/release/
 </code></pre>
-<p>Requires Rust (stable) and libclang for the RocksDB build: <code>apt install libclang-dev</code> on Debian/Ubuntu; on macOS it ships with the Xcode Command Line Tools.</p>
+<p>Requires Rust (stable), Node.js (for the dashboard) and libclang for the RocksDB build: <code>apt install libclang-dev</code> on Debian/Ubuntu; on macOS it ships with the Xcode Command Line Tools. On Windows, see <a href="https://github.com/vvooki-sys/loomem/blob/main/INSTALL_WINDOWS.md">INSTALL_WINDOWS.md</a>.</p>
+<p>Skipping the dashboard build leaves the dashboard returning 404; skipping the model fetch turns vector search off. The default config enables LLM-backed extraction and dreaming, so before starting the server set your LLM key (<code>export OPENAI_API_KEY=...</code>) or set <code>LOOMEM_ALLOW_KEYLESS=1</code> to accept degraded keyless mode (regex extraction, no dreaming) — otherwise it refuses to start.</p>
 <h2 id="docker">Docker</h2>
 <pre><code class="language-bash">docker build -t loomem .
 export LOOMEM_AUTH_TOKEN=$(openssl rand -hex 32)

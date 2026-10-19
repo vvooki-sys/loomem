@@ -99,11 +99,17 @@ Installs `loomem-server`, `loomem-cli`, and `loomem-migrate` to `~/.loomem/bin` 
 git clone https://github.com/vvooki-sys/loomem.git
 cd loomem
 cp entities.toml.example entities.toml   # personal entity config (gitignored)
+(cd loomem-dashboard && npm ci && npm run build)   # dashboard, embedded at compile time
+./scripts/fetch-embedding-model.sh                 # local embedding model → ~/.loomem/models
+cargo build --release -p loomem-server -p loomem-cli
+export OPENAI_API_KEY="sk-..."   # or LOOMEM_ALLOW_KEYLESS=1 to run without a key (degraded)
 cargo run --release -p loomem-server
 # server listens on http://127.0.0.1:3030, data in ./data
 ```
 
-Requires Rust (stable) and libclang (for the RocksDB build): `apt install libclang-dev` on Debian/Ubuntu, included with Xcode CLT on macOS.
+Requires Rust (stable), Node.js (for the dashboard) and libclang (for the RocksDB build): `apt install libclang-dev` on Debian/Ubuntu, included with Xcode CLT on macOS. On Windows, see [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md).
+
+Each step matters even though skipping one doesn't fail the build: without the dashboard build it returns 404, without the model vector search is off, and without `loomem-cli` there is no stdio bridge for the Claude desktop app. The default config enables LLM-backed extraction and dreaming, so the server **refuses to start** unless an LLM key is set or `LOOMEM_ALLOW_KEYLESS=1` accepts degraded keyless mode (regex extraction, no dreaming).
 
 ### Docker
 
