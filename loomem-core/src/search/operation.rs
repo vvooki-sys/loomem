@@ -50,6 +50,8 @@ pub enum OperationPolicy {
     E4,
     #[serde(rename = "E5")]
     E5,
+    #[serde(rename = "E6")]
+    E6,
 }
 
 impl OperationPolicy {

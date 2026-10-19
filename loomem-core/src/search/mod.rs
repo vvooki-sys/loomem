@@ -6,6 +6,7 @@
 //!
 //! See: `docs/architecture/memory-routing.md` §3 + §4 + §5.
 
+pub mod context_evidence;
 pub mod context_relevance;
 pub mod context_selection;
 pub mod fusion;
@@ -13,6 +14,7 @@ pub mod operation;
 pub mod query_classifier;
 pub mod query_taxonomy;
 pub mod rare_term;
+pub mod semantic_context;
 pub mod signals;
 pub mod tier1;
 

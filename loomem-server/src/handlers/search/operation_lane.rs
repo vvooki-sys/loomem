@@ -1,7 +1,9 @@
 //! Bounded E2 retrieval lane and deterministic post-primary union.
 mod resources;
+mod semantic;
 pub(super) use resources::hybrid_result_bytes;
 use resources::{charge_chunk, charge_hit, search_result_bytes};
+use semantic::primary_outcome;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
@@ -197,7 +199,7 @@ pub(super) async fn finalize(
     state: &Arc<AppState>,
 ) -> LaneOutcome {
     if !ctx.operation.policy.is_e2() {
-        return primary_outcome(primary, ctx.operation.policy, &payload.query);
+        return primary_outcome(primary, ctx, payload, state).await;
     }
     #[cfg(feature = "evaluation")]
     let mut evidence = super::evaluation_evidence::Capture::new(&primary, &ctx.operation);
@@ -281,27 +283,6 @@ pub(super) async fn finalize(
         #[cfg(feature = "evaluation")]
         evidence,
     )
-}
-
-fn primary_outcome(
-    primary: Vec<HybridSearchResult>,
-    policy: loomem_core::search::operation::OperationPolicy,
-    query: &str,
-) -> LaneOutcome {
-    LaneOutcome {
-        results: match policy {
-            loomem_core::search::operation::OperationPolicy::E4 => {
-                loomem_core::search::context_selection::select(query, primary)
-            }
-            loomem_core::search::operation::OperationPolicy::E5 => {
-                loomem_core::search::context_relevance::select(query, primary)
-            }
-            _ => primary,
-        },
-        observation: None,
-        #[cfg(feature = "evaluation")]
-        evidence: None,
-    }
 }
 
 fn observed(

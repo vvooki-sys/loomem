@@ -32,3 +32,18 @@ fn policies_register_exact_ablation_matrix() {
     assert!(OperationPolicy::E1C.date_enabled());
     assert!(OperationPolicy::E1C.facets_enabled());
 }
+
+#[test]
+fn e6_is_opt_in_without_date_or_facet_retrieval() {
+    assert_eq!(
+        serde_json::to_string(&OperationPolicy::E6).unwrap(),
+        "\"E6\""
+    );
+    assert_eq!(
+        serde_json::from_str::<OperationPolicy>("\"E6\"").unwrap(),
+        OperationPolicy::E6
+    );
+    assert!(!OperationPolicy::E6.date_enabled());
+    assert!(!OperationPolicy::E6.facets_enabled());
+    assert!(!OperationPolicy::E6.is_e2());
+}
