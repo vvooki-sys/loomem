@@ -19,6 +19,7 @@ use crate::handlers::AppError;
 
 const DATE_SOURCE_POLICY: &str = "event-date-only-v1";
 const E2_CACHE_VERSION: &str = "e3-two-lane-v1";
+const E4_CACHE_VERSION: &str = "e4-context-selection-v1";
 
 #[derive(Debug, Clone)]
 pub(super) struct E2LaneSpec {
@@ -57,6 +58,9 @@ impl PreparedOperation {
     }
 
     pub fn cache_identity(&self, date: &PreparedDate) -> Option<String> {
+        if self.policy == OperationPolicy::E4 {
+            return Some(E4_CACHE_VERSION.to_string());
+        }
         if self.policy.is_e2() {
             return Some(self.e2_cache_identity());
         }
@@ -741,3 +745,7 @@ fn unsupported_e2_filters(payload: &SearchRequest) -> bool {
         || payload.debug_channels
         || payload.debug_signal_breakdown
 }
+
+#[cfg(test)]
+#[path = "operation/e4_tests.rs"]
+mod e4_tests;

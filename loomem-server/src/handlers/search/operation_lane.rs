@@ -197,12 +197,7 @@ pub(super) async fn finalize(
     state: &Arc<AppState>,
 ) -> LaneOutcome {
     if !ctx.operation.policy.is_e2() {
-        return LaneOutcome {
-            results: primary,
-            observation: None,
-            #[cfg(feature = "evaluation")]
-            evidence: None,
-        };
+        return primary_outcome(primary, ctx.operation.policy, &payload.query);
     }
     #[cfg(feature = "evaluation")]
     let mut evidence = super::evaluation_evidence::Capture::new(&primary, &ctx.operation);
@@ -286,6 +281,23 @@ pub(super) async fn finalize(
         #[cfg(feature = "evaluation")]
         evidence,
     )
+}
+
+fn primary_outcome(
+    primary: Vec<HybridSearchResult>,
+    policy: loomem_core::search::operation::OperationPolicy,
+    query: &str,
+) -> LaneOutcome {
+    LaneOutcome {
+        results: if policy == loomem_core::search::operation::OperationPolicy::E4 {
+            loomem_core::search::context_selection::select(query, primary)
+        } else {
+            primary
+        },
+        observation: None,
+        #[cfg(feature = "evaluation")]
+        evidence: None,
+    }
 }
 
 fn observed(

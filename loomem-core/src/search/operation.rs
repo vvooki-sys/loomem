@@ -46,6 +46,8 @@ pub enum OperationPolicy {
     E2F,
     #[serde(rename = "E2-C")]
     E2C,
+    #[serde(rename = "E4")]
+    E4,
 }
 
 impl OperationPolicy {
@@ -511,6 +513,13 @@ mod tests {
 
     #[test]
     fn policies_register_exact_ablation_matrix() {
+        assert_eq!(
+            serde_json::to_string(&OperationPolicy::E4).unwrap(),
+            "\"E4\""
+        );
+        assert!(!OperationPolicy::E4.date_enabled());
+        assert!(!OperationPolicy::E4.facets_enabled());
+        assert!(!OperationPolicy::E4.is_e2());
         assert_eq!(
             serde_json::to_string(&OperationPolicy::E0).unwrap(),
             "\"E0\""

@@ -6,6 +6,7 @@
 //!
 //! See: `docs/architecture/memory-routing.md` §3 + §4 + §5.
 
+pub mod context_selection;
 pub mod fusion;
 pub mod operation;
 pub mod query_classifier;
