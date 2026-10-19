@@ -31,10 +31,6 @@ subtle.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 
-# Signal handling
-signal-hook.workspace = true
-signal-hook-tokio.workspace = true
-
 # System utilities
 num_cpus = "1.16"
 futures = "0.3"
