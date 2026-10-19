@@ -6,7 +6,9 @@ use loomem_core::hybrid_search::{SearchCandidateBudget, VectorSearchOptions};
 use loomem_core::{embeddings, HybridSearchResult, SearchResult};
 use tracing::warn;
 
-use super::{retain_by_agent_set, vector_channel_hits, QueryComplexity, QueryContext};
+use super::{
+    retain_by_agent_set, vector_channel_hits, QueryComplexity, QueryContext, RequestTelemetry,
+};
 use crate::handlers::types::{ChannelDiagnostics, SearchRequest};
 use crate::handlers::AppError;
 use crate::AppState;
@@ -16,6 +18,7 @@ pub(super) struct PrimaryRequest<'a> {
     pub payload: &'a SearchRequest,
     pub guaranteed: Option<&'a HashSet<String>>,
     pub channel_diag: Option<&'a mut ChannelDiagnostics>,
+    pub telemetry: Option<&'a RequestTelemetry>,
 }
 
 struct VectorInputs {
@@ -82,7 +85,14 @@ pub(super) async fn retrieve_primary(
     let vectors = if state.config.storage.vector_enabled
         && request.ctx.complexity != QueryComplexity::Simple
     {
-        vector_inputs(state, request.ctx, request.payload, agent_set).await
+        vector_inputs(
+            state,
+            request.ctx,
+            request.payload,
+            agent_set,
+            request.telemetry,
+        )
+        .await
     } else {
         None
     };
@@ -114,7 +124,11 @@ async fn vector_inputs(
     ctx: &QueryContext,
     payload: &SearchRequest,
     agent_set: Option<&HashSet<String>>,
+    telemetry: Option<&RequestTelemetry>,
 ) -> Option<VectorInputs> {
+    if let Some(meter) = telemetry {
+        meter.record_embedding_attempt();
+    }
     let query_embedding = match embed_query(state, &payload.query).await {
         Ok(embedding) => embedding,
         Err(e) => {

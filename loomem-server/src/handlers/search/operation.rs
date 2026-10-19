@@ -2,8 +2,8 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use loomem_core::hybrid_search::SearchConfig;
 use loomem_core::search::operation::{
-    OperationPlan, OperationPolicy, MAX_CANDIDATES, MAX_CHANGED_ADMISSIONS, MAX_QUERY_BYTES,
-    MAX_RECORD_SCAN_BYTES, MAX_REQUEST_SCAN_BYTES, MAX_RETURNED, PROTECTED_RANKS,
+    OperationPlan, OperationPolicy, MAX_ADDED_BYTES, MAX_CANDIDATES, MAX_CHANGED_ADMISSIONS,
+    MAX_QUERY_BYTES, MAX_RECORD_SCAN_BYTES, MAX_REQUEST_SCAN_BYTES, MAX_RETURNED, PROTECTED_RANKS,
 };
 use loomem_core::HybridSearchResult;
 use std::collections::HashMap;
@@ -42,6 +42,10 @@ impl PreparedOperation {
             return None;
         }
         Some(format!("{:?}|{}", self.policy, self.plan.identity()))
+    }
+
+    pub fn fallback_reason(&self) -> Option<&'static str> {
+        self.fallback
     }
 }
 
@@ -201,24 +205,32 @@ pub(super) struct OperationMetrics {
     pub matched_candidates: usize,
     pub changed_admissions: usize,
     pub elapsed_us: u128,
+    pub temporary_bytes: usize,
     pub fallback: Option<&'static str>,
+    max_record_bytes: usize,
 }
 
 pub(super) fn apply(
     candidates: Vec<HybridSearchResult>,
     prepared: &PreparedOperation,
     debug: bool,
-) -> Vec<HybridSearchResult> {
+) -> (Vec<HybridSearchResult>, OperationMetrics) {
     let (ranked, mut metrics) = if prepared.policy.facets_enabled() {
         rerank(candidates, &prepared.plan)
     } else {
         (candidates, OperationMetrics::default())
     };
+    if debug {
+        metrics.temporary_bytes = base_temporary_bytes(&prepared.plan);
+        if prepared.policy.facets_enabled() {
+            metrics.temporary_bytes = temporary_bytes(&metrics, &prepared.plan);
+        }
+    }
     if metrics.fallback.is_none() {
         metrics.fallback = prepared.fallback;
     }
     trace(prepared.policy, &metrics, debug);
-    ranked
+    (ranked, metrics)
 }
 
 fn trace(policy: OperationPolicy, metrics: &OperationMetrics, enabled: bool) {
@@ -232,6 +244,7 @@ fn trace(policy: OperationPolicy, metrics: &OperationMetrics, enabled: bool) {
         scanned_bytes = metrics.scanned_bytes,
         matched_candidates = metrics.matched_candidates,
         changed_admissions = metrics.changed_admissions,
+        temporary_bytes = metrics.temporary_bytes,
         elapsed_us = metrics.elapsed_us,
         fallback = metrics.fallback,
         "operation search stage"
@@ -281,10 +294,12 @@ fn scan(
     let mut credits = Vec::new();
     for (index, candidate) in candidates.iter().enumerate() {
         let scan_bytes = candidate.content.len().min(MAX_RECORD_SCAN_BYTES);
-        metrics.scanned_bytes = metrics.scanned_bytes.checked_add(scan_bytes)?;
-        if metrics.scanned_bytes > MAX_REQUEST_SCAN_BYTES {
+        let next_scanned_bytes = metrics.scanned_bytes.checked_add(scan_bytes)?;
+        if next_scanned_bytes > MAX_REQUEST_SCAN_BYTES {
             return None;
         }
+        metrics.scanned_bytes = next_scanned_bytes;
+        metrics.max_record_bytes = metrics.max_record_bytes.max(scan_bytes);
         metrics.scanned_candidates += 1;
         if index < PROTECTED_RANKS {
             continue;
@@ -315,6 +330,44 @@ fn scan(
         });
     }
     Some(credits)
+}
+
+fn temporary_bytes(metrics: &OperationMetrics, plan: &OperationPlan) -> usize {
+    let scan_buffer = metrics.max_record_bytes.saturating_mul(8);
+    let credit_slots = allocation_slots(metrics.matched_candidates);
+    let credits = credit_slots.saturating_mul(
+        std::mem::size_of::<CandidateCredit>()
+            .saturating_add(MAX_ADDED_BYTES)
+            .saturating_add(8usize.saturating_mul(std::mem::size_of::<String>())),
+    );
+    let reorder = allocation_slots(metrics.scanned_candidates).saturating_mul(
+        std::mem::size_of::<Option<HybridSearchResult>>()
+            .saturating_add(std::mem::size_of::<HybridSearchResult>()),
+    );
+    let term_map = 8usize.saturating_mul(
+        std::mem::size_of::<(String, usize)>()
+            .saturating_add(MAX_ADDED_BYTES)
+            .saturating_add(128),
+    );
+    let promoted = MAX_CHANGED_ADMISSIONS.saturating_mul(std::mem::size_of::<HybridSearchResult>());
+    base_temporary_bytes(plan)
+        .saturating_add(scan_buffer)
+        .saturating_add(credits)
+        .saturating_add(reorder)
+        .saturating_add(term_map)
+        .saturating_add(promoted)
+        .saturating_add(MAX_ADDED_BYTES.saturating_mul(4))
+}
+
+fn base_temporary_bytes(plan: &OperationPlan) -> usize {
+    // The plan identity String and its 64-byte hexadecimal SHA-256 digest are
+    // materialized when debug telemetry is finalized. Four bytes per identity
+    // byte conservatively covers UTF-8 growth and allocator capacity.
+    plan.identity().len().saturating_mul(4).saturating_add(64)
+}
+
+fn allocation_slots(items: usize) -> usize {
+    items.max(1).next_power_of_two()
 }
 
 fn choose(mut credits: Vec<CandidateCredit>) -> Vec<usize> {
@@ -402,13 +455,22 @@ mod tests {
         }
     }
 
+    fn prepared_plan() -> PreparedOperation {
+        PreparedOperation {
+            policy: OperationPolicy::E1F,
+            plan: plan(),
+            reference_time: None,
+            fallback: None,
+        }
+    }
+
     #[test]
     fn protects_top_twenty_and_changes_at_most_two() {
         let input: Vec<_> = (0..80)
             .map(|index| candidate(index, if index >= 35 { "prefer enjoy" } else { "plain" }))
             .collect();
         let baseline: Vec<_> = input.iter().map(|item| item.id.clone()).collect();
-        let (ranked, metrics) = rerank(input, &plan());
+        let (ranked, metrics) = apply(input, &prepared_plan(), true);
         assert_eq!(
             ranked[..20].iter().map(|item| &item.id).collect::<Vec<_>>(),
             baseline[..20].iter().collect::<Vec<_>>()
@@ -444,7 +506,7 @@ mod tests {
             .map(|index| candidate(index, &"x".repeat(MAX_RECORD_SCAN_BYTES)))
             .collect();
         let ids: Vec<_> = input.iter().map(|item| item.id.clone()).collect();
-        let (ranked, metrics) = rerank(input, &plan());
+        let (ranked, metrics) = apply(input, &prepared_plan(), true);
         assert_eq!(
             ranked
                 .iter()
@@ -453,6 +515,43 @@ mod tests {
             ids
         );
         assert_eq!(metrics.fallback, Some("scan_limit"));
+        assert_eq!(metrics.scanned_bytes, MAX_REQUEST_SCAN_BYTES);
+        assert_eq!(metrics.scanned_candidates, 32);
+        assert!(metrics.temporary_bytes > 0);
+        assert!(metrics.temporary_bytes <= 1024 * 1024);
+    }
+
+    #[test]
+    fn temporary_memory_bound_is_monotonic_and_below_budget() {
+        let small = (0..25)
+            .map(|index| candidate(index, "prefer enjoy"))
+            .collect();
+        let bounded_content = format!("prefer enjoy {}", "x".repeat(2_880));
+        let large = (0..MAX_CANDIDATES)
+            .map(|index| candidate(index, &bounded_content))
+            .collect();
+        let small_metrics = apply(small, &prepared_plan(), true).1;
+        let large_metrics = apply(large, &prepared_plan(), true).1;
+        assert_eq!(large_metrics.scanned_candidates, MAX_CANDIDATES);
+        assert!(large_metrics.scanned_bytes <= MAX_REQUEST_SCAN_BYTES);
+        assert!(large_metrics.temporary_bytes >= small_metrics.temporary_bytes);
+        assert!(large_metrics.temporary_bytes <= 1024 * 1024);
+    }
+
+    #[test]
+    fn operation_stage_has_no_bpe_or_context_packing_boundary() {
+        let server_source = include_str!("operation.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default();
+        let core_source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../loomem-core/src/search/operation.rs"
+        ));
+        for forbidden in ["tiktoken", "count_text", "pack_context", "tokenizer"] {
+            assert!(!server_source.contains(forbidden), "{forbidden}");
+            assert!(!core_source.contains(forbidden), "{forbidden}");
+        }
     }
 
     #[test]
@@ -461,7 +560,8 @@ mod tests {
             .map(|index| candidate(index, "prefer"))
             .collect();
         let ids: Vec<_> = input.iter().map(|item| item.id.clone()).collect();
-        let (ranked, metrics) = rerank(input, &plan());
+        let prepared = prepared_plan();
+        let (ranked, metrics) = apply(input, &prepared, true);
         assert_eq!(
             ranked
                 .iter()
@@ -470,6 +570,32 @@ mod tests {
             ids
         );
         assert_eq!(metrics.fallback, Some("candidate_limit"));
+        assert!(metrics.temporary_bytes > 0);
+    }
+
+    #[test]
+    fn telemetry_has_base_memory_without_scan_or_when_disabled() {
+        let no_scan = PreparedOperation {
+            policy: OperationPolicy::E1F,
+            plan: OperationPlan::plain(),
+            reference_time: None,
+            fallback: None,
+        };
+        let no_scan_metrics = apply(Vec::new(), &no_scan, true).1;
+        assert!(no_scan_metrics.temporary_bytes >= 64);
+        assert_eq!(no_scan_metrics.fallback, None);
+
+        let disabled_metrics = apply(
+            Vec::new(),
+            &PreparedOperation::baseline(Some("disabled")),
+            true,
+        )
+        .1;
+        assert!(disabled_metrics.temporary_bytes >= 64);
+        assert_eq!(disabled_metrics.fallback, Some("disabled"));
+
+        let non_debug_metrics = apply(Vec::new(), &prepared_plan(), false).1;
+        assert_eq!(non_debug_metrics.temporary_bytes, 0);
     }
 
     fn valid_gate() -> GateState {

@@ -238,7 +238,9 @@ pub struct SearchResult {
 }
 
 mod search_trace;
-pub use search_trace::{EvidenceStage, EvidenceTrace, TraceInfo, TraceMetadata};
+pub use search_trace::{
+    EvidenceStage, EvidenceTrace, OperationTelemetry, TraceInfo, TraceMetadata,
+};
 
 #[derive(Debug, Serialize)]
 pub struct StatusResponse {

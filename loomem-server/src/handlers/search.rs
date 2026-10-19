@@ -17,6 +17,9 @@ mod candidate_limit_tests;
 mod candidates;
 mod evidence;
 mod operation;
+mod telemetry;
+
+use telemetry::{stage_timer, Bm25Runner, RequestTelemetry, ResponseMetrics, TraceCounters};
 
 use super::types::{
     AssociateRequest, AssociateResponse, Association, ChannelDiagnostics, ChannelHit,
@@ -240,6 +243,7 @@ struct QueryContext {
     cache_key: Option<u64>,
     limit: usize,
     operation: operation::PreparedOperation,
+    telemetry: Option<Arc<RequestTelemetry>>,
 }
 
 /// Pipeline metrics collected between retrieval and response building.
@@ -247,15 +251,6 @@ struct QueryContext {
 /// to `build_response` for trace metadata + sufficiency scoring.
 /// Includes `start` and `complexity` because both outlive the orchestrator's
 /// retrieval block and feed directly into the response envelope.
-struct ResponseMetrics {
-    start: Instant,
-    complexity: QueryComplexity,
-    dedup_removed: usize,
-    total_results_before_topk: usize,
-    final_top_k: usize,
-    evidence: Option<super::types::EvidenceTrace>,
-}
-
 /// Output of `filter_candidates`. Bundles the filtered result list with
 /// the counters that feed into `ResponseMetrics`. Introduced in cycle/02
 /// Iter 3 so the helper can return multiple related values without a tuple
@@ -477,6 +472,7 @@ fn prepare_query_context(
         .map_err(|_| AppError::BadRequest("Access denied: cannot search this stream".into()))?
     };
     let start = Instant::now();
+    let telemetry = telemetry::request_telemetry(payload);
 
     // Complexity-aware recall: classify query to route through appropriate pipeline
     let complexity = if state.config.search.complexity.enabled {
@@ -486,12 +482,14 @@ fn prepare_query_context(
     };
 
     let limit = candidates::request_limit(state, payload, complexity)?;
+    let classify_plan_started = Instant::now();
     let operation = operation::prepare(
         &state.config.search,
         payload,
         limit,
         validated_streams.as_deref(),
     );
+    telemetry::record_prepare_stage(telemetry.as_deref(), classify_plan_started, false);
     let prepared_date = operation::resolve_date(payload, &operation);
     let query_without_date = prepared_date.query.clone();
     let date_filter = prepared_date.filter.clone();
@@ -502,6 +500,7 @@ fn prepare_query_context(
     );
 
     // Step 1: Resolve entity aliases
+    let expansion_started = Instant::now();
     let entity_resolved = state.entity_extractor.resolve_aliases(&query_without_date);
 
     if entity_resolved != query_without_date {
@@ -519,6 +518,7 @@ fn prepare_query_context(
         &query_without_date,
         &expanded_query,
     );
+    telemetry::record_prepare_stage(telemetry.as_deref(), expansion_started, true);
 
     tracing::debug!("Query expansion complete");
 
@@ -552,6 +552,7 @@ fn prepare_query_context(
         // agent-scoped at the source — #257's over-fetch is no longer needed.
         limit,
         operation,
+        telemetry,
     })
 }
 
@@ -690,7 +691,12 @@ pub async fn search_handler(
     // candidates join the BM25 pool and their ids survive the fusion pool
     // cut + join the reranker slice below.
     let lane = compute_rare_term_lane(&ctx, &state, channel_diag.as_mut()).await;
-    let bm25_results = merge_lane_candidates(bm25_results, lane.as_ref(), channel_diag.as_mut());
+    let bm25_results = merge_lane_candidates(
+        bm25_results,
+        lane.as_ref(),
+        channel_diag.as_mut(),
+        ctx.telemetry.as_deref(),
+    );
 
     // Vector retrieval: embed query + hybrid search + vector multi-query merge.
     // Returns the full hybrid-results list (graph boost + scoring happen in
@@ -725,7 +731,8 @@ pub async fn search_handler(
     // Score + rank: graph boost + level boost + tier/importance/preference +
     // complexity-aware final sort. Sync (no await — `graph.find_related_chunks`
     // and `state.store.get_chunk` are blocking). See `score_and_rank` below.
-    let hybrid_results = score_and_apply_operation(hybrid_results, &ctx, &payload, &auth, &state);
+    let (hybrid_results, operation_metrics) =
+        score_and_apply_operation(hybrid_results, &ctx, &payload, &auth, &state);
 
     // Cycle/012 diagnostics: post-rank snapshot (after graph/level/tier
     // boosts, before soft-delete filter + truncate).
@@ -733,12 +740,13 @@ pub async fn search_handler(
         diag.post_rank_top = fused_pool_hits(&hybrid_results);
     }
 
-    let (outcome, evidence) = evidence::filter_with_trace(hybrid_results, &ctx, &payload, &state);
+    let (outcome, evidence) =
+        telemetry::filter_with_telemetry(hybrid_results, &ctx, &payload, &state);
+    let metrics = ResponseMetrics::full(&ctx, &outcome, evidence, operation_metrics);
     let FilterOutcome {
         results: mut hybrid_results,
-        dedup_removed,
-        total_results_before_topk,
         final_top_k,
+        ..
     } = outcome;
 
     // ECA-31: Check cost budget for reranker
@@ -838,14 +846,6 @@ pub async fn search_handler(
     // scoring + trace + event emit + associations + recommendations are all
     // extracted into `build_response` below. Orchestrator packages the
     // pipeline metrics and hands off the final response envelope.
-    let metrics = ResponseMetrics {
-        start: ctx.start,
-        complexity: ctx.complexity,
-        dedup_removed,
-        total_results_before_topk,
-        final_top_k,
-        evidence,
-    };
     let mut response = build_response(
         metrics,
         hybrid_results,
@@ -1048,25 +1048,14 @@ async fn tier1_lookup(
 
     // Reuse the shared response tail: bitemporal/superseded/extraction-meta
     // filters, dedup, agent filters, truncate — then the standard envelope.
-    let FilterOutcome {
-        results,
-        dedup_removed,
-        total_results_before_topk,
-        final_top_k,
-    } = cache_policy::truncate(filter_candidates(matched, ctx, payload, state));
+    let outcome = cache_policy::truncate(filter_candidates(matched, ctx, payload, state));
+    let metrics = ResponseMetrics::tier1(ctx, &outcome);
+    let results = outcome.results;
     if results.is_empty() {
         return None;
     }
     tracing::debug!("Tier-1 direct lookup answered: {} results", results.len());
 
-    let metrics = ResponseMetrics {
-        start: ctx.start,
-        complexity: ctx.complexity,
-        dedup_removed,
-        total_results_before_topk,
-        final_top_k,
-        evidence: None, // Tier-1 coverage is not instrumented.
-    };
     let mut response = build_response(metrics, results, state, auth, payload, classification).await;
     response.tier = Some(1);
     Some(response)
@@ -1097,6 +1086,7 @@ async fn build_response(
         total_results_before_topk,
         final_top_k,
         evidence,
+        operation,
     } = metrics;
 
     // Implicit boost: top 3 results get +0.1 importance (cap 1.5, max once per 24h)
@@ -1234,21 +1224,18 @@ async fn build_response(
         None
     };
 
-    let trace_metadata = if payload.trace {
-        Some(super::types::TraceMetadata {
+    let trace_metadata = telemetry::build_trace_metadata(
+        payload,
+        state,
+        start,
+        complexity,
+        TraceCounters {
             total_results_before_topk,
             dedup_removed,
             evidence,
-            search_latency_us: start.elapsed().as_micros() as u64,
-            query_complexity: if state.config.search.complexity.enabled {
-                Some(format!("{}", complexity))
-            } else {
-                None
-            },
-        })
-    } else {
-        None
-    };
+            operation,
+        },
+    );
 
     let took_ms = start.elapsed().as_millis() as u64;
 
@@ -1343,6 +1330,7 @@ async fn bm25_retrieve(
 ) -> Result<Vec<loomem_core::SearchResult>, AppError> {
     // Dual-query merge: search with original (weight 1.0) and expanded (weight 0.5)
     let tantivy = state.tantivy.lock().await;
+    let runner = Bm25Runner::new(&tantivy, payload, ctx.telemetry.as_deref());
     let oq: &str = &ctx.original_query_stemmed;
 
     // Every branch routes through `bm25_over_streams`, so the stream predicate
@@ -1354,21 +1342,15 @@ async fn bm25_retrieve(
         let (start_ts, end_ts) = match date_filter {
             DateFilter::Range(start, end) => (*start, *end),
         };
-        date_bm25_results(&tantivy, payload, streams, ctx, (start_ts, end_ts))?
+        date_bm25_results(&runner, streams, ctx, (start_ts, end_ts))?
     } else if let Some(ref entity) = payload.entity {
         bm25_over_streams(streams, |s| {
-            bm25_leaf(
-                &tantivy,
-                payload,
-                Bm25Leaf::entity(oq, s, entity, ctx.limit * 2),
-            )
+            runner.run(Bm25Leaf::entity(oq, s, entity, ctx.limit * 2))
         })?
     } else {
         let search_query =
             |query: &str, lim: usize| -> anyhow::Result<Vec<loomem_core::SearchResult>> {
-                bm25_over_streams(streams, |s| {
-                    bm25_leaf(&tantivy, payload, Bm25Leaf::plain(query, s, lim))
-                })
+                bm25_over_streams(streams, |s| runner.run(Bm25Leaf::plain(query, s, lim)))
             };
 
         let original_results = search_query(&ctx.original_query_stemmed, ctx.limit * 2)?;
@@ -1376,10 +1358,10 @@ async fn bm25_retrieve(
         if ctx.original_query_stemmed == ctx.expanded_query_stemmed {
             original_results
         } else {
-            merge_expanded_results(
+            merge_expanded_results_timed(
+                ctx,
                 original_results,
                 search_query(&ctx.expanded_query_stemmed, ctx.limit * 2)?,
-                expanded_merge_mode(ctx),
             )
         }
     };
@@ -1410,11 +1392,9 @@ async fn bm25_retrieve(
                 let mut sub_merged: std::collections::HashMap<String, loomem_core::SearchResult> =
                     std::collections::HashMap::new();
                 for s in streams {
-                    if let Ok(results) = bm25_leaf(
-                        &tantivy,
-                        payload,
-                        Bm25Leaf::plain(&sub_query_stemmed, Some(s), ctx.limit * 2),
-                    ) {
+                    if let Ok(results) =
+                        runner.run(Bm25Leaf::plain(&sub_query_stemmed, Some(s), ctx.limit * 2))
+                    {
                         for r in results {
                             sub_merged
                                 .entry(r.id.clone())
@@ -1429,13 +1409,10 @@ async fn bm25_retrieve(
                 }
                 sub_merged.into_values().collect()
             } else {
-                bm25_leaf(
-                    &tantivy,
-                    payload,
-                    Bm25Leaf::plain(&sub_query_stemmed, None, ctx.limit * 2),
-                )
-                .ok()
-                .unwrap_or_default()
+                runner
+                    .run(Bm25Leaf::plain(&sub_query_stemmed, None, ctx.limit * 2))
+                    .ok()
+                    .unwrap_or_default()
             };
 
             for result in sub_results {
@@ -1466,8 +1443,7 @@ async fn bm25_retrieve(
 }
 
 fn date_bm25_results(
-    tantivy: &loomem_core::TantivyIndex,
-    payload: &SearchRequest,
+    runner: &Bm25Runner<'_>,
     streams: Option<&[String]>,
     ctx: &QueryContext,
     range: (i64, i64),
@@ -1478,8 +1454,7 @@ fn date_bm25_results(
         !ctx.operation.plan.added_terms.is_empty(),
     );
     let original = date_bm25_leaf(
-        tantivy,
-        payload,
+        runner,
         streams,
         DateBm25Leaf {
             query: &ctx.original_query_stemmed,
@@ -1491,8 +1466,7 @@ fn date_bm25_results(
         return Ok(original);
     };
     let expanded = date_bm25_leaf(
-        tantivy,
-        payload,
+        runner,
         streams,
         DateBm25Leaf {
             query: expanded_query,
@@ -1500,11 +1474,7 @@ fn date_bm25_results(
             limit: ctx.limit,
         },
     )?;
-    Ok(merge_expanded_results(
-        original,
-        expanded,
-        expanded_merge_mode(ctx),
-    ))
+    Ok(merge_expanded_results_timed(ctx, original, expanded))
 }
 
 fn bounded_date_queries<'a>(
@@ -1517,17 +1487,17 @@ fn bounded_date_queries<'a>(
 }
 
 fn date_bm25_leaf(
-    tantivy: &loomem_core::TantivyIndex,
-    payload: &SearchRequest,
+    runner: &Bm25Runner<'_>,
     streams: Option<&[String]>,
     leaf: DateBm25Leaf<'_>,
 ) -> anyhow::Result<Vec<loomem_core::SearchResult>> {
     bm25_over_streams(streams, |stream| {
-        bm25_leaf(
-            tantivy,
-            payload,
-            Bm25Leaf::date(leaf.query, stream, leaf.range, leaf.limit * 2),
-        )
+        runner.run(Bm25Leaf::date(
+            leaf.query,
+            stream,
+            leaf.range,
+            leaf.limit * 2,
+        ))
     })
 }
 
@@ -1560,6 +1530,15 @@ fn merge_expanded_results(
         ExpandedMergeMode::Legacy => merge_weighted_results(original, expanded),
         ExpandedMergeMode::Operation => merge_operation_results(original, expanded),
     }
+}
+
+fn merge_expanded_results_timed(
+    ctx: &QueryContext,
+    original: Vec<loomem_core::SearchResult>,
+    expanded: Vec<loomem_core::SearchResult>,
+) -> Vec<loomem_core::SearchResult> {
+    let _timer = stage_timer(ctx.telemetry.as_deref().map(|meter| &meter.merge_us));
+    merge_expanded_results(original, expanded, expanded_merge_mode(ctx))
 }
 
 fn merge_operation_results(
@@ -1814,7 +1793,9 @@ fn merge_lane_candidates(
     mut bm25_results: Vec<loomem_core::SearchResult>,
     lane: Option<&LaneOutcome>,
     diag: Option<&mut ChannelDiagnostics>,
+    telemetry: Option<&RequestTelemetry>,
 ) -> Vec<loomem_core::SearchResult> {
+    let _timer = stage_timer(telemetry.map(|meter| &meter.merge_us));
     let Some(lane) = lane else {
         return bm25_results;
     };
@@ -1971,6 +1952,7 @@ async fn vector_retrieve(
     guaranteed: Option<&std::collections::HashSet<String>>,
     channel_diag: Option<&mut ChannelDiagnostics>,
 ) -> Result<Vec<loomem_core::HybridSearchResult>, AppError> {
+    let _timer = telemetry::embedding_vector_timer(ctx.telemetry.as_deref());
     // Cycle/258 (Option A): agent id-set fetched once (None when no filter); the
     // two vector pre-filters use it via `retain_by_agent_set` (HashSet lookup,
     // replacing #257's per-embedding `get_chunk`).
@@ -1985,6 +1967,7 @@ async fn vector_retrieve(
             payload,
             guaranteed,
             channel_diag,
+            telemetry: ctx.telemetry.as_deref(),
         },
     )
     .await?;
@@ -2030,17 +2013,7 @@ async fn vector_retrieve(
                 if sub_q == &ctx.query_without_date {
                     continue; // already embedded as main query
                 }
-                let sub_embed = if let Some(ref embedder) = state.local_embedder {
-                    embedder.embed(sub_q)
-                } else if let Some(api_key) = state.config.llm.get_api_key() {
-                    embeddings::embed(
-                        &state.http_client,
-                        &api_key,
-                        &state.config.llm.embedding_model,
-                        sub_q,
-                    )
-                    .await
-                } else {
+                let Some(sub_embed) = embed_sub_query(state, ctx, sub_q).await else {
                     continue;
                 };
 
@@ -2111,6 +2084,28 @@ async fn vector_retrieve(
     Ok(hybrid_results)
 }
 
+async fn embed_sub_query(
+    state: &AppState,
+    ctx: &QueryContext,
+    query: &str,
+) -> Option<anyhow::Result<Vec<f32>>> {
+    if let Some(embedder) = state.local_embedder.as_ref() {
+        telemetry::record_extra_embedding_attempt(ctx);
+        return Some(embedder.embed(query));
+    }
+    let api_key = state.config.llm.get_api_key()?;
+    telemetry::record_extra_embedding_attempt(ctx);
+    Some(
+        embeddings::embed(
+            &state.http_client,
+            &api_key,
+            &state.config.llm.embedding_model,
+            query,
+        )
+        .await,
+    )
+}
+
 /// Cycle/118: log-frequency multiplier for implicit access-count boost.
 ///
 /// Formula: `1.0 + ln(1.0 + access_count) * weight`
@@ -2156,8 +2151,13 @@ fn score_and_apply_operation(
     payload: &SearchRequest,
     auth: &AuthContext,
     state: &Arc<AppState>,
-) -> Vec<loomem_core::HybridSearchResult> {
+) -> (
+    Vec<loomem_core::HybridSearchResult>,
+    operation::OperationMetrics,
+) {
+    let timer = stage_timer(ctx.telemetry.as_deref().map(|meter| &meter.rerank_us));
     let ranked = score_and_rank(results, ctx, payload, auth, state);
+    drop(timer);
     operation::apply(ranked, &ctx.operation, payload.debug_operation)
 }
 
@@ -4685,7 +4685,7 @@ mod stream_scoping_e2e_tests {
     }
 
     /// Seed one chunk into both RocksDB and Tantivy (with an optional entity tag).
-    async fn seed_one(
+    pub(super) async fn seed_one(
         state: &std::sync::Arc<AppState>,
         id: &str,
         stream: &str,
@@ -4714,7 +4714,7 @@ mod stream_scoping_e2e_tests {
         tv.commit().unwrap();
     }
 
-    fn configured_state(operation_enabled: bool) -> std::sync::Arc<AppState> {
+    pub(super) fn configured_state(operation_enabled: bool) -> std::sync::Arc<AppState> {
         let (app, state) = crate::tests::make_test_app();
         drop(app);
         let Ok(mut state) = std::sync::Arc::try_unwrap(state) else {
@@ -4725,7 +4725,7 @@ mod stream_scoping_e2e_tests {
         std::sync::Arc::new(state)
     }
 
-    async fn response_projection(
+    pub(super) async fn response_projection(
         state: &std::sync::Arc<AppState>,
         payload: SearchRequest,
     ) -> serde_json::Value {
@@ -5023,7 +5023,7 @@ mod stream_scoping_e2e_tests {
         }
     }
 
-    fn base_request_for(query: &str) -> SearchRequest {
+    pub(super) fn base_request_for(query: &str) -> SearchRequest {
         let mut request = base_req();
         request.query = query.into();
         request.streams = Some(vec!["streamA".into()]);

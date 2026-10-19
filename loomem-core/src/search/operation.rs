@@ -2,6 +2,7 @@
 use chrono::{DateTime, Duration, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 
 pub const MAX_FACETS: usize = 2;
@@ -83,6 +84,22 @@ impl OperationPlan {
     #[must_use]
     pub fn identity(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "plain".to_string())
+    }
+
+    #[must_use]
+    pub fn identity_sha256(&self) -> String {
+        format!("{:x}", Sha256::digest(self.identity().as_bytes()))
+    }
+
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self.operation {
+            QueryOperation::Plain => "Plain",
+            QueryOperation::PreferenceAdvice { .. } => "PreferenceAdvice",
+            QueryOperation::TemporalCompare { .. } => "TemporalCompare",
+            QueryOperation::TemporalEnumerate { .. } => "TemporalEnumerate",
+            QueryOperation::TemporalWindow { .. } => "TemporalWindow",
+        }
     }
 
     #[must_use]
@@ -442,6 +459,24 @@ mod tests {
         assert!(!OperationPolicy::E1F.date_enabled());
         assert!(OperationPolicy::E1C.date_enabled());
         assert!(OperationPolicy::E1C.facets_enabled());
+    }
+
+    #[test]
+    fn plan_identity_hash_is_canonical_and_binds_facets() {
+        let plain = OperationPlan::plain();
+        assert_eq!(plain.kind(), "Plain");
+        assert_eq!(
+            plain.identity_sha256(),
+            "7a9b7d8895a49f8abe56070490fdb1d9e84dc2df8606b9144dc773da6dfb4c45"
+        );
+        let mut changed = plain;
+        changed.facets.push("private derived facet".into());
+        assert_ne!(changed.identity_sha256(), changed.identity());
+        assert_ne!(
+            changed.identity_sha256(),
+            OperationPlan::plain().identity_sha256()
+        );
+        assert_eq!(changed.identity_sha256().len(), 64);
     }
 
     #[test]
