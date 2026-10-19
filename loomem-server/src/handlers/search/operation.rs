@@ -18,7 +18,7 @@ use crate::handlers::types::{DateFilter, SearchRequest};
 use crate::handlers::AppError;
 
 const DATE_SOURCE_POLICY: &str = "event-date-only-v1";
-const E2_CACHE_VERSION: &str = "e2-two-lane-v1";
+const E2_CACHE_VERSION: &str = "e3-two-lane-v1";
 
 #[derive(Debug, Clone)]
 pub(super) struct E2LaneSpec {
@@ -168,12 +168,13 @@ fn prepare_e2(
 
 fn prepare_e2_lane(payload: &SearchRequest, prepared: &mut PreparedOperation) {
     let interval = prepared.plan.half_open_interval();
-    if payload.operation_policy.date_enabled() && prepared.reference_time.is_none() {
+    let requires_date = requires_derived_date(payload, prepared);
+    if requires_date && prepared.reference_time.is_none() {
         prepared.e2_fallback = Some("no_reference_time");
         return;
     }
     let range = interval.and_then(|value| value.inclusive_bounds());
-    if payload.operation_policy.date_enabled() && range.is_none() {
+    if requires_date && range.is_none() {
         prepared.e2_fallback = Some("unsupported_date_expression");
         return;
     }
@@ -186,10 +187,7 @@ fn prepare_e2_lane(payload: &SearchRequest, prepared: &mut PreparedOperation) {
     } else {
         payload.query.clone()
     };
-    if payload.operation_policy.facets_enabled()
-        && !payload.operation_policy.date_enabled()
-        && prepared.plan.kind() == "Plain"
-    {
+    if payload.operation_policy.facets_enabled() && prepared.plan.kind() == "Plain" {
         return;
     }
     prepared.e2_lane = Some(E2LaneSpec {
@@ -197,6 +195,20 @@ fn prepare_e2_lane(payload: &SearchRequest, prepared: &mut PreparedOperation) {
         inclusive_range: range,
     });
 }
+
+fn requires_derived_date(payload: &SearchRequest, prepared: &PreparedOperation) -> bool {
+    if !payload.operation_policy.date_enabled() {
+        return false;
+    }
+    if !payload.operation_policy.facets_enabled() || prepared.plan.half_open_interval().is_some() {
+        return true;
+    }
+    loomem_core::search::operation::has_date_window_marker(&payload.query)
+}
+
+#[cfg(test)]
+#[path = "operation/facet_gate_tests.rs"]
+mod facet_gate_tests;
 
 fn effective_lane_range(
     range: Option<(i64, i64)>,
@@ -481,7 +493,6 @@ fn trace(policy: OperationPolicy, metrics: &OperationMetrics, enabled: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
     use loomem_core::search::{OperationPlan, QueryOperation};
 
     fn candidate(index: usize, content: &str) -> HybridSearchResult {
@@ -703,28 +714,6 @@ mod tests {
             state.query_bytes = MAX_QUERY_BYTES + 1;
             assert_eq!(gate_reason(state), Some("query_limit"), "{policy:?}");
         }
-    }
-
-    #[test]
-    fn cache_identity_uses_effective_dates_instead_of_anchor_text() {
-        let make = |hour| PreparedOperation {
-            policy: OperationPolicy::E1D,
-            plan: OperationPlan::plain(),
-            reference_time: Utc.with_ymd_and_hms(2026, 10, 19, hour, 0, 0).single(),
-            fallback: None,
-            e2_lane: None,
-            e2_fallback: None,
-            explicit_range: None,
-        };
-        let date = PreparedDate {
-            query: "yesterday".into(),
-            filter: Some(DateFilter::Range(1, 2)),
-            anchored: true,
-        };
-        assert_eq!(
-            make(1).cache_identity(&date),
-            make(23).cache_identity(&date)
-        );
     }
 
     #[test]

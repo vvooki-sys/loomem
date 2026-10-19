@@ -1,5 +1,5 @@
 //! Deterministic, bounded operation facets for opt-in search experiments.
-use chrono::{DateTime, Datelike, Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -17,9 +17,10 @@ pub const MAX_RECORD_SCAN_BYTES: usize = 16 * 1024;
 pub const MAX_REQUEST_SCAN_BYTES: usize = 512 * 1024;
 pub const MAX_QUERY_BYTES: usize = 16 * 1024;
 
-static LAST_MONTH_REGEX: LazyLock<Option<Regex>> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(?:last month|ostatni miesiąc|yesterday|today|tomorrow|last week|\d+ (?:days?|weeks?|months?) ago)\b").ok()
-});
+mod calendar;
+pub use calendar::has_date_window_marker;
+use calendar::last_month_interval;
+
 static RELATIVE_REGEX: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(
         r"(?i)\b(\d{1,3})\s+(day|days|week|weeks|month|months)\s+ago\b|\b(\d{1,3})\s+(dzień|dni|tydzień|tygodnie|miesiąc|miesiące)\s+temu\b",
@@ -250,20 +251,6 @@ fn plan_e2(
     } else {
         OperationPlan::plain()
     }
-}
-
-fn last_month_interval(query: &str, reference: DateTime<Utc>) -> Option<HalfOpenInterval> {
-    let mut markers = LAST_MONTH_REGEX.as_ref()?.find_iter(query);
-    let marker = markers.next()?.as_str().to_lowercase();
-    (markers.next().is_none() && matches!(marker.as_str(), "last month" | "ostatni miesiąc"))
-        .then_some(())?;
-    let end_date = reference.date_naive().with_day(1)?;
-    let start_date = end_date.pred_opt()?.with_day(1)?;
-    let end = end_date.and_hms_opt(0, 0, 0)?.and_utc().timestamp();
-    Some(HalfOpenInterval {
-        start: start_date.and_hms_opt(0, 0, 0)?.and_utc().timestamp(),
-        end,
-    })
 }
 
 fn match_count(
