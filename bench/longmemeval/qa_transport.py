@@ -1,4 +1,5 @@
 """Single-attempt OpenAI transport and durable budget-bound completion cache."""
+from dataclasses import dataclass
 from decimal import Decimal
 import json
 import os
@@ -7,6 +8,12 @@ import tempfile
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 from validate import canonical_hash, decode
+
+
+@dataclass(frozen=True)
+class CompletionOptions:
+    transport: object
+    response_format: dict | None = None
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -117,10 +124,26 @@ def parse_response(response, model):
 
 
 def complete(messages, config, binding, ledger, cache_dir, transport):
+    """Backward-compatible completion entrypoint without a response format."""
+    return complete_with_options(
+        messages, config, binding, ledger, cache_dir, CompletionOptions(transport)
+    )
+
+
+def complete_with_options(messages, config, binding, ledger, cache_dir, options):
     """Never retry a request; an uncertain call retains its full reservation."""
+    if not isinstance(options, CompletionOptions):
+        raise ValueError("Completion options must be explicit")
     validate_model_config(config)
     payload = {key: config[key] for key in ("model", "temperature", "seed", "max_completion_tokens")}
     payload["messages"] = messages
+    if options.response_format is not None:
+        if not isinstance(options.response_format, dict):
+            raise ValueError("Completion response format must be an object")
+        # Round-trip before hashing or transport so callers cannot mutate the
+        # request through a shared nested object after this boundary.
+        response_format = json.loads(json.dumps(options.response_format, allow_nan=False))
+        payload["response_format"] = response_format
     request_hash = canonical_hash({"payload": payload, "config": config, "binding": binding})
     path = Path(cache_dir) / (request_hash + ".json")
     if path.exists():
@@ -135,7 +158,9 @@ def complete(messages, config, binding, ledger, cache_dir, transport):
     except Exception as exc:
         return {"status": "failed", "error_type": type(exc).__name__, "request_sha256": request_hash}
     try:
-        result = parse_response(transport(payload, config["timeout_seconds"]), config["model"])
+        result = parse_response(
+            options.transport(payload, config["timeout_seconds"]), config["model"]
+        )
         actual = cost(config, result["usage"]["prompt_tokens"], result["usage"]["completion_tokens"])
         entry = {"status": "response_received", "request_sha256": request_hash,
                  "reservation_token": token, "actual_usd": str(actual), **result}
