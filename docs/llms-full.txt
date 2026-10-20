@@ -11,7 +11,7 @@ This file is a fuller, self-contained brief intended for language models and AI 
 
 ## What runs
 - A single static binary. Storage is embedded: RocksDB (chunks, entity graph, vector embeddings) + Tantivy (full-text / BM25). No separate vector database, graph database, or queue.
-- Embeddings run on-device by default via a local ONNX model (multilingual-e5-small, 384-dim), so storing and searching context works fully offline. An OpenAI API key is optional and only sharpens LLM-based extraction and consolidation; without it those steps fall back to regex.
+- Embeddings run on-device by default via a local ONNX model (multilingual-e5-small, 384-dim), so storing and searching context works fully offline. An OpenAI API key powers the LLM steps (fact extraction, entity extraction, consolidation, dreaming); without it those steps are skipped or return an error, and the default config needs LOOMEM_ALLOW_KEYLESS=1 to start.
 - Interface: MCP over streamable HTTP, plus plain HTTP (/v1, /api). It exposes the memory_* tool set (memory_search, memory_store, memory_ingest, memory_context, memory_profile, memory_namespaces, memory_graph, memory_history, memory_dream, memory_reflect, memory_feedback, memory_delete, memory_associate, memory_status). OAuth dynamic client registration is supported for remote connectors.
 
 ## How it works

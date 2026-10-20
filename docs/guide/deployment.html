@@ -170,7 +170,7 @@ a:hover{text-decoration:underline}
 <ul>
 <li>Rust toolchain (stable)</li>
 <li>clang + libclang-dev (for RocksDB)</li>
-<li>OpenAI API key (optional — local embeddings available)</li>
+<li>OpenAI API key (needed for the LLM steps; without one, start with <code>LOOMEM_ALLOW_KEYLESS=1</code>)</li>
 </ul>
 <h3 id="build-and-run">Build and run</h3>
 <pre><code class="language-bash">git clone &lt;repository-url&gt;
@@ -197,7 +197,7 @@ curl http://localhost:3030/health
 </code></pre>
 <h3 id="local-embeddings-no-openai-dependency">Local embeddings (no OpenAI dependency)</h3>
 <p>Set <code>embedding_provider = "local"</code> in <code>config.toml</code> under <code>[llm]</code> — this is the default on a fresh install. Uses the tract ONNX runtime — pure Rust, no native dependencies, and nothing leaves the machine.</p>
-<p>Note: consolidation, extraction, and dream use OpenAI completions (<code>gpt-4.1-mini</code>). Without an <code>OPENAI_API_KEY</code> those steps fall back to a built-in regex extractor; embeddings and search stay fully local either way.</p>
+<p>Note: consolidation, extraction, and dream use OpenAI completions (<code>gpt-4.1-mini</code>). Without an <code>OPENAI_API_KEY</code> those steps do not run, and the server starts only with <code>LOOMEM_ALLOW_KEYLESS=1</code>; <code>memory_store</code>, embeddings, and search stay fully local either way.</p>
 <hr />
 <h2 id="docker">Docker</h2>
 <h3 id="build">Build</h3>

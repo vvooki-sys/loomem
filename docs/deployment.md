@@ -6,7 +6,7 @@
 
 - Rust toolchain (stable)
 - clang + libclang-dev (for RocksDB)
-- OpenAI API key (optional — local embeddings available)
+- OpenAI API key (needed for the LLM steps; without one, start with `LOOMEM_ALLOW_KEYLESS=1`)
 
 ### Build and run
 
@@ -41,7 +41,7 @@ curl -X POST http://localhost:3030/v1/store \
 
 Set `embedding_provider = "local"` in `config.toml` under `[llm]` — this is the default on a fresh install. Uses the tract ONNX runtime — pure Rust, no native dependencies, and nothing leaves the machine.
 
-Note: consolidation, extraction, and dream use OpenAI completions (`gpt-4.1-mini`). Without an `OPENAI_API_KEY` those steps fall back to a built-in regex extractor; embeddings and search stay fully local either way.
+Note: consolidation, extraction, and dream use OpenAI completions (`gpt-4.1-mini`). Without an `OPENAI_API_KEY` those steps do not run, and the server starts only with `LOOMEM_ALLOW_KEYLESS=1`; `memory_store`, embeddings, and search stay fully local either way.
 
 ---
 

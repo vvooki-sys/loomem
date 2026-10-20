@@ -658,7 +658,7 @@ fallback_to_regex = true
 <tr>
 <td><code>fallback_to_regex</code></td>
 <td>bool</td>
-<td>Use regex extraction if the completions LLM is unavailable</td>
+<td>Use regex compression when a consolidation LLM call fails (only with a key set; without a key, consolidation is skipped)</td>
 </tr>
 </tbody>
 </table>
@@ -671,8 +671,10 @@ ships in the default build; obtain the model files with:</p>
 <pre><code class="language-sh">./scripts/fetch-embedding-model.sh         # → ~/.loomem/models/multilingual-e5-small
 </code></pre>
 <p>The completions LLM (consolidation, fact extraction, dream) is independent: with
-no <code>OPENAI_API_KEY</code>, those steps fall back to regex (<code>fallback_to_regex</code>), while
-<code>memory_store</code> and semantic search work fully locally. To use a local LLM for
+no <code>OPENAI_API_KEY</code>, those steps do not run: <code>memory_ingest</code> returns a missing-key
+error, entity extraction and consolidation are skipped, and dream fails, while
+<code>memory_store</code> and semantic search work fully locally. The default config enables
+these steps, so a keyless start needs <code>LOOMEM_ALLOW_KEYLESS=1</code>. To use a local LLM for
 completions too, point <code>provider</code> at an OpenAI-compatible endpoint (future cycle).</p>
 <h3 id="embedding-dimension-re-embedding">Embedding dimension &amp; re-embedding</h3>
 <p><code>embedding_dim</code> <strong>must</strong> match the active embedding model
@@ -983,7 +985,7 @@ model = &quot;gpt-4.1-mini&quot;
 <tr>
 <td><code>OPENAI_API_KEY</code></td>
 <td>LLM API key (name configurable via <code>llm.api_key_env</code>)</td>
-<td>Only for OpenAI completions (<code>provider = "openai"</code>) or OpenAI embeddings (<code>embedding_provider = "openai"</code>). With local embeddings (default) and no key, the LLM steps fall back to regex.</td>
+<td>Only for OpenAI completions (<code>provider = "openai"</code>) or OpenAI embeddings (<code>embedding_provider = "openai"</code>). With local embeddings (default) and no key, <code>memory_store</code> and search work, the LLM steps do not run, and the server needs <code>LOOMEM_ALLOW_KEYLESS=1</code> to start.</td>
 </tr>
 <tr>
 <td><code>LOOMEM_CONFIG</code></td>
