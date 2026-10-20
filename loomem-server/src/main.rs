@@ -552,7 +552,23 @@ async fn main() -> Result<()> {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
             format!("{home}/.loomem/models/multilingual-e5-small")
         });
-        loomem_core::local_embeddings::try_load(&model_dir, config.llm.embedding_dim).map(Arc::new)
+        let loaded = loomem_core::local_embeddings::try_load(&model_dir, config.llm.embedding_dim)
+            .map(Arc::new);
+        if loomem_core::local_embeddings::local_provider_falls_back_to_openai(
+            &config.llm.embedding_provider,
+            loaded.is_some(),
+            config.llm.get_api_key().is_some(),
+        ) {
+            anyhow::bail!(
+                "embedding_provider = \"local\" but the local model did not load from {model_dir}, \
+                 and an LLM API key is set: Loomem would silently send stored text to the OpenAI \
+                 embeddings API and store vectors that do not match embedding_dim = {}. Run \
+                 scripts/fetch-embedding-model.sh, set embedding_model_path, or switch to \
+                 embedding_provider = \"openai\" with embedding_dim = 1536",
+                config.llm.embedding_dim
+            );
+        }
+        loaded
     } else {
         None
     };

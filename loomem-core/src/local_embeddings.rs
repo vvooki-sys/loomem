@@ -256,6 +256,38 @@ pub fn try_load(model_dir: &str, expected_dim: usize) -> Option<LocalEmbedder> {
     }
 }
 
+/// True when the operator chose `embedding_provider = "local"` but the model
+/// did not load while an LLM API key resolves. In that state every embed site
+/// (ingest, embedding queue, consolidation, search, re-embed) falls back to the
+/// OpenAI embeddings API: stored text leaves the machine, and the vectors
+/// (1536-dim for the default OpenAI model) do not match the configured
+/// `embedding_dim`. The startup dimension guard records the configured dim,
+/// so it cannot catch this. The server refuses to start instead.
+pub fn local_provider_falls_back_to_openai(
+    provider: &str,
+    local_loaded: bool,
+    api_key_present: bool,
+) -> bool {
+    provider == "local" && !local_loaded && api_key_present
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::local_provider_falls_back_to_openai;
+
+    #[test]
+    fn only_local_provider_without_model_but_with_key_is_rejected() {
+        // The silent-fallback case: local chosen, model missing, key present.
+        assert!(local_provider_falls_back_to_openai("local", false, true));
+        // Model loaded: the local embedder is used, no fallback.
+        assert!(!local_provider_falls_back_to_openai("local", true, true));
+        // No key: embed sites have nothing to fall back to (keyword-only).
+        assert!(!local_provider_falls_back_to_openai("local", false, false));
+        // OpenAI chosen on purpose: the API path is the intended one.
+        assert!(!local_provider_falls_back_to_openai("openai", false, true));
+    }
+}
+
 #[cfg(all(test, feature = "local-embeddings"))]
 mod tests {
     use super::*;
