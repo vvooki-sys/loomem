@@ -523,3 +523,7 @@ mod e5_tests;
 #[cfg(test)]
 #[path = "operation/e6_tests.rs"]
 mod e6_tests;
+
+#[cfg(all(test, feature = "evaluation"))]
+#[path = "operation/e6_cost_tests.rs"]
+mod e6_cost_tests;

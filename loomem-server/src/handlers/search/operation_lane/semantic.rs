@@ -25,11 +25,25 @@ pub(super) async fn primary_outcome(
         }
         OperationPolicy::E6 if budget_allows(state, ctx.stream_list.as_deref()) => {
             let reference = ctx.operation.reference_time.map(|value| value.to_rfc3339());
+            let tracker = loomem_core::CostTracker::new(
+                state.store.clone(),
+                state.config.cost.clone(),
+                state.http_client.clone(),
+            );
+            let stream_id = ctx
+                .stream_list
+                .as_deref()
+                .and_then(|streams| streams.first())
+                .map(String::as_str);
             loomem_core::search::semantic_context::select(
                 &state.config.llm,
                 &payload.query,
                 reference.as_deref(),
                 primary,
+                loomem_core::search::semantic_context::SelectorAccounting {
+                    tracker: &tracker,
+                    stream_id,
+                },
             )
             .await
         }
@@ -44,6 +58,9 @@ pub(super) async fn primary_outcome(
 }
 
 fn budget_allows(state: &AppState, streams: Option<&[String]>) -> bool {
+    if streams.is_some_and(|streams| streams.len() > 1) {
+        return false;
+    }
     let cap = state.config.cost.daily_cap_usd;
     if !check_cost_budget(&state.store, cap).allow_llm_calls() {
         return false;

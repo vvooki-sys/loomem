@@ -146,8 +146,36 @@ async fn missing_credentials_and_preparation_bounds_return_exact_input() {
         time_decay_factor: 1.0,
     };
     let input = vec![candidate];
+    let temp = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(
+        crate::storage::RocksDbStore::open(
+            temp.path(),
+            &crate::config::RocksDbConfig {
+                max_open_files: 100,
+                compression: "none".into(),
+                write_buffer_size: 4 * 1024 * 1024,
+                max_write_buffer_number: 2,
+            },
+        )
+        .unwrap(),
+    );
+    let tracker = crate::CostTracker::new(
+        store,
+        crate::cost_tracker::CostConfig::default(),
+        Client::new(),
+    );
     for query in ["query".to_string(), "x".repeat(16385)] {
-        let output = select(&config, &query, None, input.clone()).await;
+        let output = select(
+            &config,
+            &query,
+            None,
+            input.clone(),
+            SelectorAccounting {
+                tracker: &tracker,
+                stream_id: None,
+            },
+        )
+        .await;
         assert_eq!(
             serde_json::to_value(output).unwrap(),
             serde_json::to_value(&input).unwrap()
@@ -169,7 +197,8 @@ async fn redirects_never_forward_source_body_to_another_listener() {
         let server = tokio::spawn(async move {
             let (mut socket, _) = origin.accept().await.unwrap();
             let mut input = vec![0; 8192];
-            socket.read(&mut input).await.unwrap();
+            let size = socket.read(&mut input).await.unwrap();
+            assert!(size > 0);
             socket.write_all(response.as_bytes()).await.unwrap();
         });
         let client = selector_client(&LlmConfig::default()).unwrap();
@@ -188,4 +217,52 @@ async fn redirects_never_forward_source_body_to_another_listener() {
             .await
             .is_err());
     }
+}
+
+#[test]
+fn risk_routing_request_preserves_competing_sources_and_empty_response_keeps_e0() {
+    let sources = [
+        "User, 2025-01-01: My preferred workshop is Cedar. Only weekends.",
+        "User, 2026-02-01: I changed my preference to Birch. Not weekday sessions.",
+        "Assistant: You could try Maple; this is a suggestion, not the user's choice.",
+    ];
+    let candidates: Vec<_> = sources
+        .iter()
+        .enumerate()
+        .map(|(index, content)| HybridSearchResult {
+            id: format!("opaque-{index}"),
+            content: (*content).into(),
+            user_id: "user".into(),
+            app_id: "app".into(),
+            level: 2,
+            timestamp: 123,
+            score: 0.4,
+            bm25_score: 0.2,
+            vector_score: 0.3,
+            time_decay_factor: 1.0,
+        })
+        .collect();
+    let prepared =
+        context_evidence::prepare("What is my current preference?", &candidates).unwrap();
+    let body = build_request(
+        "What is my current preference?",
+        Some("2026-03-01T00:00:00Z"),
+        &prepared,
+        "model",
+    );
+    let data: Value =
+        serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
+    for (index, source) in sources.iter().enumerate() {
+        assert_eq!(data["records"][index]["windows"][0]["content"], *source);
+    }
+    let response = json!({"choices":[{"finish_reason":"stop","message":{
+        "content": r#"{"selections":[]}"#
+    }}]});
+    let selections = parse_response(&serde_json::to_vec(&response).unwrap()).unwrap();
+    assert!(selections.is_empty());
+    let output = context_evidence::apply(candidates.clone(), &selections);
+    assert_eq!(
+        serde_json::to_value(output).unwrap(),
+        serde_json::to_value(candidates).unwrap()
+    );
 }

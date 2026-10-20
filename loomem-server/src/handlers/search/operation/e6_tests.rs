@@ -57,7 +57,15 @@ fn e6_obeys_common_operation_gate() {
     );
 }
 
-async fn http_results(app: &axum::Router, policy: OperationPolicy) -> serde_json::Value {
+pub(super) async fn http_results(app: &axum::Router, policy: OperationPolicy) -> serde_json::Value {
+    http_scoped_results(app, policy, &["streamA"]).await
+}
+
+pub(super) async fn http_scoped_results(
+    app: &axum::Router,
+    policy: OperationPolicy,
+    streams: &[&str],
+) -> serde_json::Value {
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/v1/search")
@@ -66,7 +74,7 @@ async fn http_results(app: &axum::Router, policy: OperationPolicy) -> serde_json
         .body(axum::body::Body::from(
             serde_json::to_vec(&serde_json::json!({
                 "query": "apple budget", "operation_policy": policy, "top_k": 10,
-                "streams": ["streamA"], "source_agent": "tester"
+                "streams": streams, "source_agent": "tester"
             }))
             .unwrap(),
         ))
@@ -84,6 +92,9 @@ async fn e6_missing_key_http_preserves_e0_results_and_isolates_cache() {
     config.search.operation.enabled = true;
     config.llm.api_key = None;
     config.llm.api_key_env = "LOOMEM_E6_TEST_INTENTIONALLY_ABSENT_KEY".into();
+    // This fallback/cache test compares all fields; time decay is not under test.
+    config.search.decay.l0_lambda = 0.0;
+    config.search.decay.l1_lambda = 0.0;
     let (app, state) = crate::tests::make_test_app_cfg(config);
     super::super::stream_scoping_e2e_tests::seed_one(
         &state,
