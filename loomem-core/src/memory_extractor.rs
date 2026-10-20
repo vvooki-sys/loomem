@@ -3,16 +3,17 @@
 //! Extracts typed, temporally-annotated facts from conversation text using LLM.
 //! Uses 4-type taxonomy: preference_or_decision, project_state, fact, experience.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::config::LlmConfig;
 
 mod config_validation;
+mod http;
 use config_validation::transcript_chunks;
+pub use http::HttpExtractionChat;
 
 /// /153: an operator-defined extraction category. `fact_type` is the wire key
 /// used in the `## Types` list and the JSON `fact_type` enum; when absent,
@@ -283,47 +284,6 @@ pub trait ExtractionChat: Send + Sync {
         &self,
         request_body: &serde_json::Value,
     ) -> impl std::future::Future<Output = Result<ChatHttpReply>> + Send;
-}
-
-/// Production [`ExtractionChat`]: posts to the OpenAI chat endpoint.
-pub struct HttpExtractionChat<'a> {
-    client: &'a Client,
-    api_key: String,
-}
-
-impl<'a> HttpExtractionChat<'a> {
-    pub fn new(client: &'a Client, api_key: String) -> Self {
-        Self { client, api_key }
-    }
-}
-
-impl ExtractionChat for HttpExtractionChat<'_> {
-    fn chat(
-        &self,
-        request_body: &serde_json::Value,
-    ) -> impl std::future::Future<Output = Result<ChatHttpReply>> + Send {
-        // Clone captures so the future owns them (Send, no borrow across await).
-        let client = self.client.clone();
-        let api_key = self.api_key.clone();
-        let body = request_body.clone();
-        async move {
-            let response = client
-                .post("https://api.openai.com/v1/chat/completions")
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .timeout(Duration::from_secs(30))
-                .send()
-                .await
-                .context("Failed to send extraction request")?;
-            let status = response.status().as_u16();
-            let body = response
-                .text()
-                .await
-                .context("Failed to read extraction response body")?;
-            Ok(ChatHttpReply { status, body })
-        }
-    }
 }
 
 /// One failed extraction attempt for a single transcript chunk (/157 S1).
