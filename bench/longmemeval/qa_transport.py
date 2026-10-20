@@ -47,8 +47,10 @@ def validate_model_config(config):
     required = {"model", "context_window_tokens", "max_completion_tokens",
                 "input_usd_per_million", "output_usd_per_million",
                 "temperature", "seed", "timeout_seconds"}
-    if not isinstance(config, dict) or set(config) != required:
+    if not isinstance(config, dict) or set(config) not in (required, required | {"service_tier"}):
         raise ValueError("Completion config requires exact frozen fields")
+    if "service_tier" in config and config["service_tier"] != "default":
+        raise ValueError("Only the default completion service tier is supported")
     if not isinstance(config["model"], str) or not config["model"].strip():
         raise ValueError("Missing frozen model")
     for key in ("context_window_tokens", "max_completion_tokens", "timeout_seconds"):
@@ -104,9 +106,11 @@ def atomic_text(path, text):
             os.unlink(name)
 
 
-def parse_response(response, model):
+def parse_response(response, model, service_tier=None):
     if not isinstance(response, dict) or response.get("model") != model:
         raise ValueError("Completion model mismatch")
+    if service_tier is not None and response.get("service_tier") != service_tier:
+        raise ValueError("Completion service tier mismatch")
     usage = response.get("usage", {})
     counts = {key: usage.get(key) for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
     if any(type(value) is not int or value < 0 for value in counts.values()):
@@ -119,8 +123,11 @@ def parse_response(response, model):
     text = choices[0].get("message", {}).get("content")
     if not isinstance(text, str) or not text.strip():
         raise ValueError("Missing completion text")
-    return {"text": text, "usage": counts,
-            "finish_reason": choices[0].get("finish_reason"), "model": model}
+    result = {"text": text, "usage": counts,
+              "finish_reason": choices[0].get("finish_reason"), "model": model}
+    if service_tier is not None:
+        result["service_tier"] = service_tier
+    return result
 
 
 def complete(messages, config, binding, ledger, cache_dir, transport):
@@ -136,6 +143,8 @@ def complete_with_options(messages, config, binding, ledger, cache_dir, options)
         raise ValueError("Completion options must be explicit")
     validate_model_config(config)
     payload = {key: config[key] for key in ("model", "temperature", "seed", "max_completion_tokens")}
+    if "service_tier" in config:
+        payload["service_tier"] = config["service_tier"]
     payload["messages"] = messages
     if options.response_format is not None:
         if not isinstance(options.response_format, dict):
@@ -159,7 +168,8 @@ def complete_with_options(messages, config, binding, ledger, cache_dir, options)
         return {"status": "failed", "error_type": type(exc).__name__, "request_sha256": request_hash}
     try:
         result = parse_response(
-            options.transport(payload, config["timeout_seconds"]), config["model"]
+            options.transport(payload, config["timeout_seconds"]), config["model"],
+            config.get("service_tier")
         )
         actual = cost(config, result["usage"]["prompt_tokens"], result["usage"]["completion_tokens"])
         entry = {"status": "response_received", "request_sha256": request_hash,
@@ -201,12 +211,16 @@ def validate_cached(entry, request_hash, config, ledger):
             raise ValueError("Invalid cached failure")
         return
     fields = base | {"actual_usd", "text", "usage", "finish_reason", "model"}
+    if "service_tier" in config:
+        fields.add("service_tier")
     if entry["status"] == "failed":
         fields.add("error_type")
     if set(entry) != fields:
         raise ValueError("Invalid cached completion shape")
-    parse_response({"model": entry["model"], "usage": entry["usage"], "choices": [
-        {"message": {"content": entry["text"]}, "finish_reason": entry["finish_reason"]}]}, config["model"])
+    parse_response({"model": entry["model"], "service_tier": entry.get("service_tier"),
+                    "usage": entry["usage"], "choices": [
+        {"message": {"content": entry["text"]}, "finish_reason": entry["finish_reason"]}]},
+        config["model"], config.get("service_tier"))
     actual = cost(config, entry["usage"]["prompt_tokens"], entry["usage"]["completion_tokens"])
     if Decimal(entry["actual_usd"]) != actual:
         raise ValueError("Cached usage cost mismatch")

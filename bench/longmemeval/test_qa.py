@@ -80,6 +80,62 @@ class QATests(unittest.TestCase):
         self.assertNotEqual(first["request_sha256"], second["request_sha256"])
         self.assertEqual(self.ledger.totals()["request_count"], 2)
 
+    def test_optional_default_tier_is_payload_and_request_bound(self):
+        messages = [{"role": "user", "content": "synthetic question"}]
+        legacy = self.invoke(lambda *_: response())
+        payload = {key: model_config()[key] for key in
+                   ("model", "temperature", "seed", "max_completion_tokens")}
+        payload["messages"] = messages
+        self.assertEqual(legacy["request_sha256"], canonical_hash({
+            "payload": payload, "config": model_config(), "binding": {"variant": "raw"}}))
+        config = {**model_config(), "service_tier": "default"}
+        calls = []
+        def fake(body, timeout):
+            calls.append(body)
+            return {**response(), "service_tier": "default"}
+        pinned = self.invoke(fake, config=config)
+        self.assertEqual(calls, [{**payload, "service_tier": "default"}])
+        self.assertNotEqual(legacy["request_sha256"], pinned["request_sha256"])
+        self.assertEqual(pinned["service_tier"], "default")
+        self.assertEqual(self.invoke(fake, config=config), pinned)
+        self.assertEqual(len(calls), 1)
+
+    def test_unrequested_tier_keeps_legacy_result_shape(self):
+        result = self.invoke(lambda *_: {**response(), "service_tier": "default"})
+        self.assertNotIn("service_tier", result)
+
+    def test_unsupported_requested_tier_rejected_before_reservation(self):
+        for tier in ("auto", "flex", "priority", "", None):
+            with self.assertRaises(ValueError):
+                self.invoke(lambda *_: self.fail("network must not run"),
+                            config={**model_config(), "service_tier": tier})
+        self.assertEqual(self.ledger.totals()["request_count"], 0)
+
+    def test_provider_tier_missing_or_changed_never_settles_reservation(self):
+        for tier in (None, "flex", "priority"):
+            with self.subTest(tier=tier):
+                self.ledger = BudgetLedger(self.path / (str(tier) + ".json"), "100")
+                reply = response() if tier is None else {**response(), "service_tier": tier}
+                result = self.invoke(lambda *_: reply,
+                                     config={**model_config(), "service_tier": "default"},
+                                     binding={"tier_fixture": tier})
+                self.assertEqual(result["status"], "failed")
+                self.assertNotIn("actual_usd", result)
+                self.assertEqual(self.ledger.totals()["pending_count"], 1)
+                self.assertEqual(self.ledger.totals()["spent_usd"], 0)
+
+    def test_pinned_cache_rejects_changed_provider_tier(self):
+        config = {**model_config(), "service_tier": "default"}
+        result = self.invoke(lambda *_: {**response(), "service_tier": "default"}, config=config)
+        path = self.path / "cache" / (result["request_sha256"] + ".json")
+        entry = json.loads(path.read_text())
+        entry.pop("entry_sha256")
+        entry["service_tier"] = "priority"
+        entry["entry_sha256"] = canonical_hash(entry)
+        path.write_text(json.dumps(entry))
+        with self.assertRaisesRegex(ValueError, "service tier mismatch"):
+            self.invoke(lambda *_: self.fail("network must not run"), config=config)
+
     def test_price_context_and_alias_spoofing_rejected(self):
         for field, value in [("input_usd_per_million", "0"), ("output_usd_per_million", "0.1"),
                              ("context_window_tokens", 1024), ("model", "gpt-4.1")]:

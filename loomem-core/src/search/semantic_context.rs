@@ -31,6 +31,7 @@ pub fn build_request(
     }
     json!({
         "model": model,
+        "service_tier": "default",
         "temperature": 0,
         "seed": 42,
         "max_completion_tokens": 1024,

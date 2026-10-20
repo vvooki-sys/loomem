@@ -108,6 +108,10 @@ impl<'a> SelectorAccounting<'a> {
 impl SelectorReservation<'_> {
     /// Reconcile known billed usage once, even when the selected output is invalid.
     pub fn reconcile(self, response: &Value) -> Result<()> {
+        anyhow::ensure!(
+            response.get("service_tier").and_then(Value::as_str) == Some("default"),
+            "Selector processing tier unavailable or unsupported"
+        );
         let usage = SelectorUsage::from_response(response).context("Selector usage unavailable")?;
         anyhow::ensure!(usage.input_tokens > 0, "Selector prompt usage invalid");
         let returned_model = response

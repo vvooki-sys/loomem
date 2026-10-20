@@ -29,7 +29,7 @@ fn tracker(cap: f64) -> (tempfile::TempDir, CostTracker) {
 }
 
 fn response() -> Value {
-    json!({"model":"gpt-4.1-2025-04-14", "usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1100}})
+    json!({"service_tier":"default","model":"gpt-4.1-2025-04-14", "usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1100}})
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn unknown_invalid_usage_and_unsupported_models_preserve_reservations() {
     assert!(accounting.reserve("unpriced").is_err());
     let reservation = accounting.reserve("gpt-4.1").unwrap();
     let before = tracker.daily_summary();
-    assert!(reservation.reconcile(&json!({"model":"gpt-4.1","usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1}})).is_err());
+    assert!(reservation.reconcile(&json!({"service_tier":"default","model":"gpt-4.1","usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1}})).is_err());
     assert_eq!(tracker.daily_summary().total_usd, before.total_usd);
     assert!(accounting.reserve("gpt-4.1").is_err());
     assert_eq!(tracker.daily_summary().selector_unknown_usage_calls, 1);
@@ -144,7 +144,7 @@ fn known_usage_above_estimate_is_recorded_in_full_and_returns_breach() {
         stream_id: None,
     };
     let reservation = accounting.reserve("gpt-4.1").unwrap();
-    let huge = json!({"model":"gpt-4.1","usage":{"prompt_tokens":2000000,"completion_tokens":100,"total_tokens":2000100}});
+    let huge = json!({"service_tier":"default","model":"gpt-4.1","usage":{"prompt_tokens":2000000,"completion_tokens":100,"total_tokens":2000100}});
     assert!(reservation.reconcile(&huge).is_err());
     assert!((tracker.daily_summary().total_usd - 4.0008).abs() < 1e-12);
     assert_eq!(tracker.daily_summary().selector_unknown_usage_calls, 0);
@@ -210,8 +210,8 @@ fn competing_threads_admit_only_one_and_unknown_survives_store_reopen() {
 fn invalid_model_or_cached_counts_retain_full_estimated_charge() {
     let (_temp, tracker) = tracker(10.0);
     for response in [
-        json!({"model":"gpt-4.1-mini","usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1100}}),
-        json!({"model":"gpt-4.1","usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1100,"prompt_tokens_details":{"cached_tokens":1001}}}),
+        json!({"service_tier":"default","model":"gpt-4.1-mini","usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1100}}),
+        json!({"service_tier":"default","model":"gpt-4.1","usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1100,"prompt_tokens_details":{"cached_tokens":1001}}}),
     ] {
         let before = tracker.daily_summary().selector_unknown_usage_calls;
         let reservation = SelectorAccounting {
@@ -225,5 +225,35 @@ fn invalid_model_or_cached_counts_retain_full_estimated_charge() {
             tracker.daily_summary().selector_unknown_usage_calls,
             before + 1
         );
+    }
+}
+
+#[test]
+fn missing_or_different_service_tier_retains_unknown_reservation() {
+    let (_temp, tracker) = tracker(10.0);
+    for tier in [None, Some("priority"), Some("flex"), Some("auto")] {
+        let mut envelope = response();
+        if let Some(tier) = tier {
+            envelope["service_tier"] = json!(tier);
+        } else {
+            envelope.as_object_mut().unwrap().remove("service_tier");
+        }
+        let before = tracker.daily_summary();
+        let reservation = SelectorAccounting {
+            tracker: &tracker,
+            stream_id: Some("stream"),
+        }
+        .reserve("gpt-4.1")
+        .unwrap();
+        let charged = tracker.daily_summary().total_usd;
+        assert!(reservation.reconcile(&envelope).is_err());
+        let after = tracker.daily_summary();
+        assert_eq!(after.total_usd, charged);
+        assert_eq!(
+            after.selector_unknown_usage_calls,
+            before.selector_unknown_usage_calls + 1
+        );
+        assert_eq!(after.total_input_tokens, before.total_input_tokens);
+        assert_eq!(tracker.get_cost(Some("stream")).unwrap().total_usd, charged);
     }
 }

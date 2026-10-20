@@ -21,6 +21,7 @@ fn request_is_deterministic_strict_and_keeps_untrusted_data_in_user_message() {
         include_str!("frozen_request.json").trim_end()
     );
     assert_eq!(body["model"], "model");
+    assert_eq!(body["service_tier"], "default");
     assert_eq!(body["temperature"], 0);
     assert_eq!(body["seed"], 42);
     assert_eq!(body["max_completion_tokens"], 1024);

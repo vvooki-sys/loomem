@@ -26,6 +26,7 @@ async fn complete(
     Json(body): Json<Value>,
 ) -> (axum::http::StatusCode, Json<Value>) {
     assert_eq!(body["model"], "gpt-4.1");
+    assert_eq!(body["service_tier"], "default");
     provider.calls.fetch_add(1, Ordering::SeqCst);
     (
         *provider.status.lock().await,
@@ -44,7 +45,7 @@ impl Drop for EndpointGuard {
 }
 
 fn completion(content: &str, usage: bool) -> Value {
-    let mut response = json!({"model":"gpt-4.1","choices":[{"finish_reason":"stop","message":{"content":content}}]});
+    let mut response = json!({"model":"gpt-4.1","service_tier":"default","choices":[{"finish_reason":"stop","message":{"content":content}}]});
     if usage {
         response["usage"] =
             json!({"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1100});
@@ -140,6 +141,7 @@ async fn e6_native_http_books_paid_invalid_and_enforces_both_caps() {
         axum::serve(listener, mock).await.unwrap();
     });
     let reservation = verify_paid_responses(&provider).await;
+    verify_unpriced_tiers(&provider, reservation).await;
     verify_concurrent_unknown(&provider, reservation).await;
     verify_blocked_calls(&provider).await;
     server.abort();
@@ -181,6 +183,30 @@ async fn verify_paid_responses(provider: &Provider) -> f64 {
         assert_eq!(daily(&state, None).total_usd, global.total_usd);
     }
     reservation
+}
+
+async fn verify_unpriced_tiers(provider: &Provider, reservation: f64) {
+    for tier in [None, Some("priority"), Some("flex")] {
+        let mut response = completion(r#"{"selections":[]}"#, true);
+        match tier {
+            Some(tier) => response["service_tier"] = json!(tier),
+            None => {
+                response.as_object_mut().unwrap().remove("service_tier");
+            }
+        }
+        *provider.response.lock().await = response;
+        let (app, state) = fixture("gpt-4.1").await;
+        let before = provider.calls.load(Ordering::SeqCst);
+        super::e6_tests::http_results(&app, OperationPolicy::E6).await;
+        assert_eq!(provider.calls.load(Ordering::SeqCst), before + 1);
+        let cost = daily(&state, None);
+        assert_eq!(cost.total_usd, reservation);
+        assert_eq!(cost.selector_reserved_usd, reservation);
+        assert_eq!(cost.selector_unknown_usage_calls, 1);
+        assert_eq!(cost.total_input_tokens, 0);
+        assert_eq!(cost.total_output_tokens, 0);
+        assert_eq!(daily(&state, Some("streamA")).total_usd, reservation);
+    }
 }
 
 async fn verify_concurrent_unknown(provider: &Provider, reservation: f64) {
