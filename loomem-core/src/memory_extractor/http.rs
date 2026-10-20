@@ -29,12 +29,14 @@ impl ExtractionChat for HttpExtractionChat<'_> {
         let api_key = self.api_key.clone();
         let body = request_body.clone();
         async move {
+            let endpoint = endpoint()?;
+            let timeout = request_timeout(&endpoint)?;
             let response = client
-                .post(endpoint()?)
+                .post(endpoint)
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
                 .json(&body)
-                .timeout(Duration::from_secs(30))
+                .timeout(timeout)
                 .send()
                 .await
                 .context("Failed to send extraction request")?;
@@ -46,6 +48,44 @@ impl ExtractionChat for HttpExtractionChat<'_> {
             Ok(ChatHttpReply { status, body })
         }
     }
+}
+
+fn request_timeout(_endpoint: &str) -> Result<Duration> {
+    #[cfg(feature = "evaluation")]
+    return evaluation_timeout(
+        _endpoint,
+        std::env::var("LOOMEM_EVALUATION_EXTRACTION_TIMEOUT_SECS"),
+    );
+    #[cfg(not(feature = "evaluation"))]
+    Ok(Duration::from_secs(30))
+}
+
+#[cfg(feature = "evaluation")]
+fn evaluation_timeout(
+    endpoint: &str,
+    value: Result<String, std::env::VarError>,
+) -> Result<Duration> {
+    let value = match value {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(Duration::from_secs(30)),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("Invalid evaluation extraction timeout encoding")
+        }
+    };
+    // A timeout override must never affect a direct provider request.
+    evaluation_endpoint(Ok(endpoint.to_string()))?;
+    anyhow::ensure!(
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()),
+        "Evaluation extraction timeout must be an integer in 1..=600 seconds"
+    );
+    let seconds = value
+        .parse::<u64>()
+        .context("Invalid evaluation extraction timeout")?;
+    anyhow::ensure!(
+        (1..=600).contains(&seconds),
+        "Evaluation extraction timeout must be in 1..=600 seconds"
+    );
+    Ok(Duration::from_secs(seconds))
 }
 
 fn endpoint() -> Result<String> {
@@ -96,6 +136,10 @@ mod tests {
     #[test]
     fn production_endpoint_is_unchanged() {
         assert_eq!(endpoint().unwrap(), PROVIDER_URL);
+        assert_eq!(
+            request_timeout(PROVIDER_URL).unwrap(),
+            Duration::from_secs(30)
+        );
     }
 
     #[cfg(feature = "evaluation")]
@@ -105,6 +149,55 @@ mod tests {
             evaluation_endpoint(Err(std::env::VarError::NotPresent)).unwrap(),
             PROVIDER_URL
         );
+        assert_eq!(
+            evaluation_timeout(PROVIDER_URL, Err(std::env::VarError::NotPresent)).unwrap(),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[cfg(feature = "evaluation")]
+    #[test]
+    fn timeout_override_is_bounded_and_only_for_local_metering() {
+        let local = "http://127.0.0.1:49152/v1/chat/completions";
+        for seconds in [1, 30, 180, 600] {
+            assert_eq!(
+                evaluation_timeout(local, Ok(seconds.to_string())).unwrap(),
+                Duration::from_secs(seconds)
+            );
+        }
+        assert!(evaluation_timeout(PROVIDER_URL, Ok("180".to_string())).is_err());
+        assert!(evaluation_timeout(
+            "http://localhost:49152/v1/chat/completions",
+            Ok("180".to_string())
+        )
+        .is_err());
+    }
+
+    #[cfg(feature = "evaluation")]
+    #[test]
+    fn invalid_timeout_fails_closed() {
+        let local = "http://127.0.0.1:49152/v1/chat/completions";
+        for value in [
+            "",
+            "0",
+            "601",
+            "-1",
+            "+1",
+            "1.5",
+            " 180",
+            "180 ",
+            "forever",
+            "18446744073709551616",
+        ] {
+            assert!(evaluation_timeout(local, Ok(value.to_string())).is_err());
+        }
+        assert!(evaluation_timeout(
+            local,
+            Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+                "invalid"
+            )))
+        )
+        .is_err());
     }
 
     #[cfg(feature = "evaluation")]
