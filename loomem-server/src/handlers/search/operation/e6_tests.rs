@@ -21,6 +21,9 @@ fn e6_reference_normalization_binds_only_semantic_cache() {
         assert!(operation.e2_lane_spec().is_none());
         operation.cache_identity(&resolve_date(&payload, &operation))
     };
+    assert!(identity(OperationPolicy::E6, None)
+        .unwrap()
+        .starts_with("e6-semantic-evidence-v2-temporal-veto-v1|"));
     let utc = Some("2026-10-19T10:00:00Z");
     let offset = Some("2026-10-19T12:00:00+02:00");
     assert_eq!(
@@ -66,6 +69,15 @@ pub(super) async fn http_scoped_results(
     policy: OperationPolicy,
     streams: &[&str],
 ) -> serde_json::Value {
+    http_query_results(app, policy, streams, "apple budget").await
+}
+
+pub(super) async fn http_query_results(
+    app: &axum::Router,
+    policy: OperationPolicy,
+    streams: &[&str],
+    query: &str,
+) -> serde_json::Value {
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/v1/search")
@@ -73,7 +85,7 @@ pub(super) async fn http_scoped_results(
         .header("Content-Type", "application/json")
         .body(axum::body::Body::from(
             serde_json::to_vec(&serde_json::json!({
-                "query": "apple budget", "operation_policy": policy, "top_k": 10,
+                "query": query, "operation_policy": policy, "top_k": 10,
                 "streams": streams, "source_agent": "tester"
             }))
             .unwrap(),

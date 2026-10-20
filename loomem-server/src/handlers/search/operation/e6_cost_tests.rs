@@ -98,6 +98,9 @@ async fn fixture_settings(model: &str, cap: f64, persist: bool) -> (Router, Arc<
     let (_, original) = make_test_app();
     let mut config = original.config.clone();
     config.search.operation.enabled = true;
+    // Identity assertions cover complete results without wall-clock decay variance.
+    config.search.decay.l0_lambda = 0.0;
+    config.search.decay.l1_lambda = 0.0;
     config.llm.api_key = Some("synthetic-selector-test-key".into());
     config.llm.compression_model = model.into();
     config.cost.persist = persist;
@@ -140,6 +143,7 @@ async fn e6_native_http_books_paid_invalid_and_enforces_both_caps() {
     let server = tokio::spawn(async move {
         axum::serve(listener, mock).await.unwrap();
     });
+    verify_temporal_veto(&provider).await;
     let reservation = verify_paid_responses(&provider).await;
     verify_unpriced_tiers(&provider, reservation).await;
     verify_concurrent_unknown(&provider, reservation).await;
@@ -260,4 +264,53 @@ async fn verify_blocked_calls(provider: &Provider) {
     super::e6_tests::http_results(&app, OperationPolicy::E6).await;
     assert_eq!(provider.calls.load(Ordering::SeqCst), before);
     assert_eq!(daily(&state, None).total_usd, 0.0);
+}
+
+fn cost_rows(state: &AppState) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let cf = state.store.db().cf_handle("costs").unwrap();
+    let mut iterator = state.store.db().raw_iterator_cf(&cf);
+    iterator.seek_to_first();
+    let mut rows = Vec::new();
+    while iterator.valid() {
+        rows.push((
+            iterator.key().unwrap().to_vec(),
+            iterator.value().unwrap().to_vec(),
+        ));
+        iterator.next();
+    }
+    iterator.status().unwrap();
+    rows
+}
+
+async fn verify_temporal_veto(provider: &Provider) {
+    let (app, state) = fixture("gpt-4.1").await;
+    super::super::stream_scoping_e2e_tests::seed_one(
+        &state,
+        "second",
+        "streamA",
+        "apple budget has a separate synthetic note",
+        None,
+    )
+    .await;
+    let mut chunk = state.store.get_chunk("second").unwrap().unwrap();
+    chunk.importance = Some(1.5);
+    state.store.store_chunk(&chunk).unwrap();
+    let query = "What is my current apple budget?";
+    let baseline =
+        super::e6_tests::http_query_results(&app, OperationPolicy::E0, &["streamA"], query).await;
+    assert_eq!(baseline.as_array().unwrap().len(), 2);
+    let before = provider.calls.load(Ordering::SeqCst);
+    let costs = cost_rows(&state);
+    let vetoed =
+        super::e6_tests::http_query_results(&app, OperationPolicy::E6, &["streamA"], query).await;
+    assert_eq!(vetoed, baseline);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), before);
+    assert_eq!(cost_rows(&state), costs);
+    let warm_e0 =
+        super::e6_tests::http_query_results(&app, OperationPolicy::E0, &["streamA"], query).await;
+    let warm_e6 =
+        super::e6_tests::http_query_results(&app, OperationPolicy::E6, &["streamA"], query).await;
+    assert_eq!(warm_e6, warm_e0);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), before);
+    assert_eq!(cost_rows(&state), costs);
 }

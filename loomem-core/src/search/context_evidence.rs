@@ -9,7 +9,7 @@ use crate::HybridSearchResult;
 const MAX_CANDIDATES: usize = 60;
 const MAX_RECORD_BYTES: usize = 16 * 1024;
 const MAX_TOTAL_BYTES: usize = 512 * 1024;
-const MAX_QUERY_BYTES: usize = 16 * 1024;
+pub(super) const MAX_QUERY_BYTES: usize = 16 * 1024;
 const MAX_WINDOWS: usize = 2048;
 const WINDOW_CHARS: usize = 400;
 const OVERLAP_CHARS: usize = 64;

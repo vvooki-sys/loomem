@@ -60,7 +60,10 @@ impl PreparedOperation {
 
     pub fn cache_identity(&self, date: &PreparedDate) -> Option<String> {
         if self.policy == OperationPolicy::E6 {
-            return Some(format!("e6-semantic-evidence-v1|{:?}", self.reference_time));
+            return Some(format!(
+                "e6-semantic-evidence-v2-temporal-veto-v1|{:?}",
+                self.reference_time
+            ));
         }
         if self.policy == OperationPolicy::E5 {
             return Some(E5_CACHE_VERSION.to_string());
