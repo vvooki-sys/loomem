@@ -126,26 +126,10 @@ pub async fn context_pack_handler(
                     let mut section_text = String::from("## Relevant Memories\n\n");
                     let mut section_tokens = 0;
 
-                    for r in &results {
-                        // Prefix with date from the chunk for temporal reasoning
-                        let date_prefix = {
-                            let chunk = state.store.get_chunk(&r.id).ok().flatten();
-                            let event_date = chunk
-                                .as_ref()
-                                .and_then(|c| c.extraction_meta.as_ref())
-                                .and_then(|m| m.event_date.as_ref())
-                                .cloned();
-                            event_date.unwrap_or_else(|| {
-                                chrono::DateTime::from_timestamp(r.timestamp, 0)
-                                    .map(|d| d.format("%Y-%m-%d").to_string())
-                                    .unwrap_or_default()
-                            })
-                        };
-                        let line = if date_prefix.is_empty() {
-                            format!("- {}\n", r.content)
-                        } else {
-                            format!("- [{}] {}\n", date_prefix, r.content)
-                        };
+                    for (r, line) in results.iter().filter_map(|hit| {
+                        super::ingest_date::live_context_line(&state.store, &stream, hit)
+                            .map(|line| (hit, line))
+                    }) {
                         let line_tokens = estimate_tokens(&line);
                         if section_tokens + line_tokens > section_budget {
                             sections_truncated.push("relevant".to_string());
@@ -203,21 +187,8 @@ pub async fn context_pack_handler(
                 let mut section_tokens = 0;
 
                 for chunk in &recent_chunks {
-                    let date_prefix = chunk
-                        .extraction_meta
-                        .as_ref()
-                        .and_then(|m| m.event_date.as_ref())
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            chrono::DateTime::from_timestamp(chunk.timestamp as i64, 0)
-                                .map(|d| d.format("%Y-%m-%d").to_string())
-                                .unwrap_or_default()
-                        });
-                    let line = if date_prefix.is_empty() {
-                        format!("- {}\n", chunk.content)
-                    } else {
-                        format!("- [{}] {}\n", date_prefix, chunk.content)
-                    };
+                    // Relocated legacy timestamp cast; preserve the existing recent-date fallback.
+                    let line = super::ingest_date::context_line(chunk, chunk.timestamp as i64);
                     let line_tokens = estimate_tokens(&line);
                     if section_tokens + line_tokens > section_budget {
                         sections_truncated.push(section.clone());

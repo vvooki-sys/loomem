@@ -66,7 +66,7 @@ Extract structured knowledge from a conversation via LLM. **Preferred method** f
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `content` | string | yes | Conversation transcript |
-| `conversation_date` | string | no | ISO date (e.g., "2026-04-02") |
+| `conversation_date` | string | no | Known conversation date in `YYYY-MM-DD` form; observation time, not a substitute for an unknown event date |
 
 **Example:**
 
@@ -78,10 +78,14 @@ memory_ingest(
 ```
 
 **What happens:**
-1. LLM extracts individual facts with type, subject, date, confidence
-2. Each fact checked for duplicates (cosine similarity > 0.92 = skip)
-3. Contradiction detection runs (updates supersede older facts)
-4. Facts stored with full `extraction_meta`
+
+1. The sanitized transcript is stored first as a persistent, searchable supporting source.
+2. When extraction is enabled, the LLM extracts typed facts linked to that source, with subject, confidence, optional speaker attribution and resolved event dates.
+3. The response includes the source ID even when extraction fails, credentials are missing, or no facts are found. Partial fact writes are reported; the source is retained.
+
+This ingestion path does not automatically deduplicate or supersede existing facts. Repeating ingestion creates another source. Source-linked content and provenance are immutable: to correct a conversation, delete its source ID and ingest the corrected transcript.
+
+A conversation date anchors relative expressions only when known; an unknown event date stays unknown. Omitting the conversation date does not authorize using storage time to resolve relative dates. New ingestion records render known events as `[event:YYYY-MM-DD]`, observations as `[observed:YYYY-MM-DD]`, and storage time as `[recorded:YYYY-MM-DD]`. Legacy `[YYYY-MM-DD]` labels are unchanged and do not establish an event date. Date-range filtering still uses Tantivy's event-date field, which falls back to the recorded timestamp for undated records; the new labels and metadata do not change that filter behavior. If a date-filtered search omits a source with an unknown event date, retry without the time filter or fetch the returned source ID.
 
 **Typical output (illustrative — exact extraction depends on LLM judgment):**
 - `PreferenceOrDecision`: "User prefers Cursor over VSCode" (subject: user, confidence: 0.95)
@@ -285,7 +289,9 @@ v2 (2026-04-01): "User uses Cursor"         ← current
 
 ### memory_delete
 
-Delete a specific memory by ID.
+Soft-delete a specific memory by ID. Deleting a recognized ingestion source also tombstones its same-stream linked descendants before index cleanup. Deleting one derived fact retains its source and other facts; the response names the retained source ID. Delete that source ID to remove the conversation and linked memories from retrieval.
+
+A partial cleanup response requires a retry. Soft-deleted content follows the existing recovery and purge policy; this is not immediate physical erasure or a search for every semantic copy. Unrelated copies and shared graph names or aliases referenced by other live memories may remain.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

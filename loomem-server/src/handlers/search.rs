@@ -10,6 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::warn;
 
+mod associations;
+mod cache_hit;
 mod cache_policy;
 #[cfg(test)]
 #[path = "search_candidate_limit_tests.rs"]
@@ -585,35 +587,7 @@ pub async fn search_handler(
         if let Some((is_reranked, cached)) = cache.get_best(key) {
             drop(cache); // release lock before building response
             tracing::debug!(reranked = is_reranked, "Search cache hit");
-            let results: Vec<SearchResult> = cached
-                .iter()
-                .map(|r| {
-                    // Cycle/142: content-type hydrates on the cache-hit path too
-                    // (sidecar lookup by id is independent of the result cache).
-                    let ct = loomem_core::content_type::get_content_type(&state.store, &r.id);
-                    SearchResult {
-                        id: r.id.clone(),
-                        content: r.content.clone(),
-                        score: r.score,
-                        metadata: Some(json!({
-                            "level": r.level,
-                            "timestamp": r.timestamp,
-                            "bm25_score": r.bm25_score,
-                            "vector_score": r.vector_score,
-                            "time_decay": r.time_decay_factor,
-                            "cached": true,
-                            "reranked": is_reranked,
-                        })),
-                        trace_info: None, // no trace for cached results
-                        // Cache hit path skips fresh fusion — debug breakdown is
-                        // a fresh-pipeline-only artifact in /86. Documented in
-                        // 86-close.md § Findings.
-                        signal_breakdown: None,
-                        content_type: ct.map(|m| m.content_type.as_str().to_string()),
-                        content_type_source: ct.map(|m| m.source.as_str().to_string()),
-                    }
-                })
-                .collect();
+            let results = cache_hit::results(&cached, &ctx, &payload, &state, is_reranked);
             return Ok(Json(SearchResponse {
                 results,
                 took_ms: ctx.start.elapsed().as_millis() as u64,
@@ -2851,14 +2825,7 @@ async fn compute_associations(
         candidates.len()
     );
 
-    // Sort by serendipity score, deduplicate, take max_associations
-    candidates.sort_by(|a, b| {
-        b.serendipity_score
-            .partial_cmp(&a.serendipity_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    candidates.dedup_by(|a, b| a.chunk_id == b.chunk_id);
-    candidates.truncate(max_assoc);
+    let candidates = associations::finalize(candidates, state, stream_id, max_assoc);
 
     // ECA-29: Record mean Sₑ for this search (for health tracking)
     if !candidates.is_empty() {
@@ -2871,20 +2838,7 @@ async fn compute_associations(
         return None;
     }
 
-    let assoc_results: Vec<Association> = candidates
-        .into_iter()
-        .map(|c| Association {
-            content: c.content,
-            score: c.serendipity_score,
-            source_mechanism: c.source_mechanism,
-            explanation: Some(format!(
-                "relevance={:.2} obviousness={:.2} cluster_dist={:.2}",
-                c.relevance, c.obviousness, c.cluster_dist
-            )),
-        })
-        .collect();
-
-    Some(assoc_results)
+    Some(associations::serialize(candidates))
 }
 
 /// Dedicated association endpoint: POST /v1/associate
@@ -3162,27 +3116,8 @@ pub async fn associate_handler(
         }
     }
 
-    // Sort, deduplicate, truncate
-    candidates.sort_by(|a, b| {
-        b.serendipity_score
-            .partial_cmp(&a.serendipity_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    candidates.dedup_by(|a, b| a.chunk_id == b.chunk_id);
-    candidates.truncate(count);
-
-    let associations: Vec<Association> = candidates
-        .into_iter()
-        .map(|c| Association {
-            content: c.content,
-            score: c.serendipity_score,
-            source_mechanism: c.source_mechanism,
-            explanation: Some(format!(
-                "relevance={:.2} obviousness={:.2} cluster_dist={:.2}",
-                c.relevance, c.obviousness, c.cluster_dist
-            )),
-        })
-        .collect();
+    let associations =
+        associations::serialize(associations::finalize(candidates, &state, stream_id, count));
 
     Ok(Json(AssociateResponse {
         associations,

@@ -25,9 +25,9 @@ single confirmed facts.
 - memory_namespaces — see available memory namespaces (personal, projects, etc.)
 
 ### Storing memory
-- memory_ingest — PREFERRED: extract structured facts from a conversation
-  via LLM. Produces typed facts with subject, date, confidence. Use instead
-  of memory_store when processing conversations.
+- memory_ingest — PREFERRED: preserve a sanitized, searchable conversation source,
+  then extract linked typed facts via LLM. Returns the source ID even when
+  extraction fails. Use instead of memory_store when processing conversations.
 - memory_store — store a single, confirmed fact. Use for explicit user
   statements ("I prefer X", "My name is Y"). NOT for raw text.
 
@@ -37,7 +37,7 @@ single confirmed facts.
 - memory_reflect — check memory quality. Reports noise level, missing
   metadata, suggestions for cleanup. Use periodically.
 - memory_history — trace how a fact evolved over time (version chain).
-- memory_delete — delete a specific memory by ID.
+- memory_delete — soft-delete a memory by ID; deleting an ingestion source also removes its same-stream linked family from retrieval.
 - memory_feedback — rate how useful a specific chunk was for a task.
 
 ### Info
@@ -88,6 +88,10 @@ memory_ingest(
 → Typically extracts ~2-3 typed facts, e.g.: preference (Cursor), project_state (Tailwind v4), project_state (deadline)
   Note: exact extraction depends on LLM judgment — count and phrasing may vary.
 ```
+
+The sanitized source is stored before extraction and retained if extraction fails or finds no facts. Capture its returned ID. This path does not automatically deduplicate or supersede existing facts; repeating ingestion creates another source. Source-linked content and provenance are immutable: delete the source and ingest a corrected transcript to make a correction.
+
+Supply the conversation date only when known. It is observation time, not an event-date fallback. Without a known reference date, relative expressions must remain unresolved; explicit absolute source dates can still be used. New ingestion labels distinguish `[event:YYYY-MM-DD]`, `[observed:YYYY-MM-DD]`, and `[recorded:YYYY-MM-DD]`. Legacy `[YYYY-MM-DD]` labels do not prove when an event happened. Do not infer current state solely from a later observation or storage date. Date-range filtering still uses Tantivy's event-date field, which falls back to the recorded timestamp for undated records; the new labels and metadata do not change that filter behavior.
 
 ### memory_store
 Call for **single, confirmed facts** only:
@@ -142,6 +146,8 @@ Call when:
 - User explicitly asks to forget something: "delete that", "forget X"
 - Never delete without user confirmation
 
+Deleting a recognized ingestion source tombstones its same-stream linked descendants before index cleanup. Deleting one derived fact retains the source and other facts; surface the returned source ID so the user can choose whether to remove the conversation too. Report partial cleanup and retry when requested. Soft deletion follows the existing recovery/purge policy; it is not immediate physical erasure or deletion of every semantic copy. Shared graph names or aliases may remain when other live memories reference them.
+
 ### memory_status
 Call when:
 - Tools seem unresponsive or return unexpected results
@@ -157,7 +163,7 @@ Call when:
 
 ## What NOT to do
 
-- **NEVER store raw conversation text** — use memory_ingest to extract facts
+- Do not dump raw conversations through memory_store — memory_ingest preserves the sanitized source and extracts linked facts
 - Do not store: temporary status, small talk, questions without answers
 - Do not call memory_search for every response — only when recall matters
 - Do not store sensitive data (passwords, API keys)

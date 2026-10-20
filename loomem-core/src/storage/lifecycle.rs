@@ -12,7 +12,7 @@ pub struct EmbeddingTarget {
     generation: Option<Vec<u8>>,
 }
 
-fn generation_key(id: &str) -> String {
+pub(super) fn generation_key(id: &str) -> String {
     format!("embedding_generation:{id}")
 }
 
@@ -70,6 +70,7 @@ impl RocksDbStore {
     }
 
     pub(super) fn store_chunk_locked(&self, chunk: &Chunk) -> Result<()> {
+        self.validate_ingest_admission(chunk)?;
         let previous = self.get_chunk(&chunk.id)?;
         let changed = previous.as_ref().is_none_or(|old| {
             old.content != chunk.content

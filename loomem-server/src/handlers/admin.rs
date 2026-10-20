@@ -1443,39 +1443,9 @@ pub async fn graph_entity_handler(
     let stream = auth::validate_stream(&auth, requested)
         .map_err(|_| AppError::Forbidden("Cross-stream access denied".into()))?;
 
-    let entity = state
-        .graph
-        .get_entity_by_name(&name, &stream)?
-        .ok_or_else(|| {
-            AppError::BadRequest(format!(
-                "Entity '{}' not found in stream '{}'",
-                name, stream
-            ))
-        })?;
-
-    let chunk_ids = entity.chunk_ids.clone();
-
-    let neighbors = state.graph.get_neighbors(&entity.id)?;
-    let neighbor_list: Vec<serde_json::Value> = neighbors.iter().map(|(edge, node)| {
-        serde_json::json!({
-            "entity": node.canonical_name,
-            "entity_type": node.entity_type,
-            "relation": edge.relation_type,
-            "direction": if edge.source_entity_id == entity.id { "outgoing" } else { "incoming" },
-        })
-    }).collect();
-
-    Ok(Json(serde_json::json!({
-        "entity": {
-            "id": entity.id,
-            "name": entity.canonical_name,
-            "type": entity.entity_type.to_lowercase(),
-            "aliases": entity.aliases,
-            "chunk_count": chunk_ids.len(),
-        },
-        "neighbors": neighbor_list,
-        "chunk_ids": chunk_ids,
-    })))
+    let graph = super::graph_visibility::find(&state, &name, &stream)?
+        .ok_or_else(|| AppError::BadRequest("Entity not found in knowledge graph".into()))?;
+    Ok(Json(graph.json()))
 }
 
 /// GET /v1/graph/stats — graph statistics.

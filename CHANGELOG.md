@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- MCP conversation ingestion now preserves a sanitized, searchable source before
+  extraction and links each derived fact to it. Extraction failure or cancellation
+  retains that source; responses report its ID and any incomplete fact writes.
+  Source-linked content and provenance are immutable: correct them by deleting
+  the source and ingesting the corrected conversation.
+- New ingestion records distinguish event dates, conversation dates (`observed`),
+  and storage dates (`recorded`). Missing event dates remain unknown; unresolved
+  relative dates without a conversation date are not anchored to the current day.
+  Existing records retain their previous date rendering. Temporal search filters
+  retain the existing timestamp fallback for undated records; these changes do
+  not redefine the search index's temporal filtering semantics.
+- Deleting an ingestion source atomically tombstones its same-stream descendants
+  before retryable index cleanup. Deleting one derived fact retains the source
+  and sibling facts and reports that retention. Tombstones retain the existing
+  recovery/purge lifecycle; this operation does not promise immediate physical erasure.
+  Existing databases require no schema migration; historical provenance is not inferred.
+- Cached search results, associations, and context packing check current record
+  visibility before returning text, so stale derived indexes cannot override tombstones.
+
 ## [0.5.3] - 2026-07-07
 
 Search-quality release: rare-term guarantee lane with per-channel diagnostics.

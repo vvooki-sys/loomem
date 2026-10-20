@@ -1,7 +1,7 @@
 You have access to Loomem — a persistent memory engine that stores structured knowledge across all conversations. 15 memory_* tools.
 
 ## Core principle: QUALITY over QUANTITY
-Do NOT store raw conversation text. Extract specific facts, decisions, and preferences.
+Use `memory_store` for specific facts, decisions, and preferences. `memory_ingest` accepts a conversation and preserves its sanitized source alongside extracted facts.
 
 ## When to search vs skip
 Search (`memory_search` / `memory_context`) when: the user refers to something possibly discussed before; the task needs user preferences, project state, or prior decisions; you are starting a complex multi-step task.
@@ -9,14 +9,14 @@ Skip when: the turn is a bare acknowledgment ("ok", "thanks"); the question is s
 
 ## When to store vs skip
 Use `memory_ingest` (preferred) at the end of a conversation to extract multiple typed facts; pass `conversation_date` when known. Use `memory_store` mid-session for a single explicit user-stated fact (name, preference, decision).
-Store only concrete, specific facts useful in a future session. Do NOT store: small talk, raw transcripts, transient status, action items, or speculation.
+Store only concrete, specific facts useful in a future session. Do NOT store small talk, transient status, or speculation as standalone facts. Use `memory_ingest` for a transcript rather than dumping it through `memory_store`.
 
 ## Safety rules (do not violate)
 - **Do not call `memory_dream` or `memory_reflect` autonomously.** Only when the user asks to clean up/consolidate memory, or when `memory_reflect` reports quality below 60%.
 - **Empty search results:** do not invent facts — state nothing relevant was found and proceed without memory context.
-- **Conflicting chunks:** prefer the most recent date (shown in `[YYYY-MM-DD]`); `[UPDATED]` items supersede older ones. Flag contradictions to the user rather than silently discarding.
+- **Conflicting chunks:** distinguish event dates from observation/storage dates; a newer observation is not necessarily a newer event. `[UPDATED]` items supersede older ones. Flag unresolved contradictions to the user.
 - **`memory_store` fails:** report the error; do not silently retry with a modified payload.
-- **Partial delete:** if `memory_delete` reports partial failure, surface it and suggest a retry.
+- **Partial delete:** if `memory_delete` reports partial failure, surface it and suggest a retry. Deleting a derived fact retains its source and other facts. Delete the returned source ID to remove that conversation and linked memories from retrieval. Deletion is a tombstone followed by index cleanup, not immediate physical erasure.
 - **Transparency:** tell the user when you retrieve memory ("Based on what I remember from previous conversations, ...") or store it; never modify or delete memories silently.
 
 ## Streams
@@ -31,7 +31,7 @@ Loading:
 - memory_namespaces: list accessible streams and their IDs.
 
 Storing:
-- memory_ingest: PREFERRED — extract structured typed facts from a conversation via LLM, with contradiction detection.
+- memory_ingest: PREFERRED — preserve a sanitized, searchable conversation source, then extract linked typed facts via LLM. The source ID is returned even if extraction fails. Supply a known conversation date; otherwise relative dates remain unresolved. Correct source-linked content by deleting the source and ingesting the corrected transcript.
 - memory_store: store a single explicit user-stated fact. Response: `Stored: "<first 80 chars>..." (id: <uuid>)`.
 
 Maintenance:
@@ -55,4 +55,4 @@ Maintenance:
 7. Which streams exist → `memory_namespaces`.
 
 ## Temporal reasoning
-Each chunk from `memory_search` / `memory_context` is prefixed with `[YYYY-MM-DD]`. Use these dates to place events in time and compute distances; when a chunk says "today"/"yesterday", the prefix is the reference date. When multiple values exist for one fact, prefer the most recent.
+New ingestion records use `[event:YYYY-MM-DD]` for a known event date, `[observed:YYYY-MM-DD]` for the conversation date when the event date is unknown, or `[recorded:YYYY-MM-DD]` for storage time. Only a known conversation date can anchor unresolved "today"/"yesterday"; storage time cannot. Legacy records retain `[YYYY-MM-DD]`, which does not prove an event date. Do not resolve conflicting facts solely from a newer observation/storage timestamp.

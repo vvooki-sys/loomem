@@ -10,8 +10,12 @@ use crate::source_tag::{deserialize_source_compat, SourceTag};
 use crate::tantivy_index::TantivyConfig;
 
 mod consolidation;
+mod ingest_lineage;
 mod lifecycle;
+mod provenance_role;
+pub use ingest_lineage::{is_ingest_fact_shape, is_ingest_source};
 pub use lifecycle::EmbeddingTarget;
+pub use provenance_role::ProvenanceRole;
 pub mod persist;
 pub mod scan_log;
 pub use persist::{persist_chunk_with_index, PersistChunkArgs};
@@ -126,26 +130,6 @@ impl ExtractionMeta {
             .timestamp();
         u64::try_from(ts).ok()
     }
-}
-
-/// Cycle /001 (MemIR): provenance role of a chunk — how authoritative its
-/// content is as a retrieval signal. Combined with `trust_level` into a
-/// multiplier applied to the fused score in `hybrid_search`, so equally
-/// relevant chunks are ordered by authority rather than tied.
-///
-/// `Claim` is the default so existing chunks (and every current write path)
-/// deserialize and construct as first-class asserted memories. `Evidence`
-/// and `Cue` are defined for future producers (e.g. entity-derived chunks);
-/// no current write path emits them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum ProvenanceRole {
-    /// A first-class asserted fact/memory. Highest retrieval weight (1.00).
-    #[default]
-    Claim,
-    /// Supporting evidence derived from other content. Lowest retrieval weight (0.50).
-    Evidence,
-    /// A weak associative cue (e.g. graph/entity link). Reduced retrieval weight (0.80).
-    Cue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

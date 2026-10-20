@@ -74,7 +74,7 @@ Facts may be authored by any party in the conversation. Extract them from the us
 - "preference_or_decision": Choices, preferences, decisions, opinions. E.g. "Anna prefers dark mode", "Team decided to use Rust for the backend".
 - "project_state": Current state of work, ongoing projects, deadlines, statuses. E.g. "Auth migration is blocked by legal review", "Sprint ends on 2026-03-15".
 - "fact": Biographical or timeless facts with no specific date. E.g. "Anna is a senior engineer at Acme", "The main repo is github.com/acme/core".
-- "event": A dated personal experience — something the user (or a person) did, attended, experienced, discovered, or that happened to them at a specific time. E.g. "The user attended a bluegrass concert on 2023-03-19", "Anna adopted a rescue dog on 2023-03-01". Prefer this over "fact" whenever there is a personal action with a time; always set event_date (a resolved date, else the conversation_date).
+- "event": A dated personal experience — something the user (or a person) did, attended, experienced, discovered, or that happened to them at a specific time. E.g. "The user attended a bluegrass concert on 2023-03-19", "Anna adopted a rescue dog on 2023-03-01". Prefer this over "fact" whenever there is a personal action with a time; set event_date only from an explicit or resolvable temporal cue; otherwise leave it null, never substitute conversation_date.
 - "experience": Transferable lesson about how to act — proven procedure, lesson from a mistake, effective strategy, anti-pattern. E.g. "When dispatching long tasks to Claude Code, the full brief must be in the first message — drip-feeding instructions degrades output quality", "Running cargo clippy before cargo test catches most issues earlier and saves CI time".
 
 ## Rules:
@@ -83,8 +83,8 @@ Facts may be authored by any party in the conversation. Extract them from the us
 3. SKIP: greetings, small talk, questions without answers, uncertain statements, action items, temporary debugging states, summaries
 4. CHANGE RULE: When something changed, always record before→after. E.g. "Anna switched from VS Code to Neovim" (not just "Anna uses Neovim")
 5. PERSONAL EVENTS: When the user (or a person) did, attended, experienced, or discovered something at a point in time, capture it as an "event" with its date — do NOT flatten it into a timeless "fact". Do not substitute an encyclopedic definition for the person's dated action (e.g. extract "The user attended a bluegrass show on 2023-03-19", not "The Infamous Stringdusters is a bluegrass band"). This guards the action against being lost; it does NOT make assistant-authored content unextractable — see rule 11.
-6. THREE DATES MODEL: For each fact, provide:
-   - "event_date": absolute ISO date if determinable (e.g. "2026-03-15"), null otherwise
+6. EVENT DATE AND CONTEXT: For each fact, provide:
+   - "event_date": absolute ISO date from an explicit or resolvable temporal cue (e.g. "2026-03-15"), null otherwise; conversation_date is only a reference for resolving relative cues, never a substitute for an unknown event date; relative dates require a known reference date, and when it is unknown never resolve them using the current date; explicit absolute source dates are allowed
    - "event_date_context": original relative expression if any (e.g. "yesterday", "two weeks ago"), null otherwise
 7. "subject": The main entity this fact is about (person name, project name, etc.), null if unclear
 8. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
@@ -152,8 +152,8 @@ Facts may be authored by any party in the conversation. Extract them from the us
 2. Extract: preferences, decisions, facts about people, project states, deadlines, contacts, technical decisions, procedural lessons, and the assistant's recommendations, plans, schedules, and researched answers (see rule 10)
 3. SKIP: greetings, small talk, questions without answers, uncertain statements, action items, temporary debugging states, summaries
 4. CHANGE RULE: When something changed, always record before→after. E.g. "Anna switched from VS Code to Neovim" (not just "Anna uses Neovim")
-5. THREE DATES MODEL: For each fact, provide:
-   - "event_date": absolute ISO date if determinable (e.g. "2026-03-15"), null otherwise
+5. EVENT DATE AND CONTEXT: For each fact, provide:
+   - "event_date": absolute ISO date from an explicit or resolvable temporal cue (e.g. "2026-03-15"), null otherwise; conversation_date is only a reference for resolving relative cues, never a substitute for an unknown event date; relative dates require a known reference date, and when it is unknown never resolve them using the current date; explicit absolute source dates are allowed
    - "event_date_context": original relative expression if any (e.g. "yesterday", "two weeks ago"), null otherwise
 6. "subject": The main entity this fact is about (person name, project name, etc.), null if unclear
 7. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5

@@ -100,3 +100,43 @@ fn build_prompt_empty_topics_is_byte_identical() {
         )
     );
 }
+
+#[test]
+fn default_and_custom_prompts_never_substitute_session_date_for_unknown_event() {
+    let default = KnowledgeExtractionConfig::default();
+    let custom = KnowledgeExtractionConfig {
+        topics: Some(vec![ExtractionTopic {
+            name: "event".into(),
+            description: "A personal event, with its source-supported date if known".into(),
+            fact_type: None,
+        }]),
+        ..default.clone()
+    };
+    for config in [default, custom] {
+        let prompt = build_extraction_prompt(&config, "2026-10-20");
+        assert!(prompt.contains("explicit or resolvable temporal cue"));
+        assert!(prompt.contains("never a substitute for an unknown event date"));
+        assert!(prompt.contains("The conversation_date is: 2026-10-20"));
+        assert!(!prompt.contains("else the conversation_date"));
+    }
+}
+
+#[test]
+fn unknown_reference_never_authorizes_current_date_relative_resolution() {
+    let default = KnowledgeExtractionConfig::default();
+    let custom = KnowledgeExtractionConfig {
+        topics: Some(vec![ExtractionTopic {
+            name: "event".into(),
+            description: "A source-supported personal event".into(),
+            fact_type: None,
+        }]),
+        ..default.clone()
+    };
+    for config in [default, custom] {
+        let prompt = build_extraction_prompt(&config, "unknown");
+        assert!(prompt.contains("The conversation_date is: unknown"));
+        assert!(prompt.contains("relative dates require a known reference date"));
+        assert!(prompt.contains("when it is unknown never resolve them using the current date"));
+        assert!(prompt.contains("explicit absolute source dates are allowed"));
+    }
+}
