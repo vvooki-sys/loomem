@@ -221,6 +221,18 @@ impl RocksDbStore {
             .context("atomically tombstone ingest lineage")
     }
 
+    /// Strict startup snapshot, including tombstones, for non-destructive
+    /// repair of versioned ingest event-date index semantics.
+    pub fn ingest_chunks_for_index_repair(&self) -> Result<Vec<Chunk>> {
+        let _guard = self.lock_lifecycle()?;
+        Ok(self
+            .lineage_rows()?
+            .into_iter()
+            .map(|(_, chunk)| chunk)
+            .filter(|chunk| is_ingest_source(chunk) || is_ingest_fact_shape(chunk))
+            .collect())
+    }
+
     fn lineage_rows(&self) -> Result<Vec<(Vec<u8>, Chunk)>> {
         let mut rows = Vec::new();
         for row in self.db.prefix_iterator(b"chunk:") {

@@ -1,6 +1,7 @@
 mod access_hook;
 mod auth;
 mod content_type;
+mod entity_worker;
 mod evaluation_clock;
 mod handlers;
 mod local_embedding;
@@ -20,7 +21,7 @@ use axum::{
 };
 use futures::stream::StreamExt;
 use loomem_core::embedding_queue::{self, EmbeddingQueue};
-use loomem_core::entity_extraction_queue::{self, EntityExtractionQueue};
+use loomem_core::entity_extraction_queue::EntityExtractionQueue;
 use loomem_core::graph::GraphStore;
 use loomem_core::intent_log::IntentLog;
 use loomem_core::local_embeddings::LocalEmbedder;
@@ -513,28 +514,14 @@ async fn main() -> Result<()> {
     // Initialize graph store (before scheduler, which needs it)
     let graph_store = Arc::new(GraphStore::new(store_arc.clone()));
 
-    // Spawn entity extraction queue (LLM-based NER)
-    let entity_extraction_queue =
-        if config.entity_extraction.enabled && config.llm.get_api_key().is_some() {
-            let cost_tracker_for_extraction =
-                CostTracker::new(store_arc.clone(), config.cost.clone(), http_client.clone());
-            let queue = entity_extraction_queue::spawn_worker(
-                store_arc.clone(),
-                graph_store.clone(),
-                tantivy_arc.clone(),
-                http_client.clone(),
-                config.llm.clone(),
-                Arc::new(cost_tracker_for_extraction),
-                config.entity_extraction.clone(),
-            );
-            info!("Entity extraction queue started (LLM NER enabled)");
-            Some(queue)
-        } else {
-            if config.entity_extraction.enabled {
-                tracing::warn!("Entity extraction disabled (no API key)");
-            }
-            None
-        };
+    let entity_extraction_queue = entity_worker::start(
+        &config,
+        store_arc.clone(),
+        graph_store.clone(),
+        tantivy_arc.clone(),
+        http_client.clone(),
+        pii_filter.clone(),
+    );
 
     // Initialize event log (before scheduler, so scheduler can emit events)
     // /150a Gap 5: surface the *effective* value at boot — the code default is

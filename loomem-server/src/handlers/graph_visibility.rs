@@ -1,5 +1,5 @@
 //! Graph metadata is visible only while authoritative same-stream support is live.
-//! Entity aliases remain shared metadata: there is no per-alias source provenance.
+//! Canonical labels, aliases and relations require per-chunk live contributions.
 use anyhow::Result;
 use loomem_core::graph::{Edge, EntityNode};
 use serde_json::{json, Value};
@@ -23,7 +23,7 @@ pub(crate) fn find(state: &AppState, name: &str, stream: &str) -> Result<Option<
 fn live_entity(state: &AppState, name: &str, stream: &str) -> Result<Option<EntityNode>> {
     Ok(state
         .graph
-        .get_entity_by_name(name, stream)?
+        .get_live_entity_by_name(name, stream)?
         .and_then(|entity| supported_entity(state, entity, stream)))
 }
 
@@ -49,7 +49,7 @@ fn live_support(state: &AppState, id: &str, stream: &str) -> bool {
 fn live_neighbors(state: &AppState, entity: &EntityNode) -> Result<Vec<(Edge, EntityNode)>> {
     Ok(state
         .graph
-        .get_neighbors(&entity.id)?
+        .get_live_neighbors(&entity.id)?
         .into_iter()
         .filter_map(|(edge, target)| supported_neighbor(state, entity, edge, target))
         .collect())
@@ -116,3 +116,46 @@ impl VisibleGraph {
 
 #[cfg(test)]
 mod tests;
+
+/// Enumerate ordinary graph metadata through the same live reader as name lookup.
+pub(crate) fn entities(state: &AppState) -> Vec<EntityNode> {
+    state
+        .store
+        .prefix_scan(b"graph:entity:")
+        .filter_map(|(key, _)| {
+            let id = std::str::from_utf8(key.strip_prefix(b"graph:entity:")?).ok()?;
+            state.graph.get_live_entity_by_id(id).ok().flatten()
+        })
+        .collect()
+}
+
+pub(crate) fn entity_ids_for_chunk(
+    state: &AppState,
+    chunk: &loomem_core::storage::Chunk,
+) -> Vec<String> {
+    state
+        .graph
+        .get_entities_for_chunk(&chunk.id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|id| state.graph.get_live_entity_by_id(&id).ok().flatten())
+        .filter(|entity| entity.stream_id == chunk.stream && entity.chunk_ids.contains(&chunk.id))
+        .map(|entity| entity.id)
+        .collect()
+}
+
+pub(crate) fn counts(state: &AppState) -> std::collections::HashMap<String, (usize, usize)> {
+    let mut counts = std::collections::HashMap::<String, (usize, usize)>::new();
+    let mut edges = std::collections::HashSet::new();
+    for entity in entities(state) {
+        counts.entry(entity.stream_id.clone()).or_default().0 += 1;
+        if let Ok(neighbors) = state.graph.get_live_neighbors(&entity.id) {
+            for (edge, _) in neighbors {
+                if edges.insert(edge.id) {
+                    counts.entry(entity.stream_id.clone()).or_default().1 += 1;
+                }
+            }
+        }
+    }
+    counts
+}

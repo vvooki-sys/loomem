@@ -12,6 +12,12 @@ pub(crate) fn check_index_drift(
     store: &RocksDbStore,
     tantivy: &mut TantivyIndex,
 ) -> Result<()> {
+    store
+        .cleanup_legacy_entity_markers()
+        .context("Failed to remove obsolete extraction payloads before serving")?;
+    tantivy
+        .repair_ingest_event_dates(store)
+        .context("Failed to repair versioned event-date index before serving")?;
     let tantivy_count = tantivy
         .count()
         .context("Failed to count Tantivy documents")?;

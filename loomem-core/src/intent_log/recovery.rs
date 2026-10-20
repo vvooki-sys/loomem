@@ -16,7 +16,7 @@ fn replay_chunk_to_tantivy(
     match store.get_chunk(chunk_id)? {
         Some(chunk) if chunk.deleted_at.is_none() => {
             let doc = build_recovery_text_doc(store, &chunk)?;
-            tantivy.upsert_document(doc)?;
+            tantivy.upsert_chunk_document(doc, &chunk)?;
             Ok(true)
         }
         _ => {

@@ -19,6 +19,7 @@ mod candidate_limit_tests;
 mod candidates;
 #[cfg(feature = "evaluation")]
 mod evaluation_evidence;
+mod event_date;
 mod evidence;
 mod operation;
 mod operation_lane;
@@ -689,7 +690,7 @@ pub async fn search_handler(
     // and cycles/03-coordinated-core-fix/03-brief.md for the full trace.
 
     // Score + rank: graph boost + level boost + tier/importance/preference +
-    // complexity-aware final sort. Sync (no await — `graph.find_related_chunks`
+    // complexity-aware final sort. Sync (no await — `graph.find_live_related_chunks`
     // and `state.store.get_chunk` are blocking). See `score_and_rank` below.
     let (hybrid_results, operation_metrics) =
         score_and_apply_operation(hybrid_results, &ctx, &payload, &auth, &state);
@@ -786,7 +787,7 @@ pub async fn search_handler(
         &state,
     )
     .await;
-    let (hybrid_results, metrics) = lane.finish(metrics);
+    let (hybrid_results, metrics) = event_date::finish(lane, metrics, &ctx, &state);
 
     // Cache store — post-boost, post-filter, post-truncate. Warm-path cache
     // hits (line ~216) now return the same Vec<HybridSearchResult> that the
@@ -933,7 +934,7 @@ async fn tier1_lookup(
     }
 
     // Resolve entities in every searched stream (graph entities are
-    // stream-scoped; `get_entity_by_name` also consults the alias index).
+    // stream-scoped; `get_live_entity_by_name` verifies live alias support).
     let streams: Vec<String> = ctx
         .stream_list
         .clone()
@@ -942,7 +943,7 @@ async fn tier1_lookup(
     let mut seen = std::collections::HashSet::new();
     'collect: for stream in &streams {
         for name in &classification.features.entities {
-            let entity = match state.graph.get_entity_by_name(name, stream) {
+            let entity = match state.graph.get_live_entity_by_name(name, stream) {
                 Ok(Some(entity)) => entity,
                 Ok(None) => continue,
                 Err(e) => {
@@ -1825,7 +1826,7 @@ fn graph_channel_hits(
         return Vec::new();
     }
     let entity_names: Vec<String> = query_entities.iter().map(|(n, _)| n.clone()).collect();
-    let Ok(graph_chunks) = state.graph.find_related_chunks(
+    let Ok(graph_chunks) = state.graph.find_live_related_chunks(
         &entity_names,
         state.config.search.graph.max_hops,
         &auth.stream_id,
@@ -1889,7 +1890,7 @@ async fn vector_retrieve(
     // Cycle/258 (Option A): agent id-set fetched once (None when no filter); the
     // two vector pre-filters use it via `retain_by_agent_set` (HashSet lookup,
     // replacing #257's per-embedding `get_chunk`).
-    let agent_set = agent_id_set(state, payload).await;
+    let (agent_set, bm25_results) = event_date::inputs(state, payload, ctx, bm25_results).await;
 
     let hybrid_results = candidates::retrieve_primary(
         state,
@@ -1919,10 +1920,7 @@ async fn vector_retrieve(
         }
 
         // Get embeddings once (shared across sub-queries)
-        let all_embs = retain_by_agent_set(
-            state.store.get_all_embeddings().unwrap_or_default(),
-            agent_set.as_ref(),
-        );
+        let all_embs = event_date::multi_query_embeddings(state, ctx, agent_set.as_ref());
         let vector_stream_filter: Option<Vec<String>> = ctx.stream_list.clone();
         let filtered_embs: Vec<_> = if let Some(ref streams) = vector_stream_filter {
             all_embs
@@ -2074,7 +2072,7 @@ fn compute_access_boost_multiplier(access_count: u32, weight: f64) -> f64 {
 /// multiplier + PreferenceOrDecision 1.5x boost, and complexity-aware final
 /// sort (Temporal → chronological, otherwise → score desc).
 ///
-/// Sync (no await): `graph.find_related_chunks` and `state.store.get_chunk`
+/// Sync (no await): `graph.find_live_related_chunks` and `state.store.get_chunk`
 /// are blocking. Sort/boost is pure CPU work once chunks are loaded. Pulling
 /// this out of the orchestrator isolates the scoring policy from I/O and
 /// makes it easier to swap strategies (see cycles/02-brief.md §score_and_rank).
@@ -2106,7 +2104,7 @@ fn score_and_rank(
         let query_entities = state.entity_extractor.extract(&payload.query);
         if !query_entities.is_empty() {
             let entity_names: Vec<String> = query_entities.iter().map(|(n, _)| n.clone()).collect();
-            if let Ok(graph_chunks) = state.graph.find_related_chunks(
+            if let Ok(graph_chunks) = state.graph.find_live_related_chunks(
                 &entity_names,
                 state.config.search.graph.max_hops,
                 &auth.stream_id,
@@ -2364,21 +2362,7 @@ fn filter_candidates(
     payload: &SearchRequest,
     state: &Arc<AppState>,
 ) -> FilterOutcome {
-    // Bitemporal filter: keep only chunks valid at the requested point in time.
-    // Fail-open + tracing::warn on metadata load failure (cycle/42 D2):
-    // time-travel is exploration UX, false negatives are worse than false
-    // positives. See cycles/42-audit-findings.md §A.
-    if let Some(valid_at) = payload.valid_at {
-        filter_bitemporal(&mut hybrid_results, &state.store, valid_at);
-    }
-
-    // Filter superseded chunks: by default, only show is_latest=true.
-    // Fail-closed + tracing::warn on metadata load failure (cycle/42 D1):
-    // a superseded chunk silently bypassing this filter is a regression of the
-    // supersede contract hardened in legacy-agent /40. See cycles/42-audit-findings.md §A.
-    if !payload.include_superseded {
-        filter_superseded(&mut hybrid_results, &state.store);
-    }
+    event_date::apply(&mut hybrid_results, ctx, payload, state);
 
     // Filter by extraction_meta fields (fact_type, subject, min_confidence)
     if payload.fact_type.is_some() || payload.subject.is_some() || payload.min_confidence.is_some()
@@ -2629,7 +2613,7 @@ async fn compute_associations(
     // 1. Graph walk: use entities from query (stream-scoped)
     let query_entities = state.entity_extractor.extract(query);
     for (entity_name, _) in &query_entities {
-        if let Ok(Some(entity)) = state.graph.get_entity_by_name(entity_name, stream_id) {
+        if let Ok(Some(entity)) = state.graph.get_live_entity_by_name(entity_name, stream_id) {
             if let Ok(walk_results) = random_walk(&state.graph, &entity.id, 3, 2, 20) {
                 for walk in &walk_results {
                     for chunk_id in &walk.terminal_chunk_ids {
@@ -2950,7 +2934,7 @@ pub async fn associate_handler(
         let query_entities = state.entity_extractor.extract(&payload.query);
         let hops = payload.hops.unwrap_or(3);
         for (entity_name, _) in &query_entities {
-            if let Ok(Some(entity)) = state.graph.get_entity_by_name(entity_name, stream_id) {
+            if let Ok(Some(entity)) = state.graph.get_live_entity_by_name(entity_name, stream_id) {
                 if let Ok(walk_results) = loomem_core::associator::graph_walk::random_walk(
                     &state.graph,
                     &entity.id,

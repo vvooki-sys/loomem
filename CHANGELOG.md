@@ -17,9 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New ingestion records distinguish event dates, conversation dates (`observed`),
   and storage dates (`recorded`). Missing event dates remain unknown; unresolved
   relative dates without a conversation date are not anchored to the current day.
-  Existing records retain their previous date rendering. Temporal search filters
-  retain the existing timestamp fallback for undated records; these changes do
-  not redefine the search index's temporal filtering semantics.
+  Existing records retain their previous date rendering. Date-range searches for
+  recognized versioned ingestion records require known event dates, including
+  cached, vector and graph results. Legacy unmarked records retain existing event
+  dates and their recorded-time fallback when undated. Startup repairs older
+  versioned index entries in place without resetting the index; repair failures
+  prevent serving stale temporal data. The separate `valid_at` scope is unchanged.
 - Deleting an ingestion source atomically tombstones its same-stream descendants
   before retryable index cleanup. Deleting one derived fact retains the source
   and sibling facts and reports that retention. Tombstones retain the existing
@@ -27,6 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Existing databases require no schema migration; historical provenance is not inferred.
 - Cached search results, associations, and context packing check current record
   visibility before returning text, so stale derived indexes cannot override tombstones.
+- Graph lookup and display require live per-memory contributions for names,
+  aliases and relations, bound to their owner, stream and content generation and
+  stored through the existing encryption provider. Legacy support uses explicit
+  per-memory entity names and relation tuples; unproven aliases stay hidden until
+  re-extraction, and legacy entity types may appear as Unknown.
+- Content or stream edits invalidate entity, relation and extraction-completion
+  caches. Startup removes obsolete raw JSON extraction-completion hints without
+  deleting canonical memories or making model calls. New completion hints contain
+  only a static marker.
+- Existing encryption backfill covers graph label and relation sidecars; upgrading
+  from plaintext still requires the separate name-index rekey step. Physical purge
+  removes associated graph sidecars in batched namespace scans. Source-family
+  deletion still uses full-store discovery; no reverse index or source-family deletion speedup
+  is claimed.
 
 ## [0.5.3] - 2026-07-07
 

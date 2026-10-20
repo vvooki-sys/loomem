@@ -25,7 +25,8 @@ pub(super) fn results(
 }
 
 fn visible(chunk: &Chunk, ctx: &QueryContext, payload: &SearchRequest) -> bool {
-    chunk.deleted_at.is_none()
+    super::event_date::allows(chunk, ctx.date_filter.as_ref())
+        && chunk.deleted_at.is_none()
         && !chunk.dormant
         && !chunk.in_progress
         && ctx

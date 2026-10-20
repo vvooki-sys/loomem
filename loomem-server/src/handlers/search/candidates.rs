@@ -147,6 +147,7 @@ async fn vector_inputs(
         tracing::info!("No embeddings found, falling back to BM25 only");
         return None;
     }
+    let all = super::event_date::embeddings(all, ctx.date_filter.as_ref(), state);
     let filtered = filter_stream_embeddings(state, all, ctx.stream_list.as_deref());
     tracing::info!(
         "Performing hybrid search with {} embeddings (stream-filtered)",

@@ -3,6 +3,9 @@
 //! Sends chunk content to OpenAI and extracts entities + relations
 //! with confidence scores. Complements dictionary-based extraction.
 
+mod privacy;
+pub use privacy::prepare_entry;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};

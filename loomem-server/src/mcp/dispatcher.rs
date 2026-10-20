@@ -1,3 +1,5 @@
+mod caller_relations;
+use caller_relations::inject_caller_relations;
 mod delete_notice;
 mod dream;
 mod ingest;
@@ -257,113 +259,6 @@ struct CallerRelation {
 /// caller or a hallucinating client cannot starve the executor with an
 /// arbitrarily long array. Over-cap relations are dropped with a warning.
 const MAX_CALLER_RELATIONS: usize = 64;
-
-/// Link a chunk to a graph entity, warning (not failing) on error so the
-/// behaviour matches `inject_caller_relations`' "warn and swallow" contract.
-fn link_chunk_to_entity(state: &Arc<AppState>, entity_id: &str, chunk_id: &str, name: &str) {
-    if let Err(e) = state.graph.add_chunk_to_entity(entity_id, chunk_id) {
-        tracing::warn!(
-            "caller-relation: failed to link chunk to entity {:?}: {}",
-            name,
-            e
-        );
-    }
-}
-
-/// Inject caller-declared graph relations (memory_store `relations` param).
-///
-/// Graph-store only by design: each subject/object is resolved through
-/// `get_or_create_entity` — reusing dictionary aliases (`entities.toml`) so
-/// caller name variants converge onto one node instead of fragmenting — and an
-/// idempotent edge is created via `get_or_create_edge` (dedup on
-/// subject/relation/object, so a later LLM-extracted edge for the same triple
-/// will not double).
-///
-/// Deliberately does NOT write the `rel:`/`entity:` RocksDB rows that
-/// `persist_chunk` already populated for this chunk (`store_relations`
-/// overwrites per chunk_id, which would clobber dictionary-derived rows), nor
-/// the Tantivy `relations` field. Caller edges reach retrieval via the graph
-/// signal in hybrid search. Per-relation failures warn and are swallowed: a
-/// malformed relation must never fail the store itself.
-fn inject_caller_relations(
-    state: &Arc<AppState>,
-    chunk_id: &str,
-    stream: &str,
-    relations: &[CallerRelation],
-) {
-    if relations.len() > MAX_CALLER_RELATIONS {
-        tracing::warn!(
-            "caller-relation: {} relations exceeds cap {}; processing first {} only",
-            relations.len(),
-            MAX_CALLER_RELATIONS,
-            MAX_CALLER_RELATIONS
-        );
-    }
-    for rel in relations.iter().take(MAX_CALLER_RELATIONS) {
-        let subject_type = rel.subject_type.as_deref().unwrap_or("Concept");
-        let object_type = rel.object_type.as_deref().unwrap_or("Concept");
-        let subject_aliases = state.entity_extractor.get_aliases_for(&rel.subject);
-        let object_aliases = state.entity_extractor.get_aliases_for(&rel.object);
-
-        let subject = match state.graph.get_or_create_entity(
-            &rel.subject,
-            subject_type,
-            &subject_aliases,
-            stream,
-        ) {
-            Ok(node) => node,
-            Err(e) => {
-                tracing::warn!(
-                    "caller-relation: failed to resolve subject {:?}: {}",
-                    rel.subject,
-                    e
-                );
-                continue;
-            }
-        };
-        let object = match state.graph.get_or_create_entity(
-            &rel.object,
-            object_type,
-            &object_aliases,
-            stream,
-        ) {
-            Ok(node) => node,
-            Err(e) => {
-                tracing::warn!(
-                    "caller-relation: failed to resolve object {:?}: {}",
-                    rel.object,
-                    e
-                );
-                continue;
-            }
-        };
-        link_chunk_to_entity(state, &subject.id, chunk_id, &rel.subject);
-        link_chunk_to_entity(state, &object.id, chunk_id, &rel.object);
-        match state
-            .graph
-            .get_or_create_edge(&subject.id, &object.id, &rel.relation, stream)
-        {
-            Ok(edge) => {
-                if let Err(e) = state.graph.add_chunk_to_edge(&edge.id, chunk_id) {
-                    tracing::warn!(
-                        "caller-relation: failed to link chunk to edge {} -{}-> {}: {}",
-                        rel.subject,
-                        rel.relation,
-                        rel.object,
-                        e
-                    );
-                }
-            }
-            Err(e) => tracing::warn!(
-                "caller-relation: failed to create edge {} -{}-> {}: {}",
-                rel.subject,
-                rel.relation,
-                rel.object,
-                e
-            ),
-        }
-    }
-}
 
 /// Lightweight fact_type classification via keyword matching.
 /// Note: event_date extraction is handled by the dream/consolidation worker (requires LLM).

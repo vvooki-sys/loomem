@@ -3,7 +3,12 @@
 use super::{Chunk, RocksDbStore, CF_EMBEDDINGS};
 use anyhow::{Context, Result};
 use rocksdb::WriteBatch;
+use std::collections::BTreeSet;
 use std::sync::MutexGuard;
+
+mod marker_cleanup;
+mod proof_cache;
+mod sidecar_cleanup;
 
 #[derive(Debug)]
 pub struct EmbeddingTarget {
@@ -21,6 +26,13 @@ impl RocksDbStore {
         self.lifecycle
             .lock()
             .map_err(|_| anyhow::anyhow!("chunk lifecycle lock poisoned"))
+    }
+
+    /// Caller holds the lifecycle lock while binding graph work to this incarnation.
+    pub(crate) fn graph_generation(&self, id: &str) -> Result<Option<Vec<u8>>> {
+        self.db
+            .get(generation_key(id))
+            .context("Read graph source generation")
     }
 
     /// Capture before inference; None means the request is already obsolete.
@@ -79,6 +91,7 @@ impl RocksDbStore {
                 || old.deleted_at != chunk.deleted_at
         });
         let mut batch = WriteBatch::default();
+        proof_cache::invalidate_changed_source(&mut batch, chunk, previous.as_ref());
         batch.put(
             format!("chunk:L{}:{}", chunk.level, chunk.id),
             self.encode_chunk(chunk)?,
@@ -126,6 +139,7 @@ impl RocksDbStore {
         batch.delete_cf(&cf, id.as_bytes());
         batch.delete(format!("entity:{id}"));
         batch.delete(format!("rel:{id}"));
+        batch.delete(format!("llm_entities:{id}"));
         batch.delete(generation_key(id));
         Ok(())
     }
@@ -139,6 +153,7 @@ impl RocksDbStore {
             .any(Option::is_some);
         let mut batch = WriteBatch::default();
         self.append_chunk_delete(&mut batch, id)?;
+        self.append_graph_sidecar_deletes(&mut batch, &BTreeSet::from([id.to_owned()]))?;
         self.db
             .write(batch)
             .context("hard delete chunk and derivatives")?;
@@ -164,6 +179,8 @@ impl RocksDbStore {
                 ids.push(chunk.id);
             }
         }
+        let id_set = ids.iter().cloned().collect();
+        self.append_graph_sidecar_deletes(&mut batch, &id_set)?;
         if !dry_run {
             self.db
                 .write(batch)

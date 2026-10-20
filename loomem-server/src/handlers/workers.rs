@@ -219,36 +219,14 @@ pub async fn admin_streams_stats_handler(
         }
     }
 
-    // Pass 2: count graph entities per stream.
-    for (_, value) in state.store.prefix_scan(b"graph:entity:") {
-        if let Ok(entity) = serde_json::from_slice::<loomem_core::graph::EntityNode>(&value) {
-            if let Some(s) = filter_stream {
-                if entity.stream_id != s {
-                    continue;
-                }
-            }
-            streams
-                .entry(entity.stream_id.clone())
-                .or_default()
-                .graph
-                .entities += 1;
+    // Count only graph metadata with authoritative live contribution support.
+    for (stream, (entities, edges)) in super::graph_visibility::counts(&state) {
+        if filter_stream.is_some_and(|filter| filter != stream) {
+            continue;
         }
-    }
-
-    // Pass 3: count graph edges per stream.
-    for (_, value) in state.store.prefix_scan(b"graph:edge:") {
-        if let Ok(edge) = serde_json::from_slice::<loomem_core::graph::Edge>(&value) {
-            if let Some(s) = filter_stream {
-                if edge.stream_id != s {
-                    continue;
-                }
-            }
-            streams
-                .entry(edge.stream_id.clone())
-                .or_default()
-                .graph
-                .edges += 1;
-        }
+        let stats = &mut streams.entry(stream).or_default().graph;
+        stats.entities = entities;
+        stats.edges = edges;
     }
 
     // Format activity timestamps once per stream.

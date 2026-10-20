@@ -85,7 +85,7 @@ memory_ingest(
 
 This ingestion path does not automatically deduplicate or supersede existing facts. Repeating ingestion creates another source. Source-linked content and provenance are immutable: to correct a conversation, delete its source ID and ingest the corrected transcript.
 
-A conversation date anchors relative expressions only when known; an unknown event date stays unknown. Omitting the conversation date does not authorize using storage time to resolve relative dates. New ingestion records render known events as `[event:YYYY-MM-DD]`, observations as `[observed:YYYY-MM-DD]`, and storage time as `[recorded:YYYY-MM-DD]`. Legacy `[YYYY-MM-DD]` labels are unchanged and do not establish an event date. Date-range filtering still uses Tantivy's event-date field, which falls back to the recorded timestamp for undated records; the new labels and metadata do not change that filter behavior. If a date-filtered search omits a source with an unknown event date, retry without the time filter or fetch the returned source ID.
+A conversation date anchors relative expressions only when known; an unknown event date stays unknown. Omitting the conversation date does not authorize using storage time to resolve relative dates. New ingestion records render known events as `[event:YYYY-MM-DD]`, observations as `[observed:YYYY-MM-DD]`, and storage time as `[recorded:YYYY-MM-DD]`. Legacy `[YYYY-MM-DD]` labels are unchanged and do not establish an event date. For records with the recognized versioned ingestion contract, date-range searches require a known event date; an unknown event date does not match a date range. Conversation and storage dates do not substitute for event time. Legacy records without that contract retain their existing event dates and recorded-time fallback when undated. Startup repairs older versioned index entries in place without resetting the index, and stops if repair fails. The separate valid_at filter retains its validity/history semantics. If a date-filtered search omits a source with an unknown event date, retry without the time filter or fetch the returned source ID.
 
 **Typical output (illustrative — exact extraction depends on LLM judgment):**
 - `PreferenceOrDecision`: "User prefers Cursor over VSCode" (subject: user, confidence: 0.95)
@@ -257,6 +257,8 @@ memory_graph(entity: "Cursor")
 
 **Returns:** entity details (name, type, aliases), connections to other entities, linked chunk count. Only entities and edges within the active stream are visible.
 
+New graph names, aliases and relations are bound to the contributing memory, stream, entity or edge, and current content generation, using the configured at-rest encryption. Lookup and display require live support for each contribution in the active stream; a deleted conversation’s alias cannot borrow support from another memory of the same entity. Older graph data contributes only explicit stored per-memory entity names and relation tuples. Unsupported aliases and connections remain hidden until re-extraction, and legacy entity types may appear as Unknown; source-text resemblance is not used to reconstruct missing provenance.
+
 Useful for understanding "who works on what", "what technologies are connected", etc.
 
 ---
@@ -291,7 +293,7 @@ v2 (2026-04-01): "User uses Cursor"         ← current
 
 Soft-delete a specific memory by ID. Deleting a recognized ingestion source also tombstones its same-stream linked descendants before index cleanup. Deleting one derived fact retains its source and other facts; the response names the retained source ID. Delete that source ID to remove the conversation and linked memories from retrieval.
 
-A partial cleanup response requires a retry. Soft-deleted content follows the existing recovery and purge policy; this is not immediate physical erasure or a search for every semantic copy. Unrelated copies and shared graph names or aliases referenced by other live memories may remain.
+A partial cleanup response requires a retry. Soft-deleted content follows the existing recovery and purge policy; this is not immediate physical erasure or a search for every semantic copy. Unrelated copies may remain. Graph names, aliases and connections remain visible only with their own live supporting memories.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

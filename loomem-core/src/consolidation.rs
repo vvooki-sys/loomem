@@ -1,5 +1,6 @@
 #[path = "derived_safety.rs"]
 pub(crate) mod derived_safety;
+mod graph_publication;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -864,45 +865,17 @@ pub async fn consolidate(
                         }
                     }
 
-                    // Store entities and relations extracted in step 1
-                    if !extracted_entities.is_empty() {
-                        let typed: Vec<(String, String)> = extracted_entities
-                            .iter()
-                            .map(|(n, t)| (n.clone(), t.to_string()))
-                            .collect();
-                        let _ = storage.store_entities(&l1_id, &stream, &typed);
-                    }
-                    if !extracted_relations.is_empty() {
-                        let tuples: Vec<(String, String, String)> = extracted_relations
-                            .iter()
-                            .map(|r| (r.subject.clone(), r.relation.clone(), r.object.clone()))
-                            .collect();
-                        let _ = storage.store_relations(&l1_id, &stream, &tuples);
-                    }
-
-                    // Populate graph
-                    if let (Some(ref extractor), Some(ref g)) = (&entity_extractor, &graph) {
-                        for (name, etype) in &extracted_entities {
-                            let aliases = extractor.get_aliases_for(name);
-                            if let Ok(node) =
-                                g.get_or_create_entity(name, &etype.to_string(), &aliases, &stream)
-                            {
-                                let _ = g.add_chunk_to_entity(&node.id, &l1_id);
-                            }
-                        }
-                        for rel in &extracted_relations {
-                            if let (Ok(Some(src)), Ok(Some(tgt))) = (
-                                g.get_entity_by_name(&rel.subject, &stream),
-                                g.get_entity_by_name(&rel.object, &stream),
-                            ) {
-                                if let Ok(edge) =
-                                    g.get_or_create_edge(&src.id, &tgt.id, &rel.relation, &stream)
-                                {
-                                    let _ = g.add_chunk_to_edge(&edge.id, &l1_id);
-                                }
-                            }
-                        }
-                    }
+                    graph_publication::publish(
+                        &storage,
+                        graph.as_ref(),
+                        graph_publication::Input {
+                            chunk: &l1_chunk,
+                            entities: &extracted_entities,
+                            relations: &extracted_relations,
+                            extractor: entity_extractor.as_deref(),
+                            pii: pii_filter,
+                        },
+                    );
 
                     // Step 5: mark source L0 chunks as consolidated.
                     // Gated on helper success (above): if helper returned Err we already

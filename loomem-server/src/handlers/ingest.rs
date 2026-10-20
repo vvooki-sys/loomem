@@ -1,3 +1,4 @@
+pub(crate) mod graph;
 use axum::{extract::State, http::StatusCode, Json};
 use chrono::Utc;
 use loomem_core::intent_log::OpType;
@@ -118,58 +119,6 @@ pub async fn persist_chunk(
         None
     };
 
-    // Store entities with types in RocksDB
-    if !entities.is_empty() {
-        let typed_entities: Vec<(String, String)> = entities
-            .iter()
-            .map(|(name, etype)| (name.clone(), etype.to_string()))
-            .collect();
-        state.store.store_entities(&id, stream, &typed_entities)?;
-    }
-
-    // Store relations in RocksDB
-    if !relations.is_empty() {
-        let rel_tuples: Vec<(String, String, String)> = relations
-            .iter()
-            .map(|r| (r.subject.clone(), r.relation.clone(), r.object.clone()))
-            .collect();
-        state.store.store_relations(&id, stream, &rel_tuples)?;
-    }
-
-    // Populate knowledge graph (stream-scoped)
-    for (entity_name, entity_type) in &entities {
-        let aliases = state.entity_extractor.get_aliases_for(entity_name);
-        match state.graph.get_or_create_entity(
-            entity_name,
-            &entity_type.to_string(),
-            &aliases,
-            stream,
-        ) {
-            Ok(node) => {
-                if let Err(e) = state.graph.add_chunk_to_entity(&node.id, &id) {
-                    warn!("Failed to link chunk to graph entity: {}", e);
-                }
-            }
-            Err(e) => warn!("Failed to create graph entity: {}", e),
-        }
-    }
-    for rel in &relations {
-        if let (Ok(Some(src)), Ok(Some(tgt))) = (
-            state.graph.get_entity_by_name(&rel.subject, stream),
-            state.graph.get_entity_by_name(&rel.object, stream),
-        ) {
-            match state
-                .graph
-                .get_or_create_edge(&src.id, &tgt.id, &rel.relation, stream)
-            {
-                Ok(edge) => {
-                    let _ = state.graph.add_chunk_to_edge(&edge.id, &id);
-                }
-                Err(e) => warn!("Failed to create graph edge: {}", e),
-            }
-        }
-    }
-
     // Parse event_date from extraction_meta for Tantivy temporal indexing
     let event_date_ts: Option<i64> = chunk
         .extraction_meta
@@ -210,6 +159,11 @@ pub async fn persist_chunk(
         },
     )
     .await?;
+
+    // Derived labels are published only after canonical storage succeeds.
+    if let Err(error) = graph::publish_dictionary(state, &chunk, &entities, &relations) {
+        warn!("Graph dictionary publication skipped: {}", error);
+    }
 
     // Enqueue embedding for background batch processing
     if let Some(ref queue) = state.embedding_queue {
@@ -811,87 +765,17 @@ pub async fn retag_all_handler(
 
     for chunk in chunks {
         let entities = state.entity_extractor.extract(&chunk.content);
-        let entity_names: Vec<String> = entities.iter().map(|(name, _)| name.clone()).collect();
-
         let relations = state.entity_extractor.find_relations(&entities);
-
-        // Persist re-extracted entities/relations only when present.
-        if !entity_names.is_empty() || !relations.is_empty() {
-            if !entities.is_empty() {
-                let typed_entities: Vec<(String, String)> = entities
-                    .iter()
-                    .map(|(name, etype)| (name.clone(), etype.to_string()))
-                    .collect();
-                state
-                    .store
-                    .store_entities(&chunk.id, &chunk.stream, &typed_entities)?;
-            }
-
-            if !relations.is_empty() {
-                let rel_tuples: Vec<(String, String, String)> = relations
-                    .iter()
-                    .map(|r| (r.subject.clone(), r.relation.clone(), r.object.clone()))
-                    .collect();
-                state
-                    .store
-                    .store_relations(&chunk.id, &chunk.stream, &rel_tuples)?;
-            }
-        }
-
-        // Parity with persist_chunk: re-index EVERY chunk into Tantivy (refreshing
-        // source_agent), regardless of entity/relation count. The previous entity
-        // gate silently skipped entity-less chunks, violating the
-        // persist_chunk_parity invariant. See source-provenance-fixes-brief Issue 2.
-        let entities_str = if !entity_names.is_empty() {
-            Some(entity_names.join(","))
-        } else {
-            None
-        };
-
-        let relations_str = if !relations.is_empty() {
-            let rel_text: Vec<String> = relations
-                .iter()
-                .map(|r| {
-                    format!(
-                        "{} {} {}",
-                        r.subject.to_lowercase(),
-                        r.relation,
-                        r.object.to_lowercase()
-                    )
-                })
-                .collect();
-            Some(rel_text.join(", "))
-        } else {
-            None
-        };
-
-        let event_date_ts: Option<i64> = chunk
-            .extraction_meta
-            .as_ref()
-            .and_then(|m| m.event_date.as_ref())
-            .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-            .map(|d| {
-                d.and_hms_opt(12, 0, 0)
-                    .expect("valid static HMS")
-                    .and_utc()
-                    .timestamp()
-            });
-        let doc = TextDocument {
-            id: chunk.id.clone(),
-            content: chunk.content.clone(),
-            user_id: "default".to_string(),
-            app_id: "default".to_string(),
-            level: chunk.level,
-            timestamp: chunk.timestamp as i64,
-            stream: chunk.stream.clone(),
-            entities: entities_str,
-            relations: relations_str,
-            event_date: event_date_ts,
-            source_agent: chunk.source.as_ref().map(|s| s.agent.clone()),
-        };
-
+        let target =
+            state
+                .graph
+                .capture_contribution_target(&chunk.id, &chunk.stream, &chunk.content)?;
+        graph::publish_dictionary(&state, &chunk, &entities, &relations)?;
+        // Re-index every current chunk, including chunks without entities.
         let mut tantivy = state.tantivy.lock().await;
-        tantivy.upsert_document(doc)?;
+        state
+            .graph
+            .reindex_extraction_if_current(&target, &mut tantivy)?;
         drop(tantivy);
 
         // retagged_count now counts every re-indexed chunk (== total chunk

@@ -91,7 +91,7 @@ memory_ingest(
 
 The sanitized source is stored before extraction and retained if extraction fails or finds no facts. Capture its returned ID. This path does not automatically deduplicate or supersede existing facts; repeating ingestion creates another source. Source-linked content and provenance are immutable: delete the source and ingest a corrected transcript to make a correction.
 
-Supply the conversation date only when known. It is observation time, not an event-date fallback. Without a known reference date, relative expressions must remain unresolved; explicit absolute source dates can still be used. New ingestion labels distinguish `[event:YYYY-MM-DD]`, `[observed:YYYY-MM-DD]`, and `[recorded:YYYY-MM-DD]`. Legacy `[YYYY-MM-DD]` labels do not prove when an event happened. Do not infer current state solely from a later observation or storage date. Date-range filtering still uses Tantivy's event-date field, which falls back to the recorded timestamp for undated records; the new labels and metadata do not change that filter behavior.
+Supply the conversation date only when known. It is observation time, not an event-date fallback. Without a known reference date, relative expressions must remain unresolved; explicit absolute source dates can still be used. New ingestion labels distinguish `[event:YYYY-MM-DD]`, `[observed:YYYY-MM-DD]`, and `[recorded:YYYY-MM-DD]`. Legacy `[YYYY-MM-DD]` labels do not prove when an event happened. Do not infer current state solely from a later observation or storage date. For records with the recognized versioned ingestion contract, date-range searches require a known event date; an unknown event date does not match a date range. Conversation and storage dates do not substitute for event time. Legacy records without that contract retain their existing event dates and recorded-time fallback when undated. Startup repairs older versioned index entries in place without resetting the index, and stops if repair fails. The separate valid_at filter retains its validity/history semantics.
 
 ### memory_store
 Call for **single, confirmed facts** only:
@@ -141,12 +141,14 @@ Call when:
 - Understanding relationships between people, projects, technologies
 - User asks "who works on X?" or "what's connected to Y?"
 
+New graph names, aliases and relations are bound to the contributing memory, stream, entity or edge, and current content generation, using the configured at-rest encryption. Lookup and display require live support for each contribution in the active stream; a deleted conversation’s alias cannot borrow support from another memory of the same entity. Older graph data contributes only explicit stored per-memory entity names and relation tuples. Unsupported aliases and connections remain hidden until re-extraction, and legacy entity types may appear as Unknown; source-text resemblance is not used to reconstruct missing provenance.
+
 ### memory_delete
 Call when:
 - User explicitly asks to forget something: "delete that", "forget X"
 - Never delete without user confirmation
 
-Deleting a recognized ingestion source tombstones its same-stream linked descendants before index cleanup. Deleting one derived fact retains the source and other facts; surface the returned source ID so the user can choose whether to remove the conversation too. Report partial cleanup and retry when requested. Soft deletion follows the existing recovery/purge policy; it is not immediate physical erasure or deletion of every semantic copy. Shared graph names or aliases may remain when other live memories reference them.
+Deleting a recognized ingestion source tombstones its same-stream linked descendants before index cleanup. Deleting one derived fact retains the source and other facts; surface the returned source ID so the user can choose whether to remove the conversation too. Report partial cleanup and retry when requested. Soft deletion follows the existing recovery/purge policy; it is not immediate physical erasure or deletion of every semantic copy. Graph names, aliases and connections remain visible only with their own live supporting memories.
 
 ### memory_status
 Call when:
