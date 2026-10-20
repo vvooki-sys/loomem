@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Knowledge extraction rejects explicitly truncated or refused model completions
+  before admitting facts, while retaining the stored conversation source and
+  reporting partial extraction failures. Completion metadata omitted by legacy
+  compatible providers retains its existing behavior.
+
 - MCP conversation ingestion now preserves a sanitized, searchable source before
   extraction and links each derived fact to it. Extraction failure or cancellation
   retains that source; responses report its ID and any incomplete fact writes.

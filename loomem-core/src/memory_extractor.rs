@@ -12,8 +12,10 @@ use crate::config::LlmConfig;
 
 mod config_validation;
 mod http;
+mod reply;
 use config_validation::transcript_chunks;
 pub use http::HttpExtractionChat;
+use reply::parse_extraction_reply;
 
 /// /153: an operator-defined extraction category. `fact_type` is the wire key
 /// used in the `## Types` list and the JSON `fact_type` enum; when absent,
@@ -394,52 +396,6 @@ fn build_extraction_request(
         "max_tokens": max_tokens,
         "temperature": 0.0
     })
-}
-
-/// Parse a 2xx chat reply body into facts (LLM envelope + extraction JSON).
-fn parse_extraction_reply(
-    reply: &ChatHttpReply,
-    chunk_index: usize,
-) -> Result<Vec<ExtractedFact>, ChunkFailure> {
-    #[derive(Deserialize)]
-    struct LlmResponse {
-        choices: Vec<LlmChoice>,
-    }
-    #[derive(Deserialize)]
-    struct LlmChoice {
-        message: LlmMessage,
-    }
-    #[derive(Deserialize)]
-    struct LlmMessage {
-        content: String,
-    }
-
-    let llm_resp: LlmResponse = serde_json::from_str(&reply.body).map_err(|e| ChunkFailure {
-        chunk_index,
-        status: Some(reply.status),
-        reason: truncate_reason(&format!("response parse failed: {e}")),
-    })?;
-
-    let content = llm_resp
-        .choices
-        .first()
-        .map(|c| c.message.content.clone())
-        .unwrap_or_default();
-
-    let json_str = content
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-
-    serde_json::from_str::<ExtractionResult>(json_str)
-        .map(|result| result.facts)
-        .map_err(|e| ChunkFailure {
-            chunk_index,
-            status: Some(reply.status),
-            reason: truncate_reason(&format!("facts parse failed: {e}")),
-        })
 }
 
 /// Run one chunk's request → parse pipeline. `Err` carries the per-chunk

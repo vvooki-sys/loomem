@@ -638,3 +638,72 @@ async fn warmed_search_cache_cannot_return_source_or_facts_after_source_cascade(
 
 #[path = "date_render_tests.rs"]
 mod date_render_tests;
+
+#[tokio::test]
+async fn truncated_completion_keeps_source_without_admitting_valid_json_prefix() {
+    for content in [
+        json!({"facts":[fact(None)]}).to_string(),
+        "{\"facts\":[".into(),
+    ] {
+        let (_, state) = fixture(20000);
+        let chat = Chat::sequence(vec![Ok(ChatHttpReply {
+            status: 200,
+            body: json!({"choices":[{"finish_reason":"length","message":{"content":content}}]})
+                .to_string(),
+        })]);
+        let result = tool_ingest_with(
+            &chat,
+            &state,
+            args("user: Synthetic truncation source."),
+            "phase18",
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0]
+            .text
+            .contains("output token limit reached"));
+        assert!(!result.content[0].text.contains("503"));
+        let records = chunks(&state, "phase18");
+        assert_eq!(records.len(), 1);
+        let source = &records[0];
+        assert_eq!(kind(source), "source");
+        assert!(result.content[0].text.contains(&source.id));
+        assert_eq!(chat.calls(), 1);
+        let indexed = state
+            .tantivy
+            .lock()
+            .await
+            .search_with_stream("truncation source", "phase18", 10)
+            .unwrap();
+        assert!(indexed.iter().any(|hit| hit.id == source.id));
+    }
+}
+
+#[tokio::test]
+async fn truncated_later_chunk_reports_partial_extraction_without_extra_facts() {
+    let (_, state) = fixture(10);
+    let limited = ChatHttpReply {
+        status: 200,
+        body: json!({"choices":[{"finish_reason":"length","message":{"content":json!({"facts":[fact(None)]}).to_string()}}]}).to_string(),
+    };
+    let chat = Chat::sequence(vec![Ok(reply(vec![fact(None)])), Ok(limited)]);
+    let result = tool_ingest_with(&chat, &state, args(&"x".repeat(60)), "phase18", None)
+        .await
+        .unwrap();
+    assert_ne!(result.is_error, Some(true));
+    assert!(result.content[0].text.contains("Extracted 1 facts"));
+    assert!(result.content[0]
+        .text
+        .contains("Warning: 1 extraction chunk(s) failed"));
+    assert!(result.content[0]
+        .text
+        .contains("output token limit reached"));
+    assert_eq!(chat.calls(), 2);
+    let records = chunks(&state, "phase18");
+    assert_eq!(records.len(), 2);
+    let source = records.iter().find(|row| kind(row) == "source").unwrap();
+    let derived = records.iter().find(|row| kind(row) == "fact").unwrap();
+    assert_link(derived, source);
+}
