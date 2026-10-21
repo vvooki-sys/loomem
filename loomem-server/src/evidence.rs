@@ -20,7 +20,8 @@ use serde::Serialize;
 /// adding a key breaks its validation, so extend only by agreement.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Evidence {
-    /// Normalised author role (`user`, `assistant`, `system`), or `null`.
+    /// Normalised author role (`user`, `assistant`, `system`, `tool`), or
+    /// `null`.
     pub author: Option<String>,
     /// Date the conversation took place, as stored.
     pub conversation_date: Option<String>,
@@ -37,10 +38,12 @@ pub struct Evidence {
     pub byte_end: Option<usize>,
 }
 
-/// Author roles accepted from `extraction_meta.attributed_to`. The extractor
-/// prompt asks for `user`/`assistant`; anything else (a person's name, free
-/// text) is not a role and must not be surfaced as one.
-const AUTHOR_ROLES: [&str; 3] = ["user", "assistant", "system"];
+/// Author roles accepted from `extraction_meta.attributed_to` and from
+/// `fragment.role`. The extractor prompt asks for `user`/`assistant`; the
+/// turn parser passes JSONL roles through, where `tool` is the standard
+/// function-result role. Anything else (a person's name carried by a JSONL
+/// `role`, free text) is not a role and must not be surfaced as one.
+const AUTHOR_ROLES: [&str; 4] = ["user", "assistant", "system", "tool"];
 
 /// Render the evidence object for one chunk.
 #[must_use]
@@ -56,9 +59,8 @@ pub fn render_evidence(chunk: &Chunk) -> Evidence {
         .unzip();
     Evidence {
         author: fragment
-            .and_then(|fragment| fragment.role.clone())
-            .or_else(|| attributed_role(meta))
-            .filter(|role| !role.is_empty()),
+            .and_then(|fragment| known_role(fragment.role.as_deref()))
+            .or_else(|| attributed_role(meta)),
         conversation_date: fragment
             .and_then(|fragment| fragment.conversation_date.as_deref())
             .or_else(|| ingest_conversation_date(chunk))
@@ -67,7 +69,7 @@ pub fn render_evidence(chunk: &Chunk) -> Evidence {
         event_date,
         source_id: fragment
             .map(|fragment| fragment.source_id.clone())
-            .or_else(|| chunk.source_ids.as_ref()?.first().cloned())
+            .or_else(|| extracted_source(chunk))
             .filter(|id| !id.is_empty()),
         byte_start,
         byte_end,
@@ -91,8 +93,24 @@ pub fn hit_text_suffix(evidence: Option<&Evidence>) -> String {
 
 /// `attributed_to` when it names a role; names and free text yield `None`.
 fn attributed_role(meta: Option<&ExtractionMeta>) -> Option<String> {
-    let role = meta?.attributed_to.as_deref()?.trim().to_ascii_lowercase();
+    known_role(meta?.attributed_to.as_deref())
+}
+
+/// `value` normalised when it is one of [`AUTHOR_ROLES`], else `None`.
+fn known_role(value: Option<&str>) -> Option<String> {
+    let role = value?.trim().to_ascii_lowercase();
     AUTHOR_ROLES.contains(&role.as_str()).then_some(role)
+}
+
+/// The canonical source of a server-owned ingest fact (its single parent
+/// in `source_ids`). A dream or consolidation child also carries
+/// `source_ids`, but those are merged inputs, not a source it was cut or
+/// extracted from, so no source is claimed for them.
+fn extracted_source(chunk: &Chunk) -> Option<String> {
+    if !is_ingest_fact_shape(chunk) {
+        return None;
+    }
+    chunk.source_ids.as_ref()?.first().cloned()
 }
 
 /// The ingest-time conversation date recorded on server-owned source and
@@ -141,8 +159,10 @@ fn iso_date(value: &str, field: &'static str) -> Option<String> {
 
 /// Compact bracketed suffix for the `memory_search` plain-text surface, e.g.
 /// ` [author: user; conversation: 2023-03-19; event: 2023-03-01 (resolved);
-/// source: <id>#0-120]`. Null parts are omitted; an all-null evidence
-/// object renders as an empty string so the line is unchanged.
+/// source: <id>]`. Null parts are omitted; an all-null evidence object
+/// renders as an empty string so the line is unchanged. The byte range is
+/// deliberately left out: no MCP tool reads a byte range, so it would only
+/// cost tokens there; the REST surfaces carry `byte_start`/`byte_end`.
 #[must_use]
 pub fn evidence_text_suffix(evidence: &Evidence) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(4);
@@ -156,11 +176,7 @@ pub fn evidence_text_suffix(evidence: &Evidence) -> String {
         parts.push(format!("event: {date} ({provenance})"));
     }
     if let Some(source) = &evidence.source_id {
-        let range = match (evidence.byte_start, evidence.byte_end) {
-            (Some(start), Some(end)) => format!("#{start}-{end}"),
-            _ => String::new(),
-        };
-        parts.push(format!("source: {source}{range}"));
+        parts.push(format!("source: {source}"));
     }
     if parts.is_empty() {
         String::new()
@@ -335,6 +351,46 @@ mod tests {
     }
 
     #[test]
+    fn fragment_role_outside_the_role_set_is_not_an_author() {
+        let mut chunk = fragment_chunk();
+        for name in ["Anna Kowalska", "anna", "", "  ", "customer"] {
+            chunk.fragment.as_mut().unwrap().role = Some(name.into());
+            assert_eq!(render_evidence(&chunk).author, None, "{name:?}");
+        }
+        for (raw, role) in [(" Tool ", "tool"), ("SYSTEM", "system"), ("user", "user")] {
+            chunk.fragment.as_mut().unwrap().role = Some(raw.into());
+            assert_eq!(render_evidence(&chunk).author.as_deref(), Some(role));
+        }
+        // A rejected fragment role falls back to a role-valued
+        // `attributed_to` exactly like a missing one (moot for real
+        // fragments, which carry no extraction_meta).
+        chunk.fragment.as_mut().unwrap().role = Some("Anna".into());
+        chunk.extraction_meta = Some(meta(None, None, Some("user")));
+        assert_eq!(render_evidence(&chunk).author.as_deref(), Some("user"));
+        chunk.extraction_meta = Some(meta(None, None, Some("Anna")));
+        assert_eq!(render_evidence(&chunk).author, None);
+    }
+
+    #[test]
+    fn source_id_fallback_only_for_ingest_facts_never_for_merged_children() {
+        // A dream/consolidation child lists its merged inputs in source_ids.
+        let mut child = chunk();
+        child.level = 1;
+        child.source_ids = Some(vec!["in-1".into(), "in-2".into()]);
+        child.extraction_meta = Some(meta(None, None, None));
+        assert_eq!(render_evidence(&child).source_id, None);
+        // A legacy level-0 chunk with source_ids is not an ingest fact either.
+        let mut legacy = chunk();
+        legacy.source_ids = Some(vec!["00000000-0000-4000-8000-000000000001".into()]);
+        assert_eq!(render_evidence(&legacy).source_id, None);
+        // The strict ingest-fact shape keeps its canonical source.
+        assert_eq!(
+            render_evidence(&ingest_fact_chunk()).source_id.as_deref(),
+            Some("00000000-0000-4000-8000-000000000001")
+        );
+    }
+
+    #[test]
     fn hit_evidence_follows_the_flag_and_tolerates_an_unreadable_chunk() {
         let chunk = fragment_chunk();
         assert_eq!(hit_evidence(false, Some(&chunk)), None);
@@ -350,9 +406,15 @@ mod tests {
     #[test]
     fn text_suffix_omits_null_parts_and_is_empty_when_all_null() {
         assert_eq!(evidence_text_suffix(&Evidence::default()), "");
+        // No byte range on the text surface; the REST object still has it.
+        let fragment = render_evidence(&fragment_chunk());
         assert_eq!(
-            evidence_text_suffix(&render_evidence(&fragment_chunk())),
-            " [author: assistant; conversation: 2023-03-19; source: src-1#10-42]"
+            (fragment.byte_start, fragment.byte_end),
+            (Some(10), Some(42))
+        );
+        assert_eq!(
+            evidence_text_suffix(&fragment),
+            " [author: assistant; conversation: 2023-03-19; source: src-1]"
         );
         assert_eq!(
             evidence_text_suffix(&render_evidence(&ingest_fact_chunk())),

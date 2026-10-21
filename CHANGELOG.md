@@ -44,7 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `event_date`, `event_date_provenance`, `source_id`, `byte_start` and
   `byte_end` (unknowns are `null`, never a substituted date; only
   calendar-valid ISO dates are emitted), and `memory_search` lines carry
-  the same facts as a compact bracketed tag before the score.
+  the same facts, minus the byte range, as a compact bracketed tag before
+  the score.
   `event_date_provenance` is `resolved` when the engine recorded the
   temporal cue the date came from and `unknown` otherwise; `explicit` is
   reserved until the extractor persists that distinction.
