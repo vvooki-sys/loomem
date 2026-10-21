@@ -21,6 +21,7 @@ pub use crate::dream::DreamConfig;
 pub use crate::entity_extractor::EntityExtractionConfig;
 pub use crate::event_log::EventLogConfig;
 pub use crate::feedback::FeedbackConfig;
+pub use crate::fragments::FragmentsConfig;
 pub use crate::graph::GraphSearchConfig;
 pub use crate::hybrid_search::{
     ComplexityConfig, HybridWeightsConfig, ImportanceConfig, SearchConfig,
@@ -95,6 +96,10 @@ pub struct Config {
     /// behavior (5/20 normal, 30/30 aggregation) byte-identically.
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Source fragmentation (source → fragments → index). `#[serde(default)]`
+    /// so configs without `[fragments]` load and degrade to off.
+    #[serde(default)]
+    pub fragments: FragmentsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

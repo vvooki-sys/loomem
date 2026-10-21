@@ -206,6 +206,20 @@ search_max_top_k = 20           # cap for normal queries
 aggregation_default_top_k = 30  # top_k when omitted (aggregation queries)
 aggregation_max_top_k = 30      # cap for aggregation queries
 
+# Source fragments (source → turn-level fragments → index). Governs how a
+# canonical conversation source is segmented: one fragment per transcript
+# turn, long turns split further at paragraph / sentence / whitespace
+# boundaries. Off by default — existing deployments and clients keep
+# byte-identical behavior. max_fragment_tokens is the budget for a fragment's
+# TEXT; prefix_reserve_tokens stays free for the embedding prefix
+# ("passage: "), so text + prefix must fit the embedder's input window
+# (max_fragment_tokens + prefix_reserve_tokens <= 512 for the local
+# multilingual-e5-small, which silently truncates longer input).
+[fragments]
+enabled = false
+max_fragment_tokens = 400       # token budget for a fragment's text
+prefix_reserve_tokens = 16      # tokens kept free for the embedding prefix
+
 [resource_guards]
 max_cpu_cores = 1.0
 max_memory_mb = 512

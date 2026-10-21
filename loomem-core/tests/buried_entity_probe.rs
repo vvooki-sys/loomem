@@ -265,6 +265,7 @@ fn base_chunk(id: &str, stream: &str, content: &str, ts: i64, level: i32) -> Chu
         n_ratings: 0,
         last_rated_at: None,
         provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+        fragment: None,
     }
 }
 
@@ -348,6 +349,7 @@ fn probe_config() -> loomem_core::config::Config {
         access_audit: loomem_core::config::AccessAuditConfig::default(),
         rate_limit: loomem_core::config::RateLimitConfig::default(),
         mcp: loomem_core::config::McpConfig::default(),
+        fragments: loomem_core::config::FragmentsConfig::default(),
         dream: loomem_core::config::DreamConfig::default(),
     }
 }

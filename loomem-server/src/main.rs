@@ -1444,6 +1444,7 @@ mod tests {
             access_audit: cfg::AccessAuditConfig::default(),
             rate_limit: cfg::RateLimitConfig::default(),
             mcp: cfg::McpConfig::default(),
+            fragments: cfg::FragmentsConfig::default(),
         }
     }
 
@@ -1682,6 +1683,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 
@@ -2081,6 +2083,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 

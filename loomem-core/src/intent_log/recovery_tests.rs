@@ -43,6 +43,7 @@ fn make_chunk(id: &str, stream: &str, content: &str) -> Chunk {
         n_ratings: 0,
         last_rated_at: None,
         provenance_role: crate::storage::ProvenanceRole::Claim,
+        fragment: None,
     }
 }
 

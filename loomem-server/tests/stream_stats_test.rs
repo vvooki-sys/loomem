@@ -99,6 +99,7 @@ fn chunk(
         n_ratings: 0,
         last_rated_at: None,
         provenance_role: ProvenanceRole::Claim,
+        fragment: None,
     }
 }
 

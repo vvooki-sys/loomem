@@ -692,6 +692,7 @@ pub async fn consolidate(
                         n_ratings: 0,
                         last_rated_at: None,
                         provenance_role: crate::storage::ProvenanceRole::Claim,
+                        fragment: None,
                     };
 
                     derived_safety::protect_derived_chunk(&mut l1_chunk, pii_filter);

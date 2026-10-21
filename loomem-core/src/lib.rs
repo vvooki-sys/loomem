@@ -24,6 +24,7 @@ pub mod evaluation_evidence;
 pub mod event_date;
 pub mod event_log;
 pub mod feedback;
+pub mod fragments;
 pub mod graph;
 pub mod graph_repair;
 pub mod hybrid_search;
