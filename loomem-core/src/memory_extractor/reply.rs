@@ -38,9 +38,22 @@ impl<'de> Deserialize<'de> for FinishReason {
     }
 }
 
+/// Stable reason reported for a token-limited completion; the split-on-
+/// truncation retry keys on it via [`ChunkFailure::is_truncated`].
+pub(super) const TRUNCATED_REASON: &str =
+    "extraction completion truncated: output token limit reached";
+
+impl ChunkFailure {
+    /// `true` when the provider reported `finish_reason: length` for this
+    /// chunk (the reply was rejected unparsed, never partially admitted).
+    pub fn is_truncated(&self) -> bool {
+        self.reason == TRUNCATED_REASON
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum CompletionFailure {
-    #[error("extraction completion truncated: output token limit reached")]
+    #[error("{TRUNCATED_REASON}")]
     Truncated,
     #[error("extraction completion refused by provider")]
     Refused,

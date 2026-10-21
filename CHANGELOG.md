@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[fragments]` config section (`enabled = false` by default) and an optional
   `fragment` provenance field on stored chunks; existing databases and
   configurations load unchanged. Not yet wired into ingestion.
+- Opt-in knowledge extraction controls in `[knowledge_extraction]`:
+  `input_chunk_tokens` splits a transcript at line boundaries into smaller
+  per-call chunks, and `split_on_truncation` re-extracts a chunk whose
+  completion hit the output token limit as two line-aligned halves (at most
+  four extra calls per chunk). Both default off; `max_tokens` is now spelled
+  out in `config.toml` at its existing default. Extraction outcomes report
+  attempted, completed and truncated calls. A truncated reply is still never
+  admitted.
 
 ### Changed
 
