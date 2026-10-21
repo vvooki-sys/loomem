@@ -371,6 +371,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: crate::storage::ProvenanceRole::Claim,
+            fragment: None,
         };
 
         groups.insert("TestEntity".to_string(), vec![chunk1]);

@@ -1,6 +1,4 @@
 use axum::{extract::State, Json};
-use chrono::{NaiveDate, Utc};
-use loomem_core::query_cache::QueryCache;
 use loomem_core::query_expansion::polish_stem;
 #[cfg(test)]
 use loomem_core::sanitizer::sanitize_for_llm;
@@ -12,7 +10,29 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::warn;
 
-use super::date_filter::extract_date_filter;
+mod associations;
+mod cache_hit;
+mod cache_policy;
+#[cfg(test)]
+#[path = "search_candidate_limit_tests.rs"]
+mod candidate_limit_tests;
+mod candidates;
+#[cfg(feature = "evaluation")]
+mod evaluation_evidence;
+mod event_date;
+mod evidence;
+#[cfg(test)]
+mod evidence_fields_tests;
+mod operation;
+mod operation_lane;
+mod prefix_dedup;
+mod rejections;
+mod request_scope;
+mod telemetry;
+use request_scope::validated_search_streams;
+
+use telemetry::{stage_timer, Bm25Runner, RequestTelemetry, ResponseMetrics, TraceCounters};
+
 use super::types::{
     AssociateRequest, AssociateResponse, Association, ChannelDiagnostics, ChannelHit,
     ContextSufficiency, DateFilter, FusedPoolHit, RareTermLaneDiag, SearchRequest, SearchResponse,
@@ -101,9 +121,8 @@ fn is_counting_query(query: &str) -> bool {
     ];
     patterns.iter().any(|p| q.contains(p))
 }
-use super::scope as scope_mod;
 use super::AppError;
-use crate::auth::{self, AuthContext};
+use crate::auth::AuthContext;
 use crate::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -234,6 +253,8 @@ struct QueryContext {
     stream_list: Option<Vec<String>>,
     cache_key: Option<u64>,
     limit: usize,
+    operation: operation::PreparedOperation,
+    telemetry: Option<Arc<RequestTelemetry>>,
 }
 
 /// Pipeline metrics collected between retrieval and response building.
@@ -241,15 +262,7 @@ struct QueryContext {
 /// to `build_response` for trace metadata + sufficiency scoring.
 /// Includes `start` and `complexity` because both outlive the orchestrator's
 /// retrieval block and feed directly into the response envelope.
-struct ResponseMetrics {
-    start: Instant,
-    complexity: QueryComplexity,
-    dedup_removed: usize,
-    total_results_before_topk: usize,
-    final_top_k: usize,
-}
-
-/// Output of `filter_and_truncate`. Bundles the filtered result list with
+/// Output of `filter_candidates`. Bundles the filtered result list with
 /// the counters that feed into `ResponseMetrics`. Introduced in cycle/02
 /// Iter 3 so the helper can return multiple related values without a tuple
 /// explosion at the call site.
@@ -258,6 +271,8 @@ struct FilterOutcome {
     dedup_removed: usize,
     total_results_before_topk: usize,
     final_top_k: usize,
+    /// Per-id drop reasons; empty unless the request asked for `trace`.
+    rejections: Vec<super::types::Rejection>,
 }
 
 /// Whether the request carries a `source_agent` include or
@@ -394,7 +409,7 @@ where
 /// The agent-matching chunk id set for the vector path, or `None` when no agent
 /// filter is set (embeddings left untouched). One Tantivy full-collect query
 /// (`ids_matching_agent`) replaces #257's per-embedding `get_chunk`. Fails open
-/// (`None` + WARN) on a Tantivy error — `filter_and_truncate` is the safety net.
+/// (`None` + WARN) on a Tantivy error — `filter_candidates` is the safety net.
 async fn agent_id_set(
     state: &Arc<AppState>,
     payload: &SearchRequest,
@@ -450,26 +465,9 @@ fn prepare_query_context(
     // Scope branch: mutually exclusive with stream/streams.
     // resolve_scope handles membership + leak-protection — do not wrap its
     // errors in BadRequest (that would destroy the 404 leak-protection).
-    let validated_streams = if let Some(scope) = payload.scope {
-        if payload.stream.is_some() || payload.streams.is_some() {
-            return Err(AppError::BadRequest(
-                "specify scope or stream/streams, not both".into(),
-            ));
-        }
-        let resolution = scope_mod::resolve_scope(scope, auth, &state.store)?;
-        Some(resolution.streams.into_iter().map(|(id, _)| id).collect())
-    } else {
-        // Existing path — byte-identical behaviour for pre-existing callers.
-        auth::validate_streams(
-            auth,
-            payload
-                .streams
-                .as_deref()
-                .or(payload.stream.as_ref().map(std::slice::from_ref)),
-        )
-        .map_err(|_| AppError::BadRequest("Access denied: cannot search this stream".into()))?
-    };
+    let validated_streams = validated_search_streams(state, auth, payload)?;
     let start = Instant::now();
+    let telemetry = telemetry::request_telemetry(payload);
 
     // Complexity-aware recall: classify query to route through appropriate pipeline
     let complexity = if state.config.search.complexity.enabled {
@@ -478,147 +476,61 @@ fn prepare_query_context(
         QueryComplexity::Complex // full pipeline when disabled
     };
 
-    let _limit = if state.config.search.complexity.enabled {
-        match complexity {
-            QueryComplexity::Simple => payload
-                .top_k
-                .unwrap_or(state.config.search.complexity.simple_top_k),
-            QueryComplexity::Medium => payload
-                .top_k
-                .unwrap_or(state.config.search.complexity.medium_top_k),
-            QueryComplexity::Complex | QueryComplexity::Temporal => payload
-                .top_k
-                .unwrap_or(state.config.search.complexity.complex_top_k),
-            QueryComplexity::Aggregation => payload.top_k.unwrap_or(30),
-            QueryComplexity::Profile => payload.top_k.unwrap_or(state.config.search.top_k),
-        }
-    } else {
-        payload.top_k.unwrap_or(state.config.search.top_k)
-    };
-
-    tracing::debug!(complexity = %complexity, top_k = _limit, "Query classified");
-
-    // Extract date filter from query (implicit) or use explicit params
-    let (query_without_date, date_filter) =
-        if payload.date_from.is_some() || payload.date_to.is_some() {
-            let filter = if let (Some(from), Some(to)) = (&payload.date_from, &payload.date_to) {
-                if let (Ok(from_date), Ok(to_date)) = (
-                    NaiveDate::parse_from_str(from, "%Y-%m-%d"),
-                    NaiveDate::parse_from_str(to, "%Y-%m-%d"),
-                ) {
-                    let start_ts = from_date
-                        .and_hms_opt(0, 0, 0)
-                        .expect("valid static HMS values")
-                        .and_utc()
-                        .timestamp();
-                    let end_ts = to_date
-                        .and_hms_opt(23, 59, 59)
-                        .expect("valid static HMS values")
-                        .and_utc()
-                        .timestamp();
-                    Some(DateFilter::Range(start_ts, end_ts))
-                } else {
-                    None
-                }
-            } else if let Some(from) = &payload.date_from {
-                if let Ok(from_date) = NaiveDate::parse_from_str(from, "%Y-%m-%d") {
-                    let start_ts = from_date
-                        .and_hms_opt(0, 0, 0)
-                        .expect("valid static HMS values")
-                        .and_utc()
-                        .timestamp();
-                    let now = Utc::now().timestamp();
-                    Some(DateFilter::Range(start_ts, now))
-                } else {
-                    None
-                }
-            } else if let Some(to) = &payload.date_to {
-                if let Ok(to_date) = NaiveDate::parse_from_str(to, "%Y-%m-%d") {
-                    let end_ts = to_date
-                        .and_hms_opt(23, 59, 59)
-                        .expect("valid static HMS values")
-                        .and_utc()
-                        .timestamp();
-                    Some(DateFilter::Range(0, end_ts))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            (payload.query.clone(), filter)
-        } else {
-            extract_date_filter(&payload.query)
-        };
+    let limit = candidates::request_limit(state, payload, complexity)?;
+    let classify_plan_started = Instant::now();
+    let operation = operation::prepare(
+        &state.config.search,
+        payload,
+        limit,
+        validated_streams.as_deref(),
+    )?;
+    telemetry::record_prepare_stage(telemetry.as_deref(), classify_plan_started, false);
+    let prepared_date = operation::resolve_date(payload, &operation);
+    let query_without_date = prepared_date.query.clone();
+    let date_filter = prepared_date.filter.clone();
 
     tracing::debug!(
-        "Date filter: {:?}, cleaned query: '{}'",
-        date_filter,
-        query_without_date
+        has_date_filter = date_filter.is_some(),
+        "Date filter resolved"
     );
 
     // Step 1: Resolve entity aliases
+    let expansion_started = Instant::now();
     let entity_resolved = state.entity_extractor.resolve_aliases(&query_without_date);
 
     if entity_resolved != query_without_date {
-        tracing::debug!(
-            "Entity alias resolution: {:?} → {:?}",
-            query_without_date,
-            entity_resolved
-        );
+        tracing::debug!("Entity aliases resolved");
     }
 
     // Step 2: Apply query expansion (on entity-resolved query)
-    let expanded_query = state.query_expander.expand(&entity_resolved);
+    let expanded_query =
+        operation.primary_expansion(&state.query_expander.expand(&entity_resolved));
 
     // Apply Polish stemming to both original and expanded queries
-    let original_query_stemmed = if state.config.search.stem_polish {
-        let words: Vec<String> = query_without_date
-            .split_whitespace()
-            .flat_map(polish_stem)
-            .collect();
-        words.join(" ")
-    } else {
-        query_without_date.clone()
-    };
-
-    let expanded_query_stemmed = if state.config.search.stem_polish {
-        let words: Vec<String> = expanded_query
-            .split_whitespace()
-            .flat_map(polish_stem)
-            .collect();
-        words.join(" ")
-    } else {
-        expanded_query.clone()
-    };
-
-    tracing::debug!(
-        "Query: {} -> Expanded: {}",
-        query_without_date,
-        expanded_query
+    let (original_query_stemmed, expanded_query_stemmed) = prepared_stems(
+        state.config.search.stem_polish,
+        &query_without_date,
+        &expanded_query,
     );
+    telemetry::record_prepare_stage(telemetry.as_deref(), expansion_started, true);
+
+    tracing::debug!("Query expansion complete");
 
     // Cache key (flat `limit` — see F-R1 note above). The cache key is keyed on
     // the *real* `top_k`, not the over-fetched retrieval pool: `source_agent` and
     // `exclude_source_agents` are already part of the key (below), so two requests
     // that differ only in agent filter never collide, and the stored result set is
     // post-filter + post-truncate either way.
-    let limit = payload.top_k.unwrap_or(state.config.search.top_k);
     let stream_list: Option<Vec<String>> = validated_streams;
-    let cache_key = if state.config.search.cache.enabled {
-        Some(QueryCache::hash_query_with_source(
-            &original_query_stemmed,
-            stream_list.as_deref(),
-            payload.entity.as_deref(),
-            payload.date_from.as_deref(),
-            payload.date_to.as_deref(),
-            limit,
-            payload.source_agent.as_deref(),
-            payload.exclude_source_agents.as_deref(),
-        ))
-    } else {
-        None
-    };
+    let operation_identity = operation.cache_identity(&prepared_date);
+    let cache_key = cache_policy::cache_key(
+        &state.config.search.cache,
+        payload,
+        stream_list.as_deref(),
+        date_filter.as_ref(),
+        limit,
+        operation_identity.as_deref(),
+    );
 
     Ok(QueryContext {
         start,
@@ -633,7 +545,27 @@ fn prepare_query_context(
         // Tantivy (`bm25_leaf` / `agent_id_set`), so the candidate pool is
         // agent-scoped at the source — #257's over-fetch is no longer needed.
         limit,
+        operation,
+        telemetry,
     })
+}
+
+fn prepared_stems(enabled: bool, original: &str, expanded: &str) -> (String, String) {
+    (
+        stem_if_enabled(original, enabled),
+        stem_if_enabled(expanded, enabled),
+    )
+}
+
+fn stem_if_enabled(query: &str, enabled: bool) -> String {
+    if !enabled {
+        return query.to_string();
+    }
+    query
+        .split_whitespace()
+        .flat_map(polish_stem)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub async fn search_handler(
@@ -647,6 +579,7 @@ pub async fn search_handler(
     // helpers can borrow the prepared fields via `&ctx` without duplicating
     // arguments.
     let ctx = prepare_query_context(&state, &auth, &payload)?;
+    let cache_generation = state.query_cache.lock().await.generation();
 
     // Cycle/85: deterministic query classification. Sub-ms, regex-only,
     // no LLM. Surfaced in the response only when the request flag is set;
@@ -660,41 +593,8 @@ pub async fn search_handler(
         let mut cache = state.query_cache.lock().await;
         if let Some((is_reranked, cached)) = cache.get_best(key) {
             drop(cache); // release lock before building response
-            tracing::debug!(
-                "Cache hit for query '{}' (key={}, reranked={})",
-                ctx.query_without_date,
-                key,
-                is_reranked
-            );
-            let results: Vec<SearchResult> = cached
-                .iter()
-                .map(|r| {
-                    // Cycle/142: content-type hydrates on the cache-hit path too
-                    // (sidecar lookup by id is independent of the result cache).
-                    let ct = loomem_core::content_type::get_content_type(&state.store, &r.id);
-                    SearchResult {
-                        id: r.id.clone(),
-                        content: r.content.clone(),
-                        score: r.score,
-                        metadata: Some(json!({
-                            "level": r.level,
-                            "timestamp": r.timestamp,
-                            "bm25_score": r.bm25_score,
-                            "vector_score": r.vector_score,
-                            "time_decay": r.time_decay_factor,
-                            "cached": true,
-                            "reranked": is_reranked,
-                        })),
-                        trace_info: None, // no trace for cached results
-                        // Cache hit path skips fresh fusion — debug breakdown is
-                        // a fresh-pipeline-only artifact in /86. Documented in
-                        // 86-close.md § Findings.
-                        signal_breakdown: None,
-                        content_type: ct.map(|m| m.content_type.as_str().to_string()),
-                        content_type_source: ct.map(|m| m.source.as_str().to_string()),
-                    }
-                })
-                .collect();
+            tracing::debug!(reranked = is_reranked, "Search cache hit");
+            let results = cache_hit::results(&cached, &ctx, &payload, &state, is_reranked);
             return Ok(Json(SearchResponse {
                 results,
                 took_ms: ctx.start.elapsed().as_millis() as u64,
@@ -738,6 +638,7 @@ pub async fn search_handler(
     // Cycle/258 (Option A): the source_agent filter is now pushed into Tantivy
     // inside `bm25_retrieve` (`bm25_leaf`), so the BM25 pool is already
     // agent-scoped at the source — no post-retrieval pre-filter pass needed.
+    let primary_started = Instant::now();
     let bm25_results = bm25_retrieve(&ctx, &sub_queries, &payload, &state).await?;
 
     // Cycle/012: channel diagnostics (request-flag gated, None on the
@@ -757,7 +658,12 @@ pub async fn search_handler(
     // candidates join the BM25 pool and their ids survive the fusion pool
     // cut + join the reranker slice below.
     let lane = compute_rare_term_lane(&ctx, &state, channel_diag.as_mut()).await;
-    let bm25_results = merge_lane_candidates(bm25_results, lane.as_ref(), channel_diag.as_mut());
+    let bm25_results = merge_lane_candidates(
+        bm25_results,
+        lane.as_ref(),
+        channel_diag.as_mut(),
+        ctx.telemetry.as_deref(),
+    );
 
     // Vector retrieval: embed query + hybrid search + vector multi-query merge.
     // Returns the full hybrid-results list (graph boost + scoring happen in
@@ -790,9 +696,10 @@ pub async fn search_handler(
     // and cycles/03-coordinated-core-fix/03-brief.md for the full trace.
 
     // Score + rank: graph boost + level boost + tier/importance/preference +
-    // complexity-aware final sort. Sync (no await — `graph.find_related_chunks`
+    // complexity-aware final sort. Sync (no await — `graph.find_live_related_chunks`
     // and `state.store.get_chunk` are blocking). See `score_and_rank` below.
-    let hybrid_results = score_and_rank(hybrid_results, &ctx, &payload, &auth, &state);
+    let (hybrid_results, operation_metrics) =
+        score_and_apply_operation(hybrid_results, &ctx, &payload, &auth, &state);
 
     // Cycle/012 diagnostics: post-rank snapshot (after graph/level/tier
     // boosts, before soft-delete filter + truncate).
@@ -800,31 +707,17 @@ pub async fn search_handler(
         diag.post_rank_top = fused_pool_hits(&hybrid_results);
     }
 
-    // RED-SD-1/SD-2 defense-in-depth: drop soft-deleted chunks before
-    // reranker spawn (external LLM) and before filter_and_truncate. Covers
-    // the vector path (no predicate push-down) and the stale-tantivy edge
-    // case (silent delete in legacy flows).
-    let hybrid_results: Vec<_> = hybrid_results
-        .into_iter()
-        .filter(|r| !crate::handlers::delete::is_deleted_in_store(&state, &r.id))
-        .collect();
+    let (outcome, evidence) =
+        telemetry::filter_with_telemetry(hybrid_results, &ctx, &payload, &state);
+    let metrics = ResponseMetrics::full(&ctx, &outcome, evidence, operation_metrics);
+    let FilterOutcome {
+        results: mut hybrid_results,
+        final_top_k,
+        ..
+    } = outcome;
 
     // ECA-31: Check cost budget for reranker
-    let rerank_cost_ok = {
-        let cost_status = loomem_core::cost_tracker::check_cost_budget_for_stream(
-            &state.store,
-            &auth.stream_id,
-            state.config.cost.daily_cap_usd,
-        );
-        if !cost_status.allow_reranker() {
-            tracing::warn!(
-                "Reranker disabled for stream {}: cost budget tier={} (ECA-31)",
-                auth.stream_id,
-                cost_status.description()
-            );
-        }
-        cost_status.allow_reranker()
-    };
+    let rerank_cost_ok = rerank_budget_allows(&state, &auth);
 
     // Async reranking: spawn in background, results cached for next identical query
     if state.config.search.rerank_enabled && rerank_cost_ok && !hybrid_results.is_empty() {
@@ -832,7 +725,7 @@ pub async fn search_handler(
             let candidates = hybrid_results
                 .len()
                 .min(state.config.search.rerank_candidates);
-            let top_k = payload.top_k.unwrap_or(state.config.search.top_k);
+            let top_k = final_top_k;
             // Cycle/012: the reranker slice is the head of the ranked pool
             // plus — when the rare-term lane is active — any guaranteed ids
             // that survived the pool cut but fell below the head. Lane off
@@ -843,6 +736,7 @@ pub async fn search_handler(
                 lane.as_ref(),
                 state.config.search.rare_term_lane.candidate_cap,
             );
+            let eligible_results = hybrid_results.clone();
             let chunks: Vec<String> = results_for_rerank
                 .iter()
                 .map(|r| r.content.clone())
@@ -872,19 +766,15 @@ pub async fn search_handler(
 
                 match rerank_result {
                     Ok(indices) => {
-                        let reranked: Vec<_> = indices
-                            .into_iter()
-                            .filter_map(|i| results_for_rerank.get(i).cloned())
-                            .collect();
-                        if !reranked.is_empty() {
-                            let mut c = cache.lock().await;
-                            c.insert_reranked(key, reranked.clone());
-                            tracing::info!(
-                                "Async rerank complete: {} → {} results, cached",
-                                candidates,
-                                reranked.len()
-                            );
-                        }
+                        cache_policy::publish_reranked(
+                            &cache,
+                            (key, cache_generation),
+                            indices,
+                            &results_for_rerank,
+                            &eligible_results,
+                            top_k,
+                        )
+                        .await;
                     }
                     Err(e) => {
                         tracing::debug!("Async rerank failed (non-blocking): {}", e);
@@ -894,37 +784,33 @@ pub async fn search_handler(
         }
     }
 
-    // Filter + truncate: bitemporal, superseded, extraction_meta filters +
-    // content dedup + aggregation dedup + source_agent filters + truncate to
-    // final top-K. Returns the result list plus the counters that feed into
-    // `ResponseMetrics`. See `filter_and_truncate` below.
-    let FilterOutcome {
-        results: hybrid_results,
-        dedup_removed,
-        total_results_before_topk,
-        final_top_k,
-    } = filter_and_truncate(hybrid_results, &ctx, &payload, &state);
+    hybrid_results.truncate(final_top_k);
+    let lane = operation_lane::finalize(
+        hybrid_results,
+        primary_started.elapsed().as_micros(),
+        &ctx,
+        &payload,
+        &state,
+    )
+    .await;
+    let (hybrid_results, metrics) = event_date::finish(lane, metrics, &ctx, &state);
 
     // Cache store — post-boost, post-filter, post-truncate. Warm-path cache
     // hits (line ~216) now return the same Vec<HybridSearchResult> that the
     // cold path is about to build into SearchResult. This closes the
     // cold/warm divergence diagnosed in cycles/N7-cli-nondeterminism.md §3.
-    if let Some(key) = ctx.cache_key {
+    if let Some(key) = ctx
+        .cache_key
+        .filter(|_| cache_policy::complete_response(&metrics))
+    {
         let mut cache = state.query_cache.lock().await;
-        cache.insert(key, hybrid_results.clone());
+        cache.insert_if_current(key, cache_generation, hybrid_results.clone());
     }
 
     // Iter 1 (cycle/02): implicit boost + response serialization + sufficiency
     // scoring + trace + event emit + associations + recommendations are all
     // extracted into `build_response` below. Orchestrator packages the
     // pipeline metrics and hands off the final response envelope.
-    let metrics = ResponseMetrics {
-        start: ctx.start,
-        complexity: ctx.complexity,
-        dedup_removed,
-        total_results_before_topk,
-        final_top_k,
-    };
     let mut response = build_response(
         metrics,
         hybrid_results,
@@ -1012,7 +898,7 @@ fn classify_and_trace(query: &str) -> ClassifiedQuery {
 /// cached copy would come back through the warm path without its tier stamp.
 /// Candidates are ordered newest-first (`timestamp` desc) — for mutable
 /// entity attributes the latest fact wins — and given descending rank-marker
-/// scores (1.0, 0.999, …) so the order survives `filter_and_truncate`, which
+/// scores (1.0, 0.999, …) so the order survives `filter_candidates`, which
 /// retains but never re-sorts.
 async fn tier1_lookup(
     ctx: &QueryContext,
@@ -1054,7 +940,7 @@ async fn tier1_lookup(
     }
 
     // Resolve entities in every searched stream (graph entities are
-    // stream-scoped; `get_entity_by_name` also consults the alias index).
+    // stream-scoped; `get_live_entity_by_name` verifies live alias support).
     let streams: Vec<String> = ctx
         .stream_list
         .clone()
@@ -1063,7 +949,7 @@ async fn tier1_lookup(
     let mut seen = std::collections::HashSet::new();
     'collect: for stream in &streams {
         for name in &classification.features.entities {
-            let entity = match state.graph.get_entity_by_name(name, stream) {
+            let entity = match state.graph.get_live_entity_by_name(name, stream) {
                 Ok(Some(entity)) => entity,
                 Ok(None) => continue,
                 Err(e) => {
@@ -1127,28 +1013,14 @@ async fn tier1_lookup(
 
     // Reuse the shared response tail: bitemporal/superseded/extraction-meta
     // filters, dedup, agent filters, truncate — then the standard envelope.
-    let FilterOutcome {
-        results,
-        dedup_removed,
-        total_results_before_topk,
-        final_top_k,
-    } = filter_and_truncate(matched, ctx, payload, state);
+    let outcome = cache_policy::truncate(filter_candidates(matched, ctx, payload, state));
+    let metrics = ResponseMetrics::tier1(ctx, &outcome);
+    let results = outcome.results;
     if results.is_empty() {
         return None;
     }
-    tracing::debug!(
-        "Tier-1 direct lookup answered: {} results (entities={:?})",
-        results.len(),
-        classification.features.entities
-    );
+    tracing::debug!("Tier-1 direct lookup answered: {} results", results.len());
 
-    let metrics = ResponseMetrics {
-        start: ctx.start,
-        complexity: ctx.complexity,
-        dedup_removed,
-        total_results_before_topk,
-        final_top_k,
-    };
     let mut response = build_response(metrics, results, state, auth, payload, classification).await;
     response.tier = Some(1);
     Some(response)
@@ -1178,6 +1050,9 @@ async fn build_response(
         dedup_removed,
         total_results_before_topk,
         final_top_k,
+        evidence,
+        operation,
+        retrieval_v2,
     } = metrics;
 
     // Implicit boost: top 3 results get +0.1 importance (cap 1.5, max once per 24h)
@@ -1272,6 +1147,11 @@ async fn build_response(
                 signal_breakdown: signal_breakdowns.get(idx).cloned().flatten(),
                 content_type: content_type_meta.map(|m| m.content_type.as_str().to_string()),
                 content_type_source: content_type_meta.map(|m| m.source.as_str().to_string()),
+                // Evidence object from the chunk already loaded above (flag-gated).
+                evidence: crate::evidence::hit_evidence(
+                    state.config.search.evidence_fields,
+                    chunk_opt.as_ref(),
+                ),
             }
         })
         .collect();
@@ -1315,37 +1195,23 @@ async fn build_response(
         None
     };
 
-    let trace_metadata = if payload.trace {
-        Some(super::types::TraceMetadata {
+    let trace_metadata = telemetry::build_trace_metadata(
+        payload,
+        state,
+        start,
+        complexity,
+        TraceCounters {
             total_results_before_topk,
             dedup_removed,
-            search_latency_us: start.elapsed().as_micros() as u64,
-            query_complexity: if state.config.search.complexity.enabled {
-                Some(format!("{}", complexity))
-            } else {
-                None
-            },
-        })
-    } else {
-        None
-    };
+            evidence,
+            operation,
+            retrieval_v2,
+        },
+    );
 
     let took_ms = start.elapsed().as_millis() as u64;
 
-    // Emit search event
-    if let Some(ref tx) = state.event_tx {
-        let top_scores: Vec<f32> = results.iter().take(5).map(|r| r.score as f32).collect();
-        loomem_core::event_log::emit(
-            tx,
-            loomem_core::event_log::MemoryEvent::Search {
-                query: payload.query.clone(),
-                stream_id: auth.stream_id.clone(),
-                top_scores,
-                latency_ms: took_ms,
-                result_count: results.len(),
-            },
-        );
-    }
+    evidence::emit_search_event(state, auth, &results, took_ms);
 
     // /150e-2 access-audit (ADR-018): metadata-only, no query text, aggregate
     // (target_id=None for search). No-op when the feature is disabled.
@@ -1436,6 +1302,7 @@ async fn bm25_retrieve(
 ) -> Result<Vec<loomem_core::SearchResult>, AppError> {
     // Dual-query merge: search with original (weight 1.0) and expanded (weight 0.5)
     let tantivy = state.tantivy.lock().await;
+    let runner = Bm25Runner::new(&tantivy, payload, ctx.telemetry.as_deref());
     let oq: &str = &ctx.original_query_stemmed;
 
     // Every branch routes through `bm25_over_streams`, so the stream predicate
@@ -1447,28 +1314,15 @@ async fn bm25_retrieve(
         let (start_ts, end_ts) = match date_filter {
             DateFilter::Range(start, end) => (*start, *end),
         };
-
-        bm25_over_streams(streams, |s| {
-            bm25_leaf(
-                &tantivy,
-                payload,
-                Bm25Leaf::date(oq, s, (start_ts, end_ts), ctx.limit * 2),
-            )
-        })?
+        date_bm25_results(&runner, streams, ctx, (start_ts, end_ts))?
     } else if let Some(ref entity) = payload.entity {
         bm25_over_streams(streams, |s| {
-            bm25_leaf(
-                &tantivy,
-                payload,
-                Bm25Leaf::entity(oq, s, entity, ctx.limit * 2),
-            )
+            runner.run(Bm25Leaf::entity(oq, s, entity, ctx.limit * 2))
         })?
     } else {
         let search_query =
             |query: &str, lim: usize| -> anyhow::Result<Vec<loomem_core::SearchResult>> {
-                bm25_over_streams(streams, |s| {
-                    bm25_leaf(&tantivy, payload, Bm25Leaf::plain(query, s, lim))
-                })
+                bm25_over_streams(streams, |s| runner.run(Bm25Leaf::plain(query, s, lim)))
             };
 
         let original_results = search_query(&ctx.original_query_stemmed, ctx.limit * 2)?;
@@ -1476,38 +1330,11 @@ async fn bm25_retrieve(
         if ctx.original_query_stemmed == ctx.expanded_query_stemmed {
             original_results
         } else {
-            let expanded_results = search_query(&ctx.expanded_query_stemmed, ctx.limit * 2)?;
-
-            let mut merged_map: std::collections::HashMap<String, loomem_core::SearchResult> =
-                std::collections::HashMap::new();
-
-            for result in original_results {
-                merged_map.insert(result.id.clone(), result);
-            }
-
-            for result in expanded_results {
-                let adjusted_score = result.score * 0.5;
-                merged_map
-                    .entry(result.id.clone())
-                    .and_modify(|e| {
-                        if adjusted_score > e.score {
-                            e.score = adjusted_score;
-                        }
-                    })
-                    .or_insert_with(|| {
-                        let mut r = result;
-                        r.score = adjusted_score;
-                        r
-                    });
-            }
-
-            let mut merged: Vec<_> = merged_map.into_values().collect();
-            merged.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            merged
+            merge_expanded_results_timed(
+                ctx,
+                original_results,
+                search_query(&ctx.expanded_query_stemmed, ctx.limit * 2)?,
+            )
         }
     };
 
@@ -1537,11 +1364,9 @@ async fn bm25_retrieve(
                 let mut sub_merged: std::collections::HashMap<String, loomem_core::SearchResult> =
                     std::collections::HashMap::new();
                 for s in streams {
-                    if let Ok(results) = bm25_leaf(
-                        &tantivy,
-                        payload,
-                        Bm25Leaf::plain(&sub_query_stemmed, Some(s), ctx.limit * 2),
-                    ) {
+                    if let Ok(results) =
+                        runner.run(Bm25Leaf::plain(&sub_query_stemmed, Some(s), ctx.limit * 2))
+                    {
                         for r in results {
                             sub_merged
                                 .entry(r.id.clone())
@@ -1556,13 +1381,10 @@ async fn bm25_retrieve(
                 }
                 sub_merged.into_values().collect()
             } else {
-                bm25_leaf(
-                    &tantivy,
-                    payload,
-                    Bm25Leaf::plain(&sub_query_stemmed, None, ctx.limit * 2),
-                )
-                .ok()
-                .unwrap_or_default()
+                runner
+                    .run(Bm25Leaf::plain(&sub_query_stemmed, None, ctx.limit * 2))
+                    .ok()
+                    .unwrap_or_default()
             };
 
             for result in sub_results {
@@ -1590,6 +1412,137 @@ async fn bm25_retrieve(
 
     drop(tantivy);
     Ok(bm25_results)
+}
+
+fn date_bm25_results(
+    runner: &Bm25Runner<'_>,
+    streams: Option<&[String]>,
+    ctx: &QueryContext,
+    range: (i64, i64),
+) -> anyhow::Result<Vec<loomem_core::SearchResult>> {
+    let lanes = bounded_date_queries(
+        &ctx.original_query_stemmed,
+        &ctx.expanded_query_stemmed,
+        ctx.operation.uses_operation_primary_merge(),
+    );
+    let original = date_bm25_leaf(
+        runner,
+        streams,
+        DateBm25Leaf {
+            query: &ctx.original_query_stemmed,
+            range,
+            limit: ctx.limit,
+        },
+    )?;
+    let Some(expanded_query) = lanes[1] else {
+        return Ok(original);
+    };
+    let expanded = date_bm25_leaf(
+        runner,
+        streams,
+        DateBm25Leaf {
+            query: expanded_query,
+            range,
+            limit: ctx.limit,
+        },
+    )?;
+    Ok(merge_expanded_results_timed(ctx, original, expanded))
+}
+
+fn bounded_date_queries<'a>(
+    original: &'a str,
+    expanded: &'a str,
+    operation_facets: bool,
+) -> [Option<&'a str>; 2] {
+    let expanded = (operation_facets && original != expanded).then_some(expanded);
+    [Some(original), expanded]
+}
+
+fn date_bm25_leaf(
+    runner: &Bm25Runner<'_>,
+    streams: Option<&[String]>,
+    leaf: DateBm25Leaf<'_>,
+) -> anyhow::Result<Vec<loomem_core::SearchResult>> {
+    bm25_over_streams(streams, |stream| {
+        runner.run(Bm25Leaf::date(
+            leaf.query,
+            stream,
+            leaf.range,
+            leaf.limit * 2,
+        ))
+    })
+}
+
+struct DateBm25Leaf<'a> {
+    query: &'a str,
+    range: (i64, i64),
+    limit: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExpandedMergeMode {
+    Legacy,
+    Operation,
+}
+
+fn expanded_merge_mode(ctx: &QueryContext) -> ExpandedMergeMode {
+    if !ctx.operation.uses_operation_primary_merge() {
+        ExpandedMergeMode::Legacy
+    } else {
+        ExpandedMergeMode::Operation
+    }
+}
+
+fn merge_expanded_results(
+    original: Vec<loomem_core::SearchResult>,
+    expanded: Vec<loomem_core::SearchResult>,
+    mode: ExpandedMergeMode,
+) -> Vec<loomem_core::SearchResult> {
+    match mode {
+        ExpandedMergeMode::Legacy => merge_weighted_results(original, expanded),
+        ExpandedMergeMode::Operation => operation::merge_expanded_results(original, expanded),
+    }
+}
+
+fn merge_expanded_results_timed(
+    ctx: &QueryContext,
+    original: Vec<loomem_core::SearchResult>,
+    expanded: Vec<loomem_core::SearchResult>,
+) -> Vec<loomem_core::SearchResult> {
+    let _timer = stage_timer(ctx.telemetry.as_deref().map(|meter| &meter.merge_us));
+    merge_expanded_results(original, expanded, expanded_merge_mode(ctx))
+}
+
+fn merge_weighted_results(
+    original: Vec<loomem_core::SearchResult>,
+    expanded: Vec<loomem_core::SearchResult>,
+) -> Vec<loomem_core::SearchResult> {
+    let mut merged: std::collections::HashMap<String, loomem_core::SearchResult> = original
+        .into_iter()
+        .map(|item| (item.id.clone(), item))
+        .collect();
+    for mut result in expanded {
+        result.score *= 0.5;
+        merge_weighted_result(&mut merged, result);
+    }
+    let mut results: Vec<_> = merged.into_values().collect();
+    results.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results
+}
+
+fn merge_weighted_result(
+    merged: &mut std::collections::HashMap<String, loomem_core::SearchResult>,
+    result: loomem_core::SearchResult,
+) {
+    merged
+        .entry(result.id.clone())
+        .and_modify(|existing| existing.score = existing.score.max(result.score))
+        .or_insert(result);
 }
 
 // ─── Cycle/012: rare-term guarantee lane + per-channel diagnostics ──────────
@@ -1785,7 +1738,9 @@ fn merge_lane_candidates(
     mut bm25_results: Vec<loomem_core::SearchResult>,
     lane: Option<&LaneOutcome>,
     diag: Option<&mut ChannelDiagnostics>,
+    telemetry: Option<&RequestTelemetry>,
 ) -> Vec<loomem_core::SearchResult> {
+    let _timer = stage_timer(telemetry.map(|meter| &meter.merge_us));
     let Some(lane) = lane else {
         return bm25_results;
     };
@@ -1882,7 +1837,7 @@ fn graph_channel_hits(
         return Vec::new();
     }
     let entity_names: Vec<String> = query_entities.iter().map(|(n, _)| n.clone()).collect();
-    let Ok(graph_chunks) = state.graph.find_related_chunks(
+    let Ok(graph_chunks) = state.graph.find_live_related_chunks(
         &entity_names,
         state.config.search.graph.max_hops,
         &auth.stream_id,
@@ -1942,114 +1897,25 @@ async fn vector_retrieve(
     guaranteed: Option<&std::collections::HashSet<String>>,
     channel_diag: Option<&mut ChannelDiagnostics>,
 ) -> Result<Vec<loomem_core::HybridSearchResult>, AppError> {
+    let _timer = telemetry::embedding_vector_timer(ctx.telemetry.as_deref());
     // Cycle/258 (Option A): agent id-set fetched once (None when no filter); the
     // two vector pre-filters use it via `retain_by_agent_set` (HashSet lookup,
     // replacing #257's per-embedding `get_chunk`).
-    let agent_set = agent_id_set(state, payload).await;
+    let (agent_set, bm25_results) = event_date::inputs(state, payload, ctx, bm25_results).await;
 
-    // Try hybrid search with vector embeddings
-    // Simple queries skip vector search for lower latency (BM25 only)
-    let skip_vector = ctx.complexity == QueryComplexity::Simple;
-    let hybrid_results = if state.config.storage.vector_enabled && !skip_vector {
-        // Embed query — local model or OpenAI
-        let embed_result = if let Some(ref embedder) = state.local_embedder {
-            embedder.embed(&payload.query)
-        } else if let Some(api_key) = state.config.llm.get_api_key() {
-            embeddings::embed(
-                &state.http_client,
-                &api_key,
-                &state.config.llm.embedding_model,
-                &payload.query,
-            )
-            .await
-        } else {
-            Err(anyhow::anyhow!("No embedding provider available"))
-        };
-        match embed_result {
-            Ok(query_embedding) => {
-                match state.store.get_all_embeddings() {
-                    Ok(all_embeddings) => {
-                        // Cycle/258: pre-filter the vector pool by the agent
-                        // id-set before scoring/truncation (parity with the BM25
-                        // source-level filter). No-op when no agent filter.
-                        let all_embeddings =
-                            retain_by_agent_set(all_embeddings, agent_set.as_ref());
-                        if !all_embeddings.is_empty() {
-                            let vector_stream_filter: Option<Vec<String>> = ctx.stream_list.clone();
-
-                            // Pre-filter embeddings by stream BEFORE vector search
-                            // Without this, vector search picks top-K from ALL streams,
-                            // then post-filter removes most results → vector_score=0
-                            let filtered_embeddings =
-                                if let Some(ref streams) = vector_stream_filter {
-                                    all_embeddings
-                                        .into_iter()
-                                        .filter(|(id, _)| {
-                                            state
-                                                .store
-                                                .get_chunk(id)
-                                                .ok()
-                                                .flatten()
-                                                .map(|c| streams.contains(&c.stream))
-                                                .unwrap_or(false)
-                                        })
-                                        .collect::<Vec<_>>()
-                                } else {
-                                    all_embeddings
-                                };
-
-                            tracing::info!(
-                                "Performing hybrid search with {} embeddings (stream-filtered)",
-                                filtered_embeddings.len()
-                            );
-
-                            if filtered_embeddings.is_empty() {
-                                state
-                                    .hybrid_search
-                                    .bm25_only_guaranteed(bm25_results, guaranteed)?
-                            } else {
-                                // Cycle/012 diagnostics: pre-fusion vector
-                                // channel view (same inputs the fusion sees).
-                                if let Some(diag) = channel_diag {
-                                    diag.vector_top =
-                                        vector_channel_hits(&filtered_embeddings, &query_embedding);
-                                }
-                                state.hybrid_search.search_with_vector_guaranteed(
-                                    bm25_results,
-                                    &filtered_embeddings,
-                                    &query_embedding,
-                                    Some(&state.store),
-                                    None, // already filtered, no need for post-filter
-                                    guaranteed,
-                                )?
-                            }
-                        } else {
-                            tracing::info!("No embeddings found, falling back to BM25 only");
-                            state
-                                .hybrid_search
-                                .bm25_only_guaranteed(bm25_results, guaranteed)?
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to retrieve embeddings: {}, falling back to BM25", e);
-                        state
-                            .hybrid_search
-                            .bm25_only_guaranteed(bm25_results, guaranteed)?
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to embed query: {}, falling back to BM25", e);
-                state
-                    .hybrid_search
-                    .bm25_only_guaranteed(bm25_results, guaranteed)?
-            }
-        }
-    } else {
-        state
-            .hybrid_search
-            .bm25_only_guaranteed(bm25_results, guaranteed)?
-    };
+    let hybrid_results = candidates::retrieve_primary(
+        state,
+        bm25_results,
+        agent_set.as_ref(),
+        candidates::PrimaryRequest {
+            ctx,
+            payload,
+            guaranteed,
+            channel_diag,
+            telemetry: ctx.telemetry.as_deref(),
+        },
+    )
+    .await?;
 
     // Vector multi-query: embed each sub-query, search vectors, merge results
     let hybrid_results = if state.config.search.vector_multi_query
@@ -2065,10 +1931,7 @@ async fn vector_retrieve(
         }
 
         // Get embeddings once (shared across sub-queries)
-        let all_embs = retain_by_agent_set(
-            state.store.get_all_embeddings().unwrap_or_default(),
-            agent_set.as_ref(),
-        );
+        let all_embs = event_date::multi_query_embeddings(state, ctx, agent_set.as_ref());
         let vector_stream_filter: Option<Vec<String>> = ctx.stream_list.clone();
         let filtered_embs: Vec<_> = if let Some(ref streams) = vector_stream_filter {
             all_embs
@@ -2092,17 +1955,7 @@ async fn vector_retrieve(
                 if sub_q == &ctx.query_without_date {
                     continue; // already embedded as main query
                 }
-                let sub_embed = if let Some(ref embedder) = state.local_embedder {
-                    embedder.embed(sub_q)
-                } else if let Some(api_key) = state.config.llm.get_api_key() {
-                    embeddings::embed(
-                        &state.http_client,
-                        &api_key,
-                        &state.config.llm.embedding_model,
-                        sub_q,
-                    )
-                    .await
-                } else {
+                let Some(sub_embed) = embed_sub_query(state, ctx, sub_q).await else {
                     continue;
                 };
 
@@ -2154,7 +2007,7 @@ async fn vector_retrieve(
                                 }
                             });
                     }
-                    tracing::debug!("Vector multi-query: embedded sub-query '{}'", sub_q);
+                    tracing::debug!("Vector multi-query: embedded sub-query");
                 }
             }
         }
@@ -2171,6 +2024,28 @@ async fn vector_retrieve(
     };
 
     Ok(hybrid_results)
+}
+
+async fn embed_sub_query(
+    state: &AppState,
+    ctx: &QueryContext,
+    query: &str,
+) -> Option<anyhow::Result<Vec<f32>>> {
+    if let Some(embedder) = state.local_embedder.as_ref() {
+        telemetry::record_extra_embedding_attempt(ctx);
+        return Some(embedder.embed(query));
+    }
+    let api_key = state.config.llm.get_api_key()?;
+    telemetry::record_extra_embedding_attempt(ctx);
+    Some(
+        embeddings::embed(
+            &state.http_client,
+            &api_key,
+            &state.config.llm.embedding_model,
+            query,
+        )
+        .await,
+    )
 }
 
 /// Cycle/118: log-frequency multiplier for implicit access-count boost.
@@ -2208,10 +2083,26 @@ fn compute_access_boost_multiplier(access_count: u32, weight: f64) -> f64 {
 /// multiplier + PreferenceOrDecision 1.5x boost, and complexity-aware final
 /// sort (Temporal → chronological, otherwise → score desc).
 ///
-/// Sync (no await): `graph.find_related_chunks` and `state.store.get_chunk`
+/// Sync (no await): `graph.find_live_related_chunks` and `state.store.get_chunk`
 /// are blocking. Sort/boost is pure CPU work once chunks are loaded. Pulling
 /// this out of the orchestrator isolates the scoring policy from I/O and
 /// makes it easier to swap strategies (see cycles/02-brief.md §score_and_rank).
+fn score_and_apply_operation(
+    results: Vec<loomem_core::HybridSearchResult>,
+    ctx: &QueryContext,
+    payload: &SearchRequest,
+    auth: &AuthContext,
+    state: &Arc<AppState>,
+) -> (
+    Vec<loomem_core::HybridSearchResult>,
+    operation::OperationMetrics,
+) {
+    let timer = stage_timer(ctx.telemetry.as_deref().map(|meter| &meter.rerank_us));
+    let ranked = score_and_rank(results, ctx, payload, auth, state);
+    drop(timer);
+    operation::apply(ranked, &ctx.operation, payload.debug_operation)
+}
+
 fn score_and_rank(
     mut hybrid_results: Vec<loomem_core::HybridSearchResult>,
     ctx: &QueryContext,
@@ -2224,7 +2115,7 @@ fn score_and_rank(
         let query_entities = state.entity_extractor.extract(&payload.query);
         if !query_entities.is_empty() {
             let entity_names: Vec<String> = query_entities.iter().map(|(n, _)| n.clone()).collect();
-            if let Ok(graph_chunks) = state.graph.find_related_chunks(
+            if let Ok(graph_chunks) = state.graph.find_live_related_chunks(
                 &entity_names,
                 state.config.search.graph.max_hops,
                 &auth.stream_id,
@@ -2469,100 +2360,51 @@ fn filter_superseded(
 /// filter (is_latest), extraction_meta filter (fact_type/subject/min_confidence),
 /// content-prefix dedup (150-char fingerprint, 80% prefix overlap), aggregation
 /// dedup (keep highest-scored chunk per subject), source_agent include/exclude
-/// filters, and truncate to final top-K (30 for Aggregation, config.top_k
+/// filters, and calculate final top-K (30 for Aggregation, config.top_k
 /// otherwise, overridable via payload.top_k).
 ///
 /// Returns `FilterOutcome` bundling the result list with `dedup_removed`,
 /// `total_results_before_topk`, and `final_top_k` — the three counters that
 /// feed into `ResponseMetrics` for trace metadata. Sync because every filter
 /// is a `retain` over a `Vec`.
-fn filter_and_truncate(
+fn filter_candidates(
     mut hybrid_results: Vec<loomem_core::HybridSearchResult>,
     ctx: &QueryContext,
     payload: &SearchRequest,
     state: &Arc<AppState>,
 ) -> FilterOutcome {
-    // Bitemporal filter: keep only chunks valid at the requested point in time.
-    // Fail-open + tracing::warn on metadata load failure (cycle/42 D2):
-    // time-travel is exploration UX, false negatives are worse than false
-    // positives. See cycles/42-audit-findings.md §A.
-    if let Some(valid_at) = payload.valid_at {
-        filter_bitemporal(&mut hybrid_results, &state.store, valid_at);
-    }
-
-    // Filter superseded chunks: by default, only show is_latest=true.
-    // Fail-closed + tracing::warn on metadata load failure (cycle/42 D1):
-    // a superseded chunk silently bypassing this filter is a regression of the
-    // supersede contract hardened in legacy-agent /40. See cycles/42-audit-findings.md §A.
-    if !payload.include_superseded {
-        filter_superseded(&mut hybrid_results, &state.store);
-    }
+    // Stage diagnostics (trace only): each `retain` below is wrapped so the
+    // dropped ids are recorded with the filter that removed them.
+    let mut log = rejections::RejectionLog::new(payload.trace);
+    let stage = rejections::STAGE_FILTERS;
+    event_date::apply(&mut hybrid_results, ctx, payload, state, &mut log);
 
     // Filter by extraction_meta fields (fact_type, subject, min_confidence)
     if payload.fact_type.is_some() || payload.subject.is_some() || payload.min_confidence.is_some()
     {
-        hybrid_results.retain(|r| {
+        log.retain_explained(&mut hybrid_results, stage, |r| {
             if let Ok(Some(chunk)) = state.store.get_chunk(&r.id) {
-                if let Some(ref meta) = chunk.extraction_meta {
-                    let type_ok = payload.fact_type.as_ref().is_none_or(|ft| {
-                        let chunk_type = match meta.fact_type {
-                            loomem_core::storage::FactType::PreferenceOrDecision => {
-                                "preference_or_decision"
-                            }
-                            loomem_core::storage::FactType::ProjectState => "project_state",
-                            loomem_core::storage::FactType::Fact => "fact",
-                            loomem_core::storage::FactType::Event => "event",
-                            loomem_core::storage::FactType::Experience => "experience",
-                        };
-                        // Match the built-in enum string, or an operator-configured
-                        // custom topic preserved in `meta.topic` (collapses to Fact
-                        // in the enum, so the raw key is the only way to filter it).
-                        chunk_type == ft.as_str() || meta.topic.as_deref() == Some(ft.as_str())
-                    });
-                    let subject_ok = payload.subject.as_ref().is_none_or(|s| {
-                        meta.subject
-                            .as_ref()
-                            .is_some_and(|ms| ms.to_lowercase().contains(&s.to_lowercase()))
-                    });
-                    let conf_ok = payload
-                        .min_confidence
-                        .is_none_or(|mc| meta.confidence >= mc);
-                    type_ok && subject_ok && conf_ok
-                } else {
-                    // No extraction_meta — exclude if any extraction filter is set
-                    false
-                }
+                rejections::extraction_filter_rejection(chunk.extraction_meta.as_ref(), payload)
             } else {
-                true
+                None
             }
         });
     }
 
     // Deduplicate near-identical results: keep highest-scored, collapse similar content.
     // Uses first 150 chars as fingerprint — catches duplicate ingest from daily logs.
+    // Fragments of different sources are distinct evidence and never collapse,
+    // nor does a fragment collapse against its own source.
     let count_before_dedup = hybrid_results.len();
     {
-        let mut seen_fingerprints: Vec<String> = Vec::new();
-        hybrid_results.retain(|r| {
-            let fp: String = r
-                .content
-                .chars()
-                .take(150)
-                .collect::<String>()
-                .to_lowercase();
-            // Check if any existing fingerprint shares >80% prefix
-            let dominated = seen_fingerprints.iter().any(|existing| {
-                let min_len = fp.len().min(existing.len());
-                if min_len < 30 {
-                    return false;
-                }
-                let common = fp
-                    .chars()
-                    .zip(existing.chars())
-                    .take_while(|(a, b)| a == b)
-                    .count();
-                common as f64 / min_len as f64 > 0.8
-            });
+        let mut seen_fingerprints: Vec<prefix_dedup::Fingerprint> = Vec::new();
+        let reason = super::types::RejectionReason::ContentPrefixDedup;
+        log.retain(&mut hybrid_results, stage, reason, |r| {
+            let source = prefix_dedup::fragment_source(&state.store, &r.id);
+            let fp = prefix_dedup::Fingerprint::new(&r.id, &r.content, source.as_deref());
+            let dominated = seen_fingerprints
+                .iter()
+                .any(|existing| fp.dominated_by(existing));
             if dominated {
                 tracing::debug!("Dedup: dropped duplicate result {}", r.id);
                 false
@@ -2575,7 +2417,8 @@ fn filter_and_truncate(
     // Aggregation dedup: keep only the highest-scored chunk per subject
     if matches!(ctx.complexity, QueryComplexity::Aggregation) {
         let mut seen_subjects: std::collections::HashSet<String> = std::collections::HashSet::new();
-        hybrid_results.retain(|r| {
+        let reason = super::types::RejectionReason::AggregationSubjectDedup;
+        log.retain(&mut hybrid_results, stage, reason, |r| {
             if let Ok(Some(chunk)) = state.store.get_chunk(&r.id) {
                 if let Some(ref meta) = chunk.extraction_meta {
                     if let Some(ref subject) = meta.subject {
@@ -2594,8 +2437,9 @@ fn filter_and_truncate(
     let dedup_removed = count_before_dedup - hybrid_results.len();
 
     // Source agent filtering (post-retrieval)
+    let reason = super::types::RejectionReason::SourceAgentFilter;
     if let Some(ref agent) = payload.source_agent {
-        hybrid_results.retain(|r| {
+        log.retain(&mut hybrid_results, stage, reason, |r| {
             if let Ok(Some(chunk)) = state.store.get_chunk(&r.id) {
                 chunk
                     .source
@@ -2608,7 +2452,7 @@ fn filter_and_truncate(
         });
     }
     if let Some(ref exclude) = payload.exclude_source_agents {
-        hybrid_results.retain(|r| {
+        log.retain(&mut hybrid_results, stage, reason, |r| {
             if let Ok(Some(chunk)) = state.store.get_chunk(&r.id) {
                 chunk
                     .source
@@ -2641,13 +2485,12 @@ fn filter_and_truncate(
     } else {
         payload.top_k.unwrap_or(state.config.search.top_k)
     };
-    hybrid_results.truncate(final_top_k);
-
     FilterOutcome {
         results: hybrid_results,
         dedup_removed,
         total_results_before_topk,
         final_top_k,
+        rejections: log.into_entries(),
     }
 }
 
@@ -2749,7 +2592,7 @@ async fn compute_associations(
     // 1. Graph walk: use entities from query (stream-scoped)
     let query_entities = state.entity_extractor.extract(query);
     for (entity_name, _) in &query_entities {
-        if let Ok(Some(entity)) = state.graph.get_entity_by_name(entity_name, stream_id) {
+        if let Ok(Some(entity)) = state.graph.get_live_entity_by_name(entity_name, stream_id) {
             if let Ok(walk_results) = random_walk(&state.graph, &entity.id, 3, 2, 20) {
                 for walk in &walk_results {
                     for chunk_id in &walk.terminal_chunk_ids {
@@ -2945,14 +2788,7 @@ async fn compute_associations(
         candidates.len()
     );
 
-    // Sort by serendipity score, deduplicate, take max_associations
-    candidates.sort_by(|a, b| {
-        b.serendipity_score
-            .partial_cmp(&a.serendipity_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    candidates.dedup_by(|a, b| a.chunk_id == b.chunk_id);
-    candidates.truncate(max_assoc);
+    let candidates = associations::finalize(candidates, state, stream_id, max_assoc);
 
     // ECA-29: Record mean Sₑ for this search (for health tracking)
     if !candidates.is_empty() {
@@ -2965,20 +2801,7 @@ async fn compute_associations(
         return None;
     }
 
-    let assoc_results: Vec<Association> = candidates
-        .into_iter()
-        .map(|c| Association {
-            content: c.content,
-            score: c.serendipity_score,
-            source_mechanism: c.source_mechanism,
-            explanation: Some(format!(
-                "relevance={:.2} obviousness={:.2} cluster_dist={:.2}",
-                c.relevance, c.obviousness, c.cluster_dist
-            )),
-        })
-        .collect();
-
-    Some(assoc_results)
+    Some(associations::serialize(candidates))
 }
 
 /// Dedicated association endpoint: POST /v1/associate
@@ -3090,7 +2913,7 @@ pub async fn associate_handler(
         let query_entities = state.entity_extractor.extract(&payload.query);
         let hops = payload.hops.unwrap_or(3);
         for (entity_name, _) in &query_entities {
-            if let Ok(Some(entity)) = state.graph.get_entity_by_name(entity_name, stream_id) {
+            if let Ok(Some(entity)) = state.graph.get_live_entity_by_name(entity_name, stream_id) {
                 if let Ok(walk_results) = loomem_core::associator::graph_walk::random_walk(
                     &state.graph,
                     &entity.id,
@@ -3256,27 +3079,8 @@ pub async fn associate_handler(
         }
     }
 
-    // Sort, deduplicate, truncate
-    candidates.sort_by(|a, b| {
-        b.serendipity_score
-            .partial_cmp(&a.serendipity_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    candidates.dedup_by(|a, b| a.chunk_id == b.chunk_id);
-    candidates.truncate(count);
-
-    let associations: Vec<Association> = candidates
-        .into_iter()
-        .map(|c| Association {
-            content: c.content,
-            score: c.serendipity_score,
-            source_mechanism: c.source_mechanism,
-            explanation: Some(format!(
-                "relevance={:.2} obviousness={:.2} cluster_dist={:.2}",
-                c.relevance, c.obviousness, c.cluster_dist
-            )),
-        })
-        .collect();
+    let associations =
+        associations::serialize(associations::finalize(candidates, &state, stream_id, count));
 
     Ok(Json(AssociateResponse {
         associations,
@@ -3406,6 +3210,9 @@ mod tests {
             // Verify SearchRequest accepts both fields (compile-time AC-1 proof).
             let payload = SearchRequest {
                 query: "test".into(),
+                reference_time: None,
+                operation_policy: loomem_core::search::OperationPolicy::E0,
+                debug_operation: false,
                 user_id: None,
                 top_k: None,
                 stream: Some("X".into()),
@@ -3440,7 +3247,7 @@ mod tests {
     // ── Cycle /42 — bitemporal + supersede filter unit tests ──────────────
     //
     // Lock the bitemporal (`valid_at`) and supersede (`is_latest`) filter
-    // semantics that `filter_and_truncate` delegates to via the two pure
+    // semantics that `filter_candidates` delegates to via the two pure
     // helpers `filter_bitemporal` and `filter_superseded` (search.rs §1500).
     // Mirror `mod scope_tests` style: tempdir + real `RocksDbStore`, no
     // `AppState`. See `cycles/42-audit-findings.md` §E for placement
@@ -3512,6 +3319,7 @@ mod tests {
                 n_ratings: 0,
                 last_rated_at: None,
                 provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+                fragment: None,
             }
         }
 
@@ -3741,6 +3549,9 @@ mod tests {
         fn payload(query: &str, debug: bool) -> SearchRequest {
             SearchRequest {
                 query: query.to_string(),
+                reference_time: None,
+                operation_policy: loomem_core::search::OperationPolicy::E0,
+                debug_operation: false,
                 user_id: None,
                 top_k: None,
                 stream: None,
@@ -3861,6 +3672,9 @@ mod tests {
         fn payload(query: &str, debug: bool) -> SearchRequest {
             SearchRequest {
                 query: query.to_string(),
+                reference_time: None,
+                operation_policy: loomem_core::search::OperationPolicy::E0,
+                debug_operation: false,
                 user_id: None,
                 top_k: None,
                 stream: None,
@@ -3911,6 +3725,7 @@ mod tests {
                 signal_breakdown: sb,
                 content_type: None,
                 content_type_source: None,
+                evidence: None,
             }
         }
 
@@ -4163,6 +3978,7 @@ mod tests {
                 n_ratings: 0,
                 last_rated_at: None,
                 provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+                fragment: None,
             }
         }
 
@@ -4183,6 +3999,7 @@ mod tests {
 
         fn fixture_search_cfg() -> SearchConfig {
             SearchConfig {
+                max_request_top_k: 1000,
                 top_k: 10,
                 surprise_boost: 1.5,
                 hybrid_weights: HybridWeightsConfig {
@@ -4221,6 +4038,8 @@ mod tests {
                 vector_similarity_floor: 0.0,
                 decay_match_relief: 0.0,
                 tier1: loomem_core::search::tier1::Tier1Config::default(),
+                operation: loomem_core::hybrid_search::OperationSearchConfig::default(),
+                evidence_fields: false,
             }
         }
 
@@ -4298,6 +4117,9 @@ mod agent_filter_tests {
     fn req(source_agent: Option<&str>, exclude: Option<Vec<&str>>) -> SearchRequest {
         SearchRequest {
             query: "q".into(),
+            reference_time: None,
+            operation_policy: loomem_core::search::OperationPolicy::E0,
+            debug_operation: false,
             user_id: None,
             top_k: None,
             stream: None,
@@ -4322,6 +4144,8 @@ mod agent_filter_tests {
             debug_channels: false,
         }
     }
+
+    mod rerank_cache_tests;
 
     // ── e2e: full search path fills top_k under an agent filter ───────────────
     // Cycle/258 replaced #257's over-fetch arithmetic (`agent_filtered_retrieval_limit`
@@ -4372,6 +4196,7 @@ mod agent_filter_tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 
@@ -4635,6 +4460,34 @@ mod stream_scoping_e2e_tests {
     use loomem_core::storage::{Chunk, UserRole};
     use loomem_core::{SourceTag, TextDocument};
 
+    fn bm25_result(id: &str, score: f32) -> loomem_core::SearchResult {
+        loomem_core::SearchResult {
+            id: id.into(),
+            content: id.into(),
+            user_id: String::new(),
+            app_id: String::new(),
+            level: 0,
+            timestamp: 0,
+            stream: "streamA".into(),
+            score,
+        }
+    }
+
+    fn equal_score_operation_ids(reversed: bool) -> Vec<String> {
+        let expanded = if reversed {
+            vec![bm25_result("a", 2.0), bm25_result("b", 2.0)]
+        } else {
+            vec![bm25_result("b", 2.0), bm25_result("a", 2.0)]
+        };
+        operation::merge_expanded_results(
+            vec![bm25_result("z", 1.0), bm25_result("y", 1.0)],
+            expanded,
+        )
+        .into_iter()
+        .map(|item| item.id)
+        .collect()
+    }
+
     /// A chunk in an explicit stream. `1_700_000_000` = 2023-11-14, so a
     /// 2023 date window covers it.
     fn chunk(id: &str, stream: &str, content: &str) -> Chunk {
@@ -4677,6 +4530,7 @@ mod stream_scoping_e2e_tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 
@@ -4697,7 +4551,7 @@ mod stream_scoping_e2e_tests {
     }
 
     /// Seed one chunk into both RocksDB and Tantivy (with an optional entity tag).
-    async fn seed_one(
+    pub(super) async fn seed_one(
         state: &std::sync::Arc<AppState>,
         id: &str,
         stream: &str,
@@ -4709,6 +4563,48 @@ mod stream_scoping_e2e_tests {
         let mut tv = state.tantivy.lock().await;
         tv.upsert_document(index_doc(&c, entities)).unwrap();
         tv.commit().unwrap();
+    }
+
+    async fn seed_at(
+        state: &std::sync::Arc<AppState>,
+        id: &str,
+        stream: &str,
+        content: &str,
+        timestamp: u64,
+    ) {
+        let mut c = chunk(id, stream, content);
+        c.timestamp = timestamp;
+        state.store.store_chunk(&c).unwrap();
+        let mut tv = state.tantivy.lock().await;
+        tv.upsert_document(index_doc(&c, None)).unwrap();
+        tv.commit().unwrap();
+    }
+
+    pub(super) fn configured_state(operation_enabled: bool) -> std::sync::Arc<AppState> {
+        let (app, state) = crate::tests::make_test_app();
+        drop(app);
+        let Ok(mut state) = std::sync::Arc::try_unwrap(state) else {
+            panic!("test router must release its AppState clone")
+        };
+        state.config.search.operation.enabled = operation_enabled;
+        state.config.search.cache.enabled = true;
+        std::sync::Arc::new(state)
+    }
+
+    pub(super) async fn response_projection(
+        state: &std::sync::Arc<AppState>,
+        payload: SearchRequest,
+    ) -> serde_json::Value {
+        let response = search_handler(
+            axum::extract::State(state.clone()),
+            axum::Extension(admin_auth()),
+            axum::Json(payload),
+        )
+        .await
+        .expect("search_handler");
+        let mut value = serde_json::to_value(response.0).unwrap();
+        value.as_object_mut().unwrap().remove("took_ms");
+        value
     }
 
     /// Twins: identical content + entity, one in each stream.
@@ -4732,6 +4628,9 @@ mod stream_scoping_e2e_tests {
     fn base_req() -> SearchRequest {
         SearchRequest {
             query: "budget".into(),
+            reference_time: None,
+            operation_policy: loomem_core::search::OperationPolicy::E0,
+            debug_operation: false,
             user_id: None,
             top_k: Some(10),
             stream: None,
@@ -4835,4 +4734,200 @@ mod stream_scoping_e2e_tests {
             "streamB twin must be retrievable via entity filter scoped to streamB, got {entity_ids:?}"
         );
     }
+
+    #[tokio::test]
+    async fn e1c_anchored_date_executes_the_combined_facet_leaf() {
+        let state = configured_state(true);
+        seed_at(&state, "facet-only", "streamA", "event", 1_791_158_400).await;
+
+        let mut baseline = base_req();
+        baseline.streams = Some(vec!["streamA".into()]);
+        baseline.query = "What happened 2 weeks ago?".into();
+        assert!(run(&state, baseline).await.is_empty());
+
+        let mut combined = base_req();
+        combined.streams = Some(vec!["streamA".into()]);
+        combined.query = "What happened 2 weeks ago?".into();
+        combined.reference_time = Some("2026-10-19T12:00:00Z".into());
+        combined.operation_policy = loomem_core::search::OperationPolicy::E1C;
+        let ids = run(&state, combined).await;
+        assert_eq!(ids, vec!["facet-only"]);
+        assert_eq!(
+            bounded_date_queries(
+                "what happened 2 weeks ago",
+                "what happened 2 weeks ago event",
+                true
+            )
+            .into_iter()
+            .flatten()
+            .count(),
+            2
+        );
+        assert_eq!(
+            bounded_date_queries(
+                "what happened 2 weeks ago",
+                "what happened 2 weeks ago event",
+                false
+            )
+            .into_iter()
+            .flatten()
+            .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn e1_equal_score_merge_has_a_total_deterministic_order() {
+        let expected = vec!["z", "y", "a", "b"];
+        for iteration in 0..100 {
+            assert_eq!(equal_score_operation_ids(iteration % 2 == 1), expected);
+        }
+    }
+
+    #[test]
+    fn production_merge_router_covers_e1f_nondate_e1c_and_e0() {
+        let enabled = configured_state(true);
+        for policy in [
+            loomem_core::search::OperationPolicy::E1F,
+            loomem_core::search::OperationPolicy::E1C,
+        ] {
+            let mut request = base_request_for("Recommend a guitar");
+            request.operation_policy = policy;
+            let ctx = prepare_query_context(&enabled, &admin_auth(), &request).unwrap();
+            assert!(!ctx.operation.plan.added_terms.is_empty());
+            assert_ne!(ctx.original_query_stemmed, ctx.expanded_query_stemmed);
+            assert_eq!(expanded_merge_mode(&ctx), ExpandedMergeMode::Operation);
+            let ids: Vec<_> = merge_expanded_results(
+                vec![bm25_result("z", 1.0), bm25_result("y", 1.0)],
+                vec![bm25_result("b", 2.0), bm25_result("a", 2.0)],
+                expanded_merge_mode(&ctx),
+            )
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
+            assert_eq!(ids, ["z", "y", "a", "b"]);
+        }
+
+        let e0 = prepare_query_context(
+            &enabled,
+            &admin_auth(),
+            &base_request_for("Recommend a guitar"),
+        )
+        .unwrap();
+        assert_eq!(expanded_merge_mode(&e0), ExpandedMergeMode::Legacy);
+
+        let disabled = configured_state(false);
+        let mut fallback = base_request_for("Recommend a guitar");
+        fallback.operation_policy = loomem_core::search::OperationPolicy::E1C;
+        let fallback_ctx = prepare_query_context(&disabled, &admin_auth(), &fallback).unwrap();
+        assert_eq!(
+            expanded_merge_mode(&fallback_ctx),
+            ExpandedMergeMode::Legacy
+        );
+    }
+
+    #[test]
+    fn e1_equal_score_merge_child_process() {
+        assert_eq!(equal_score_operation_ids(false), ["z", "y", "a", "b"]);
+    }
+
+    #[test]
+    fn e1_equal_score_merge_is_stable_across_processes() {
+        let executable = std::env::current_exe().expect("current test executable");
+        let test_name =
+            "handlers::search::stream_scoping_e2e_tests::e1_equal_score_merge_child_process";
+        for _ in 0..30 {
+            let output = std::process::Command::new(&executable)
+                .args(["--exact", test_name])
+                .output()
+                .expect("spawn deterministic merge child");
+            assert!(
+                output.status.success(),
+                "child failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn default_off_absent_disabled_and_explicit_e0_are_identical() {
+        let state = configured_state(false);
+        seed_twins(&state).await;
+        for query in ["budget", "budget 2023-11-14"] {
+            let absent: SearchRequest = serde_json::from_value(serde_json::json!({
+                "query": query,
+                "top_k": 10,
+                "streams": ["streamA"]
+            }))
+            .unwrap();
+            let mut explicit_e0 = base_req();
+            explicit_e0.query = query.into();
+            explicit_e0.streams = Some(vec!["streamA".into()]);
+            explicit_e0.operation_policy = loomem_core::search::OperationPolicy::E0;
+            let mut disabled = base_req();
+            disabled.query = query.into();
+            disabled.streams = Some(vec!["streamA".into()]);
+            disabled.operation_policy = loomem_core::search::OperationPolicy::E1C;
+            disabled.reference_time = Some("2026-10-19T12:00:00Z".into());
+
+            let absent_ctx = prepare_query_context(&state, &admin_auth(), &absent).unwrap();
+            let e0_ctx = prepare_query_context(&state, &admin_auth(), &explicit_e0).unwrap();
+            let disabled_ctx = prepare_query_context(&state, &admin_auth(), &disabled).unwrap();
+            assert_eq!(absent_ctx.cache_key, e0_ctx.cache_key);
+            assert_eq!(absent_ctx.cache_key, disabled_ctx.cache_key);
+
+            state.query_cache.lock().await.clear();
+            let _cold = response_projection(&state, base_request_for(query)).await;
+            let absent_response = response_projection(&state, absent).await;
+            let e0_response = response_projection(&state, explicit_e0).await;
+            let disabled_response = response_projection(&state, disabled).await;
+            assert_eq!(
+                absent_response, e0_response,
+                "absent and explicit E0 must share the complete warm-cache response"
+            );
+            assert_eq!(e0_response, disabled_response);
+        }
+    }
+
+    pub(super) fn base_request_for(query: &str) -> SearchRequest {
+        let mut request = base_req();
+        request.query = query.into();
+        request.streams = Some(vec!["streamA".into()]);
+        request
+    }
+
+    #[tokio::test]
+    async fn top_k_above_e1_cap_executes_byte_identical_e0_fallback() {
+        let state = configured_state(true);
+        seed_one(&state, "a1", "streamA", "guitar preference", None).await;
+        let mut baseline = base_request_for("Recommend a guitar");
+        baseline.top_k = Some(61);
+        let mut oversized = base_request_for("Recommend a guitar");
+        oversized.top_k = Some(61);
+        oversized.operation_policy = loomem_core::search::OperationPolicy::E1C;
+        state.query_cache.lock().await.clear();
+        let mut cold = base_request_for("Recommend a guitar");
+        cold.top_k = Some(61);
+        let _cold = response_projection(&state, cold).await;
+        assert_eq!(
+            response_projection(&state, baseline).await,
+            response_projection(&state, oversized).await
+        );
+    }
+}
+
+fn rerank_budget_allows(state: &Arc<AppState>, auth: &AuthContext) -> bool {
+    let cost_status = loomem_core::cost_tracker::check_cost_budget_for_stream(
+        &state.store,
+        &auth.stream_id,
+        state.config.cost.daily_cap_usd,
+    );
+    if !cost_status.allow_reranker() {
+        tracing::warn!(
+            "Reranker disabled for stream {}: cost budget tier={} (ECA-31)",
+            auth.stream_id,
+            cost_status.description()
+        );
+    }
+    cost_status.allow_reranker()
 }

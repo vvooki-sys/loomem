@@ -1,3 +1,7 @@
+#[path = "derived_safety.rs"]
+pub(crate) mod derived_safety;
+mod graph_publication;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -208,15 +212,12 @@ fn parse_structured_response(
     model: &str,
 ) -> Option<Enrichment> {
     // Strip markdown code fences if present
-    let cleaned = summary
-        .trim()
+    let trimmed = summary.trim();
+    let unfenced = trimmed
         .strip_prefix("```json")
-        .unwrap_or(summary.trim())
-        .strip_prefix("```")
-        .unwrap_or(summary.trim())
-        .strip_suffix("```")
-        .unwrap_or(summary.trim())
-        .trim();
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed);
+    let cleaned = unfenced.strip_suffix("```").unwrap_or(unfenced).trim();
 
     let response: StructuredResponse = serde_json::from_str(cleaned).ok()?;
 
@@ -416,6 +417,10 @@ impl Drop for InProgressGuard {
     }
 }
 
+fn is_consolidation_source(chunk: &Chunk) -> bool {
+    chunk.is_latest && chunk.deleted_at.is_none()
+}
+
 pub async fn consolidate(
     storage: Arc<RocksDbStore>,
     tantivy: Arc<tokio::sync::Mutex<TantivyIndex>>,
@@ -442,7 +447,11 @@ pub async fn consolidate(
     );
 
     // Scan RocksDB for L0 chunks that are unconsolidated and old enough
-    let candidates = storage.scan_l0_unconsolidated(config.min_age_secs, config.batch_size * 10)?;
+    let candidates: Vec<_> = storage
+        .scan_l0_unconsolidated(config.min_age_secs, config.batch_size * 10)?
+        .into_iter()
+        .filter(is_consolidation_source)
+        .collect();
 
     if candidates.is_empty() {
         info!("No L0 chunks eligible for consolidation");
@@ -499,20 +508,8 @@ pub async fn consolidate(
         // Sub-group by topic similarity so unrelated facts don't merge into one L1 chunk.
         // Each sub-group gets its own LLM compress call → its own L1 chunk.
         //
-        // Bypass for lme_* eval streams: their content is deliberately heterogeneous
-        // (multi-topic per stream by design). Topic clustering splits them into 1-2 chunk
-        // sub-groups that fail min_chunks_to_consolidate. Treat the whole stream as one
-        // group and let the structured prompt extract multiple typed observations.
-        let sub_groups = if stream.starts_with("lme_") {
-            debug!(
-                "Stream {}: bypassing topic sub-grouping for eval stream ({} chunks → 1 group)",
-                stream,
-                chunks.len()
-            );
-            vec![chunks.clone()]
-        } else {
-            cluster_by_similarity(&storage, &chunks, config.similarity_threshold)
-        };
+        // Apply the same grouping policy to every stream, including benchmarks.
+        let sub_groups = cluster_by_similarity(&storage, &chunks, config.similarity_threshold);
 
         info!(
             "Stream {}: {} chunks → {} sub-groups",
@@ -608,12 +605,7 @@ pub async fn consolidate(
                             &llm_config.compression_model,
                         ) {
                             Some(e) => {
-                                debug!(
-                                    "Structured consolidation: type={}, event_date={:?}, confidence={:.2}",
-                                    e.memory_type,
-                                    e.extraction_meta.event_date,
-                                    e.extraction_meta.confidence,
-                                );
+                                debug!("Structured consolidation response parsed");
                                 Some(e)
                             }
                             None => {
@@ -661,7 +653,7 @@ pub async fn consolidate(
                         )
                     };
 
-                    let l1_chunk = Chunk {
+                    let mut l1_chunk = Chunk {
                         id: l1_id.clone(),
                         content: l1_content,
                         stream: stream.clone(),
@@ -692,7 +684,7 @@ pub async fn consolidate(
                         memory_type: l1_memory_type,
                         extraction_meta: l1_extraction_meta,
                         deleted_at: None,
-                        trust_level: None,
+                        trust_level: Some(derived_safety::derived_trust(sub_group.iter()).into()),
                         ingester_user_id: None,
                         alpha: 1.0,
                         beta: 1.0,
@@ -700,14 +692,11 @@ pub async fn consolidate(
                         n_ratings: 0,
                         last_rated_at: None,
                         provenance_role: crate::storage::ProvenanceRole::Claim,
+                        fragment: None,
                     };
 
-                    // Use enriched or raw summary for embedding + entity extraction
-                    let summary_for_index = if enrichment.is_some() {
-                        l1_chunk.content.clone()
-                    } else {
-                        summary.clone()
-                    };
+                    derived_safety::protect_derived_chunk(&mut l1_chunk, pii_filter);
+                    let summary_for_index = l1_chunk.content.clone();
 
                     // Generate embedding for L1 BEFORE storing (needed for quality gate).
                     // Route through the SAME embedder the rest of the system uses: the
@@ -753,26 +742,20 @@ pub async fn consolidate(
                     };
 
                     // ECA-15: Quality gate — reject if consolidated chunk lost too much meaning.
-                    // Bypass for lme_* eval streams: their content is deliberately heterogeneous
-                    // (multiple topics per stream), so the gate's homogeneity assumption produces
-                    // false negatives. Production streams unaffected.
-                    let skip_quality_gate = stream.starts_with("lme_");
-                    if !skip_quality_gate {
-                        if let Some(ref emb) = l1_embedding {
-                            if !quality_gate(
-                                &storage,
-                                &summary,
-                                emb,
-                                &sub_group,
-                                config.quality_gate_threshold,
-                            ) {
-                                warn!(
-                                    "Consolidation quality gate rejected sub-group in stream {} ({} chunks)",
-                                    stream, sub_group.len()
-                                );
-                                skipped_count += sub_group.len();
-                                continue;
-                            }
+                    if let Some(ref emb) = l1_embedding {
+                        if !quality_gate(
+                            &storage,
+                            &summary,
+                            emb,
+                            &sub_group,
+                            config.quality_gate_threshold,
+                        ) {
+                            warn!(
+                                "Consolidation quality gate rejected sub-group in stream {} ({} chunks)",
+                                stream, sub_group.len()
+                            );
+                            skipped_count += sub_group.len();
+                            continue;
                         }
                     }
 
@@ -863,7 +846,9 @@ pub async fn consolidate(
 
                     // Store L1 embedding (already generated above)
                     if let Some(embedding) = l1_embedding {
-                        if let Err(e) = storage.store_embedding(&l1_id, embedding) {
+                        if let Err(e) = derived_safety::store_generated_embedding(
+                            &storage, &l1_chunk, embedding,
+                        ) {
                             warn!("Failed to store L1 embedding: {}", e);
                         }
                     }
@@ -881,45 +866,17 @@ pub async fn consolidate(
                         }
                     }
 
-                    // Store entities and relations extracted in step 1
-                    if !extracted_entities.is_empty() {
-                        let typed: Vec<(String, String)> = extracted_entities
-                            .iter()
-                            .map(|(n, t)| (n.clone(), t.to_string()))
-                            .collect();
-                        let _ = storage.store_entities(&l1_id, &stream, &typed);
-                    }
-                    if !extracted_relations.is_empty() {
-                        let tuples: Vec<(String, String, String)> = extracted_relations
-                            .iter()
-                            .map(|r| (r.subject.clone(), r.relation.clone(), r.object.clone()))
-                            .collect();
-                        let _ = storage.store_relations(&l1_id, &stream, &tuples);
-                    }
-
-                    // Populate graph
-                    if let (Some(ref extractor), Some(ref g)) = (&entity_extractor, &graph) {
-                        for (name, etype) in &extracted_entities {
-                            let aliases = extractor.get_aliases_for(name);
-                            if let Ok(node) =
-                                g.get_or_create_entity(name, &etype.to_string(), &aliases, &stream)
-                            {
-                                let _ = g.add_chunk_to_entity(&node.id, &l1_id);
-                            }
-                        }
-                        for rel in &extracted_relations {
-                            if let (Ok(Some(src)), Ok(Some(tgt))) = (
-                                g.get_entity_by_name(&rel.subject, &stream),
-                                g.get_entity_by_name(&rel.object, &stream),
-                            ) {
-                                if let Ok(edge) =
-                                    g.get_or_create_edge(&src.id, &tgt.id, &rel.relation, &stream)
-                                {
-                                    let _ = g.add_chunk_to_edge(&edge.id, &l1_id);
-                                }
-                            }
-                        }
-                    }
+                    graph_publication::publish(
+                        &storage,
+                        graph.as_ref(),
+                        graph_publication::Input {
+                            chunk: &l1_chunk,
+                            entities: &extracted_entities,
+                            relations: &extracted_relations,
+                            extractor: entity_extractor.as_deref(),
+                            pii: pii_filter,
+                        },
+                    );
 
                     // Step 5: mark source L0 chunks as consolidated.
                     // Gated on helper success (above): if helper returned Err we already
@@ -1052,3 +1009,7 @@ mod tests {
         assert_eq!(cfg.interval_secs, 21600);
     }
 }
+
+#[cfg(test)]
+#[path = "consolidation_regression_tests.rs"]
+mod regression_tests;

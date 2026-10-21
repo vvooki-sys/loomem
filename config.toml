@@ -30,6 +30,7 @@ sync_on_write = false  # true = fsync every write (safer, slower)
 
 [search]
 top_k = 10
+max_request_top_k = 1000  # HTTP request ceiling; MCP retains its separate lower caps
 surprise_boost = 1.5  # Surprise boost multiplier from Titans intelligence
 synonyms_file = "synonyms.toml"
 entities_file = "entities.toml"
@@ -45,6 +46,7 @@ user_state_boost = 1.0  # Retrieval boost for user-authored state facts (attribu
 agent_fact_damp = 1.0  # Retrieval damp for agent-authored facts (attributed_to=="assistant"). 1.0=neutral (default; no penalty). <1.0 only with A/B evidence the boost alone is insufficient and no regression on assistant/preference.
 vector_similarity_floor = 0.0  # WS-1(a) Spectron gap brief: raw-cosine floor for the vector channel — below-floor candidates get no vector weight (kills max-normalized noise). 0.0=disabled (byte-identical). e5-small cosines run high (~0.70-0.95); tune on the cycle/012 probe before enabling (0.75-0.80 starting range).
 decay_match_relief = 0.70  # WS-1(b), enabled in cycle/015: strong lexical/vector match relieves the age penalty (effective = decay + (1-decay)*relief*strength). Benefit: buried-needle rank 13.9->5.0, full-name R@5 0.00->1.00 on the cycle/012 probe with real e5-small embeddings. Freshness gate (cycle/015 KROK 3, supersede-pair fixture): stale_wins = 0 at 0.70 in both arms; the order flips only at 1.0 with a +0.02 designed cosine edge - do NOT raise toward 1.0 without re-running k3_freshness_supersede_grid.
+evidence_fields = false  # Attach the additive `evidence` object (author, conversation_date, event_date + event_date_provenance, source_id, byte_start/byte_end) to every /v1/search hit and GET /api/memories/:id item, plus a bracketed suffix on memory_search lines. false = responses byte-identical to pre-flag output.
 
 [search.cache]
 enabled = true
@@ -70,6 +72,9 @@ bm25 = 0.4
 [search.tier1]
 enabled = false        # WS-1(c) Spectron gap brief: Tier-1 direct entity→attribute lookup — factual query naming a graph entity + attribute term answers straight from the entity chunk index (no embeddings, no fusion, no LLM). Off = execution path identical to pre-cycle. Response carries "tier": 1 when the lane answered.
 candidate_cap = 64     # max entity chunks inspected per query (cost stays O(cap) chunk reads)
+
+[search.operation]
+enabled = false        # Phase 7 E1: request-level E1-D/E1-F/E1-C policies remain inert unless explicitly enabled here.
 
 [search.rare_term_lane]
 enabled = false        # Cycle/012: force-include chunks holding a rare query token in the reranker candidate pool. Off = execution path identical to pre-cycle.
@@ -203,6 +208,45 @@ search_max_top_k = 20           # cap for normal queries
 aggregation_default_top_k = 30  # top_k when omitted (aggregation queries)
 aggregation_max_top_k = 30      # cap for aggregation queries
 
+# Source fragments (source → turn-level fragments → index). Governs how a
+# canonical conversation source is segmented: one fragment per transcript
+# turn, long turns split further at paragraph / sentence / whitespace
+# boundaries. Off by default — existing deployments and clients keep
+# byte-identical behavior. max_fragment_tokens is the budget for a fragment's
+# TEXT as measured by token_counter; prefix_reserve_tokens is headroom above
+# it (the embedder adds exactly two special tokens to the content — no
+# "passage:"/"query:" prefix is prepended anywhere — the rest absorbs the
+# gap between the chosen counter and the embedder's own tokenizer). The sum
+# must fit the embedder's input window: validated at startup as
+# max_fragment_tokens + prefix_reserve_tokens <= 512 when embedding_provider
+# is "local" (multilingual-e5-small silently truncates longer input).
+# token_counter: "embedder" (DEFAULT and recommended) counts with the loaded
+# local model's own tokenizer, the only measure that guarantees no hidden
+# truncation. It needs the local model: with enabled = true, config load
+# rejects "embedder" unless embedding_provider = "local", and segmentation
+# fails loudly (the memory_ingest text says so, never a silent fallback to an
+# approximation) if the model is not loaded. "approx" (ceil(chars / 3),
+# model-free; safe for Latin-script prose, under-counts code/JSON/URLs and
+# CJK) and "tiktoken" (cl100k_base BPE) are for non-local embedding providers
+# and offline tests — set one of them explicitly when enabling fragments
+# with embedding_provider = "openai".
+# When enabled, memory_ingest persists the fragments of each source right
+# after the source itself (before extraction); fragments are additive and
+# never block fact extraction. With the flag on, the same text is embedded
+# and entity-extracted once for the source and once for each fragment, and
+# chunk counts (status, stats, dashboard) grow by the turn count per ingest.
+# provenance_role is the ranking knob applied to every fragment chunk
+# ("claim" = full weight, "evidence" = x0.5, "cue" = x0.8 in hybrid search).
+# It affects ranking only on fused (vector) retrieval; BM25-only queries
+# (under 5 words without a routing keyword, or vector_enabled = false) apply
+# no provenance multiplier.
+[fragments]
+enabled = false
+max_fragment_tokens = 400       # token budget for a fragment's text
+prefix_reserve_tokens = 16      # headroom above the text budget (2 special tokens + slack)
+provenance_role = "claim"       # "claim" | "evidence" | "cue" — role of fragment chunks
+token_counter = "embedder"      # "embedder" (local model's tokenizer, default) | "approx" (chars / 3) | "tiktoken" (cl100k_base)
+
 [resource_guards]
 max_cpu_cores = 1.0
 max_memory_mb = 512
@@ -245,6 +289,9 @@ dedup_cosine_threshold = 0.92
 contradiction_check = true
 contradiction_cosine_min = 0.5   # Skip LLM judge if top-1 cosine < this
 max_facts_per_transcript = 20
+max_tokens = 2000                # Completion cap per extraction call; a reply that hits it (finish_reason "length") is rejected, never partially admitted
+input_chunk_tokens = 0           # 0 = one call per transcript up to max_transcript_tokens (legacy). >0 = split at line boundaries into chunks of at most min(this, max_transcript_tokens) tokens, one call each
+split_on_truncation = false      # true = re-extract a truncated chunk as two line-aligned halves (at most 4 extra calls per chunk, depth 2). false = reject and report, no retry
 
 [entity_extraction]
 enabled = true               # Phase 4: entity linking for cross-session retrieval

@@ -77,6 +77,7 @@ sync_on_write = false
 ```toml
 [search]
 top_k = 10
+max_request_top_k = 1000      # HTTP top_k must be 1..this limit; MCP caps are separate
 surprise_boost = 1.5
 synonyms_file = "synonyms.toml"
 entities_file = "entities.toml"
@@ -85,11 +86,13 @@ rerank_candidates = 20
 rerank_model_dir = "models/reranker"
 multi_query_enabled = false
 stem_polish = true
+evidence_fields = false
 ```
 
 | Key | Type | Description |
 |-----|------|-------------|
 | `top_k` | int | Default number of search results |
+| `max_request_top_k` | int | HTTP result limit ceiling (default 1000); zero or requests above it return 400 before retrieval. MCP caps remain separate. |
 | `surprise_boost` | f64 | Novelty multiplier on ingest (Titans-inspired) |
 | `synonyms_file` | string | Path to synonym expansion map |
 | `entities_file` | string | Path to entity dictionary |
@@ -98,6 +101,7 @@ stem_polish = true
 | `rerank_model_dir` | string | ONNX model directory |
 | `multi_query_enabled` | bool | Decompose complex queries into sub-queries |
 | `stem_polish` | bool | Enable Polish language stemming |
+| `evidence_fields` | bool | **Experimental, opt-in** (default `false`). When `true`, every `/v1/search` hit and `GET /api/memories/{id}` item carries an additive `evidence` object (`author`, `conversation_date`, `event_date`, `event_date_provenance`, `source_id`, `byte_start`, `byte_end`), and each `memory_search` line carries a bracketed evidence tag before the score. When `false`, responses are byte-identical to pre-flag output. See [API Reference](api-reference.md#post-v1search). |
 
 ### [search.cache]
 
@@ -417,9 +421,49 @@ dedup_cosine_threshold = 0.92
 contradiction_check = true
 contradiction_cosine_min = 0.5
 max_facts_per_transcript = 20
+max_tokens = 2000
+input_chunk_tokens = 0
+split_on_truncation = false
 ```
 
 Controls the `memory_ingest` LLM pipeline.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `max_tokens` | int | 2000 | Completion cap per extraction call. A reply that hits it (`finish_reason: "length"`) is rejected, never partially admitted |
+| `input_chunk_tokens` | int | 0 | Input budget per extraction call (4 chars ≈ 1 token). `0` keeps the legacy pipeline: one call per transcript up to `max_transcript_tokens`. Any other value splits the transcript at line boundaries into chunks of at most `min(input_chunk_tokens, max_transcript_tokens)` tokens, one call each |
+| `split_on_truncation` | bool | false | When `true`, a chunk whose completion was truncated is re-extracted as two line-aligned halves (depth 2, at most 4 extra calls per chunk). When `false`, the truncated chunk is rejected and reported, with no retry |
+
+The three keys are additive: with the defaults above, extraction issues exactly the calls it did before they existed. A truncated reply is never admitted in either mode.
+
+---
+
+## [fragments]
+
+**Experimental, opt-in.** Off by default; existing deployments and clients keep byte-identical behavior.
+
+```toml
+[fragments]
+enabled = false
+max_fragment_tokens = 400
+prefix_reserve_tokens = 16
+provenance_role = "claim"
+token_counter = "embedder"
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | false | Persist source fragments on `memory_ingest` |
+| `max_fragment_tokens` | int | 400 | Token budget for a fragment's text, as measured by `token_counter`. Must be positive |
+| `prefix_reserve_tokens` | int | 16 | Headroom above the text budget. The local embedder adds exactly two special tokens to the content (no `passage:` prefix is prepended); the rest absorbs the gap between the chosen counter and the embedder's own tokenizer |
+| `provenance_role` | string | `"claim"` | Role stamped on every fragment chunk: `"claim"` (full weight), `"evidence"` (×0.5) or `"cue"` (×0.8). Any other value fails config load |
+| `token_counter` | string | `"embedder"` | `"embedder"` (default and recommended: the loaded local embedding model's own tokenizer, the only counter whose budget is the embedder's), `"approx"` (`ceil(chars / 3)`, model-free) or `"tiktoken"` (`cl100k_base` BPE) — the two model-free counters are for non-local embedding providers and offline tests. Any other value fails config load |
+
+When enabled, `memory_ingest` stores, right after the whole-conversation source and before extraction, one chunk per conversation turn (long turns are split further at paragraph, sentence and whitespace boundaries). Each fragment carries the author role, the conversation date and an exact byte range into the stored source. Fragments are `consolidated` from birth (never consolidation or dream input), are excluded from the `recent` section of `memory_context`, carry no event date of their own (their `memory_search` line shows the source's `observed:`/`recorded:` date), and are deleted together with their source. The tool result gains a trailing ` Stored N fragments.` sentence (see [MCP Tools](mcp-tools.md#memory_ingest)). Fragment writes are additive and never block fact extraction.
+
+Validation at startup: `max_fragment_tokens` must be positive, and with `embedding_provider = "local"` the sum `max_fragment_tokens + prefix_reserve_tokens` must not exceed the local embedder's 512-token window. `enabled = true` with `token_counter = "embedder"` (the default) requires `embedding_provider = "local"` — with another provider, set `token_counter = "approx"` or `"tiktoken"` explicitly or config load fails. With `token_counter = "embedder"` and no local model loaded, segmentation fails and the `memory_ingest` text says so (there is no silent fallback to an approximation).
+
+`provenance_role` affects ranking only on fused retrieval (vector-enabled, non-simple queries). The BM25-only path applies no provenance multiplier, so on short queries `claim` and `evidence` fragments score identically.
 
 ---
 

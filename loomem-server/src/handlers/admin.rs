@@ -13,6 +13,9 @@ use loomem_core::TextDocument;
 use std::sync::Arc;
 use tracing::warn;
 
+mod graph_publication;
+mod reembed;
+
 /// Local duplicate of `search.rs::prepare_llm_input` — kept in sync by construction.
 /// Both wrap `sanitize_with_sources` + emit one warn per detection (with source tag
 /// `raw`/`stripped`/`both` for observability). Drift risk is low because
@@ -282,6 +285,7 @@ pub async fn delete_handler(
     };
 
     let found = state.store.delete_by_id(&payload.id)?;
+    super::cache_invalidation::clear(&state).await;
 
     // Also remove from Tantivy index
     let mut tantivy = state.tantivy.lock().await;
@@ -296,7 +300,6 @@ pub async fn delete_handler(
         let mut log = ilog.lock().await;
         log.mark_committed(seq, OpType::Delete, &payload.id)?;
     }
-    state.query_cache.lock().await.clear();
 
     let status = if found { "deleted" } else { "not_found" };
 
@@ -353,22 +356,16 @@ pub async fn purge_namespace_handler(
         .store
         .purge_namespace(&payload.stream, payload.dry_run)?;
 
-    // Remove from Tantivy index if not dry run
+    // Primary deletion is already durable: invalidate even if indexing fails.
     if !payload.dry_run {
-        let mut tantivy = state.tantivy.lock().await;
-        for id in &deleted_ids {
-            let _ = tantivy.delete_document(id);
-        }
-        drop(tantivy);
+        super::cache_invalidation::clear(&state).await;
+        state.tantivy.lock().await.delete_stream(&payload.stream)?;
     }
 
     // Intent log: mark committed
     if let (Some(seq), Some(ref ilog)) = (intent_seq, &state.intent_log) {
         let mut log = ilog.lock().await;
         log.mark_committed(seq, OpType::Purge, &payload.stream)?;
-    }
-    if !payload.dry_run {
-        state.query_cache.lock().await.clear();
     }
 
     Ok(Json(PurgeNamespaceResponse {
@@ -456,7 +453,7 @@ pub async fn api_delete_memory_handler(
         let mut log = ilog.lock().await;
         let _ = log.mark_committed(seq, OpType::Delete, &id);
     }
-    state.query_cache.lock().await.clear();
+    super::cache_invalidation::clear(&state).await;
 
     if !outcome.store_deleted {
         return Err((
@@ -607,7 +604,7 @@ pub async fn api_update_memory_handler(
                 .map(|dt| dt.and_utc().timestamp()),
             source_agent: chunk.source.as_ref().map(|s| s.agent.clone()),
         };
-        let _ = tantivy.index_document(doc);
+        let _ = tantivy.index_chunk_document(doc, &chunk);
         let _ = tantivy.commit();
         drop(tantivy);
 
@@ -618,7 +615,7 @@ pub async fn api_update_memory_handler(
     }
 
     // Invalidate query cache
-    state.query_cache.lock().await.clear();
+    super::cache_invalidation::clear(&state).await;
 
     Ok((
         StatusCode::OK,
@@ -658,16 +655,20 @@ pub async fn api_get_memory_handler(
 
     // entity_ids: entities in the chunk's stream that reference this chunk
     // — the same reverse index the list endpoint builds, reduced to one id.
-    let mut entity_ids: Vec<String> = Vec::new();
-    for (_key, value) in state.store.prefix_scan(b"graph:entity:") {
-        if let Ok(entity) = serde_json::from_slice::<loomem_core::graph::EntityNode>(&value) {
-            if entity.stream_id == chunk.stream && entity.chunk_ids.iter().any(|cid| cid == &id) {
-                entity_ids.push(entity.id);
-            }
-        }
-    }
+    let entity_ids = super::graph_visibility::entity_ids_for_chunk(&state, &chunk);
 
-    Ok(Json(chunk_to_memory_item(&chunk, source, &entity_ids)))
+    let mut item = chunk_to_memory_item(&chunk, source, &entity_ids);
+    // Same additive `evidence` object as `/v1/search` hits, same flag.
+    if state.config.search.evidence_fields {
+        item["evidence"] =
+            serde_json::to_value(crate::evidence::render_evidence(&chunk)).map_err(|e| {
+                AppError::Internal(
+                    anyhow::Error::new(e)
+                        .context("GET /api/memories/:id: evidence serialization failed"),
+                )
+            })?;
+    }
+    Ok(Json(item))
 }
 
 /// Render one chunk as a REST memory item. Cycle/003 S9: extracted from the
@@ -784,7 +785,7 @@ pub async fn api_purge_namespace_handler(
         log.mark_committed(seq, OpType::Purge, &stream_id)?;
     }
     if !dry_run {
-        state.query_cache.lock().await.clear();
+        super::cache_invalidation::clear(&state).await;
     }
 
     Ok(Json(ApiPurgeResponse {
@@ -940,7 +941,7 @@ pub async fn build_graph_handler(
         ));
     }
 
-    let graph = state.graph.clone();
+    let publication_state = state.clone();
     let store = state.store.clone();
     let entity_extractor = state.entity_extractor.clone();
 
@@ -964,29 +965,15 @@ pub async fn build_graph_handler(
         for chunk in &chunks {
             let entities = entity_extractor.extract(&chunk.content);
 
-            for (name, etype) in &entities {
-                let aliases = entity_extractor.get_aliases_for(name);
-                if let Ok(node) =
-                    graph.get_or_create_entity(name, &etype.to_string(), &aliases, &chunk.stream)
-                {
-                    let _ = graph.add_chunk_to_entity(&node.id, &chunk.id);
-                    entities_created += 1;
-                }
-            }
-
             let relations = entity_extractor.find_relations(&entities);
-            for rel in &relations {
-                if let (Ok(Some(src)), Ok(Some(tgt))) = (
-                    graph.get_entity_by_name(&rel.subject, &chunk.stream),
-                    graph.get_entity_by_name(&rel.object, &chunk.stream),
-                ) {
-                    if let Ok(edge) =
-                        graph.get_or_create_edge(&src.id, &tgt.id, &rel.relation, &chunk.stream)
-                    {
-                        let _ = graph.add_chunk_to_edge(&edge.id, &chunk.id);
-                        edges_created += 1;
-                    }
-                }
+            if let Ok((entity_count, edge_count)) = super::ingest::graph::publish_dictionary(
+                &publication_state,
+                chunk,
+                &entities,
+                &relations,
+            ) {
+                entities_created += entity_count;
+                edges_created += edge_count;
             }
 
             processed += 1;
@@ -1000,8 +987,8 @@ pub async fn build_graph_handler(
             }
         }
 
-        let entity_count = graph.count_entities().unwrap_or(0);
-        let edge_count = graph.count_edges().unwrap_or(0);
+        let entity_count = publication_state.graph.count_entities().unwrap_or(0);
+        let edge_count = publication_state.graph.count_edges().unwrap_or(0);
 
         tracing::info!(
             "Build-graph complete: {}/{} chunks, {} entity refs, {} edge refs, {} unique entities, {} unique edges",
@@ -1046,6 +1033,7 @@ pub async fn extract_entities_handler(
 
     let store = state.store.clone();
     let graph = state.graph.clone();
+    let pii_filter = state.pii_filter.clone();
     let tantivy = state.tantivy.clone();
     let http_client = state.http_client.clone();
     let llm_config = state.config.llm.clone();
@@ -1098,7 +1086,7 @@ pub async fn extract_entities_handler(
         for batch_chunks in chunks.chunks(batch_size) {
             // Check if already processed
             let mut batch_items: Vec<loomem_core::llm_ner::ChunkBatchEntry> = Vec::new();
-            let mut batch_streams: Vec<String> = Vec::new();
+            let mut batch_sources = std::collections::HashMap::new();
             for chunk in batch_chunks {
                 let marker_key = format!("llm_entities:{}", chunk.id);
                 if store.get(marker_key.as_bytes()).ok().flatten().is_some() {
@@ -1111,8 +1099,19 @@ pub async fn extract_entities_handler(
                     .into_iter()
                     .map(|(n, t)| (n, t.to_string()))
                     .collect();
-                batch_streams.push(chunk.stream.clone());
-                batch_items.push((chunk.id.clone(), chunk.content.clone(), dict_ents));
+                let Ok(source) =
+                    graph_publication::BatchSource::capture(&graph, chunk, dict_ents.clone())
+                else {
+                    skipped += 1;
+                    continue;
+                };
+                batch_items.push(loomem_core::llm_ner::prepare_entry(
+                    &chunk.id,
+                    &chunk.content,
+                    &dict_ents,
+                    &pii_filter,
+                ));
+                batch_sources.insert(chunk.id.clone(), source);
             }
 
             if batch_items.is_empty() {
@@ -1147,106 +1146,23 @@ pub async fn extract_entities_handler(
                         loomem_core::llm_ner::filter_by_confidence(&extractions, confidence);
 
                     for extraction in &filtered {
-                        let idx = batch_items
-                            .iter()
-                            .position(|(id, _, _)| id == &extraction.chunk_id);
-                        let stream_for_chunk = idx
-                            .and_then(|i| batch_streams.get(i))
-                            .cloned()
-                            .unwrap_or_default();
-
-                        let dict_ents: Vec<(String, String)> =
-                            idx.map(|i| batch_items[i].2.clone()).unwrap_or_default();
-
-                        let dict_names: std::collections::HashSet<String> =
-                            dict_ents.iter().map(|(n, _)| n.to_lowercase()).collect();
-
-                        // Add new entities to graph (stream-scoped)
-                        for ent in &extraction.entities {
-                            if dict_names.contains(&ent.name.to_lowercase()) {
-                                continue;
-                            }
-                            match graph.get_or_create_entity(
-                                &ent.name,
-                                &ent.entity_type,
-                                &ent.aliases,
-                                &stream_for_chunk,
-                            ) {
-                                Ok(node) => {
-                                    let _ =
-                                        graph.add_chunk_to_entity(&node.id, &extraction.chunk_id);
-                                    new_entities += 1;
-                                }
-                                Err(e) => tracing::warn!("Graph entity error: {}", e),
+                        let Some(source) = batch_sources.get(&extraction.chunk_id) else {
+                            continue;
+                        };
+                        match graph_publication::publish_extraction(
+                            &graph,
+                            &pii_filter,
+                            &tantivy,
+                            source,
+                            extraction,
+                        )
+                        .await
+                        {
+                            Ok(count) => new_entities += count,
+                            Err(error) => {
+                                tracing::warn!("Graph extraction publication skipped: {}", error)
                             }
                         }
-
-                        // Add relations (stream-scoped)
-                        for rel in &extraction.relations {
-                            if let (Ok(Some(src)), Ok(Some(tgt))) = (
-                                graph.get_entity_by_name(&rel.subject, &stream_for_chunk),
-                                graph.get_entity_by_name(&rel.object, &stream_for_chunk),
-                            ) {
-                                if let Ok(edge) = graph.get_or_create_edge(
-                                    &src.id,
-                                    &tgt.id,
-                                    &rel.relation,
-                                    &stream_for_chunk,
-                                ) {
-                                    let _ = graph.add_chunk_to_edge(&edge.id, &extraction.chunk_id);
-                                }
-                            }
-                        }
-
-                        // Update RocksDB entities
-                        let mut merged = dict_ents.clone();
-                        for ent in &extraction.entities {
-                            if !dict_names.contains(&ent.name.to_lowercase()) {
-                                merged.push((ent.name.clone(), ent.entity_type.clone()));
-                            }
-                        }
-                        let _ =
-                            store.store_entities(&extraction.chunk_id, &stream_for_chunk, &merged);
-
-                        // Re-index in Tantivy
-                        if let Ok(Some(chunk)) = store.get_chunk(&extraction.chunk_id) {
-                            let entity_str = merged
-                                .iter()
-                                .map(|(n, _)| n.as_str())
-                                .collect::<Vec<_>>()
-                                .join(",");
-                            let event_date_ts: Option<i64> = chunk
-                                .extraction_meta
-                                .as_ref()
-                                .and_then(|m| m.event_date.as_ref())
-                                .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-                                .map(|d| {
-                                    d.and_hms_opt(12, 0, 0)
-                                        .expect("valid static HMS")
-                                        .and_utc()
-                                        .timestamp()
-                                });
-                            let doc = loomem_core::tantivy_index::TextDocument {
-                                id: chunk.id.clone(),
-                                content: chunk.content.clone(),
-                                user_id: String::new(),
-                                app_id: String::new(),
-                                level: chunk.level,
-                                timestamp: chunk.timestamp as i64,
-                                stream: chunk.stream.clone(),
-                                entities: Some(entity_str),
-                                relations: None,
-                                event_date: event_date_ts,
-                                source_agent: chunk.source.as_ref().map(|s| s.agent.clone()),
-                            };
-                            let mut idx = tantivy.lock().await;
-                            let _ = idx.upsert_document(doc);
-                        }
-
-                        // Store marker
-                        let marker_key = format!("llm_entities:{}", extraction.chunk_id);
-                        let marker_val = serde_json::to_vec(extraction).unwrap_or_default();
-                        let _ = store.put(marker_key.as_bytes(), &marker_val);
                     }
 
                     processed += batch_items.len() as u32;
@@ -1334,88 +1250,8 @@ pub async fn re_embed_all_handler(
         ));
     }
 
-    let store = state.store.clone();
-    let http_client = state.http_client.clone();
-    let llm_config = state.config.llm.clone();
-    let local_embedder = state.local_embedder.clone();
-
     tokio::spawn(async move {
-        tracing::info!("Re-embed-all: starting (provider={})", llm_config.provider);
-
-        // Step 1: Get all chunks
-        let chunks = match store.get_all_chunks() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Re-embed-all: failed to get chunks: {}", e);
-                RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
-                return;
-            }
-        };
-
-        // Step 2: Clear all existing embeddings
-        let existing = store.get_all_embeddings().unwrap_or_default();
-        let mut cleared = 0_u32;
-        for (id, _) in &existing {
-            if store.delete_embedding(id).is_ok() {
-                cleared += 1;
-            }
-        }
-        tracing::info!("Re-embed-all: cleared {} old embeddings", cleared);
-
-        // Step 3: Re-embed all chunks
-        let total = chunks.len();
-        let mut embedded = 0_u32;
-        let mut failed = 0_u32;
-        let batch_size = 50;
-
-        for batch in chunks.chunks(batch_size) {
-            let texts: Vec<String> = batch.iter().map(|c| c.content.clone()).collect();
-
-            let embed_result = if let Some(ref embedder) = local_embedder {
-                embedder.embed_batch(&texts)
-            } else if let Some(_api_key) = llm_config.get_api_key() {
-                // Inline OpenAI batch call
-                let config_for_embed = llm_config.clone();
-                loomem_core::llm::embed_batch(&http_client, &config_for_embed, &texts).await
-            } else {
-                tracing::error!("Re-embed-all: no embedding provider");
-                break;
-            };
-
-            match embed_result {
-                Ok(embeddings) => {
-                    for (chunk, embedding) in batch.iter().zip(embeddings) {
-                        match store.store_embedding(&chunk.id, embedding) {
-                            Ok(()) => embedded += 1,
-                            Err(e) => {
-                                tracing::warn!("Re-embed-all: failed to store {}: {}", chunk.id, e);
-                                failed += 1;
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Re-embed-all: batch embed failed: {}", e);
-                    failed += batch.len() as u32;
-                }
-            }
-
-            if embedded.is_multiple_of(500) && embedded > 0 {
-                tracing::info!("Re-embed-all: {}/{} embedded", embedded, total);
-            }
-
-            // Rate limiting
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        }
-
-        tracing::info!(
-            "Re-embed-all complete: {}/{} embedded, {} failed, {} cleared",
-            embedded,
-            total,
-            failed,
-            cleared
-        );
-
+        reembed::run(state).await;
         RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
     });
 
@@ -1527,39 +1363,9 @@ pub async fn graph_entity_handler(
     let stream = auth::validate_stream(&auth, requested)
         .map_err(|_| AppError::Forbidden("Cross-stream access denied".into()))?;
 
-    let entity = state
-        .graph
-        .get_entity_by_name(&name, &stream)?
-        .ok_or_else(|| {
-            AppError::BadRequest(format!(
-                "Entity '{}' not found in stream '{}'",
-                name, stream
-            ))
-        })?;
-
-    let chunk_ids = entity.chunk_ids.clone();
-
-    let neighbors = state.graph.get_neighbors(&entity.id)?;
-    let neighbor_list: Vec<serde_json::Value> = neighbors.iter().map(|(edge, node)| {
-        serde_json::json!({
-            "entity": node.canonical_name,
-            "entity_type": node.entity_type,
-            "relation": edge.relation_type,
-            "direction": if edge.source_entity_id == entity.id { "outgoing" } else { "incoming" },
-        })
-    }).collect();
-
-    Ok(Json(serde_json::json!({
-        "entity": {
-            "id": entity.id,
-            "name": entity.canonical_name,
-            "type": entity.entity_type.to_lowercase(),
-            "aliases": entity.aliases,
-            "chunk_count": chunk_ids.len(),
-        },
-        "neighbors": neighbor_list,
-        "chunk_ids": chunk_ids,
-    })))
+    let graph = super::graph_visibility::find(&state, &name, &stream)?
+        .ok_or_else(|| AppError::BadRequest("Entity not found in knowledge graph".into()))?;
+    Ok(Json(graph.json()))
 }
 
 /// GET /v1/graph/stats — graph statistics.
@@ -1911,6 +1717,7 @@ fn build_extracted_fact_chunk(
         n_ratings: 0,
         last_rated_at: None,
         provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+        fragment: None,
     }
 }
 
@@ -2208,6 +2015,7 @@ pub async fn dream_handler(
         &state.tantivy,
         &state.http_client,
         loomem_core::dream::DreamRunContext {
+            pii_filter: &state.pii_filter,
             llm_config: &state.config.llm,
             dream_config: &state.config.dream,
             intent_log: state.intent_log.as_deref(),
@@ -2652,6 +2460,7 @@ mod reprocess_handler_tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 
@@ -2886,6 +2695,7 @@ mod api_get_memory_handler_tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 
@@ -2909,24 +2719,19 @@ mod api_get_memory_handler_tests {
             .store
             .store_chunk(&fixture_chunk(id))
             .expect("store_chunk");
-        // Graph entity referencing the chunk → expected in entity_ids.
-        let entity = loomem_core::graph::EntityNode {
-            id: "ent-1".to_string(),
-            canonical_name: "Fixture Entity".to_string(),
-            entity_type: "concept".to_string(),
-            aliases: vec![],
-            chunk_ids: vec![id.to_string()],
-            stream_id: DEFAULT_STREAM_ID.to_string(),
-            created_at: 0,
-            updated_at: 0,
-        };
-        state
-            .store
-            .put(
-                format!("graph:entity:{}", entity.id).as_bytes(),
-                &serde_json::to_vec(&entity).expect("serialize entity"),
-            )
-            .expect("put graph entity");
+        // Entity membership is visible only with explicit source contribution proof.
+        let entity = state
+            .graph
+            .link_entity(loomem_core::graph::EntityContribution {
+                name: "Fixture Entity",
+                entity_type: "concept",
+                aliases: &[],
+                stream: DEFAULT_STREAM_ID,
+                chunk_id: id,
+                expected_content: &fixture_chunk(id).content,
+                pii: &state.pii_filter,
+            })
+            .expect("publish graph contribution");
 
         let (status, body) = crate::tests::send(app, http_get(id)).await;
         assert_eq!(status, StatusCode::OK);
@@ -2943,7 +2748,7 @@ mod api_get_memory_handler_tests {
         assert_eq!(item["source"], serde_json::json!("shared"));
         assert_eq!(item["source_stream"], serde_json::json!(DEFAULT_STREAM_ID));
         assert_eq!(item["source_agent"], serde_json::json!("claude-code"));
-        assert_eq!(item["entity_ids"], serde_json::json!(["ent-1"]));
+        assert_eq!(item["entity_ids"], serde_json::json!([entity.id]));
         assert_eq!(item["created_at"], serde_json::json!(1_700_000_000u64));
         assert!(item["confidence"].is_number());
         assert!(item["decay"].is_number());

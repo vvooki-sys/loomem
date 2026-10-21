@@ -150,15 +150,15 @@ fn entity_target_chunk_ids(
     entity_id: Option<&str>,
 ) -> Option<HashSet<String>> {
     let filter_id = entity_id?;
-    let mut set = HashSet::new();
-    for (_key, value) in state.store.prefix_scan(b"graph:entity:") {
-        if let Ok(entity) = serde_json::from_slice::<loomem_core::graph::EntityNode>(&value) {
-            if entity.id == filter_id && resolution.source_for(&entity.stream_id).is_some() {
-                set.extend(entity.chunk_ids.iter().cloned());
-            }
-        }
-    }
-    Some(set)
+    let chunks = state
+        .graph
+        .get_live_entity_by_id(filter_id)
+        .ok()
+        .flatten()
+        .filter(|entity| resolution.source_for(&entity.stream_id).is_some())
+        .map(|entity| entity.chunk_ids.into_iter().collect())
+        .unwrap_or_default();
+    Some(chunks)
 }
 
 /// Scan chunks across the resolved scope's streams, applying optional filters
@@ -249,17 +249,15 @@ fn build_entity_reverse_index(
     resolution: &ScopeResolution,
 ) -> HashMap<String, Vec<String>> {
     let mut chunk_to_entities: HashMap<String, Vec<String>> = HashMap::new();
-    for (_key, value) in state.store.prefix_scan(b"graph:entity:") {
-        if let Ok(entity) = serde_json::from_slice::<loomem_core::graph::EntityNode>(&value) {
-            if resolution.source_for(&entity.stream_id).is_none() {
-                continue;
-            }
-            for cid in &entity.chunk_ids {
-                chunk_to_entities
-                    .entry(cid.clone())
-                    .or_default()
-                    .push(entity.id.clone());
-            }
+    for entity in super::graph_visibility::entities(state) {
+        if resolution.source_for(&entity.stream_id).is_none() {
+            continue;
+        }
+        for cid in &entity.chunk_ids {
+            chunk_to_entities
+                .entry(cid.clone())
+                .or_default()
+                .push(entity.id.clone());
         }
     }
     chunk_to_entities
@@ -377,6 +375,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 

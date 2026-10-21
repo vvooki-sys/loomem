@@ -407,6 +407,66 @@ a:hover{text-decoration:underline}
   }
 }
 </code></pre>
+<p><strong>Evidence object (experimental, opt-in):</strong> when <code>[search] evidence_fields = true</code> in <code>config.toml</code>, every hit (cold and cached) carries an additive <code>evidence</code> key. The key is omitted entirely while the flag is off, so default responses are unchanged. The object has exactly seven keys, all always present; an unknown value is <code>null</code>, never a substituted date.</p>
+<pre><code class="language-json">&quot;evidence&quot;: {
+  &quot;author&quot;: &quot;user&quot;,
+  &quot;conversation_date&quot;: &quot;2026-04-02&quot;,
+  &quot;event_date&quot;: &quot;2026-03-26&quot;,
+  &quot;event_date_provenance&quot;: &quot;resolved&quot;,
+  &quot;source_id&quot;: &quot;a1b2c3d4-e5f6-7890-abcd-ef1234567890&quot;,
+  &quot;byte_start&quot;: 0,
+  &quot;byte_end&quot;: 142
+}
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>author</code></td>
+<td>string?</td>
+<td>Normalised author role: <code>user</code>, <code>assistant</code>, <code>system</code> or <code>tool</code>. Anything else (a person's name, free text) is <code>null</code></td>
+</tr>
+<tr>
+<td><code>conversation_date</code></td>
+<td>string?</td>
+<td>Date the conversation took place (<code>YYYY-MM-DD</code>), as stored</td>
+</tr>
+<tr>
+<td><code>event_date</code></td>
+<td>string?</td>
+<td>Date the described event happened (<code>YYYY-MM-DD</code>), as extracted. Only calendar-valid ISO dates are emitted</td>
+</tr>
+<tr>
+<td><code>event_date_provenance</code></td>
+<td>string?</td>
+<td><code>resolved</code> when the engine recorded the temporal cue the date was resolved from, <code>unknown</code> otherwise; <code>null</code> exactly when <code>event_date</code> is <code>null</code>. <code>explicit</code> is reserved and not emitted today</td>
+</tr>
+<tr>
+<td><code>source_id</code></td>
+<td>string?</td>
+<td>Canonical source chunk this memory was cut or extracted from</td>
+</tr>
+<tr>
+<td><code>byte_start</code>, <code>byte_end</code></td>
+<td>int?</td>
+<td>Byte range of a source fragment within its source (see <a href="configuration.html#fragments"><code>[fragments]</code></a>); both set or both <code>null</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Stage rejections (traced requests):</strong> with <code>trace: true</code>, <code>trace_metadata</code> also carries <code>rejections</code> — one entry per candidate dropped between the traced post-rank stages — next to the existing <code>evidence</code> stage snapshots. <code>stage</code> is the first stage the id is absent from (<code>after_soft_delete</code>, <code>after_filters_and_dedup</code> or <code>response</code>); <code>reason</code> is one of <code>soft_deleted</code>, <code>event_date_out_of_range</code>, <code>bitemporal_out_of_range</code>, <code>superseded</code>, <code>extraction_meta_missing</code>, <code>fact_type_filter</code>, <code>subject_filter</code>, <code>min_confidence</code>, <code>content_prefix_dedup</code>, <code>aggregation_subject_dedup</code>, <code>source_agent_filter</code>, <code>truncated_top_k</code>. The MCP <code>max_context_tokens</code> trim happens after the traced stages, so a result it drops is not listed here.</p>
+<pre><code class="language-json">&quot;trace_metadata&quot;: {
+  &quot;rejections&quot;: [
+    { &quot;chunk_id&quot;: &quot;def-456&quot;, &quot;stage&quot;: &quot;after_filters_and_dedup&quot;, &quot;reason&quot;: &quot;superseded&quot; },
+    { &quot;chunk_id&quot;: &quot;ghi-789&quot;, &quot;stage&quot;: &quot;response&quot;, &quot;reason&quot;: &quot;truncated_top_k&quot; }
+  ]
+}
+</code></pre>
 <hr />
 <h3 id="post-v1context-pack">POST /v1/context-pack</h3>
 <p>Smart context packing for system prompt injection. Assembles a token-budgeted context window from profile, relevant memories, and recent activity.</p>
@@ -479,6 +539,9 @@ a:hover{text-decoration:underline}
 <h3 id="delete-apimemoriesid">DELETE /api/memories/{id}</h3>
 <p>REST-compliant delete. Optional <code>?ns=&lt;namespace&gt;</code> query parameter.</p>
 <p>Response: <code>{ "deleted": true, "id": "abc-123" }</code></p>
+<h3 id="get-apimemoriesid">GET /api/memories/{id}</h3>
+<p>Returns one memory item (<code>id</code>, <code>content</code>, <code>layer</code>, <code>confidence</code>, <code>decay</code>, <code>event_date</code>, <code>created_at</code>, <code>category</code>, <code>entity_ids</code>, <code>version</code>, <code>is_latest</code>, <code>superseded_by</code>, <code>source_stream</code>, <code>source</code>, <code>source_agent</code>). 404 for unknown or soft-deleted ids; non-admin callers may only read chunks in their own stream.</p>
+<p>When <code>[search] evidence_fields = true</code>, the item also carries the same additive <code>evidence</code> object as a <code>/v1/search</code> hit (see above). The dashboard list endpoint does not carry it.</p>
 <hr />
 <h3 id="post-v1purge-namespace">POST /v1/purge-namespace</h3>
 <p>Delete all chunks in a stream.</p>

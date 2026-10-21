@@ -1,3 +1,13 @@
+mod caller_relations;
+use caller_relations::inject_caller_relations;
+mod delete_notice;
+mod dream;
+#[cfg(test)]
+mod evidence_suffix_tests;
+mod ingest;
+use dream::tool_dream;
+use ingest::tool_ingest;
+
 use axum::extract::State;
 use axum::Json;
 use chrono::Utc;
@@ -251,113 +261,6 @@ struct CallerRelation {
 /// caller or a hallucinating client cannot starve the executor with an
 /// arbitrarily long array. Over-cap relations are dropped with a warning.
 const MAX_CALLER_RELATIONS: usize = 64;
-
-/// Link a chunk to a graph entity, warning (not failing) on error so the
-/// behaviour matches `inject_caller_relations`' "warn and swallow" contract.
-fn link_chunk_to_entity(state: &Arc<AppState>, entity_id: &str, chunk_id: &str, name: &str) {
-    if let Err(e) = state.graph.add_chunk_to_entity(entity_id, chunk_id) {
-        tracing::warn!(
-            "caller-relation: failed to link chunk to entity {:?}: {}",
-            name,
-            e
-        );
-    }
-}
-
-/// Inject caller-declared graph relations (memory_store `relations` param).
-///
-/// Graph-store only by design: each subject/object is resolved through
-/// `get_or_create_entity` — reusing dictionary aliases (`entities.toml`) so
-/// caller name variants converge onto one node instead of fragmenting — and an
-/// idempotent edge is created via `get_or_create_edge` (dedup on
-/// subject/relation/object, so a later LLM-extracted edge for the same triple
-/// will not double).
-///
-/// Deliberately does NOT write the `rel:`/`entity:` RocksDB rows that
-/// `persist_chunk` already populated for this chunk (`store_relations`
-/// overwrites per chunk_id, which would clobber dictionary-derived rows), nor
-/// the Tantivy `relations` field. Caller edges reach retrieval via the graph
-/// signal in hybrid search. Per-relation failures warn and are swallowed: a
-/// malformed relation must never fail the store itself.
-fn inject_caller_relations(
-    state: &Arc<AppState>,
-    chunk_id: &str,
-    stream: &str,
-    relations: &[CallerRelation],
-) {
-    if relations.len() > MAX_CALLER_RELATIONS {
-        tracing::warn!(
-            "caller-relation: {} relations exceeds cap {}; processing first {} only",
-            relations.len(),
-            MAX_CALLER_RELATIONS,
-            MAX_CALLER_RELATIONS
-        );
-    }
-    for rel in relations.iter().take(MAX_CALLER_RELATIONS) {
-        let subject_type = rel.subject_type.as_deref().unwrap_or("Concept");
-        let object_type = rel.object_type.as_deref().unwrap_or("Concept");
-        let subject_aliases = state.entity_extractor.get_aliases_for(&rel.subject);
-        let object_aliases = state.entity_extractor.get_aliases_for(&rel.object);
-
-        let subject = match state.graph.get_or_create_entity(
-            &rel.subject,
-            subject_type,
-            &subject_aliases,
-            stream,
-        ) {
-            Ok(node) => node,
-            Err(e) => {
-                tracing::warn!(
-                    "caller-relation: failed to resolve subject {:?}: {}",
-                    rel.subject,
-                    e
-                );
-                continue;
-            }
-        };
-        let object = match state.graph.get_or_create_entity(
-            &rel.object,
-            object_type,
-            &object_aliases,
-            stream,
-        ) {
-            Ok(node) => node,
-            Err(e) => {
-                tracing::warn!(
-                    "caller-relation: failed to resolve object {:?}: {}",
-                    rel.object,
-                    e
-                );
-                continue;
-            }
-        };
-        link_chunk_to_entity(state, &subject.id, chunk_id, &rel.subject);
-        link_chunk_to_entity(state, &object.id, chunk_id, &rel.object);
-        match state
-            .graph
-            .get_or_create_edge(&subject.id, &object.id, &rel.relation, stream)
-        {
-            Ok(edge) => {
-                if let Err(e) = state.graph.add_chunk_to_edge(&edge.id, chunk_id) {
-                    tracing::warn!(
-                        "caller-relation: failed to link chunk to edge {} -{}-> {}: {}",
-                        rel.subject,
-                        rel.relation,
-                        rel.object,
-                        e
-                    );
-                }
-            }
-            Err(e) => tracing::warn!(
-                "caller-relation: failed to create edge {} -{}-> {}: {}",
-                rel.subject,
-                rel.relation,
-                rel.object,
-                e
-            ),
-        }
-    }
-}
 
 /// Lightweight fact_type classification via keyword matching.
 /// Note: event_date extraction is handled by the dream/consolidation worker (requires LLM).
@@ -620,6 +523,7 @@ async fn tool_store(
         n_ratings: 0,
         last_rated_at: None,
         provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+        fragment: None,
     };
 
     // Brief 2026-09-02 O1: explicit versioning. Validated and linked before
@@ -926,6 +830,9 @@ async fn tool_search(
 
     let req = handlers::types::SearchRequest {
         query: args.query,
+        reference_time: None,
+        operation_policy: loomem_core::search::OperationPolicy::E0,
+        debug_operation: false,
         user_id: None,
         top_k: Some(top_k),
         stream: Some(stream_id.to_string()),
@@ -1005,25 +912,13 @@ async fn tool_search(
                 )
             };
             for (i, r) in resp.results.iter().enumerate() {
-                // Prefer event_date from extraction_meta, fall back to ingestion timestamp
                 let chunk_opt = state.store.get_chunk(&r.id).ok().flatten();
-                let event_date = chunk_opt
+                let timestamp = r
+                    .metadata
                     .as_ref()
-                    .and_then(|c| c.extraction_meta.as_ref())
-                    .and_then(|m| m.event_date.as_ref())
-                    .cloned();
-                let ts = event_date.unwrap_or_else(|| {
-                    r.metadata
-                        .as_ref()
-                        .and_then(|m| m.get("timestamp"))
-                        .and_then(|v| v.as_i64())
-                        .map(|t| {
-                            chrono::DateTime::from_timestamp(t, 0)
-                                .map(|d| d.format("%Y-%m-%d").to_string())
-                                .unwrap_or_default()
-                        })
-                        .unwrap_or_default()
-                });
+                    .and_then(|meta| meta.get("timestamp"))
+                    .and_then(Value::as_i64);
+                let ts = crate::handlers::ingest_date::date_prefix(chunk_opt.as_ref(), timestamp);
 
                 let supersedes_note = chunk_opt
                     .as_ref()
@@ -1057,15 +952,18 @@ async fn tool_search(
                 // it after a search alone — needed for memory_delete,
                 // memory_history and memory_feedback, which all key on
                 // chunk_id. Previously only memory_store/_ingest surfaced ids,
-                // forcing callers to capture them at write time.
+                // forcing callers to capture them at write time. The evidence
+                // tag (`[search] evidence_fields`) sits before `(score:` so the
+                // line still ends with the id; empty when the flag is off.
                 text.push_str(&format!(
-                    "{}. [{}]{}{} {}{} (score: {:.2}) (id: {})\n",
+                    "{}. [{}]{}{} {}{}{} (score: {:.2}) (id: {})\n",
                     i + 1,
                     ts,
                     content_type_tag,
                     trust_tag,
                     r.content,
                     supersedes_note,
+                    crate::evidence::hit_text_suffix(r.evidence.as_ref()),
                     r.score,
                     r.id
                 ));
@@ -1517,43 +1415,10 @@ async fn tool_graph(
     let args: GraphArgs =
         serde_json::from_value(args).map_err(|e| JsonRpcError::invalid_params(&e.to_string()))?;
 
-    match state.graph.get_entity_by_name(&args.entity, stream_id) {
-        Ok(Some(entity)) => {
-            let mut text = format!(
-                "Entity: {} (type: {})\n",
-                entity.canonical_name, entity.entity_type
-            );
-
-            if !entity.aliases.is_empty() {
-                text.push_str(&format!("Aliases: {}\n", entity.aliases.join(", ")));
-            }
-            text.push_str(&format!("Linked chunks: {}\n\n", entity.chunk_ids.len()));
-
-            // Neighbors are already stream-scoped via entity lookup
-            match state.graph.get_neighbors(&entity.id) {
-                Ok(neighbors) => {
-                    if neighbors.is_empty() {
-                        text.push_str("No connections found.\n");
-                    } else {
-                        text.push_str("Connections:\n");
-                        for (edge, target) in &neighbors {
-                            text.push_str(&format!(
-                                "  → {} ({}) [{}]\n",
-                                target.canonical_name, edge.relation_type, target.entity_type
-                            ));
-                        }
-                    }
-                }
-                Err(_) => text.push_str("Could not load connections.\n"),
-            }
-
-            Ok(ToolResult::text(text))
-        }
-        Ok(None) => Ok(ToolResult::text(format!(
-            "Entity '{}' not found in knowledge graph.",
-            args.entity
-        ))),
-        Err(e) => Ok(ToolResult::error(format!("Graph query failed: {}", e))),
+    match handlers::graph_visibility::find(state, &args.entity, stream_id) {
+        Ok(Some(graph)) => Ok(ToolResult::text(graph.text())),
+        Ok(None) => Ok(ToolResult::text("Entity not found in knowledge graph.")),
+        Err(_) => Ok(ToolResult::error("Graph query failed.")),
     }
 }
 
@@ -1650,327 +1515,6 @@ async fn tool_namespaces(
     Ok(ToolResult::text(text))
 }
 
-// ── memory_ingest ────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct IngestArgs {
-    content: String,
-    conversation_date: Option<String>,
-    #[allow(dead_code)]
-    #[serde(default)]
-    stream: Option<String>,
-}
-
-/// /151 (port of /114b1): per-fact `ExtractionMeta` + `valid_from` routing
-/// for the extract_knowledge branch of `tool_ingest` (parity with
-/// workspace.rs `ingest_conversation`). Meta is built once and reused for
-/// both `valid_from` and the chunk's `extraction_meta` field.
-///
-/// Temporal anchoring: extraction only emits an `event_date` when the turn
-/// carries a resolvable cue ("today", "two weeks ago"). A plainly-stated event
-/// ("I bought a red mountain bike") returns `event_date: null` and would
-/// otherwise collapse onto the ingestion timestamp, corrupting later
-/// "how long ago / days between" reasoning. So when no date was resolved and
-/// the caller supplied a `conversation_date` (`anchor`, validated ISO), the
-/// fact inherits that session date as its `event_date` — which then flows to
-/// `valid_from`, the Tantivy temporal key, and the search `[date]` prefix.
-/// An explicitly resolved date always wins; with no anchor the behavior is
-/// unchanged (fall back to the ingest timestamp).
-///
-/// The anchor is only stamped when it is representable as the persisted
-/// `valid_from` key (`event_date_unix()` is `Some`). This rejects both
-/// unparseable anchors and pre-1970 dates (which cannot fit the `u64`
-/// `valid_from`), so `event_date` and `valid_from` never disagree — without
-/// the guard a valid pre-1970 anchor would be indexed/displayed while
-/// `valid_from` silently fell back to the ingest timestamp (split state).
-fn ingest_fact_meta(
-    fact: &loomem_core::memory_extractor::ExtractedFact,
-    model: &str,
-    timestamp: u64,
-    anchor: Option<&str>,
-) -> (loomem_core::storage::ExtractionMeta, u64) {
-    let mut meta = fact.to_extraction_meta(None, model);
-    if meta.event_date.is_none() {
-        if let Some(date) = anchor {
-            meta.event_date = Some(date.to_string());
-            // Not representable as the u64 valid_from key (unparseable or
-            // pre-1970) → revert so both fields stay on the fallback path.
-            if meta.event_date_unix().is_none() {
-                meta.event_date = None;
-            }
-        }
-    }
-    let valid_from = meta.event_date_unix().unwrap_or(timestamp);
-    (meta, valid_from)
-}
-
-/// /157 S1 (AC-1/AC-2): user-facing summary for an (at least partially)
-/// successful extraction. Zero facts with zero failures reads exactly as
-/// before; any per-chunk failures append a warning so partial success is
-/// visible instead of silently under-reporting.
-fn ingest_summary(
-    outcome: &loomem_core::memory_extractor::ExtractionOutcome,
-    stored: usize,
-    skipped: usize,
-) -> String {
-    let mut msg = format!(
-        "Extracted {} facts from conversation, stored {}, skipped {}.",
-        outcome.facts.len(),
-        stored,
-        skipped
-    );
-    if let Some(first) = outcome.failures.first() {
-        msg.push_str(&format!(
-            " Warning: {} extraction chunk(s) failed; facts may be incomplete. First error ({}): {}",
-            outcome.failures.len(),
-            first.status_label(),
-            first.reason
-        ));
-    }
-    msg
-}
-
-/// /157 S1 (AC-1): extraction failed outright — surface status + reason,
-/// never the "Extracted 0 facts" success shape.
-fn extraction_failed_message(err: &loomem_core::memory_extractor::ExtractionError) -> String {
-    let (status, reason) = err.status_and_reason();
-    format!("Extraction failed ({status}): {reason}. No facts stored.")
-}
-
-async fn tool_ingest(
-    state: &Arc<AppState>,
-    args: Value,
-    stream_id: &str,
-    user_id: Option<String>,
-) -> Result<ToolResult, JsonRpcError> {
-    let args: IngestArgs =
-        serde_json::from_value(args).map_err(|e| JsonRpcError::invalid_params(&e.to_string()))?;
-
-    // Keep the explicit conversation_date (if any) as the temporal anchor for
-    // dateless facts; `today` is the prompt's relative-resolution reference and
-    // still falls back to now when the caller omitted a date.
-    let anchor = args.conversation_date.clone();
-    let today = anchor
-        .clone()
-        .unwrap_or_else(|| Utc::now().format("%Y-%m-%d").to_string());
-
-    // Ingress PII boundary (security brief A): redact the transcript once,
-    // before it reaches the LLM extraction request (csf_16092cf6). Both the
-    // extraction and raw branches consume the redacted copy; extracted facts
-    // are therefore derived from redacted text, and persist_chunk re-applies
-    // the same idempotent pipeline as defense in depth.
-    let content = state.pii_filter.redact_for_sink(&args.content);
-
-    // Use knowledge extraction if enabled
-    if state.config.knowledge_extraction.enabled {
-        // /157 S1: missing key is a loud config error, not "Extracted 0".
-        let Some(api_key) = state.config.llm.get_api_key() else {
-            return Ok(ToolResult::error(extraction_failed_message(
-                &loomem_core::memory_extractor::ExtractionError::NoApiKey,
-            )));
-        };
-        let chat =
-            loomem_core::memory_extractor::HttpExtractionChat::new(&state.http_client, api_key);
-        tool_ingest_extract(
-            &chat,
-            state,
-            &content,
-            &today,
-            anchor.as_deref(),
-            stream_id,
-            user_id,
-        )
-        .await
-    } else {
-        tool_ingest_raw(state, &content, stream_id, user_id).await
-    }
-}
-
-/// Extraction branch of `tool_ingest` with an injected chat transport
-/// (/157 S1). The seam lets the integration tests below simulate API
-/// failures (AC-1) without real HTTP.
-async fn tool_ingest_extract(
-    chat: &impl loomem_core::memory_extractor::ExtractionChat,
-    state: &Arc<AppState>,
-    content: &str,
-    today: &str,
-    anchor: Option<&str>,
-    stream_id: &str,
-    user_id: Option<String>,
-) -> Result<ToolResult, JsonRpcError> {
-    match loomem_core::memory_extractor::extract_knowledge_with(
-        chat,
-        &state.config.knowledge_extraction,
-        content,
-        today,
-    )
-    .await
-    {
-        Ok(outcome) => {
-            let mut stored = 0;
-            let mut skipped = 0;
-            for fact in &outcome.facts {
-                let id = uuid::Uuid::new_v4().to_string();
-                let timestamp = Utc::now().timestamp() as u64;
-                // /151 (port of /114b1) — event_date → valid_from
-                // routing; see ingest_fact_meta.
-                let (extraction_meta_for_chunk, valid_from_ts) = ingest_fact_meta(
-                    fact,
-                    &state.config.knowledge_extraction.model,
-                    timestamp,
-                    anchor,
-                );
-
-                let chunk = loomem_core::storage::Chunk {
-                    id: id.clone(),
-                    content: fact.content.clone(),
-                    stream: stream_id.to_string(),
-                    level: 1,
-                    score: 1.0,
-                    timestamp,
-                    consolidated: false,
-                    dormant: false,
-                    in_progress: false,
-                    prompt_version: None,
-                    source_ids: None,
-                    last_decay: None,
-                    metadata: None,
-                    importance: Some(if fact.fact_type == "preference_or_decision" {
-                        2.0_f64.max(fact.confidence)
-                    } else {
-                        fact.confidence
-                    }),
-                    persistent: true,
-                    last_implicit_boost: None,
-                    access_count: 0,
-                    source: Some(SourceTag::from_agent("mcp-ingest")),
-                    created_by: Some("mcp".to_string()),
-                    updated_at: Some(timestamp),
-                    valid_from: Some(valid_from_ts),
-                    valid_until: None,
-                    is_latest: true,
-                    superseded_by: None,
-                    supersedes_id: None,
-                    root_memory_id: None,
-                    version: 1,
-                    memory_type: Some(
-                        match fact.fact_type.as_str() {
-                            "fact" | "preference_or_decision" | "experience" => "static",
-                            _ => "dynamic",
-                        }
-                        .to_string(),
-                    ),
-                    extraction_meta: Some(extraction_meta_for_chunk),
-                    deleted_at: None,
-                    trust_level: Some("a2".to_string()),
-                    ingester_user_id: user_id.clone(),
-
-                    alpha: 1.0,
-                    beta: 1.0,
-                    harmful_count: 0,
-                    n_ratings: 0,
-                    last_rated_at: None,
-                    provenance_role: loomem_core::storage::ProvenanceRole::Claim,
-                };
-
-                match handlers::ingest::persist_chunk(
-                    state,
-                    chunk,
-                    &fact.content,
-                    "default",
-                    "default",
-                    stream_id,
-                    1,
-                    timestamp as i64,
-                    None,
-                    None,
-                )
-                .await
-                {
-                    Ok(_) => stored += 1,
-                    Err(_) => skipped += 1,
-                }
-            }
-            Ok(ToolResult::text(ingest_summary(&outcome, stored, skipped)))
-        }
-        Err(e) => Ok(ToolResult::error(extraction_failed_message(&e))),
-    }
-}
-
-/// Raw-storage branch of `tool_ingest` (knowledge extraction disabled).
-/// Body unchanged by /157 — split out of the former inline `else`.
-async fn tool_ingest_raw(
-    state: &Arc<AppState>,
-    content: &str,
-    stream_id: &str,
-    user_id: Option<String>,
-) -> Result<ToolResult, JsonRpcError> {
-    // Fallback: store raw content
-    let id = uuid::Uuid::new_v4().to_string();
-    let timestamp = Utc::now().timestamp() as u64;
-    let chunk = loomem_core::storage::Chunk {
-        id: id.clone(),
-        content: content.to_string(),
-        stream: stream_id.to_string(),
-        level: 0,
-        score: 1.0,
-        timestamp,
-        consolidated: false,
-        dormant: false,
-        in_progress: false,
-        prompt_version: None,
-        source_ids: None,
-        last_decay: None,
-        metadata: None,
-        importance: Some(1.0),
-        persistent: false,
-        last_implicit_boost: None,
-        access_count: 0,
-        source: Some(SourceTag::from_agent("mcp-ingest-raw")),
-        created_by: Some("mcp".to_string()),
-        updated_at: Some(timestamp),
-        valid_from: Some(timestamp),
-        valid_until: None,
-        is_latest: true,
-        superseded_by: None,
-        supersedes_id: None,
-        root_memory_id: None,
-        version: 1,
-        memory_type: None,
-        extraction_meta: None,
-        deleted_at: None,
-        trust_level: Some("a2".to_string()),
-        ingester_user_id: user_id,
-
-        alpha: 1.0,
-        beta: 1.0,
-        harmful_count: 0,
-        n_ratings: 0,
-        last_rated_at: None,
-        provenance_role: loomem_core::storage::ProvenanceRole::Claim,
-    };
-    match handlers::ingest::persist_chunk(
-        state,
-        chunk,
-        content,
-        "default",
-        "default",
-        stream_id,
-        0,
-        timestamp as i64,
-        None,
-        None,
-    )
-    .await
-    {
-        Ok(stored_id) => Ok(ToolResult::text(format!(
-            "Stored raw transcript (id: {}). Knowledge extraction disabled.",
-            stored_id
-        ))),
-        Err(e) => Ok(ToolResult::error(format!("Failed to store: {:?}", e))),
-    }
-}
-
 // ── memory_dream ─────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -1980,53 +1524,6 @@ struct DreamArgs {
     #[allow(dead_code)]
     #[serde(default)]
     stream: Option<String>,
-}
-
-async fn tool_dream(
-    state: &Arc<AppState>,
-    args: Value,
-    stream_id: &str,
-) -> Result<ToolResult, JsonRpcError> {
-    let _args: DreamArgs = serde_json::from_value(args).unwrap_or(DreamArgs { stream: None });
-    if !state.config.dream.enabled {
-        return Ok(ToolResult::text("Dream worker is disabled in config."));
-    }
-
-    let cost_tracker = loomem_core::CostTracker::new(
-        state.store.clone(),
-        state.config.cost.clone(),
-        state.http_client.clone(),
-    );
-
-    match loomem_core::dream::dream_run(
-        &state.store,
-        &state.tantivy,
-        &state.http_client,
-        loomem_core::dream::DreamRunContext {
-            llm_config: &state.config.llm,
-            dream_config: &state.config.dream,
-            intent_log: state.intent_log.as_deref(),
-            embedding_queue: state.embedding_queue.clone(),
-        },
-        &cost_tracker,
-        stream_id,
-    )
-    .await
-    {
-        Ok(result) => {
-            let text = format!(
-                "Dream consolidation complete:\n- Chunks processed: {}\n- Subject groups: {}\n- Facts merged: {}\n- Contradictions resolved: {}\n- Cost: ${:.3}{}",
-                result.chunks_processed,
-                result.groups_found,
-                result.facts_merged,
-                result.contradictions_resolved,
-                result.cost_usd,
-                if result.cost_cap_reached { "\n⚠ Cost cap reached" } else { "" },
-            );
-            Ok(ToolResult::text(text))
-        }
-        Err(e) => Ok(ToolResult::error(format!("Dream failed: {}", e))),
-    }
 }
 
 // ── memory_history ───────────────────────────────────────────────
@@ -2106,6 +1603,7 @@ async fn tool_delete(
     let args: DeleteArgs =
         serde_json::from_value(args).map_err(|e| JsonRpcError::invalid_params(&e.to_string()))?;
 
+    let mut retained_source = String::new();
     // Validate chunk ownership before deletion
     if let Ok(Some(chunk)) = state.store.get_chunk(&args.chunk_id) {
         if chunk.stream != stream_id {
@@ -2113,6 +1611,7 @@ async fn tool_delete(
                 "Access denied: this memory belongs to another stream.".to_string(),
             ));
         }
+        retained_source = delete_notice::retained_source(&chunk);
     }
 
     match crate::handlers::delete::delete_memory_fully(
@@ -2128,8 +1627,8 @@ async fn tool_delete(
             args.chunk_id
         ))),
         Ok(outcome) if outcome.all_ok() => Ok(ToolResult::text(format!(
-            "Deleted memory {}.",
-            args.chunk_id
+            "Deleted memory {}.{}",
+            args.chunk_id, retained_source
         ))),
         Ok(outcome) => {
             // Cycle/117 partial-success: chunk is soft-deleted but at least
@@ -2145,8 +1644,8 @@ async fn tool_delete(
             .filter_map(|(name, failed)| if failed { Some(name) } else { None })
             .collect();
             Ok(ToolResult::text(format!(
-                "Deleted memory {} (partial: failed steps = {:?}; retry recommended).",
-                args.chunk_id, failures
+                "Deleted memory {} (partial: failed steps = {:?}; retry recommended).{}",
+                args.chunk_id, failures, retained_source
             )))
         }
         Err(e) => Ok(ToolResult::error(format!("Delete failed: {}", e))),
@@ -2645,7 +2144,7 @@ mod tests {
         let _: StatusArgs = serde_json::from_value(json!({})).unwrap();
         let _: ReflectArgs = serde_json::from_value(json!({})).unwrap();
         let _: GraphArgs = serde_json::from_value(json!({ "entity": "acme" })).unwrap();
-        let _: IngestArgs = serde_json::from_value(json!({ "content": "x" })).unwrap();
+        let _: ingest::IngestArgs = serde_json::from_value(json!({ "content": "x" })).unwrap();
         let _: DreamArgs = serde_json::from_value(json!({})).unwrap();
         let _: HistoryArgs = serde_json::from_value(json!({ "chunk_id": "c1" })).unwrap();
         let _: DeleteArgs = serde_json::from_value(json!({ "chunk_id": "c1" })).unwrap();
@@ -2993,254 +2492,6 @@ mod tests {
                 })
                 .collect(),
         }
-    }
-
-    // ── /157 S1 — AC-1/AC-2: loud extraction failures in memory_ingest ──
-
-    /// Failing stub: simulates OpenAI 429 quota exhaustion (incident A).
-    struct Quota429;
-
-    impl loomem_core::memory_extractor::ExtractionChat for Quota429 {
-        async fn chat(
-            &self,
-            _request_body: &serde_json::Value,
-        ) -> anyhow::Result<loomem_core::memory_extractor::ChatHttpReply> {
-            Ok(loomem_core::memory_extractor::ChatHttpReply {
-                status: 429,
-                body: r#"{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}"#.to_string(),
-            })
-        }
-    }
-
-    /// Success stub: valid chat envelope carrying zero facts.
-    struct EmptyFacts;
-
-    impl loomem_core::memory_extractor::ExtractionChat for EmptyFacts {
-        async fn chat(
-            &self,
-            _request_body: &serde_json::Value,
-        ) -> anyhow::Result<loomem_core::memory_extractor::ChatHttpReply> {
-            Ok(loomem_core::memory_extractor::ChatHttpReply {
-                status: 200,
-                body: serde_json::json!({
-                    "choices": [{"message": {"content": "{\"facts\": []}"}}]
-                })
-                .to_string(),
-            })
-        }
-    }
-
-    /// AC-1 (integration): a simulated 429 through the real `tool_ingest`
-    /// extraction branch → explicit extraction error, NOT "Extracted 0 facts".
-    #[tokio::test]
-    async fn ac1_ingest_429_is_loud_error_not_extracted_zero() {
-        let (_app, state) = crate::tests::make_test_app();
-        let result = tool_ingest_extract(
-            &Quota429,
-            &state,
-            "transcript text",
-            "2026-06-11",
-            None,
-            "test_stream",
-            None,
-        )
-        .await
-        .expect("dispatcher returns a ToolResult, not a JsonRpcError");
-        assert_eq!(result.is_error, Some(true));
-        let text = &result.content[0].text;
-        assert!(text.starts_with("Extraction failed (429):"), "got: {text}");
-        assert!(text.contains("insufficient_quota"), "got: {text}");
-        assert!(text.ends_with("No facts stored."), "got: {text}");
-        assert!(!text.contains("Extracted 0 facts"), "got: {text}");
-    }
-
-    /// AC-2 (integration): a genuine zero-fact success through the same
-    /// branch reads exactly as before /157 — no error, legacy message.
-    #[tokio::test]
-    async fn ac2_ingest_zero_facts_reads_as_before() {
-        let (_app, state) = crate::tests::make_test_app();
-        let result = tool_ingest_extract(
-            &EmptyFacts,
-            &state,
-            "smalltalk only",
-            "2026-06-11",
-            None,
-            "test_stream",
-            None,
-        )
-        .await
-        .expect("dispatcher returns a ToolResult, not a JsonRpcError");
-        assert_ne!(result.is_error, Some(true));
-        assert_eq!(
-            result.content[0].text,
-            "Extracted 0 facts from conversation, stored 0, skipped 0."
-        );
-    }
-
-    // ── temporal anchoring: dateless facts inherit conversation_date ──
-
-    fn dateless_fact() -> loomem_core::memory_extractor::ExtractedFact {
-        loomem_core::memory_extractor::ExtractedFact {
-            content: "Bought a red mountain bike.".to_string(),
-            fact_type: "fact".to_string(),
-            subject: None,
-            event_date: None,
-            event_date_context: None,
-            confidence: 0.9,
-            attributed_to: None,
-        }
-    }
-
-    /// AC-1 (unit): a dateless fact with a supplied conversation_date anchors
-    /// its event_date to that session date; valid_from derives from it, not the
-    /// ingest timestamp.
-    #[test]
-    fn anchor_applied_when_event_date_absent() {
-        let (meta, valid_from) = ingest_fact_meta(&dateless_fact(), "m", 9_999, Some("2023-02-10"));
-        assert_eq!(meta.event_date.as_deref(), Some("2023-02-10"));
-        assert_eq!(valid_from, meta.event_date_unix().expect("anchored date"));
-        assert_ne!(valid_from, 9_999, "must not fall back to ingest timestamp");
-    }
-
-    /// AC-2 (unit): an explicitly resolved event_date always wins over the
-    /// conversation_date anchor.
-    #[test]
-    fn explicit_event_date_wins_over_anchor() {
-        let mut fact = dateless_fact();
-        fact.event_date = Some("2023-03-15".to_string());
-        let (meta, _) = ingest_fact_meta(&fact, "m", 9_999, Some("2023-02-10"));
-        assert_eq!(meta.event_date.as_deref(), Some("2023-03-15"));
-    }
-
-    /// AC-3 (unit) REGRESSION: with no anchor (conversation_date omitted) a
-    /// dateless fact keeps the pre-fix behavior — no event_date, valid_from
-    /// falls back to the ingest timestamp.
-    #[test]
-    fn no_anchor_falls_back_to_timestamp() {
-        let (meta, valid_from) = ingest_fact_meta(&dateless_fact(), "m", 9_999, None);
-        assert_eq!(meta.event_date, None);
-        assert_eq!(valid_from, 9_999);
-    }
-
-    /// AC (unit): a malformed anchor is ignored (no event_date stamped), and
-    /// valid_from falls back to the ingest timestamp.
-    #[test]
-    fn malformed_anchor_is_ignored() {
-        let (meta, valid_from) = ingest_fact_meta(&dateless_fact(), "m", 9_999, Some("not-a-date"));
-        assert_eq!(meta.event_date, None);
-        assert_eq!(valid_from, 9_999);
-    }
-
-    /// AC (unit) NO SPLIT STATE: a valid but pre-1970 anchor cannot be
-    /// represented in the `u64` valid_from key, so it is not stamped at all —
-    /// event_date and valid_from stay consistent on the fallback path instead
-    /// of disagreeing (Greptile P2, PR #20).
-    #[test]
-    fn pre_1970_anchor_does_not_split_temporal_state() {
-        let (meta, valid_from) = ingest_fact_meta(&dateless_fact(), "m", 9_999, Some("1956-06-15"));
-        assert_eq!(meta.event_date, None, "pre-1970 anchor must not be stamped");
-        assert_eq!(valid_from, 9_999);
-    }
-
-    /// Success stub: one fact with NO resolved event_date — the common case of
-    /// a plainly-stated event with no temporal cue.
-    struct OneDatelessFact;
-
-    impl loomem_core::memory_extractor::ExtractionChat for OneDatelessFact {
-        async fn chat(
-            &self,
-            _request_body: &serde_json::Value,
-        ) -> anyhow::Result<loomem_core::memory_extractor::ChatHttpReply> {
-            let facts = serde_json::json!({
-                "facts": [{
-                    "content": "Bought a red mountain bike.",
-                    "fact_type": "fact",
-                    "subject": null,
-                    "event_date": null,
-                    "event_date_context": null,
-                    "confidence": 0.9
-                }]
-            })
-            .to_string();
-            Ok(loomem_core::memory_extractor::ChatHttpReply {
-                status: 200,
-                body: serde_json::json!({
-                    "choices": [{"message": {"content": facts}}]
-                })
-                .to_string(),
-            })
-        }
-    }
-
-    /// AC-1 (integration): a dateless fact ingested with a past
-    /// conversation_date persists with event_date == that date (not the
-    /// ingestion date), so the search `[date]` prefix and temporal index anchor
-    /// correctly end-to-end.
-    #[tokio::test]
-    async fn anchored_dateless_fact_persists_conversation_date() {
-        let (_app, state) = crate::tests::make_test_app();
-        let result = tool_ingest_extract(
-            &OneDatelessFact,
-            &state,
-            "Bought a red mountain bike.",
-            "2023-02-10",
-            Some("2023-02-10"),
-            "anchor_stream",
-            None,
-        )
-        .await
-        .expect("dispatcher returns a ToolResult");
-        assert_ne!(
-            result.is_error,
-            Some(true),
-            "got: {}",
-            result.content[0].text
-        );
-
-        let chunk = state
-            .store
-            .prefix_scan(b"chunk:L1:")
-            .filter_map(|(_k, v)| state.store.decode_chunk(&v).ok())
-            .find(|c| c.stream == "anchor_stream")
-            .expect("ingested chunk present in store");
-        assert_eq!(
-            chunk
-                .extraction_meta
-                .as_ref()
-                .and_then(|m| m.event_date.as_deref()),
-            Some("2023-02-10")
-        );
-    }
-
-    /// AC-2 (unit): zero facts + zero failures formats byte-identically to
-    /// the pre-/157 message.
-    #[test]
-    fn ac2_zero_facts_message_unchanged() {
-        let outcome = loomem_core::memory_extractor::ExtractionOutcome::default();
-        assert_eq!(
-            ingest_summary(&outcome, 0, 0),
-            "Extracted 0 facts from conversation, stored 0, skipped 0."
-        );
-    }
-
-    /// /157 S1: partial success appends a warning with count + first error.
-    #[test]
-    fn partial_failure_warning_appended() {
-        let outcome = loomem_core::memory_extractor::ExtractionOutcome {
-            facts: Vec::new(),
-            failures: vec![loomem_core::memory_extractor::ChunkFailure {
-                chunk_index: 1,
-                status: Some(429),
-                reason: "quota".to_string(),
-            }],
-        };
-        let msg = ingest_summary(&outcome, 0, 0);
-        assert!(msg.starts_with("Extracted 0 facts"), "got: {msg}");
-        assert!(
-            msg.contains("Warning: 1 extraction chunk(s) failed"),
-            "got: {msg}"
-        );
-        assert!(msg.contains("(429): quota"), "got: {msg}");
     }
 
     /// AC-6 (/157): memory_status surfaces the undecodable-chunks counter and

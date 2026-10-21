@@ -1,10 +1,14 @@
+mod lifecycle;
+mod temporal;
+pub use temporal::event_timestamp_for_chunk;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, RangeQuery};
 use tantivy::schema::*;
-use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy};
+use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy};
 use tracing::{debug, info, warn};
 
 use crate::storage::RocksDbStore;
@@ -101,18 +105,14 @@ fn parse_lexical_query(
 ) -> Option<(Box<dyn tantivy::query::Query>, LexicalParse)> {
     match parser.parse_query(query_text) {
         Ok(q) => Some((q, LexicalParse::Raw)),
-        Err(raw_err) => {
+        Err(_raw_err) => {
             let sanitized = sanitize_query(query_text);
             match parser.parse_query(&sanitized) {
                 Ok(q) => Some((q, LexicalParse::Sanitized)),
-                Err(sanitized_err) => match parser.parse_query(&sanitized.to_lowercase()) {
+                Err(_sanitized_err) => match parser.parse_query(&sanitized.to_lowercase()) {
                     Ok(q) => Some((q, LexicalParse::Folded)),
-                    Err(folded_err) => {
-                        warn!(
-                            "BM25 leg skipped: query unparsable raw ({raw_err}), sanitized \
-                             ({sanitized_err}) and keyword-folded ({folded_err}); degrading \
-                             to remaining search legs"
-                        );
+                    Err(_folded_err) => {
+                        warn!("BM25 leg skipped after raw, sanitized and folded parse failures");
                         None
                     }
                 },
@@ -490,47 +490,6 @@ impl TantivyIndex {
         })
     }
 
-    /// Delete + insert (upsert). Safe to call on existing or new docs.
-    pub fn upsert_document(&mut self, doc: TextDocument) -> Result<()> {
-        let id_term = tantivy::Term::from_field_text(self.id_field, &doc.id);
-        self.writer.delete_term(id_term);
-        self.index_document(doc)
-    }
-
-    pub fn index_document(&mut self, doc: TextDocument) -> Result<()> {
-        debug!("Indexing document: id={}", doc.id);
-
-        let mut tantivy_doc = doc!(
-            self.id_field => doc.id,
-            self.content_field => doc.content,
-            self.user_id_field => doc.user_id,
-            self.app_id_field => doc.app_id,
-            self.level_field => doc.level as i64,
-            self.timestamp_field => doc.timestamp,
-            self.stream_field => doc.stream,
-            self.event_date_field => doc.event_date.unwrap_or(doc.timestamp),
-        );
-
-        if let Some(entities) = doc.entities {
-            tantivy_doc.add_text(self.entities_field, entities);
-        }
-
-        if let Some(relations) = doc.relations {
-            tantivy_doc.add_text(self.relations_field, relations);
-        }
-
-        tantivy_doc.add_text(
-            self.source_agent_field,
-            doc.source_agent.as_deref().unwrap_or("unknown"),
-        );
-
-        self.writer
-            .add_document(tantivy_doc)
-            .context("Failed to add document to Tantivy")?;
-
-        Ok(())
-    }
-
     pub fn commit(&mut self) -> Result<()> {
         debug!("Committing Tantivy index");
         self.writer
@@ -542,16 +501,8 @@ impl TantivyIndex {
         Ok(())
     }
 
-    pub fn delete_document(&mut self, id: &str) -> Result<()> {
-        debug!("Deleting document from Tantivy: id={}", id);
-        let id_term = tantivy::Term::from_field_text(self.id_field, id);
-        self.writer.delete_term(id_term);
-        self.writer.commit().context("Failed to commit deletion")?;
-        Ok(())
-    }
-
     pub fn search(&self, query_text: &str, limit: usize) -> Result<Vec<SearchResult>> {
-        debug!("Searching: query='{}', limit={}", query_text, limit);
+        debug!(query_bytes = query_text.len(), limit, "Searching Tantivy");
 
         let searcher = self.reader.searcher();
 
@@ -645,8 +596,8 @@ impl TantivyIndex {
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         debug!(
-            "Searching with stream filter: query='{}', stream='{}', limit={}",
-            query_text, stream, limit
+            query_bytes = query_text.len(),
+            limit, "Searching with stream filter"
         );
 
         let searcher = self.reader.searcher();
@@ -743,8 +694,8 @@ impl TantivyIndex {
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         debug!(
-            "Searching with entity filter: query='{}', entity='{}', stream={:?}, limit={}",
-            query_text, entity, stream, limit
+            query_bytes = query_text.len(),
+            limit, "Searching with entity filter"
         );
 
         let searcher = self.reader.searcher();
@@ -978,13 +929,13 @@ impl TantivyIndex {
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         debug!(
-            "Searching with date range: query='{}', start={}, end={}, stream={:?}, limit={}",
-            query_text, start_ts, end_ts, stream, limit
+            query_bytes = query_text.len(),
+            start_ts, end_ts, limit, "Searching with date range"
         );
 
         let searcher = self.reader.searcher();
 
-        // Build date range query on event_date (semantic date, falls back to timestamp at index time)
+        // Build date range query on event_date (semantic event date; unknown versioned dates have no indexed value)
         let lower = std::ops::Bound::Included(tantivy::Term::from_field_i64(
             self.event_date_field,
             start_ts,
@@ -1336,7 +1287,7 @@ impl TantivyIndex {
                 source_agent: chunk.source.as_ref().map(|s| s.agent.clone()),
             };
 
-            self.index_document(doc)?;
+            self.index_chunk_document(doc, &chunk)?;
             indexed_count += 1;
         }
 

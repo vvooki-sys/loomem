@@ -59,7 +59,7 @@ pub fn random_walk(
         let mut visited = HashSet::new();
 
         // Start from seed
-        let seed = graph.get_entity_by_id(seed_entity_id)?;
+        let seed = graph.get_live_entity_by_id(seed_entity_id)?;
         let seed = match seed {
             Some(e) => e,
             None => continue,
@@ -78,7 +78,7 @@ pub fn random_walk(
             }
             total_hops += 1;
 
-            let neighbors = graph.get_neighbors(&current.id)?;
+            let neighbors = graph.get_live_neighbors(&current.id)?;
             if neighbors.is_empty() {
                 break;
             }

@@ -290,7 +290,7 @@ a:hover{text-decoration:underline}
 <td><code>conversation_date</code></td>
 <td>string</td>
 <td>no</td>
-<td>ISO date (e.g., "2026-04-02")</td>
+<td>Known conversation date in <code>YYYY-MM-DD</code> form; observation time, not a substitute for an unknown event date</td>
 </tr>
 </tbody>
 </table>
@@ -300,11 +300,15 @@ a:hover{text-decoration:underline}
   conversation_date: &quot;2026-04-02&quot;
 )
 </code></pre>
-<p><strong>What happens:</strong>
-1. LLM extracts individual facts with type, subject, date, confidence
-2. Each fact checked for duplicates (cosine similarity &gt; 0.92 = skip)
-3. Contradiction detection runs (updates supersede older facts)
-4. Facts stored with full <code>extraction_meta</code></p>
+<p><strong>What happens:</strong></p>
+<ol>
+<li>The sanitized transcript is stored first as a persistent, searchable supporting source. Content is sanitized to a fixpoint before storage: input that keeps changing after four sanitization passes (for example deeply nested HTML entity encoding) is refused as invalid params with nothing stored, so extraction always sees exactly the persisted text.</li>
+<li><strong>Opt-in</strong> (<code>[fragments] enabled = true</code>, off by default — see <a href="configuration.html#fragments">Configuration</a>): right after the source and before extraction, one fragment chunk per conversation turn is stored, each with the author role, the conversation date and an exact byte range into the source. The response text then ends with <code> Stored N fragments.</code> — or <code> Stored N fragments, M fragment writes failed.</code>, <code> Stored N fragments, M fragments skipped (sanitizer would rewrite the slice).</code>, or <code> Stored 0 fragments (segmentation failed: …).</code> / <code> Stored 0 fragments (segmentation skipped: …).</code> when something went wrong. Fragment writes never block fact extraction; with fragments disabled the response is unchanged.</li>
+<li>When extraction is enabled, the LLM extracts typed facts linked to that source, with subject, confidence, optional speaker attribution and resolved event dates.</li>
+<li>The response includes the source ID even when extraction fails, credentials are missing, or no facts are found. Partial fact writes are reported; the source is retained.</li>
+</ol>
+<p>This ingestion path does not automatically deduplicate or supersede existing facts. Repeating ingestion creates another source. Source-linked content and provenance are immutable: to correct a conversation, delete its source ID and ingest the corrected transcript.</p>
+<p>A conversation date anchors relative expressions only when known; an unknown event date stays unknown. Omitting the conversation date does not authorize using storage time to resolve relative dates. New ingestion records render known events as <code>[event:YYYY-MM-DD]</code>, observations as <code>[observed:YYYY-MM-DD]</code>, and storage time as <code>[recorded:YYYY-MM-DD]</code>. Legacy <code>[YYYY-MM-DD]</code> labels are unchanged and do not establish an event date. For records with the recognized versioned ingestion contract, date-range searches require a known event date; an unknown event date does not match a date range. Conversation and storage dates do not substitute for event time. Legacy records without that contract retain their existing event dates and recorded-time fallback when undated. Startup repairs older versioned index entries in place without resetting the index, and stops if repair fails. The separate valid_at filter retains its validity/history semantics. If a date-filtered search omits a source with an unknown event date, retry without the time filter or fetch the returned source ID.</p>
 <p><strong>Typical output (illustrative — exact extraction depends on LLM judgment):</strong>
 - <code>PreferenceOrDecision</code>: "User prefers Cursor over VSCode" (subject: user, confidence: 0.95)
 - <code>ProjectState</code>: "Dashboard deadline is 2026-04-15" (subject: dashboard, confidence: 0.90)</p>
@@ -352,7 +356,8 @@ a:hover{text-decoration:underline}
 - Deduplicates near-identical results
 - Marks superseded facts with <code>[UPDATED]</code>
 - For aggregation queries ("how many..."), boosts <code>top_k</code> to 30
-- Each result line ends with its <code>chunk_id</code> — usable directly for <code>memory_history</code>, <code>memory_delete</code>, or <code>memory_feedback</code></p>
+- Each result line ends with its <code>chunk_id</code> — usable directly for <code>memory_history</code>, <code>memory_delete</code>, or <code>memory_feedback</code>
+- <strong>Opt-in</strong> (<code>[search] evidence_fields = true</code>, off by default — see <a href="configuration.html#search">Configuration</a>): each line carries a bracketed evidence tag before the score — <code>[author: user; conversation: YYYY-MM-DD; event: YYYY-MM-DD (resolved|unknown); source: &lt;id&gt;]</code> — listing only the parts known for that memory (a line with none of them is unchanged). The source byte range (<code>byte_start</code>/<code>byte_end</code>) is exposed on the REST surface only</p>
 <hr />
 <h3 id="memory_context">memory_context</h3>
 <p>Load relevant background at the start of a task. Token-budgeted — won't overwhelm the context window.</p>
@@ -512,6 +517,7 @@ a:hover{text-decoration:underline}
 <pre><code>memory_graph(entity: &quot;Cursor&quot;)
 </code></pre>
 <p><strong>Returns:</strong> entity details (name, type, aliases), connections to other entities, linked chunk count. Only entities and edges within the active stream are visible.</p>
+<p>New graph names, aliases and relations are bound to the contributing memory, stream, entity or edge, and current content generation, using the configured at-rest encryption. Lookup and display require live support for each contribution in the active stream; a deleted conversation’s alias cannot borrow support from another memory of the same entity. Older graph data contributes only explicit stored per-memory entity names and relation tuples. Unsupported aliases and connections remain hidden until re-extraction, and legacy entity types may appear as Unknown; source-text resemblance is not used to reconstruct missing provenance.</p>
 <p>Useful for understanding "who works on what", "what technologies are connected", etc.</p>
 <hr />
 <h3 id="memory_history">memory_history</h3>
@@ -550,7 +556,8 @@ v2 (2026-04-01): &quot;User uses Cursor&quot;         ← current
 <p><strong>When to call:</strong> when the user asks "what did I use before X?" or when investigating contradictory information.</p>
 <hr />
 <h3 id="memory_delete">memory_delete</h3>
-<p>Delete a specific memory by ID.</p>
+<p>Soft-delete a specific memory by ID. Deleting a recognized ingestion source also tombstones its same-stream linked descendants before index cleanup. Deleting one derived fact retains its source and other facts; the response names the retained source ID. Delete that source ID to remove the conversation and linked memories from retrieval.</p>
+<p>A partial cleanup response requires a retry. Soft-deleted content follows the existing recovery and purge policy; this is not immediate physical erasure or a search for every semantic copy. Unrelated copies may remain. Graph names, aliases and connections remain visible only with their own live supporting memories.</p>
 <table>
 <thead>
 <tr>

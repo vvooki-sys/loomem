@@ -74,6 +74,7 @@ impl<'a> FeedbackService<'a> {
     /// does not exist in the caller's stream (or doesn't exist at all). Errors
     /// are reserved for actual storage failures.
     pub fn apply_rating(&self, args: ApplyRatingArgs<'_>) -> Result<RatingOutcome> {
+        let _lifecycle = self.store.lock_lifecycle()?;
         let chunk_opt = if args.caller_is_admin {
             self.store.get_chunk(args.chunk_id)?
         } else {

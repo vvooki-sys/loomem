@@ -1,3 +1,5 @@
+pub(crate) mod graph;
+pub(crate) mod sanitize;
 use axum::{extract::State, http::StatusCode, Json};
 use chrono::Utc;
 use loomem_core::intent_log::OpType;
@@ -46,28 +48,20 @@ pub async fn persist_chunk(
     _stream_id: Option<&str>,
     _metadata: Option<&serde_json::Value>,
 ) -> Result<String, AppError> {
-    // Pre-ingestion sanitization: HTML strip + injection detection
-    let sanitize_result = loomem_core::sanitizer::sanitize(content);
-    let content = &sanitize_result.content;
-    let chunk = if sanitize_result.html_stripped || sanitize_result.injection_detected {
+    // Pre-ingestion sanitization (HTML strip + injection detection, then PII
+    // redaction before any storage) — see `sanitize::persist_content`.
+    let prepared = sanitize::persist_content(&state.pii_filter, content);
+    let content = &prepared.text;
+    let chunk = if let Some(replacement) = prepared.chunk_content {
         let mut c = chunk;
-        c.content = sanitize_result.content.clone();
-        c
-    } else {
-        chunk
-    };
-
-    // PII sanitization at ingest — redact before any storage
-    let (sanitized_content, pii_redactions) = state.pii_filter.sanitize(content);
-    let content = &sanitized_content;
-    let chunk = if !pii_redactions.is_empty() {
-        let mut c = chunk;
-        c.content = sanitized_content.clone();
-        tracing::info!(
-            "PII: redacted {} items at ingest for chunk {}",
-            pii_redactions.len(),
-            c.id
-        );
+        c.content = replacement;
+        if prepared.pii_redactions > 0 {
+            tracing::info!(
+                "PII: redacted {} items at ingest for chunk {}",
+                prepared.pii_redactions,
+                c.id
+            );
+        }
         c
     } else {
         chunk
@@ -118,58 +112,6 @@ pub async fn persist_chunk(
         None
     };
 
-    // Store entities with types in RocksDB
-    if !entities.is_empty() {
-        let typed_entities: Vec<(String, String)> = entities
-            .iter()
-            .map(|(name, etype)| (name.clone(), etype.to_string()))
-            .collect();
-        state.store.store_entities(&id, stream, &typed_entities)?;
-    }
-
-    // Store relations in RocksDB
-    if !relations.is_empty() {
-        let rel_tuples: Vec<(String, String, String)> = relations
-            .iter()
-            .map(|r| (r.subject.clone(), r.relation.clone(), r.object.clone()))
-            .collect();
-        state.store.store_relations(&id, stream, &rel_tuples)?;
-    }
-
-    // Populate knowledge graph (stream-scoped)
-    for (entity_name, entity_type) in &entities {
-        let aliases = state.entity_extractor.get_aliases_for(entity_name);
-        match state.graph.get_or_create_entity(
-            entity_name,
-            &entity_type.to_string(),
-            &aliases,
-            stream,
-        ) {
-            Ok(node) => {
-                if let Err(e) = state.graph.add_chunk_to_entity(&node.id, &id) {
-                    warn!("Failed to link chunk to graph entity: {}", e);
-                }
-            }
-            Err(e) => warn!("Failed to create graph entity: {}", e),
-        }
-    }
-    for rel in &relations {
-        if let (Ok(Some(src)), Ok(Some(tgt))) = (
-            state.graph.get_entity_by_name(&rel.subject, stream),
-            state.graph.get_entity_by_name(&rel.object, stream),
-        ) {
-            match state
-                .graph
-                .get_or_create_edge(&src.id, &tgt.id, &rel.relation, stream)
-            {
-                Ok(edge) => {
-                    let _ = state.graph.add_chunk_to_edge(&edge.id, &id);
-                }
-                Err(e) => warn!("Failed to create graph edge: {}", e),
-            }
-        }
-    }
-
     // Parse event_date from extraction_meta for Tantivy temporal indexing
     let event_date_ts: Option<i64> = chunk
         .extraction_meta
@@ -211,6 +153,11 @@ pub async fn persist_chunk(
     )
     .await?;
 
+    // Derived labels are published only after canonical storage succeeds.
+    if let Err(error) = graph::publish_dictionary(state, &chunk, &entities, &relations) {
+        warn!("Graph dictionary publication skipped: {}", error);
+    }
+
     // Enqueue embedding for background batch processing
     if let Some(ref queue) = state.embedding_queue {
         if let Err(e) = queue.enqueue(id.clone(), content.to_string()) {
@@ -236,11 +183,8 @@ pub async fn persist_chunk(
 
     tracing::debug!("Persisted chunk: id={}", id);
 
-    // Invalidate search cache
-    {
-        let mut cache = state.query_cache.lock().await;
-        cache.clear();
-    }
+    // Invalidate retrieval responses after the mutation.
+    super::cache_invalidation::clear(state).await;
 
     // Audit log
     {
@@ -343,6 +287,7 @@ fn maybe_trigger_auto_dream(state: &Arc<AppState>, stream: &str) {
             &state.tantivy,
             &state.http_client,
             loomem_core::dream::DreamRunContext {
+                pii_filter: &state.pii_filter,
                 llm_config: &state.config.llm,
                 dream_config: &state.config.dream,
                 intent_log: state.intent_log.as_deref(),
@@ -591,6 +536,7 @@ pub async fn store_handler(
         n_ratings: 0,
         last_rated_at: None,
         provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+        fragment: None,
     };
 
     // Contradiction detection: check if new chunk updates/extends existing memory
@@ -792,89 +738,13 @@ pub async fn store_handler(
     }))
 }
 
+#[path = "ingest_embeddings.rs"]
+mod embedding_backfill;
+
 pub async fn embed_missing_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if !state.config.storage.vector_enabled {
-        return Ok(Json(
-            serde_json::json!({"status": "skipped", "reason": "vector_enabled=false"}),
-        ));
-    }
-    // Local embedder takes precedence (keyless local default, 384-dim) and needs
-    // no API key; otherwise fall back to the OpenAI API. Fail fast if neither is
-    // available — previously this handler unconditionally demanded a key,
-    // returning 500 on keyless instances so chunks left without a vector (e.g.
-    // consolidated chunks stuck "pending") could never be back-filled.
-    let local_embedder = state.local_embedder.clone();
-    if local_embedder.is_none() && state.config.llm.get_api_key().is_none() {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    let all_chunks = state
-        .store
-        .get_all_chunks()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let existing_embeddings = state
-        .store
-        .get_all_embeddings()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let embedded_ids: std::collections::HashSet<String> =
-        existing_embeddings.into_iter().map(|(id, _)| id).collect();
-
-    let missing: Vec<_> = all_chunks
-        .iter()
-        .filter(|c| !embedded_ids.contains(&c.id))
-        .collect();
-    let total_missing = missing.len();
-    tracing::info!("embed-missing: {} chunks need embeddings", total_missing);
-
-    let mut embedded = 0u32;
-    let mut failed = 0u32;
-    for chunk in missing {
-        let embed_result = if let Some(ref embedder) = local_embedder {
-            embedder.embed(&chunk.content)
-        } else if let Some(api_key) = state.config.llm.get_api_key() {
-            embeddings::embed(
-                &state.http_client,
-                &api_key,
-                &state.config.llm.embedding_model,
-                &chunk.content,
-            )
-            .await
-        } else {
-            Err(anyhow::anyhow!("No embedding provider"))
-        };
-        match embed_result {
-            Ok(embedding) => {
-                if state.store.store_embedding(&chunk.id, embedding).is_ok() {
-                    embedded += 1;
-                } else {
-                    failed += 1;
-                }
-            }
-            Err(e) => {
-                tracing::warn!("embed-missing: failed for {}: {}", chunk.id, e);
-                failed += 1;
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            }
-        }
-        if embedded.is_multiple_of(50) && embedded > 0 {
-            tracing::info!("embed-missing: progress {}/{}", embedded, total_missing);
-        }
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-    }
-
-    tracing::info!(
-        "embed-missing complete: {} embedded, {} failed",
-        embedded,
-        failed
-    );
-    Ok(Json(serde_json::json!({
-        "status": "done",
-        "total_missing": total_missing,
-        "embedded": embedded,
-        "failed": failed,
-    })))
+    embedding_backfill::run(&state).await
 }
 
 pub async fn retag_all_handler(
@@ -889,87 +759,17 @@ pub async fn retag_all_handler(
 
     for chunk in chunks {
         let entities = state.entity_extractor.extract(&chunk.content);
-        let entity_names: Vec<String> = entities.iter().map(|(name, _)| name.clone()).collect();
-
         let relations = state.entity_extractor.find_relations(&entities);
-
-        // Persist re-extracted entities/relations only when present.
-        if !entity_names.is_empty() || !relations.is_empty() {
-            if !entities.is_empty() {
-                let typed_entities: Vec<(String, String)> = entities
-                    .iter()
-                    .map(|(name, etype)| (name.clone(), etype.to_string()))
-                    .collect();
-                state
-                    .store
-                    .store_entities(&chunk.id, &chunk.stream, &typed_entities)?;
-            }
-
-            if !relations.is_empty() {
-                let rel_tuples: Vec<(String, String, String)> = relations
-                    .iter()
-                    .map(|r| (r.subject.clone(), r.relation.clone(), r.object.clone()))
-                    .collect();
-                state
-                    .store
-                    .store_relations(&chunk.id, &chunk.stream, &rel_tuples)?;
-            }
-        }
-
-        // Parity with persist_chunk: re-index EVERY chunk into Tantivy (refreshing
-        // source_agent), regardless of entity/relation count. The previous entity
-        // gate silently skipped entity-less chunks, violating the
-        // persist_chunk_parity invariant. See source-provenance-fixes-brief Issue 2.
-        let entities_str = if !entity_names.is_empty() {
-            Some(entity_names.join(","))
-        } else {
-            None
-        };
-
-        let relations_str = if !relations.is_empty() {
-            let rel_text: Vec<String> = relations
-                .iter()
-                .map(|r| {
-                    format!(
-                        "{} {} {}",
-                        r.subject.to_lowercase(),
-                        r.relation,
-                        r.object.to_lowercase()
-                    )
-                })
-                .collect();
-            Some(rel_text.join(", "))
-        } else {
-            None
-        };
-
-        let event_date_ts: Option<i64> = chunk
-            .extraction_meta
-            .as_ref()
-            .and_then(|m| m.event_date.as_ref())
-            .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-            .map(|d| {
-                d.and_hms_opt(12, 0, 0)
-                    .expect("valid static HMS")
-                    .and_utc()
-                    .timestamp()
-            });
-        let doc = TextDocument {
-            id: chunk.id.clone(),
-            content: chunk.content.clone(),
-            user_id: "default".to_string(),
-            app_id: "default".to_string(),
-            level: chunk.level,
-            timestamp: chunk.timestamp as i64,
-            stream: chunk.stream.clone(),
-            entities: entities_str,
-            relations: relations_str,
-            event_date: event_date_ts,
-            source_agent: chunk.source.as_ref().map(|s| s.agent.clone()),
-        };
-
+        let target =
+            state
+                .graph
+                .capture_contribution_target(&chunk.id, &chunk.stream, &chunk.content)?;
+        graph::publish_dictionary(&state, &chunk, &entities, &relations)?;
+        // Re-index every current chunk, including chunks without entities.
         let mut tantivy = state.tantivy.lock().await;
-        tantivy.upsert_document(doc)?;
+        state
+            .graph
+            .reindex_extraction_if_current(&target, &mut tantivy)?;
         drop(tantivy);
 
         // retagged_count now counts every re-indexed chunk (== total chunk
@@ -1145,6 +945,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 

@@ -1,3 +1,7 @@
+pub mod selector;
+
+static COST_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -42,6 +46,12 @@ pub struct DailyCost {
     pub compress_calls: u64,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
+    #[serde(default)]
+    pub selector_calls: u64,
+    #[serde(default)]
+    pub selector_unknown_usage_calls: u64,
+    #[serde(default)]
+    pub selector_reserved_usd: f64,
 }
 
 impl Default for DailyCost {
@@ -53,6 +63,9 @@ impl Default for DailyCost {
             compress_calls: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
+            selector_calls: 0,
+            selector_unknown_usage_calls: 0,
+            selector_reserved_usd: 0.0,
         }
     }
 }
@@ -181,6 +194,9 @@ impl CostTracker {
         model: &str,
         workspace_id: Option<&str>,
     ) -> Result<()> {
+        let _lock = COST_WRITE_LOCK
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Cost lock unavailable"))?;
         let mut cost = self.get_cost(workspace_id)?;
 
         // Calculate cost based on model

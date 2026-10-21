@@ -1,6 +1,6 @@
 //! Encryption-at-rest backfill service (cycle /147).
 //!
-//! Walks six row classes that may contain legacy plaintext written before
+//! Walks registered row classes that may contain legacy plaintext written before
 //! `LOOMEM_AT_REST_MASTER_KEY` was set and re-encrypts them through the
 //! existing `store_chunk`/`store_entity`/`provider.encrypt`+`put` write paths.
 //! Idempotent: rows that already satisfy the encrypted predicate are counted
@@ -134,7 +134,7 @@ pub async fn run_encrypt_backfill(
         }
     }
 
-    // Raw classes: entity:, rel:, audit:, access:.
+    // Raw classes include source-attributed graph label/relation sidecars.
     for (class, prefix, scope_src) in raw_class_specs() {
         let stopped =
             process_raw_class(store, params, prefix, class, scope_src, &mut progress).await?;
@@ -196,8 +196,12 @@ async fn flush_chunk_batch(
     class: &str,
     counters: &mut ClassCounters,
 ) -> Result<bool> {
-    for (_key, val) in batch {
+    for (key, _) in batch {
         counters.scanned += 1;
+        let _guard = store.lock_lifecycle()?;
+        let Some(val) = store.get(&key)? else {
+            continue;
+        };
         let staged: StoredChunkRead = match serde_json::from_slice(&val) {
             Ok(v) => v,
             Err(e) => {
@@ -213,7 +217,10 @@ async fn flush_chunk_batch(
             continue;
         }
         // Re-encrypt through the existing store_chunk write path.
-        if let Err(e) = store.store_chunk(&staged.chunk) {
+        if let Err(e) = store
+            .encode_chunk(&staged.chunk)
+            .and_then(|bytes| store.put(&key, &bytes))
+        {
             warn!(class, chunk_id = %staged.chunk.id, error = %e, "store_chunk failed — orphan");
             if record_orphan(class, Some(&staged.chunk.stream), counters) {
                 return Ok(true);
@@ -242,7 +249,8 @@ async fn process_entity_class(
         batch.push((key, val));
         if batch.len() >= params.batch_size {
             let stopped =
-                flush_entity_batch(graph, std::mem::take(&mut batch), class, counters).await?;
+                flush_entity_batch(store, graph, std::mem::take(&mut batch), class, counters)
+                    .await?;
             if stopped {
                 return Ok(true);
             }
@@ -250,7 +258,7 @@ async fn process_entity_class(
         }
     }
     if !batch.is_empty() {
-        let stopped = flush_entity_batch(graph, batch, class, counters).await?;
+        let stopped = flush_entity_batch(store, graph, batch, class, counters).await?;
         if stopped {
             return Ok(true);
         }
@@ -259,14 +267,19 @@ async fn process_entity_class(
 }
 
 async fn flush_entity_batch(
+    store: &RocksDbStore,
     graph: &GraphStore,
     batch: Vec<KvPair>,
     class: &str,
     counters: &mut ClassCounters,
 ) -> Result<bool> {
-    for (_key, val) in batch {
+    for (key, _) in batch {
         counters.scanned += 1;
-        let staged: StoredEntityRead = match serde_json::from_slice(&val) {
+        let _guard = store.lock_lifecycle()?;
+        let Some(val) = store.get(&key)? else {
+            continue;
+        };
+        let staged: StoredEntityRead = match parse_entity_envelope(&key, &val) {
             Ok(v) => v,
             Err(e) => {
                 warn!(class, error = %e, "entity envelope parse failed — orphan");
@@ -278,14 +291,6 @@ async fn flush_entity_batch(
         };
         if !staged.encrypted_payload.is_empty() {
             counters.already_encrypted += 1;
-            continue;
-        }
-        // Orphan guard: no stream_id means we can't resolve the DEK scope.
-        if staged.entity.stream_id.is_empty() {
-            warn!(class, entity_id = %staged.entity.id, "empty stream_id — orphan");
-            if record_orphan(class, None, counters) {
-                return Ok(true);
-            }
             continue;
         }
         if let Err(e) = graph.store_entity(&staged.entity) {
@@ -300,6 +305,19 @@ async fn flush_entity_batch(
     Ok(false)
 }
 
+fn parse_entity_envelope(key: &[u8], bytes: &[u8]) -> Result<StoredEntityRead> {
+    let staged: StoredEntityRead = serde_json::from_slice(bytes)?;
+    anyhow::ensure!(
+        key == format!("graph:entity:{}", staged.entity.id).as_bytes(),
+        "entity envelope key/ID mismatch"
+    );
+    anyhow::ensure!(
+        !staged.encrypted_payload.is_empty() || !staged.entity.stream_id.is_empty(),
+        "plaintext entity has no stream scope"
+    );
+    Ok(staged)
+}
+
 // ── Raw-blob walker (entity:, rel:, audit:, access:) ─────────────────────────
 
 /// How to derive the encryption scope from a raw key.
@@ -307,15 +325,27 @@ async fn flush_entity_batch(
 pub(crate) enum ScopeSource {
     /// Scope = `chunk.stream` from the paired `chunk:<chunk_id>` row.
     PairedChunk,
+    /// Graph sidecar prefix + entity/edge UUID + complete paired chunk ID.
+    GraphPairedChunk,
     /// Scope = segment at `key.rsplitn(3, ':').nth(2)` (for audit/access,
     /// where ts and seq are fixed-width suffixes).
     KeyPrefix,
 }
 
-fn raw_class_specs() -> [(&'static str, &'static str, ScopeSource); 4] {
+fn raw_class_specs() -> [(&'static str, &'static str, ScopeSource); 6] {
     [
         ("entity", "entity:", ScopeSource::PairedChunk),
         ("rel", "rel:", ScopeSource::PairedChunk),
+        (
+            "graph_labels",
+            "graph:labels:",
+            ScopeSource::GraphPairedChunk,
+        ),
+        (
+            "graph_edge_labels",
+            "graph:edge_labels:",
+            ScopeSource::GraphPairedChunk,
+        ),
         ("audit", "audit:", ScopeSource::KeyPrefix),
         ("access", "access:", ScopeSource::KeyPrefix),
     ]
@@ -358,7 +388,74 @@ async fn process_raw_class(
     Ok(orphan_limits_hit(counters))
 }
 
+// Graph contributions and physical deletion share the lifecycle mutex. A scan
+// snapshot must never overwrite a newer claim or recreate a deleted sidecar.
 async fn flush_raw_batch(
+    store: &RocksDbStore,
+    batch: Vec<KvPair>,
+    class: &str,
+    scope_src: ScopeSource,
+    counters: &mut ClassCounters,
+) -> Result<bool> {
+    if !matches!(
+        scope_src,
+        ScopeSource::GraphPairedChunk | ScopeSource::PairedChunk
+    ) {
+        return flush_raw_legacy_batch(store, batch, class, scope_src, counters).await;
+    }
+    for (key, _) in batch {
+        counters.scanned += 1;
+        if flush_current_paired_raw(store, &key, class, scope_src, counters)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn flush_current_paired_raw(
+    store: &RocksDbStore,
+    key: &[u8],
+    class: &str,
+    scope_src: ScopeSource,
+    counters: &mut ClassCounters,
+) -> Result<bool> {
+    let _guard = store.lock_lifecycle()?;
+    let Some(current) = store.get(key)? else {
+        return Ok(false);
+    };
+    if is_encrypted(&current) {
+        counters.already_encrypted += 1;
+        return Ok(false);
+    }
+    let scope = std::str::from_utf8(key)
+        .ok()
+        .and_then(|key| resolve_scope(store, key, class, scope_src).ok());
+    let Some(scope) = scope else {
+        warn!(class, "current graph sidecar scope unavailable — orphan");
+        return Ok(record_orphan(class, None, counters));
+    };
+    let result = store
+        .encryption_provider()
+        .encrypt(&scope, &current)
+        .context("encrypt current graph sidecar")
+        .and_then(|encrypted| {
+            store
+                .put(key, &encrypted)
+                .context("publish current graph sidecar")
+        });
+    match result {
+        Ok(()) => {
+            counters.encrypted += 1;
+            Ok(false)
+        }
+        Err(error) => {
+            warn!(class, %error, "graph sidecar backfill failed — orphan");
+            Ok(record_orphan(class, Some(&scope), counters))
+        }
+    }
+}
+
+async fn flush_raw_legacy_batch(
     store: &RocksDbStore,
     batch: Vec<KvPair>,
     class: &str,
@@ -420,6 +517,7 @@ fn resolve_scope(
 ) -> Result<String> {
     match scope_src {
         ScopeSource::PairedChunk => paired_chunk_scope(store, key_str, class),
+        ScopeSource::GraphPairedChunk => graph_paired_chunk_scope(store, key_str, class),
         ScopeSource::KeyPrefix => key_prefix_scope(key_str, class),
     }
 }
@@ -436,6 +534,30 @@ fn paired_chunk_scope(store: &RocksDbStore, key_str: &str, class: &str) -> Resul
         .with_context(|| format!("get_chunk for {class} scope"))?
         .with_context(|| format!("paired chunk missing for {class} key {key_str}"))?;
     Ok(chunk.stream)
+}
+
+/// Remove the known namespace first, then split only once after the UUID.
+/// The remaining chunk ID is opaque and may itself contain colons.
+fn graph_paired_chunk_scope(store: &RocksDbStore, key: &str, class: &str) -> Result<String> {
+    let chunk_id = graph_sidecar_chunk_id(key, class)?;
+    let chunk = store
+        .get_chunk(chunk_id)
+        .with_context(|| format!("decode paired chunk for {class}"))?
+        .with_context(|| format!("paired chunk missing for {class}"))?;
+    Ok(chunk.stream)
+}
+
+fn graph_sidecar_chunk_id<'a>(key: &'a str, class: &str) -> Result<&'a str> {
+    let suffix = key
+        .strip_prefix("graph:labels:")
+        .or_else(|| key.strip_prefix("graph:edge_labels:"))
+        .with_context(|| format!("unknown graph sidecar namespace for {class}"))?;
+    let (owner_id, chunk_id) = suffix
+        .split_once(':')
+        .with_context(|| format!("malformed graph sidecar key for {class}"))?;
+    uuid::Uuid::parse_str(owner_id).context("invalid graph sidecar owner UUID")?;
+    anyhow::ensure!(!chunk_id.is_empty(), "empty graph sidecar chunk ID");
+    Ok(chunk_id)
 }
 
 /// Scope embedded in the key for `audit:{user_id}:{ts:020}:{seq:06}` and

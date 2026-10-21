@@ -2,6 +2,7 @@ pub mod admin;
 pub mod ambient;
 pub mod backfill_encrypt;
 pub mod bench;
+mod cache_invalidation;
 pub mod co_occur;
 pub mod context;
 pub mod dashboard;
@@ -10,7 +11,9 @@ pub mod delete;
 pub mod encryption;
 pub mod feedback;
 pub mod graph_repair;
+pub(crate) mod graph_visibility;
 pub mod ingest;
+pub(crate) mod ingest_date;
 pub mod purge;
 pub mod scope;
 pub mod search;
@@ -70,6 +73,20 @@ pub enum AppError {
     NotFound(String),
     /// HTTP 413 Payload Too Large (e.g. feedback batch exceeds size cap).
     PayloadTooLarge(String),
+}
+
+/// The same message `IntoResponse` puts in the JSON `error` field, for
+/// callers that render an error into text (e.g. MCP tool output).
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AppError::Internal(err) => write!(f, "{err:#}"),
+            AppError::BadRequest(message)
+            | AppError::Forbidden(message)
+            | AppError::NotFound(message)
+            | AppError::PayloadTooLarge(message) => f.write_str(message),
+        }
+    }
 }
 
 impl IntoResponse for AppError {

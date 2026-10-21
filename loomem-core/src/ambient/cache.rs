@@ -6,9 +6,9 @@
 //! - Capacity: 10k entries, LRU eviction (last-access timestamp).
 //! - Distributed cache deferred per `/103a-full`.
 //!
-//! AC-10 (staleness): TTL-only invalidation per Anna finding-3 decision.
-//! Event-bus integration deferred to `/103a-full`. `refresh: true` on the
-//! request bypasses cache for that call.
+//! AC-10 (staleness): TTL plus explicit invalidation on destructive writes.
+//! In-flight producers capture a generation so cleared responses cannot be
+//! republished. `refresh: true` bypasses cache for that call.
 //!
 //! AC-3 (token budget):
 //! - Hard cap per-injection: 1500 tokens.
@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -79,6 +79,23 @@ pub fn build_key(
     *h.finalize().as_bytes()
 }
 
+/// Response cache identity includes the request-specific negative-marker policy.
+/// The retrieval-only `build_key` remains available for existing callers.
+#[must_use]
+pub fn build_response_key(
+    user_id: &str,
+    scope: &str,
+    recent_turns: Option<&[RecentTurn]>,
+    hint: Option<&str>,
+    stream: Option<&str>,
+    suppress_negative_marker: bool,
+) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(&build_key(user_id, scope, recent_turns, hint, stream));
+    h.update(&[u8::from(suppress_negative_marker)]);
+    *h.finalize().as_bytes()
+}
+
 /// Length-prefix a payload into the hasher to make the encoding injective —
 /// `("ab", "c")` and `("a", "bc")` must hash to different keys.
 fn write_lp(h: &mut blake3::Hasher, bytes: &[u8]) {
@@ -93,12 +110,21 @@ fn write_lp(h: &mut blake3::Hasher, bytes: &[u8]) {
 /// the oldest `last_access` is evicted. Bounded O(n) eviction is acceptable
 /// at n=10k.
 pub struct AmbientCache {
-    inner: Mutex<HashMap<[u8; 32], CacheEntry>>,
+    inner: Mutex<CacheState>,
     ttl: Duration,
     max_entries: usize,
     /// Monotonic access counter — drives LRU ordering.
     access_counter: Mutex<u64>,
 }
+
+struct CacheState {
+    entries: HashMap<[u8; 32], CacheEntry>,
+    generation: Arc<()>,
+}
+
+/// Opaque response-cache generation captured before retrieval starts.
+#[derive(Clone)]
+pub struct CacheGeneration(Arc<()>);
 
 struct CacheEntry {
     value: AmbientResponse,
@@ -115,7 +141,10 @@ impl AmbientCache {
     #[must_use]
     pub fn with_config(ttl: Duration, max_entries: usize) -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: Mutex::new(CacheState {
+                entries: HashMap::new(),
+                generation: Arc::new(()),
+            }),
             ttl,
             max_entries,
             access_counter: Mutex::new(0),
@@ -126,7 +155,8 @@ impl AmbientCache {
     pub fn get(&self, key: &[u8; 32]) -> Option<AmbientResponse> {
         let now = Instant::now();
         let next_access = self.bump_access();
-        let mut map = self.inner.lock().ok()?;
+        let mut state = self.inner.lock().ok()?;
+        let map = &mut state.entries;
         let expired = map
             .get(key)
             .is_some_and(|e| now.duration_since(e.inserted_at) >= self.ttl);
@@ -139,14 +169,47 @@ impl AmbientCache {
         Some(entry.value.clone())
     }
 
-    /// Insert a fresh entry; evict the oldest by `last_access` if at capacity.
+    /// Capture before retrieval so a concurrent invalidation blocks publication.
+    pub fn generation(&self) -> Option<CacheGeneration> {
+        self.inner
+            .lock()
+            .ok()
+            .map(|state| CacheGeneration(state.generation.clone()))
+    }
+
+    /// Invalidate all responses and revoke every in-flight cache publication.
+    pub fn clear(&self) {
+        if let Ok(mut state) = self.inner.lock() {
+            state.entries.clear();
+            state.generation = Arc::new(());
+        }
+    }
+
+    /// Insert a fresh entry; use `put_if_current` for asynchronous producers.
     pub fn put(&self, key: [u8; 32], value: AmbientResponse) {
+        if let Some(generation) = self.generation() {
+            self.put_if_current(key, value, &generation);
+        }
+    }
+
+    /// Atomically validate generation and insert. False means invalidated work
+    /// (or unavailable cache); a deleted source cannot repopulate cleared cache.
+    pub fn put_if_current(
+        &self,
+        key: [u8; 32],
+        value: AmbientResponse,
+        generation: &CacheGeneration,
+    ) -> bool {
         let next_access = self.bump_access();
-        let Ok(mut map) = self.inner.lock() else {
-            return;
+        let Ok(mut state) = self.inner.lock() else {
+            return false;
         };
+        if !Arc::ptr_eq(&state.generation, &generation.0) {
+            return false;
+        }
+        let map = &mut state.entries;
         if map.len() >= self.max_entries && !map.contains_key(&key) {
-            evict_oldest(&mut map);
+            evict_oldest(map);
         }
         map.insert(
             key,
@@ -156,13 +219,17 @@ impl AmbientCache {
                 last_access: next_access,
             },
         );
+        true
     }
 
     /// Test/admin helper — current entry count (post-expiry-on-get is
     /// best-effort; this returns physical size including stale entries).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.lock().map(|m| m.len()).unwrap_or(0)
+        self.inner
+            .lock()
+            .map(|state| state.entries.len())
+            .unwrap_or(0)
     }
 
     #[must_use]
@@ -221,6 +288,21 @@ pub fn truncate_to_budget(
     snippets: Vec<AmbientSnippet>,
     marker: Option<&MarkerIfEmpty>,
 ) -> Result<Vec<AmbientSnippet>> {
+    let annotated = snippets.into_iter().map(|snippet| (snippet, ())).collect();
+    Ok(truncate_annotated_to_budget(annotated, marker)?
+        .into_iter()
+        .map(|(snippet, ())| snippet)
+        .collect())
+}
+
+/// Pack snippets together with their source metadata so filtering and ordering
+/// cannot detach diagnostic attribution from the evidence actually emitted.
+/// Counts snippet text with cl100k_base, as in `truncate_to_budget`; this is
+/// not a bound on a downstream reader's complete serialized context.
+pub fn truncate_annotated_to_budget<T>(
+    snippets: Vec<(AmbientSnippet, T)>,
+    marker: Option<&MarkerIfEmpty>,
+) -> Result<Vec<(AmbientSnippet, T)>> {
     let marker_tokens = match marker {
         Some(m) => count_tokens(&serde_json::to_string(m)?)?,
         None => 0,
@@ -232,23 +314,23 @@ pub fn truncate_to_budget(
 
 /// Drop low-tier first, then medium, then high — preserving the most
 /// load-bearing snippets when budget pressure forces a cut.
-fn collect_within_budget(
-    mut snippets: Vec<AmbientSnippet>,
+fn collect_within_budget<T>(
+    mut snippets: Vec<(AmbientSnippet, T)>,
     budget: &mut usize,
-) -> Result<Vec<AmbientSnippet>> {
-    snippets.sort_by_key(|s| tier_drop_priority(s.tier));
-    let mut kept: Vec<AmbientSnippet> = Vec::with_capacity(snippets.len());
-    for s in snippets.into_iter().rev() {
+) -> Result<Vec<(AmbientSnippet, T)>> {
+    snippets.sort_by_key(|(s, _)| tier_drop_priority(s.tier));
+    let mut kept = Vec::with_capacity(snippets.len());
+    for (s, metadata) in snippets.into_iter().rev() {
         let n = count_tokens(&s.text)?;
         if n > TOKEN_PER_SNIPPET_CAP {
             continue;
         }
         if n <= *budget {
             *budget -= n;
-            kept.push(s);
+            kept.push((s, metadata));
         }
     }
-    kept.sort_by(|a, b| {
+    kept.sort_by(|(a, _), (b, _)| {
         tier_drop_priority(b.tier)
             .cmp(&tier_drop_priority(a.tier))
             .then_with(|| {
@@ -290,6 +372,70 @@ mod tests {
             marker_if_empty: None,
             debug: AmbientDebug::default(),
         }
+    }
+
+    #[test]
+    fn clear_removes_cached_responses_and_revokes_inflight_publication() {
+        let cache = AmbientCache::new();
+        let key = build_key("u", "s", None, None, None);
+        let old = cache.generation().unwrap();
+        assert!(cache.put_if_current(key, empty_resp(), &old));
+        assert!(cache.get(&key).is_some());
+        cache.clear();
+        assert!(cache.is_empty());
+        assert!(cache.get(&key).is_none());
+        assert!(!cache.put_if_current(key, empty_resp(), &old));
+        assert!(cache.is_empty());
+        let current = cache.generation().unwrap();
+        assert!(cache.put_if_current(key, empty_resp(), &current));
+        assert!(cache.get(&key).is_some());
+        cache.clear();
+        assert!(!cache.put_if_current(key, empty_resp(), &current));
+        assert!(!cache.put_if_current(key, empty_resp(), &old));
+    }
+
+    #[test]
+    fn response_key_separates_marker_policy() {
+        assert_ne!(
+            build_response_key("u", "s", None, None, None, false),
+            build_response_key("u", "s", None, None, None, true)
+        );
+    }
+
+    #[test]
+    fn annotated_budget_preserves_source_identity_after_drops_and_sorting() {
+        let input = vec![
+            (snip("lower", Tier::Medium, 0.6), "low-id"),
+            (snip(&"word ".repeat(500), Tier::High, 0.99), "oversize-id"),
+            (snip("higher", Tier::High, 0.9), "high-id"),
+        ];
+        let kept = truncate_annotated_to_budget(input, None).unwrap();
+        assert_eq!(kept.len(), 2);
+        assert_eq!(
+            (&kept[0].0.text, kept[0].1),
+            (&"higher".to_string(), "high-id")
+        );
+        assert_eq!(
+            (&kept[1].0.text, kept[1].1),
+            (&"lower".to_string(), "low-id")
+        );
+    }
+
+    #[test]
+    fn annotated_budget_keeps_distinct_ids_for_identical_text() {
+        let text = "word ".repeat(180);
+        let input = (0..12)
+            .map(|id| (snip(&text, Tier::High, 0.9), id))
+            .collect();
+        let kept = truncate_annotated_to_budget(input, None).unwrap();
+        assert!(kept.len() < 12);
+        let total: usize = kept
+            .iter()
+            .map(|(s, _)| count_tokens(&s.text).unwrap())
+            .sum();
+        assert!(total <= TOKEN_BUDGET_HARD_CAP);
+        let ids: Vec<_> = kept.iter().map(|(_, id)| *id).collect();
+        assert_eq!(ids, (0..12).rev().take(kept.len()).collect::<Vec<_>>());
     }
 
     #[test]

@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+mod search_validation;
+
 // Re-exports: each *Config lives in its owning module (CLAUDE.md §5).
 // These `pub use` re-exports preserve the historical
 // `use crate::config::FooConfig` paths used throughout the codebase.
@@ -19,6 +21,7 @@ pub use crate::dream::DreamConfig;
 pub use crate::entity_extractor::EntityExtractionConfig;
 pub use crate::event_log::EventLogConfig;
 pub use crate::feedback::FeedbackConfig;
+pub use crate::fragments::FragmentsConfig;
 pub use crate::graph::GraphSearchConfig;
 pub use crate::hybrid_search::{
     ComplexityConfig, HybridWeightsConfig, ImportanceConfig, SearchConfig,
@@ -93,6 +96,10 @@ pub struct Config {
     /// behavior (5/20 normal, 30/30 aggregation) byte-identically.
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Source fragmentation (source → fragments → index). `#[serde(default)]`
+    /// so configs without `[fragments]` load and degrade to off.
+    #[serde(default)]
+    pub fragments: FragmentsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -372,6 +379,12 @@ impl Config {
         Ok(config)
     }
 
+    /// `[fragments]` checks that depend on the embedding provider.
+    fn validate_fragments(&self) -> Result<()> {
+        self.fragments
+            .validate(self.llm.embedding_provider == "local")
+    }
+
     pub fn validate(&self) -> Result<()> {
         // Storage validation
         anyhow::ensure!(
@@ -431,28 +444,7 @@ impl Config {
             );
         }
 
-        // Search validation
-        anyhow::ensure!(
-            self.search.hybrid_weights.vector >= 0.0 && self.search.hybrid_weights.vector <= 1.0,
-            "hybrid_weights.vector must be between 0.0 and 1.0"
-        );
-        anyhow::ensure!(
-            self.search.hybrid_weights.bm25 >= 0.0 && self.search.hybrid_weights.bm25 <= 1.0,
-            "hybrid_weights.bm25 must be between 0.0 and 1.0"
-        );
-        anyhow::ensure!(
-            self.search.decay.l0_lambda >= 0.0 && self.search.decay.l0_lambda <= 1.0,
-            "decay.l0_lambda must be between 0.0 and 1.0"
-        );
-        anyhow::ensure!(
-            self.search.decay.l1_lambda >= 0.0 && self.search.decay.l1_lambda <= 1.0,
-            "decay.l1_lambda must be between 0.0 and 1.0"
-        );
-        anyhow::ensure!(
-            self.search.surprise_boost >= 0.0,
-            "surprise_boost must be non-negative"
-        );
-        anyhow::ensure!(self.search.top_k > 0, "top_k must be positive");
+        search_validation::validate(&self.search)?;
 
         // Worker validation
         anyhow::ensure!(
@@ -521,6 +513,8 @@ impl Config {
             self.llm.timeout_secs > 0,
             "llm.timeout_secs must be positive"
         );
+
+        self.validate_fragments()?;
 
         // Server validation
         anyhow::ensure!(

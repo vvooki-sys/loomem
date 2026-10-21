@@ -75,7 +75,7 @@ pub async fn persist_chunk_with_index(
     {
         let mut tantivy_guard = tantivy.lock().await;
         tantivy_guard
-            .upsert_document(args.text_doc)
+            .upsert_chunk_document(args.text_doc, args.chunk)
             .context("tantivy upsert_document failed")?;
         tantivy_guard.commit().context("tantivy commit failed")?;
     }

@@ -30,6 +30,23 @@ fn truncate_to_budget(text: &str, budget_tokens: usize) -> (String, bool) {
     }
 }
 
+/// Membership test for the "recent" sections.
+///
+/// SEC-memctx-stream-leak: tombstoned chunks (`deleted_at.is_some()`) must
+/// be excluded — same gate as `tool_status` (dispatcher.rs). Without this
+/// check Recent Context resurrects soft-deleted chunks that no other read
+/// path surfaces. Source fragments are excluded too: all fragments of one
+/// ingest share the source's timestamp, so one long transcript would
+/// otherwise fill every recent slot with its raw turns while the source
+/// itself already represents that session here.
+fn is_recent_candidate(chunk: &loomem_core::storage::Chunk, stream: &str) -> bool {
+    chunk.stream == stream
+        && chunk.is_latest
+        && !chunk.dormant
+        && chunk.deleted_at.is_none()
+        && chunk.fragment.is_none()
+}
+
 pub async fn context_pack_handler(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
@@ -126,26 +143,10 @@ pub async fn context_pack_handler(
                     let mut section_text = String::from("## Relevant Memories\n\n");
                     let mut section_tokens = 0;
 
-                    for r in &results {
-                        // Prefix with date from the chunk for temporal reasoning
-                        let date_prefix = {
-                            let chunk = state.store.get_chunk(&r.id).ok().flatten();
-                            let event_date = chunk
-                                .as_ref()
-                                .and_then(|c| c.extraction_meta.as_ref())
-                                .and_then(|m| m.event_date.as_ref())
-                                .cloned();
-                            event_date.unwrap_or_else(|| {
-                                chrono::DateTime::from_timestamp(r.timestamp, 0)
-                                    .map(|d| d.format("%Y-%m-%d").to_string())
-                                    .unwrap_or_default()
-                            })
-                        };
-                        let line = if date_prefix.is_empty() {
-                            format!("- {}\n", r.content)
-                        } else {
-                            format!("- [{}] {}\n", date_prefix, r.content)
-                        };
+                    for (r, line) in results.iter().filter_map(|hit| {
+                        super::ingest_date::live_context_line(&state.store, &stream, hit)
+                            .map(|line| (hit, line))
+                    }) {
                         let line_tokens = estimate_tokens(&line);
                         if section_tokens + line_tokens > section_budget {
                             sections_truncated.push("relevant".to_string());
@@ -174,16 +175,7 @@ pub async fn context_pack_handler(
                     let prefix = format!("chunk:L{}:", level);
                     for (_key, value) in state.store.prefix_scan(prefix.as_bytes()) {
                         if let Ok(chunk) = state.store.decode_chunk(&value) {
-                            // SEC-memctx-stream-leak: tombstoned chunks
-                            // (`deleted_at.is_some()`) must be excluded — same
-                            // gate as `tool_status` (dispatcher.rs). Without this check
-                            // Recent Context resurrects soft-deleted chunks
-                            // that no other read path surfaces.
-                            if chunk.stream == stream
-                                && chunk.is_latest
-                                && !chunk.dormant
-                                && chunk.deleted_at.is_none()
-                            {
+                            if is_recent_candidate(&chunk, &stream) {
                                 recent_chunks.push(chunk);
                             }
                         }
@@ -203,21 +195,8 @@ pub async fn context_pack_handler(
                 let mut section_tokens = 0;
 
                 for chunk in &recent_chunks {
-                    let date_prefix = chunk
-                        .extraction_meta
-                        .as_ref()
-                        .and_then(|m| m.event_date.as_ref())
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            chrono::DateTime::from_timestamp(chunk.timestamp as i64, 0)
-                                .map(|d| d.format("%Y-%m-%d").to_string())
-                                .unwrap_or_default()
-                        });
-                    let line = if date_prefix.is_empty() {
-                        format!("- {}\n", chunk.content)
-                    } else {
-                        format!("- [{}] {}\n", date_prefix, chunk.content)
-                    };
+                    // Relocated legacy timestamp cast; preserve the existing recent-date fallback.
+                    let line = super::ingest_date::context_line(chunk, chunk.timestamp as i64);
                     let line_tokens = estimate_tokens(&line);
                     if section_tokens + line_tokens > section_budget {
                         sections_truncated.push(section.clone());
@@ -330,6 +309,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 

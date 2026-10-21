@@ -305,6 +305,7 @@ sync_on_write = false
 <h2 id="search">[search]</h2>
 <pre><code class="language-toml">[search]
 top_k = 10
+max_request_top_k = 1000      # HTTP top_k must be 1..this limit; MCP caps are separate
 surprise_boost = 1.5
 synonyms_file = &quot;synonyms.toml&quot;
 entities_file = &quot;entities.toml&quot;
@@ -313,6 +314,7 @@ rerank_candidates = 20
 rerank_model_dir = &quot;models/reranker&quot;
 multi_query_enabled = false
 stem_polish = true
+evidence_fields = false
 </code></pre>
 <table>
 <thead>
@@ -327,6 +329,11 @@ stem_polish = true
 <td><code>top_k</code></td>
 <td>int</td>
 <td>Default number of search results</td>
+</tr>
+<tr>
+<td><code>max_request_top_k</code></td>
+<td>int</td>
+<td>HTTP result limit ceiling (default 1000); zero or requests above it return 400 before retrieval. MCP caps remain separate.</td>
 </tr>
 <tr>
 <td><code>surprise_boost</code></td>
@@ -367,6 +374,11 @@ stem_polish = true
 <td><code>stem_polish</code></td>
 <td>bool</td>
 <td>Enable Polish language stemming</td>
+</tr>
+<tr>
+<td><code>evidence_fields</code></td>
+<td>bool</td>
+<td><strong>Experimental, opt-in</strong> (default <code>false</code>). When <code>true</code>, every <code>/v1/search</code> hit and <code>GET /api/memories/{id}</code> item carries an additive <code>evidence</code> object (<code>author</code>, <code>conversation_date</code>, <code>event_date</code>, <code>event_date_provenance</code>, <code>source_id</code>, <code>byte_start</code>, <code>byte_end</code>), and each <code>memory_search</code> line carries a bracketed evidence tag before the score. When <code>false</code>, responses are byte-identical to pre-flag output. See <a href="api-reference.html#post-v1search">API Reference</a>.</td>
 </tr>
 </tbody>
 </table>
@@ -807,8 +819,97 @@ dedup_cosine_threshold = 0.92
 contradiction_check = true
 contradiction_cosine_min = 0.5
 max_facts_per_transcript = 20
+max_tokens = 2000
+input_chunk_tokens = 0
+split_on_truncation = false
 </code></pre>
 <p>Controls the <code>memory_ingest</code> LLM pipeline.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max_tokens</code></td>
+<td>int</td>
+<td>2000</td>
+<td>Completion cap per extraction call. A reply that hits it (<code>finish_reason: "length"</code>) is rejected, never partially admitted</td>
+</tr>
+<tr>
+<td><code>input_chunk_tokens</code></td>
+<td>int</td>
+<td>0</td>
+<td>Input budget per extraction call (4 chars ≈ 1 token). <code>0</code> keeps the legacy pipeline: one call per transcript up to <code>max_transcript_tokens</code>. Any other value splits the transcript at line boundaries into chunks of at most <code>min(input_chunk_tokens, max_transcript_tokens)</code> tokens, one call each</td>
+</tr>
+<tr>
+<td><code>split_on_truncation</code></td>
+<td>bool</td>
+<td>false</td>
+<td>When <code>true</code>, a chunk whose completion was truncated is re-extracted as two line-aligned halves (depth 2, at most 4 extra calls per chunk). When <code>false</code>, the truncated chunk is rejected and reported, with no retry</td>
+</tr>
+</tbody>
+</table>
+<p>The three keys are additive: with the defaults above, extraction issues exactly the calls it did before they existed. A truncated reply is never admitted in either mode.</p>
+<hr />
+<h2 id="fragments">[fragments]</h2>
+<p><strong>Experimental, opt-in.</strong> Off by default; existing deployments and clients keep byte-identical behavior.</p>
+<pre><code class="language-toml">[fragments]
+enabled = false
+max_fragment_tokens = 400
+prefix_reserve_tokens = 16
+provenance_role = &quot;claim&quot;
+token_counter = &quot;embedder&quot;
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td>bool</td>
+<td>false</td>
+<td>Persist source fragments on <code>memory_ingest</code></td>
+</tr>
+<tr>
+<td><code>max_fragment_tokens</code></td>
+<td>int</td>
+<td>400</td>
+<td>Token budget for a fragment's text, as measured by <code>token_counter</code>. Must be positive</td>
+</tr>
+<tr>
+<td><code>prefix_reserve_tokens</code></td>
+<td>int</td>
+<td>16</td>
+<td>Headroom above the text budget. The local embedder adds exactly two special tokens to the content (no <code>passage:</code> prefix is prepended); the rest absorbs the gap between the chosen counter and the embedder's own tokenizer</td>
+</tr>
+<tr>
+<td><code>provenance_role</code></td>
+<td>string</td>
+<td><code>"claim"</code></td>
+<td>Role stamped on every fragment chunk: <code>"claim"</code> (full weight), <code>"evidence"</code> (×0.5) or <code>"cue"</code> (×0.8). Any other value fails config load</td>
+</tr>
+<tr>
+<td><code>token_counter</code></td>
+<td>string</td>
+<td><code>"embedder"</code></td>
+<td><code>"embedder"</code> (default and recommended: the loaded local embedding model's own tokenizer, the only counter whose budget is the embedder's), <code>"approx"</code> (<code>ceil(chars / 3)</code>, model-free) or <code>"tiktoken"</code> (<code>cl100k_base</code> BPE) — the two model-free counters are for non-local embedding providers and offline tests. Any other value fails config load</td>
+</tr>
+</tbody>
+</table>
+<p>When enabled, <code>memory_ingest</code> stores, right after the whole-conversation source and before extraction, one chunk per conversation turn (long turns are split further at paragraph, sentence and whitespace boundaries). Each fragment carries the author role, the conversation date and an exact byte range into the stored source. Fragments are <code>consolidated</code> from birth (never consolidation or dream input), are excluded from the <code>recent</code> section of <code>memory_context</code>, carry no event date of their own (their <code>memory_search</code> line shows the source's <code>observed:</code>/<code>recorded:</code> date), and are deleted together with their source. The tool result gains a trailing <code> Stored N fragments.</code> sentence (see <a href="mcp-tools.html#memory_ingest">MCP Tools</a>). Fragment writes are additive and never block fact extraction.</p>
+<p>Validation at startup: <code>max_fragment_tokens</code> must be positive, and with <code>embedding_provider = "local"</code> the sum <code>max_fragment_tokens + prefix_reserve_tokens</code> must not exceed the local embedder's 512-token window. <code>enabled = true</code> with <code>token_counter = "embedder"</code> (the default) requires <code>embedding_provider = "local"</code> — with another provider, set <code>token_counter = "approx"</code> or <code>"tiktoken"</code> explicitly or config load fails. With <code>token_counter = "embedder"</code> and no local model loaded, segmentation fails and the <code>memory_ingest</code> text says so (there is no silent fallback to an approximation).</p>
+<p><code>provenance_role</code> affects ranking only on fused retrieval (vector-enabled, non-simple queries). The BM25-only path applies no provenance multiplier, so on short queries <code>claim</code> and <code>evidence</code> fragments score identically.</p>
 <hr />
 <h2 id="entity_extraction">[entity_extraction]</h2>
 <pre><code class="language-toml">[entity_extraction]

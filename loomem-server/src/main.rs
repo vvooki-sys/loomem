@@ -1,7 +1,12 @@
 mod access_hook;
 mod auth;
 mod content_type;
+mod entity_worker;
+mod evaluation_clock;
+mod evidence;
 mod handlers;
+mod local_embedding;
+mod maintenance;
 mod manifest;
 mod mcp;
 mod oauth;
@@ -16,7 +21,7 @@ use axum::{
     Router,
 };
 use loomem_core::embedding_queue::{self, EmbeddingQueue};
-use loomem_core::entity_extraction_queue::{self, EntityExtractionQueue};
+use loomem_core::entity_extraction_queue::EntityExtractionQueue;
 use loomem_core::graph::GraphStore;
 use loomem_core::intent_log::IntentLog;
 use loomem_core::local_embeddings::LocalEmbedder;
@@ -244,93 +249,6 @@ fn select_encryption_provider(
     }
 }
 
-/// Cycle /010 S5: offline re-embedding. Recomputes every stored vector with
-/// the configured embedding provider/model and records the resulting
-/// dimension. Intended to run with the server stopped (`loomem-server
-/// --reembed`); it starts no HTTP listener and no workers.
-async fn run_reembed(config: &Config, store: &RocksDbStore) -> Result<()> {
-    enum Backend {
-        Local(Arc<LocalEmbedder>),
-        Openai {
-            client: reqwest::Client,
-            api_key: String,
-            model: String,
-        },
-    }
-
-    let provider = config.llm.embedding_provider.as_str();
-    let dim = config.llm.embedding_dim;
-    info!("Re-embedding with provider={provider}, target dim={dim}");
-
-    let backend = match provider {
-        "local" => {
-            let model_dir = config.llm.embedding_model_path.clone().unwrap_or_else(|| {
-                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                format!("{home}/.loomem/models/multilingual-e5-small")
-            });
-            let embedder = loomem_core::local_embeddings::try_load(&model_dir, dim)
-                .context("failed to load local embedding model for re-embedding")?;
-            Backend::Local(Arc::new(embedder))
-        }
-        "openai" => {
-            let api_key = config
-                .llm
-                .get_api_key()
-                .context("OPENAI_API_KEY required to re-embed with the openai provider")?;
-            let client = config
-                .llm
-                .build_http_client()
-                .context("build HTTP client")?;
-            Backend::Openai {
-                client,
-                api_key,
-                model: config.llm.embedding_model.clone(),
-            }
-        }
-        other => anyhow::bail!("unknown embedding_provider {other:?}"),
-    };
-
-    // Source of truth: every id that currently has a vector.
-    let existing = store.get_all_embeddings().context("list embeddings")?;
-    let total = existing.len();
-    info!("Re-embedding {total} vectors");
-
-    let mut done = 0usize;
-    let mut skipped = 0usize;
-    for (id, _old) in existing {
-        let Some(chunk) = store
-            .get_chunk(&id)
-            .with_context(|| format!("read chunk {id}"))?
-        else {
-            skipped += 1;
-            continue;
-        };
-        let vector = match &backend {
-            Backend::Local(e) => e.embed(&chunk.content)?,
-            Backend::Openai {
-                client,
-                api_key,
-                model,
-            } => loomem_core::embeddings::embed(client, api_key, model, &chunk.content).await?,
-        };
-        store
-            .store_embedding(&id, vector)
-            .with_context(|| format!("store embedding {id}"))?;
-        done += 1;
-        if done.is_multiple_of(200) {
-            info!("  re-embedded {done}/{total}");
-        }
-    }
-
-    store
-        .set_embedding_dim(dim)
-        .context("record embedding_dim")?;
-    info!(
-        "Re-embedding complete: {done} re-embedded, {skipped} skipped (no chunk), dim recorded = {dim}"
-    );
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
@@ -412,7 +330,7 @@ async fn main() -> Result<()> {
     // vectors with the configured provider and records the new dimension,
     // then exits — no listener, no workers. Run with the server stopped.
     if std::env::args().any(|a| a == "--reembed") {
-        return run_reembed(&config, &store).await;
+        return maintenance::run_reembed(&config, &store).await;
     }
 
     // Check schema version and rebuild if needed
@@ -469,37 +387,9 @@ async fn main() -> Result<()> {
         // Flag was set and rebuild completed; flag cleared inside the helper.
     }
 
-    // Cycle /39: Tantivy drift detection — catch H3 silent-skip pattern where
-    // data/tantivy/ was wiped or reset independently of meta:schema_version,
-    // leaving the schema-version check unable to fire.
-    let tantivy_count = tantivy.count().unwrap_or(0);
-    let chunk_count = store.get_all_chunks().map(|c| c.len() as u64).unwrap_or(0);
-    let drift_pct = if chunk_count > 0 {
-        let abs_diff = chunk_count.abs_diff(tantivy_count);
-        (abs_diff as f64 / chunk_count as f64) * 100.0
-    } else {
-        0.0
-    };
-    let drift_threshold = config.storage.tantivy.drift_warn_pct;
-    if drift_pct > drift_threshold {
-        warn!(
-            "Tantivy drift detected: tantivy_docs={tantivy_count}, rocksdb_chunks={chunk_count}, drift={drift_pct:.2}% (threshold={drift_threshold:.2}%). Run POST /v1/rebuild-tantivy to fix."
-        );
-        if config.storage.tantivy.auto_rebuild_on_drift {
-            info!("auto_rebuild_on_drift=true → triggering rebuild_from_rocksdb at startup");
-            tantivy
-                .rebuild_from_rocksdb(&store)
-                .context("Failed to auto-rebuild Tantivy on drift")?;
-            info!("Auto-rebuild complete");
-        }
-    } else {
-        info!(
-            "Tantivy sync OK: {tantivy_count} docs ({drift_pct:.2}% drift, threshold={drift_threshold:.2}%)"
-        );
-    }
+    maintenance::check_index_drift(&config.storage.tantivy, &store, &mut tantivy)?;
 
-    // Initialize hybrid search engine
-    let hybrid_search = HybridSearchEngine::new(config.clone());
+    let hybrid_search = evaluation_clock::engine(config.clone())?;
 
     // Shared HTTP client for all OpenAI-bound calls (extraction, embeddings,
     // rerank, consolidation, …). Long-running instances degrade silently when
@@ -549,15 +439,7 @@ async fn main() -> Result<()> {
     // Load local embedding model if the embedding provider is "local".
     // Model dir comes from `embedding_model_path` (falls back to
     // `embedding_model`, treated as a path) when local.
-    let local_embedder: Option<Arc<LocalEmbedder>> = if config.llm.embedding_provider == "local" {
-        let model_dir = config.llm.embedding_model_path.clone().unwrap_or_else(|| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{home}/.loomem/models/multilingual-e5-small")
-        });
-        loomem_core::local_embeddings::try_load(&model_dir, config.llm.embedding_dim).map(Arc::new)
-    } else {
-        None
-    };
+    let local_embedder = local_embedding::load(&config.llm)?;
 
     // Spawn embedding queue worker (if vector search enabled)
     let has_embedder = local_embedder.is_some() || config.llm.get_api_key().is_some();
@@ -632,28 +514,14 @@ async fn main() -> Result<()> {
     // Initialize graph store (before scheduler, which needs it)
     let graph_store = Arc::new(GraphStore::new(store_arc.clone()));
 
-    // Spawn entity extraction queue (LLM-based NER)
-    let entity_extraction_queue =
-        if config.entity_extraction.enabled && config.llm.get_api_key().is_some() {
-            let cost_tracker_for_extraction =
-                CostTracker::new(store_arc.clone(), config.cost.clone(), http_client.clone());
-            let queue = entity_extraction_queue::spawn_worker(
-                store_arc.clone(),
-                graph_store.clone(),
-                tantivy_arc.clone(),
-                http_client.clone(),
-                config.llm.clone(),
-                Arc::new(cost_tracker_for_extraction),
-                config.entity_extraction.clone(),
-            );
-            info!("Entity extraction queue started (LLM NER enabled)");
-            Some(queue)
-        } else {
-            if config.entity_extraction.enabled {
-                tracing::warn!("Entity extraction disabled (no API key)");
-            }
-            None
-        };
+    let entity_extraction_queue = entity_worker::start(
+        &config,
+        store_arc.clone(),
+        graph_store.clone(),
+        tantivy_arc.clone(),
+        http_client.clone(),
+        pii_filter.clone(),
+    );
 
     // Initialize event log (before scheduler, so scheduler can emit events)
     // /150a Gap 5: surface the *effective* value at boot — the code default is
@@ -1541,6 +1409,7 @@ mod tests {
                 intent_log: cfg::IntentLogConfig::default(),
             },
             search: cfg::SearchConfig {
+                max_request_top_k: 1000,
                 top_k: 10,
                 surprise_boost: 1.5,
                 hybrid_weights: cfg::HybridWeightsConfig {
@@ -1571,6 +1440,8 @@ mod tests {
                 vector_similarity_floor: 0.0,
                 decay_match_relief: 0.0,
                 tier1: loomem_core::search::tier1::Tier1Config::default(),
+                operation: loomem_core::hybrid_search::OperationSearchConfig::default(),
+                evidence_fields: false,
             },
             advisor: cfg::AdvisorConfig::default(),
             worker: cfg::WorkerConfig::default(),
@@ -1602,6 +1473,7 @@ mod tests {
             access_audit: cfg::AccessAuditConfig::default(),
             rate_limit: cfg::RateLimitConfig::default(),
             mcp: cfg::McpConfig::default(),
+            fragments: cfg::FragmentsConfig::default(),
         }
     }
 
@@ -1840,6 +1712,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 
@@ -2239,6 +2112,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 

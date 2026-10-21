@@ -66,7 +66,7 @@ Extract structured knowledge from a conversation via LLM. **Preferred method** f
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `content` | string | yes | Conversation transcript |
-| `conversation_date` | string | no | ISO date (e.g., "2026-04-02") |
+| `conversation_date` | string | no | Known conversation date in `YYYY-MM-DD` form; observation time, not a substitute for an unknown event date |
 
 **Example:**
 
@@ -78,10 +78,15 @@ memory_ingest(
 ```
 
 **What happens:**
-1. LLM extracts individual facts with type, subject, date, confidence
-2. Each fact checked for duplicates (cosine similarity > 0.92 = skip)
-3. Contradiction detection runs (updates supersede older facts)
-4. Facts stored with full `extraction_meta`
+
+1. The sanitized transcript is stored first as a persistent, searchable supporting source. Content is sanitized to a fixpoint before storage: input that keeps changing after four sanitization passes (for example deeply nested HTML entity encoding) is refused as invalid params with nothing stored, so extraction always sees exactly the persisted text.
+2. **Opt-in** (`[fragments] enabled = true`, off by default — see [Configuration](configuration.md#fragments)): right after the source and before extraction, one fragment chunk per conversation turn is stored, each with the author role, the conversation date and an exact byte range into the source. The response text then ends with ` Stored N fragments.` — or ` Stored N fragments, M fragment writes failed.`, ` Stored N fragments, M fragments skipped (sanitizer would rewrite the slice).`, or ` Stored 0 fragments (segmentation failed: …).` / ` Stored 0 fragments (segmentation skipped: …).` when something went wrong. Fragment writes never block fact extraction; with fragments disabled the response is unchanged.
+3. When extraction is enabled, the LLM extracts typed facts linked to that source, with subject, confidence, optional speaker attribution and resolved event dates.
+4. The response includes the source ID even when extraction fails, credentials are missing, or no facts are found. Partial fact writes are reported; the source is retained.
+
+This ingestion path does not automatically deduplicate or supersede existing facts. Repeating ingestion creates another source. Source-linked content and provenance are immutable: to correct a conversation, delete its source ID and ingest the corrected transcript.
+
+A conversation date anchors relative expressions only when known; an unknown event date stays unknown. Omitting the conversation date does not authorize using storage time to resolve relative dates. New ingestion records render known events as `[event:YYYY-MM-DD]`, observations as `[observed:YYYY-MM-DD]`, and storage time as `[recorded:YYYY-MM-DD]`. Legacy `[YYYY-MM-DD]` labels are unchanged and do not establish an event date. For records with the recognized versioned ingestion contract, date-range searches require a known event date; an unknown event date does not match a date range. Conversation and storage dates do not substitute for event time. Legacy records without that contract retain their existing event dates and recorded-time fallback when undated. Startup repairs older versioned index entries in place without resetting the index, and stops if repair fails. The separate valid_at filter retains its validity/history semantics. If a date-filtered search omits a source with an unknown event date, retry without the time filter or fetch the returned source ID.
 
 **Typical output (illustrative — exact extraction depends on LLM judgment):**
 - `PreferenceOrDecision`: "User prefers Cursor over VSCode" (subject: user, confidence: 0.95)
@@ -116,6 +121,7 @@ memory_search(query: "What IDE does the user prefer?")
 - Marks superseded facts with `[UPDATED]`
 - For aggregation queries ("how many..."), boosts `top_k` to 30
 - Each result line ends with its `chunk_id` — usable directly for `memory_history`, `memory_delete`, or `memory_feedback`
+- **Opt-in** (`[search] evidence_fields = true`, off by default — see [Configuration](configuration.md#search)): each line carries a bracketed evidence tag before the score — `[author: user; conversation: YYYY-MM-DD; event: YYYY-MM-DD (resolved|unknown); source: <id>]` — listing only the parts known for that memory (a line with none of them is unchanged). The source byte range (`byte_start`/`byte_end`) is exposed on the REST surface only
 
 ---
 
@@ -253,6 +259,8 @@ memory_graph(entity: "Cursor")
 
 **Returns:** entity details (name, type, aliases), connections to other entities, linked chunk count. Only entities and edges within the active stream are visible.
 
+New graph names, aliases and relations are bound to the contributing memory, stream, entity or edge, and current content generation, using the configured at-rest encryption. Lookup and display require live support for each contribution in the active stream; a deleted conversation’s alias cannot borrow support from another memory of the same entity. Older graph data contributes only explicit stored per-memory entity names and relation tuples. Unsupported aliases and connections remain hidden until re-extraction, and legacy entity types may appear as Unknown; source-text resemblance is not used to reconstruct missing provenance.
+
 Useful for understanding "who works on what", "what technologies are connected", etc.
 
 ---
@@ -285,7 +293,9 @@ v2 (2026-04-01): "User uses Cursor"         ← current
 
 ### memory_delete
 
-Delete a specific memory by ID.
+Soft-delete a specific memory by ID. Deleting a recognized ingestion source also tombstones its same-stream linked descendants before index cleanup. Deleting one derived fact retains its source and other facts; the response names the retained source ID. Delete that source ID to remove the conversation and linked memories from retrieval.
+
+A partial cleanup response requires a retry. Soft-deleted content follows the existing recovery and purge policy; this is not immediate physical erasure or a search for every semantic copy. Unrelated copies may remain. Graph names, aliases and connections remain visible only with their own live supporting memories.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

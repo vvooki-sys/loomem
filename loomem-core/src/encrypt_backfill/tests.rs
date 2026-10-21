@@ -65,6 +65,7 @@ fn make_chunk(id: &str, stream: &str) -> Chunk {
         n_ratings: 0,
         last_rated_at: None,
         provenance_role: crate::storage::ProvenanceRole::Claim,
+        fragment: None,
     }
 }
 
@@ -502,3 +503,165 @@ async fn t5_resume_after_stop() {
     assert_eq!(dropped, 0);
     assert_eq!(events, vec![b"resume-audit".to_vec()]);
 }
+
+#[tokio::test]
+async fn graph_sidecars_upgrade_noop_to_encrypted_backfill_and_reopen() {
+    use crate::graph::GraphContributionContext;
+    use crate::pii_filter::{PiiConfig, PiiFilter};
+    let tmp = TempDir::new().unwrap();
+    let stream = "graph:sidecar:test";
+    let (entity_id, edge_id, keys) = {
+        let store = Arc::new(open_noop(&tmp));
+        let graph = GraphStore::new(Arc::clone(&store));
+        let chunk = make_chunk("legacy:chunk:with:colons", stream);
+        store.store_chunk(&chunk).unwrap();
+        let pii = PiiFilter::new(PiiConfig::default()).unwrap();
+        let ctx = GraphContributionContext {
+            stream,
+            chunk_id: &chunk.id,
+            expected_content: &chunk.content,
+            pii: &pii,
+        };
+        let first = graph
+            .link_entity(ctx.entity(
+                "private_canonical_sentinel",
+                "synthetic",
+                &["private_alias_sentinel".into()],
+            ))
+            .unwrap();
+        let second = graph
+            .link_entity(ctx.entity("private_target_sentinel", "synthetic", &[]))
+            .unwrap();
+        let edge = graph
+            .link_relation(ctx.relation(&first.id, &second.id, "private_relation_sentinel"))
+            .unwrap();
+        let mut keys = Vec::new();
+        for prefix in [
+            b"graph:labels:".as_slice(),
+            b"graph:edge_labels:".as_slice(),
+        ] {
+            for (key, value) in store.prefix_scan(prefix) {
+                assert!(!is_encrypted(&value));
+                keys.push(key.to_vec());
+            }
+        }
+        assert_eq!(keys.len(), 3);
+        (first.id, edge.id, keys)
+    };
+    let store = open_encrypted(&tmp);
+    let graph = GraphStore::new(Arc::clone(&store));
+    assert!(graph.get_live_entity_by_id(&entity_id).is_err());
+    let progress = run_encrypt_backfill(&store, &graph, &params(2), &trace(&tmp))
+        .await
+        .unwrap();
+    assert_eq!(progress.status, "completed");
+    for (class, count) in [("graph_labels", 2), ("graph_edge_labels", 1)] {
+        let counters = &progress.per_class[class];
+        assert_eq!(counters.scanned, count);
+        assert_eq!(counters.encrypted, count);
+        assert_eq!(counters.orphans, 0);
+    }
+    for key in &keys {
+        let bytes = store.get(key).unwrap().unwrap();
+        assert!(is_encrypted(&bytes));
+        for sentinel in [
+            "private_canonical_sentinel",
+            "private_alias_sentinel",
+            "private_relation_sentinel",
+        ] {
+            assert!(!bytes
+                .windows(sentinel.len())
+                .any(|window| window == sentinel.as_bytes()));
+        }
+    }
+    let again = run_encrypt_backfill(&store, &graph, &params(2), &trace(&tmp))
+        .await
+        .unwrap();
+    assert_eq!(again.per_class["graph_labels"].already_encrypted, 2);
+    assert_eq!(again.per_class["graph_edge_labels"].already_encrypted, 1);
+    drop(graph);
+    drop(store);
+    let store = open_encrypted(&tmp);
+    let graph = GraphStore::new(store);
+    assert!(graph.get_live_entity_by_id(&entity_id).unwrap().is_some());
+    // Name-token rekey is the existing separate Noop -> keyed-index migration.
+    graph.rekey_name_index().unwrap();
+    let entity = graph
+        .get_live_entity_by_name("private_alias_sentinel", stream)
+        .unwrap()
+        .unwrap();
+    assert_eq!(entity.id, entity_id);
+    let neighbors = graph.get_live_neighbors(&entity_id).unwrap();
+    assert_eq!(neighbors.len(), 1);
+    assert_eq!(neighbors[0].0.id, edge_id);
+    assert_eq!(neighbors[0].0.relation_type, "related_to");
+}
+
+#[tokio::test]
+async fn graph_sidecar_scope_uses_complete_chunk_id_and_counts_unresolved_orphans() {
+    let tmp = TempDir::new().unwrap();
+    let store = open_encrypted(&tmp);
+    let owner = uuid::Uuid::new_v4();
+    let mut tombstone = make_chunk("legacy:colon:id", "authoritative:stream");
+    tombstone.deleted_at = Some(42);
+    store.store_chunk(&tombstone).unwrap();
+    let good = format!("graph:labels:{owner}:{}", tombstone.id);
+    assert_eq!(
+        resolve_scope(&store, &good, "graph_labels", ScopeSource::GraphPairedChunk).unwrap(),
+        tombstone.stream
+    );
+    let missing = format!("graph:labels:{owner}:missing:legacy:id");
+    let corrupt = format!("graph:edge_labels:{owner}:corrupt:chunk");
+    store
+        .put(b"chunk:L0:corrupt:chunk", b"not a chunk")
+        .unwrap();
+    for key in [&good, &missing, &corrupt] {
+        store
+            .put(key.as_bytes(), b"synthetic sidecar sentinel")
+            .unwrap();
+    }
+    let graph = GraphStore::new(Arc::clone(&store));
+    let progress = run_encrypt_backfill(&store, &graph, &params(2), &trace(&tmp))
+        .await
+        .unwrap();
+    assert_eq!(progress.per_class["graph_labels"].encrypted, 1);
+    assert_eq!(progress.per_class["graph_labels"].orphans, 1);
+    assert_eq!(progress.per_class["graph_edge_labels"].encrypted, 0);
+    assert_eq!(progress.per_class["graph_edge_labels"].orphans, 1);
+    assert!(progress.per_class["graph_labels"]
+        .orphans_by_scope
+        .is_empty());
+    assert!(progress.per_class["graph_edge_labels"]
+        .orphans_by_scope
+        .is_empty());
+    let encrypted = store.get(good.as_bytes()).unwrap().unwrap();
+    assert!(is_encrypted(&encrypted));
+    assert_eq!(
+        store
+            .encryption_provider()
+            .decrypt(&tombstone.stream, &encrypted)
+            .unwrap(),
+        b"synthetic sidecar sentinel"
+    );
+    assert!(!is_encrypted(
+        &store.get(missing.as_bytes()).unwrap().unwrap()
+    ));
+    assert!(!is_encrypted(
+        &store.get(corrupt.as_bytes()).unwrap().unwrap()
+    ));
+    for malformed in [
+        "graph:labels:not-uuid:chunk",
+        "graph:edge_labels:",
+        "graph:unknown:anything",
+    ] {
+        assert!(resolve_scope(
+            &store,
+            malformed,
+            "graph_labels",
+            ScopeSource::GraphPairedChunk
+        )
+        .is_err());
+    }
+}
+
+mod race_tests;

@@ -3,13 +3,20 @@
 //! Extracts typed, temporally-annotated facts from conversation text using LLM.
 //! Uses 4-type taxonomy: preference_or_decision, project_state, fact, experience.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::config::LlmConfig;
+
+mod chunking;
+mod config_validation;
+mod http;
+mod reply;
+use chunking::extract_chunk_with_split;
+use config_validation::transcript_chunks;
+pub use http::HttpExtractionChat;
 
 /// /153: an operator-defined extraction category. `fact_type` is the wire key
 /// used in the `## Types` list and the JSON `fact_type` enum; when absent,
@@ -36,6 +43,21 @@ pub struct KnowledgeExtractionConfig {
     /// without this field producing a byte-identical request.
     #[serde(default = "default_extraction_max_tokens")]
     pub max_tokens: u32,
+    /// Input budget (tokens, 4 chars ≈ 1 token) per extraction call. `0`
+    /// (default) keeps the legacy pipeline: one call per transcript up to
+    /// `max_transcript_tokens`, overlapping character windows above it. Any
+    /// other value splits the transcript at line boundaries into chunks of at
+    /// most `min(input_chunk_tokens, max_transcript_tokens)` tokens, one call
+    /// each (see [`chunking::line_aligned_chunks`]).
+    #[serde(default)]
+    pub input_chunk_tokens: usize,
+    /// Re-extract a chunk whose completion was truncated (`finish_reason:
+    /// length`) as two line-aligned halves. Bounded by
+    /// [`chunking::MAX_SPLIT_DEPTH`] / [`chunking::MAX_SPLIT_CALLS_PER_CHUNK`];
+    /// a truncated reply is never admitted. `false` (default) rejects and
+    /// reports the chunk without any retry.
+    #[serde(default)]
+    pub split_on_truncation: bool,
     /// /153: operator-defined extraction categories. `None`/empty preserves
     /// the built-in [`EXTRACTION_PROMPT`] byte-for-byte (serde default keeps
     /// a config without this field deserializing unchanged).
@@ -58,6 +80,8 @@ impl Default for KnowledgeExtractionConfig {
             contradiction_cosine_min: 0.5,
             max_facts_per_transcript: 20,
             max_tokens: default_extraction_max_tokens(),
+            input_chunk_tokens: 0,
+            split_on_truncation: false,
             topics: None,
         }
     }
@@ -71,7 +95,7 @@ Facts may be authored by any party in the conversation. Extract them from the us
 - "preference_or_decision": Choices, preferences, decisions, opinions. E.g. "Anna prefers dark mode", "Team decided to use Rust for the backend".
 - "project_state": Current state of work, ongoing projects, deadlines, statuses. E.g. "Auth migration is blocked by legal review", "Sprint ends on 2026-03-15".
 - "fact": Biographical or timeless facts with no specific date. E.g. "Anna is a senior engineer at Acme", "The main repo is github.com/acme/core".
-- "event": A dated personal experience — something the user (or a person) did, attended, experienced, discovered, or that happened to them at a specific time. E.g. "The user attended a bluegrass concert on 2023-03-19", "Anna adopted a rescue dog on 2023-03-01". Prefer this over "fact" whenever there is a personal action with a time; always set event_date (a resolved date, else the conversation_date).
+- "event": A dated personal experience — something the user (or a person) did, attended, experienced, discovered, or that happened to them at a specific time. E.g. "The user attended a bluegrass concert on 2023-03-19", "Anna adopted a rescue dog on 2023-03-01". Prefer this over "fact" whenever there is a personal action with a time; set event_date only from an explicit or resolvable temporal cue; otherwise leave it null, never substitute conversation_date.
 - "experience": Transferable lesson about how to act — proven procedure, lesson from a mistake, effective strategy, anti-pattern. E.g. "When dispatching long tasks to Claude Code, the full brief must be in the first message — drip-feeding instructions degrades output quality", "Running cargo clippy before cargo test catches most issues earlier and saves CI time".
 
 ## Rules:
@@ -80,13 +104,13 @@ Facts may be authored by any party in the conversation. Extract them from the us
 3. SKIP: greetings, small talk, questions without answers, uncertain statements, action items, temporary debugging states, summaries
 4. CHANGE RULE: When something changed, always record before→after. E.g. "Anna switched from VS Code to Neovim" (not just "Anna uses Neovim")
 5. PERSONAL EVENTS: When the user (or a person) did, attended, experienced, or discovered something at a point in time, capture it as an "event" with its date — do NOT flatten it into a timeless "fact". Do not substitute an encyclopedic definition for the person's dated action (e.g. extract "The user attended a bluegrass show on 2023-03-19", not "The Infamous Stringdusters is a bluegrass band"). This guards the action against being lost; it does NOT make assistant-authored content unextractable — see rule 11.
-6. THREE DATES MODEL: For each fact, provide:
-   - "event_date": absolute ISO date if determinable (e.g. "2026-03-15"), null otherwise
+6. EVENT DATE AND CONTEXT: For each fact, provide:
+   - "event_date": absolute ISO date from an explicit or resolvable temporal cue (e.g. "2026-03-15"), null otherwise; conversation_date is only a reference for resolving relative cues, never a substitute for an unknown event date; relative dates require a known reference date, and when it is unknown never resolve them using the current date; explicit absolute source dates are allowed
    - "event_date_context": original relative expression if any (e.g. "yesterday", "two weeks ago"), null otherwise
 7. "subject": The main entity this fact is about (person name, project name, etc.), null if unclear
 8. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
 9. Preserve original language and diacritics
-10. Maximum 20 facts per conversation
+10. Maximum {max_facts} facts per conversation
 11. AUTHORED CONTENT: Recommendations, plans, schedules, and researched answers are extractable regardless of which party authored them — but extract an assistant-authored fact only when it records a concrete commitment or action for this user: a specific recommendation the assistant actually made, a plan or schedule it created, an action it took or confirmed ("the assistant scheduled the dentist for 2026-03-15", "the assistant booked the campsite"), or a researched answer to the user's specific question. Capture that as a first-class fact (e.g. "The user was recommended the books 'Project Hail Mary' and 'Children of Time'", "A weekly meal plan was created starting Monday with overnight oats"). Do NOT extract generic assistant output that carries no such commitment: open-ended menus of options ("you could try A, B, C, D, or E", "you might enjoy…"), how-to or storage tips, general advice, or encyclopedic background ("Halloween Time offers themed events and dining") — these are not facts about the user. Do NOT extract pure echoes, acknowledgements, or restatements of what the user already said (rule 5).
 12. ATTRIBUTION: When the transcript carries role markers (e.g. lines prefixed "user:" or "assistant:"), set "attributed_to" to the speaker of the source statement ("user" or "assistant"). When the transcript is unlabeled, set it to null.
 
@@ -98,19 +122,22 @@ Return ONLY valid JSON (no markdown, no code blocks):
 /// /153: build the extraction system prompt for one request.
 ///
 /// With no (or empty) `config.topics` the result is **byte-identical** to
-/// [`EXTRACTION_PROMPT`] with `{conversation_date}` substituted — the pre-/153
-/// behavior (AC-2). With operator-defined topics, the `## Types` list and the
+/// [`EXTRACTION_PROMPT`] with the date and configured fact cap substituted.
+/// The default cap preserves the pre-/153 behavior (AC-2). With topics, the `## Types` list and the
 /// JSON `fact_type` enum are rebuilt from them (each topic's `fact_type` field,
 /// or `name` as the wire key); every other prompt section is preserved.
 pub fn build_extraction_prompt(
     config: &KnowledgeExtractionConfig,
     conversation_date: &str,
 ) -> String {
+    let max_facts = config.max_facts_per_transcript;
     let topics = match config.topics.as_ref() {
         Some(t) if !t.is_empty() => t,
         _ => {
             return prefix_untrusted_notice(
-                &EXTRACTION_PROMPT.replace("{conversation_date}", conversation_date),
+                &EXTRACTION_PROMPT
+                    .replace("{conversation_date}", conversation_date)
+                    .replace("{max_facts}", &max_facts.to_string()),
             )
         }
     };
@@ -146,13 +173,13 @@ Facts may be authored by any party in the conversation. Extract them from the us
 2. Extract: preferences, decisions, facts about people, project states, deadlines, contacts, technical decisions, procedural lessons, and the assistant's recommendations, plans, schedules, and researched answers (see rule 10)
 3. SKIP: greetings, small talk, questions without answers, uncertain statements, action items, temporary debugging states, summaries
 4. CHANGE RULE: When something changed, always record before→after. E.g. "Anna switched from VS Code to Neovim" (not just "Anna uses Neovim")
-5. THREE DATES MODEL: For each fact, provide:
-   - "event_date": absolute ISO date if determinable (e.g. "2026-03-15"), null otherwise
+5. EVENT DATE AND CONTEXT: For each fact, provide:
+   - "event_date": absolute ISO date from an explicit or resolvable temporal cue (e.g. "2026-03-15"), null otherwise; conversation_date is only a reference for resolving relative cues, never a substitute for an unknown event date; relative dates require a known reference date, and when it is unknown never resolve them using the current date; explicit absolute source dates are allowed
    - "event_date_context": original relative expression if any (e.g. "yesterday", "two weeks ago"), null otherwise
 6. "subject": The main entity this fact is about (person name, project name, etc.), null if unclear
 7. Confidence: 0.9+ for explicit statements, 0.6-0.8 for inferred, skip below 0.5
 8. Preserve original language and diacritics
-9. Maximum 20 facts per conversation
+9. Maximum {max_facts} facts per conversation
 10. AUTHORED CONTENT: Extract an assistant-authored fact only when it records a concrete commitment or action for this user — a specific recommendation the assistant actually made, a plan or schedule it created, an action it took or confirmed, or a researched answer to the user's specific question. Do NOT extract generic assistant output that carries no such commitment: open-ended menus of options ("you could try A, B, C, D, or E"), how-to or storage tips, general advice, or encyclopedic background — these are not facts about the user. Do NOT extract pure echoes, acknowledgements, or restatements of what the user already said.
 11. ATTRIBUTION: When the transcript carries role markers (e.g. lines prefixed "user:" or "assistant:"), set "attributed_to" to the speaker of the source statement ("user" or "assistant"). When the transcript is unlabeled, set it to null.
 
@@ -279,47 +306,6 @@ pub trait ExtractionChat: Send + Sync {
     ) -> impl std::future::Future<Output = Result<ChatHttpReply>> + Send;
 }
 
-/// Production [`ExtractionChat`]: posts to the OpenAI chat endpoint.
-pub struct HttpExtractionChat<'a> {
-    client: &'a Client,
-    api_key: String,
-}
-
-impl<'a> HttpExtractionChat<'a> {
-    pub fn new(client: &'a Client, api_key: String) -> Self {
-        Self { client, api_key }
-    }
-}
-
-impl ExtractionChat for HttpExtractionChat<'_> {
-    fn chat(
-        &self,
-        request_body: &serde_json::Value,
-    ) -> impl std::future::Future<Output = Result<ChatHttpReply>> + Send {
-        // Clone captures so the future owns them (Send, no borrow across await).
-        let client = self.client.clone();
-        let api_key = self.api_key.clone();
-        let body = request_body.clone();
-        async move {
-            let response = client
-                .post("https://api.openai.com/v1/chat/completions")
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .timeout(Duration::from_secs(30))
-                .send()
-                .await
-                .context("Failed to send extraction request")?;
-            let status = response.status().as_u16();
-            let body = response
-                .text()
-                .await
-                .context("Failed to read extraction response body")?;
-            Ok(ChatHttpReply { status, body })
-        }
-    }
-}
-
 /// One failed extraction attempt for a single transcript chunk (/157 S1).
 #[derive(Debug, Clone)]
 pub struct ChunkFailure {
@@ -355,12 +341,14 @@ fn first_reason(failures: &[ChunkFailure]) -> &str {
 }
 
 /// Extraction produced no usable result (/157 S1): either the API key is
-/// missing or every transcript chunk failed. Partial failures (some chunks
+/// missing, configuration is invalid, or every transcript chunk failed. Partial failures (some chunks
 /// succeeded) are NOT an error; they surface as [`ExtractionOutcome::failures`].
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractionError {
     #[error("OpenAI API key not configured for knowledge extraction")]
     NoApiKey,
+    #[error("invalid knowledge extraction configuration: {0}")]
+    InvalidConfig(&'static str),
     #[error(
         "knowledge extraction failed: {}/{} chunk(s) failed; first: ({}) {}",
         .failures.len(),
@@ -383,6 +371,7 @@ impl ExtractionError {
                 "config".to_string(),
                 "OpenAI API key not configured".to_string(),
             ),
+            Self::InvalidConfig(reason) => ("config".to_string(), (*reason).to_string()),
             Self::AllChunksFailed { failures, .. } => (
                 first_status_label(failures),
                 first_reason(failures).to_string(),
@@ -399,6 +388,13 @@ pub struct ExtractionOutcome {
     /// success). Empty on full success; all-chunks-failed is
     /// [`ExtractionError::AllChunksFailed`] instead.
     pub failures: Vec<ChunkFailure>,
+    /// Extraction calls issued (transcript chunks plus any split retries).
+    pub chunks_attempted: usize,
+    /// Calls that returned a complete, parseable reply.
+    pub chunks_completed: usize,
+    /// Calls whose completion was truncated (`finish_reason: length`),
+    /// whether or not a split retry recovered them.
+    pub chunks_truncated: usize,
 }
 
 /// Build the chat-completion request body for one transcript chunk.
@@ -425,94 +421,6 @@ fn build_extraction_request(
         "max_tokens": max_tokens,
         "temperature": 0.0
     })
-}
-
-/// Parse a 2xx chat reply body into facts (LLM envelope + extraction JSON).
-fn parse_extraction_reply(
-    reply: &ChatHttpReply,
-    chunk_index: usize,
-) -> Result<Vec<ExtractedFact>, ChunkFailure> {
-    #[derive(Deserialize)]
-    struct LlmResponse {
-        choices: Vec<LlmChoice>,
-    }
-    #[derive(Deserialize)]
-    struct LlmChoice {
-        message: LlmMessage,
-    }
-    #[derive(Deserialize)]
-    struct LlmMessage {
-        content: String,
-    }
-
-    let llm_resp: LlmResponse = serde_json::from_str(&reply.body).map_err(|e| ChunkFailure {
-        chunk_index,
-        status: Some(reply.status),
-        reason: truncate_reason(&format!("response parse failed: {e}")),
-    })?;
-
-    let content = llm_resp
-        .choices
-        .first()
-        .map(|c| c.message.content.clone())
-        .unwrap_or_default();
-
-    let json_str = content
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-
-    serde_json::from_str::<ExtractionResult>(json_str)
-        .map(|result| result.facts)
-        .map_err(|e| ChunkFailure {
-            chunk_index,
-            status: Some(reply.status),
-            reason: truncate_reason(&format!("facts parse failed: {e}")),
-        })
-}
-
-/// Run one chunk's request → parse pipeline. `Err` carries the per-chunk
-/// failure (HTTP non-2xx, transport, or parse) for aggregation (/157 S1).
-async fn extract_chunk(
-    chat: &impl ExtractionChat,
-    request_body: &serde_json::Value,
-    chunk_index: usize,
-) -> Result<Vec<ExtractedFact>, ChunkFailure> {
-    let reply = match chat.chat(request_body).await {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(ChunkFailure {
-                chunk_index,
-                status: None,
-                reason: truncate_reason(&format!("{e:#}")),
-            })
-        }
-    };
-
-    if !(200..300).contains(&reply.status) {
-        return Err(ChunkFailure {
-            chunk_index,
-            status: Some(reply.status),
-            reason: truncate_reason(&reply.body),
-        });
-    }
-
-    let facts = parse_extraction_reply(&reply, chunk_index)?;
-    // Diagnostic for the silent-degradation signature (server-degradation brief
-    // §4.1): a 2xx that parses to zero facts. `body_len` separates a healthy
-    // "model legitimately found nothing" (full body) from a degraded transport
-    // returning a near-empty body. Pairs with the windowed extraction_empty
-    // counter; kept at debug so normal empty ingests don't spam logs.
-    if facts.is_empty() {
-        debug!(
-            "Extraction chunk {chunk_index} returned 2xx with zero facts (status={}, body_len={})",
-            reply.status,
-            reply.body.len()
-        );
-    }
-    Ok(facts)
 }
 
 /// Extract knowledge facts from conversation text using LLM.
@@ -549,18 +457,10 @@ pub async fn extract_knowledge_with(
     conversation_text: &str,
     conversation_date: &str,
 ) -> Result<ExtractionOutcome, ExtractionError> {
+    let chunks = transcript_chunks(extraction_config, conversation_text)?;
     let system_prompt = build_extraction_prompt(extraction_config, conversation_date);
 
-    // Split into chunks if too long (rough estimate: 4 chars ≈ 1 token)
-    let max_chars = extraction_config.max_transcript_tokens * 4;
-    let chunks = if conversation_text.len() > max_chars {
-        split_with_overlap(conversation_text, max_chars, max_chars / 10)
-    } else {
-        vec![conversation_text.to_string()]
-    };
-
     let mut outcome = ExtractionOutcome::default();
-    let mut succeeded_chunks = 0usize;
     // Raw facts parsed across all chunks, before the confidence filter below.
     // Lets the empty-extraction log distinguish "no facts in the response body"
     // (transport degradation — cross-reference the per-chunk body_len log) from
@@ -575,40 +475,31 @@ pub async fn extract_knowledge_with(
             chunk_text.len()
         );
 
-        let request_body = build_extraction_request(
-            &extraction_config.model,
-            &system_prompt,
-            i,
-            chunk_text,
-            extraction_config.max_tokens,
+        let run =
+            extract_chunk_with_split(chat, extraction_config, &system_prompt, i, chunk_text).await;
+        outcome.chunks_attempted += run.calls_attempted;
+        outcome.chunks_completed += run.calls_completed;
+        outcome.chunks_truncated += run.calls_truncated;
+        raw_facts_seen += run.facts.len();
+        let before = outcome.facts.len();
+        outcome
+            .facts
+            .extend(run.facts.into_iter().filter(|f| f.confidence >= 0.5));
+        debug!(
+            "Extracted {} facts (filtered by confidence >= 0.5)",
+            outcome.facts.len() - before
         );
-
-        match extract_chunk(chat, &request_body, i).await {
-            Ok(facts) => {
-                succeeded_chunks += 1;
-                raw_facts_seen += facts.len();
-                let before = outcome.facts.len();
-                outcome
-                    .facts
-                    .extend(facts.into_iter().filter(|f| f.confidence >= 0.5));
-                debug!(
-                    "Extracted {} facts (filtered by confidence >= 0.5)",
-                    outcome.facts.len() - before
-                );
-            }
-            Err(failure) => {
-                warn!(
-                    "Extraction LLM call failed for chunk {}/{} ({}): {}",
-                    i + 1,
-                    chunks.len(),
-                    failure.status_label(),
-                    failure.reason
-                );
-                // /157 S3: counted for llm_failures_recent in status payloads.
-                crate::llm_failures::global()
-                    .record(crate::llm_failures::LlmFailureKind::Extraction);
-                outcome.failures.push(failure);
-            }
+        for failure in run.failures {
+            warn!(
+                "Extraction LLM call failed for chunk {}/{} ({}): {}",
+                i + 1,
+                chunks.len(),
+                failure.status_label(),
+                failure.reason
+            );
+            // /157 S3: counted for llm_failures_recent in status payloads.
+            crate::llm_failures::global().record(crate::llm_failures::LlmFailureKind::Extraction);
+            outcome.failures.push(failure);
         }
 
         // Respect extraction cap
@@ -620,9 +511,10 @@ pub async fn extract_knowledge_with(
         }
     }
 
+    let succeeded_chunks = outcome.chunks_completed;
     if succeeded_chunks == 0 && !outcome.failures.is_empty() {
         return Err(ExtractionError::AllChunksFailed {
-            chunks_attempted: chunks.len(),
+            chunks_attempted: outcome.chunks_attempted,
             failures: outcome.failures,
         });
     }
@@ -760,7 +652,7 @@ mod tests {
                 assert_eq!(failures.len(), 1);
                 assert_eq!(failures[0].status, Some(429));
             }
-            ExtractionError::NoApiKey => panic!("wrong variant: NoApiKey"),
+            other => panic!("unexpected error: {other}"),
         }
     }
 
@@ -1010,30 +902,6 @@ mod tests {
         assert_eq!(back, crate::storage::FactType::Experience);
     }
 
-    /// /153 AC-2: no topics ⇒ the inline EXTRACTION_PROMPT body, prefixed with the
-    /// shared untrusted-data notice (the data/instruction boundary carried by every
-    /// prompt variant).
-    #[test]
-    fn build_prompt_no_topics_is_byte_identical() {
-        let date = "2026-06-11";
-        assert_eq!(
-            build_extraction_prompt(&cfg(), date),
-            prefix_untrusted_notice(&EXTRACTION_PROMPT.replace("{conversation_date}", date))
-        );
-    }
-
-    /// /153 AC-2: an explicitly empty topics list resolves to the same body.
-    #[test]
-    fn build_prompt_empty_topics_is_byte_identical() {
-        let date = "2026-06-11";
-        let mut config = cfg();
-        config.topics = Some(vec![]);
-        assert_eq!(
-            build_extraction_prompt(&config, date),
-            prefix_untrusted_notice(&EXTRACTION_PROMPT.replace("{conversation_date}", date))
-        );
-    }
-
     /// Every extraction prompt variant carries the data-only notice so stored
     /// content cannot be re-interpreted as instructions (second-order injection).
     #[test]
@@ -1226,3 +1094,7 @@ mod tests {
         assert!(fact.attributed_to.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "memory_extractor_config_tests.rs"]
+mod config_tests;

@@ -19,9 +19,12 @@ pub mod embeddings;
 pub mod encrypt_backfill;
 pub mod entity_extraction_queue;
 pub mod entity_extractor;
+#[cfg(feature = "evaluation")]
+pub mod evaluation_evidence;
 pub mod event_date;
 pub mod event_log;
 pub mod feedback;
+pub mod fragments;
 pub mod graph;
 pub mod graph_repair;
 pub mod hybrid_search;

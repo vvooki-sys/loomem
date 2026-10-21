@@ -6,11 +6,12 @@ use tracing::{debug, info, warn};
 use crate::config::LlmConfig;
 use crate::llm;
 use crate::local_embeddings::LocalEmbedder;
-use crate::storage::RocksDbStore;
+use crate::storage::{EmbeddingTarget, RocksDbStore};
 
 /// A request to embed a chunk's content and store it.
 #[derive(Debug)]
 struct EmbedRequest {
+    target: EmbeddingTarget,
     chunk_id: String,
     content: String,
 }
@@ -19,14 +20,22 @@ struct EmbedRequest {
 #[derive(Clone)]
 pub struct EmbeddingQueue {
     tx: mpsc::Sender<EmbedRequest>,
+    store: Arc<RocksDbStore>,
 }
 
 impl EmbeddingQueue {
     /// Submit a chunk for background embedding. Non-blocking, returns immediately.
     /// Returns Err only if the queue is full or closed.
     pub fn enqueue(&self, chunk_id: String, content: String) -> Result<()> {
+        let Some(target) = self.store.embedding_target(&chunk_id, &content)? else {
+            return Ok(());
+        };
         self.tx
-            .try_send(EmbedRequest { chunk_id, content })
+            .try_send(EmbedRequest {
+                target,
+                chunk_id,
+                content,
+            })
             .map_err(|e| anyhow::anyhow!("Embedding queue full or closed: {}", e))
     }
 }
@@ -60,14 +69,14 @@ pub fn spawn_worker(
 
     tokio::spawn(worker_loop(
         rx,
-        store,
+        Arc::clone(&store),
         http_client,
         llm_config,
         config,
         local_embedder,
     ));
 
-    EmbeddingQueue { tx }
+    EmbeddingQueue { tx, store }
 }
 
 async fn worker_loop(
@@ -149,8 +158,10 @@ async fn flush_batch(
     // request, so a failing chunk costs only itself (cycle /015). A chunk that
     // still fails is logged by id and left for the embed-missing backfill.
     for (req, result) in batch.drain(..).zip(results) {
-        match result.and_then(|embedding| store.store_embedding(&req.chunk_id, embedding)) {
-            Ok(()) => stored += 1,
+        match result.and_then(|embedding| store.store_embedding_if_current(&req.target, embedding))
+        {
+            Ok(true) => stored += 1,
+            Ok(false) => debug!("Discarded obsolete embedding for {}", req.chunk_id),
             Err(e) => {
                 warn!("Failed to embed/store chunk {}: {:#}", req.chunk_id, e);
                 failed += 1;
@@ -270,13 +281,24 @@ mod tests {
         let oversized = "Szczegółowy raport z zebrania zarządu w sprawie budżetu. ".repeat(90);
         let mut batch: Vec<EmbedRequest> = ["short-1", "short-2", "long-3", "short-4", "short-5"]
             .iter()
-            .map(|id| EmbedRequest {
-                chunk_id: (*id).to_string(),
-                content: if *id == "long-3" {
+            .map(|id| {
+                let content = if *id == "long-3" {
                     oversized.clone()
                 } else {
                     format!("Krótki fakt o projekcie numer {id}.")
-                },
+                };
+                let chunk: crate::storage::Chunk = serde_json::from_value(serde_json::json!({
+                    "id": id, "content": content, "stream": "test", "level": 0,
+                    "score": 1.0, "timestamp": 1, "consolidated": false,
+                    "dormant": false, "in_progress": false
+                }))
+                .unwrap();
+                store.store_chunk(&chunk).unwrap();
+                EmbedRequest {
+                    target: store.embedding_target(id, &content).unwrap().unwrap(),
+                    chunk_id: (*id).to_string(),
+                    content,
+                }
             })
             .collect();
 

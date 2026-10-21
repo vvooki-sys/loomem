@@ -45,12 +45,13 @@ use std::time::{Duration, Instant};
 
 use axum::{extract::State, Json};
 
+use loomem_core::ambient::cache::build_response_key;
 use loomem_core::ambient::{
-    apply_layer1_fusion, build_key, build_marker, compute_agreement, compute_confidence,
-    decide_marker, derive_tier, provenance_class_for_level, recency_from_breakdown,
-    synthesize_snippet, truncate_to_budget, AmbientDebug, AmbientLatencyMs, AmbientRequest,
-    AmbientResponse, AmbientSnippet, MarkerOutcome, NegativeReason, SuppressContext, Tier,
+    apply_layer1_fusion, build_marker, decide_marker, AmbientDebug, AmbientLatencyMs,
+    AmbientRequest, AmbientResponse, MarkerOutcome, NegativeReason, SuppressContext,
 };
+#[path = "ambient_selection.rs"]
+mod selection;
 use loomem_core::HybridSearchResult;
 
 use super::AppError;
@@ -77,6 +78,8 @@ pub async fn ambient_handler(
     let start = Instant::now();
 
     validate_scope_access(&auth, &payload.scope)?;
+
+    let cache_generation = state.ambient_cache.generation();
 
     // AC-9 cache fast path — skipped when caller asks for `refresh: true`.
     if !payload.refresh {
@@ -118,7 +121,11 @@ pub async fn ambient_handler(
     // explicitly asked for fresh, no point seeding cache from them).
     if !payload.refresh {
         let key = cache_key(&payload);
-        state.ambient_cache.put(key, body.clone());
+        if let Some(generation) = &cache_generation {
+            state
+                .ambient_cache
+                .put_if_current(key, body.clone(), generation);
+        }
     }
 
     Ok(Json(body))
@@ -144,18 +151,16 @@ fn validate_scope_access(auth: &AuthContext, scope: &str) -> Result<(), AppError
     }
 }
 
-/// Build a cache key per AC-9 — blake3 over (user_id, scope, recent_turns,
-/// hint, stream). Suppress flag is part of the request envelope but not
-/// part of the key (toggling it shouldn't recompute retrieval). `stream`
-/// IS part of the key — different streams produce different retrievals
-/// (cycle/103c isolation requirement).
+/// Cache the complete response by retrieval inputs and negative-marker policy.
+/// `refresh` bypasses cache and does not change response identity.
 fn cache_key(payload: &AmbientRequest) -> [u8; 32] {
-    build_key(
+    build_response_key(
         &payload.user_id,
         &payload.scope,
         payload.recent_turns.as_deref(),
         payload.hint.as_deref(),
         payload.stream.as_deref(),
+        payload.suppress_negative_marker,
     )
 }
 
@@ -175,8 +180,7 @@ async fn run_layer1_pipeline(
     let synthesis_start = Instant::now();
     let now_ts = chrono::Utc::now().timestamp();
     let fusion = apply_layer1_fusion(&candidates, now_ts);
-    let snippets = score_and_synthesize(&candidates, &fusion);
-    let kept = truncate_to_budget(snippets, None)?;
+    let (kept, mut debug) = selection::pack_selected(&candidates, &fusion)?;
     let synthesis_ms = synthesis_start.elapsed().as_millis() as u32;
 
     let marker_payload = if kept.is_empty() {
@@ -199,32 +203,16 @@ async fn run_layer1_pipeline(
         None
     };
 
-    let trace_ids = candidates
-        .iter()
-        .take(TOP_N_SNIPPETS)
-        .map(|c| c.id.clone())
-        .collect();
-    let breakdowns: Vec<_> = fusion
-        .breakdowns
-        .iter()
-        .take(TOP_N_SNIPPETS)
-        .cloned()
-        .collect();
-
     let total_ms = start.elapsed().as_millis() as u32;
+    debug.latency_ms = AmbientLatencyMs {
+        retrieval: retrieval_ms,
+        synthesis: synthesis_ms,
+        total: total_ms,
+    };
     Ok(AmbientResponse {
         snippets: kept,
         marker_if_empty: marker_payload,
-        debug: AmbientDebug {
-            trace_ids,
-            signal_breakdown_per_snippet: breakdowns,
-            latency_ms: AmbientLatencyMs {
-                retrieval: retrieval_ms,
-                synthesis: synthesis_ms,
-                total: total_ms,
-            },
-            error: None,
-        },
+        debug,
     })
 }
 
@@ -353,50 +341,6 @@ async fn retrieve_candidates(
         .take(TOP_K_RETRIEVAL)
         .collect();
     Ok(scoped)
-}
-
-/// Per-candidate confidence + synthesis. Drops candidates that fail the
-/// §10.5.3 plain-fact constraint (synthesis returns Err) or that exceed
-/// the per-snippet token cap.
-fn score_and_synthesize(
-    candidates: &[HybridSearchResult],
-    fusion: &loomem_core::search::fusion::FusionResult,
-) -> Vec<AmbientSnippet> {
-    // §10.5.1 expects `rrf_fused ∈ [0, 1]` (per memory-routing.md "Zakres
-    // faktyczny RRF na produkcji: ~0.0–1.0 po normalizacji"). The raw
-    // `search::fusion::fuse` output is the un-normalized RRF sum which
-    // lives in [0, 1/(k+1)] ≈ [0, 0.0164] for k=60. Normalize by the
-    // top-1 score within the result set so top-1 → 1.0 and the formula's
-    // 0.50 weight on rrf_fused contributes meaningfully. Final τ_high /
-    // τ_medium calibration is a /103a-pre item (§10.10 #6).
-    let max_score = fusion.fused_scores.iter().copied().fold(0.0_f32, f32::max);
-    let mut out = Vec::new();
-    for &idx in fusion.fused_order.iter().take(TOP_N_SNIPPETS) {
-        let Some(cand) = candidates.get(idx) else {
-            continue;
-        };
-        let Some(breakdown) = fusion.breakdowns.get(idx) else {
-            continue;
-        };
-        let raw_rrf = fusion.fused_scores.get(idx).copied().unwrap_or(0.0);
-        let rrf_normalized = if max_score > 0.0 {
-            (raw_rrf / max_score).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let provenance = provenance_class_for_level(cand.level);
-        let recency = recency_from_breakdown(breakdown);
-        let agreement = compute_agreement(candidates, idx);
-        let c = compute_confidence(rrf_normalized, provenance, recency, agreement);
-        let tier = derive_tier(c, false);
-        if tier == Tier::Low {
-            continue;
-        }
-        if let Ok(snippet) = synthesize_snippet(cand, c, tier) {
-            out.push(snippet);
-        }
-    }
-    out
 }
 
 /// AC-12 graceful degradation. Builds an HTTP-200 response carrying an
@@ -553,8 +497,8 @@ mod tests {
             scope: "private:u".to_string(),
             recent_turns: None,
             hint: Some("x".to_string()),
-            refresh: true,                  // refresh flag NOT part of key
-            suppress_negative_marker: true, // also NOT part of key
+            refresh: true,                   // refresh flag NOT part of key
+            suppress_negative_marker: false, // same response policy
             stream: None,
         };
         assert_eq!(cache_key(&req1), cache_key(&req2));
@@ -645,6 +589,40 @@ mod tests {
             .marker_if_empty
             .expect("marker present on empty retrieval (post cold-start grace)");
         assert_eq!(marker.reason, NegativeReason::ZeroChunks);
+    }
+
+    #[tokio::test]
+    async fn cached_response_respects_marker_suppression_toggle() {
+        let (_router, state) = crate::tests::make_test_app();
+        let auth = user_auth("__user_42__");
+        let mut payload = AmbientRequest {
+            user_id: "u_42".to_string(),
+            scope: "__user_42__".to_string(),
+            recent_turns: Some(
+                (0..6)
+                    .map(|_| RecentTurn {
+                        role: "user".to_string(),
+                        content: String::new(),
+                    })
+                    .collect(),
+            ),
+            hint: None,
+            refresh: false,
+            suppress_negative_marker: false,
+            stream: None,
+        };
+        for suppress in [false, true, false, true] {
+            payload.suppress_negative_marker = suppress;
+            let response = ambient_handler(
+                State(state.clone()),
+                axum::Extension(auth.clone()),
+                Json(payload.clone()),
+            )
+            .await
+            .unwrap()
+            .0;
+            assert_eq!(response.marker_if_empty.is_none(), suppress);
+        }
     }
 
     #[tokio::test]

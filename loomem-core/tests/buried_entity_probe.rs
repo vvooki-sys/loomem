@@ -265,6 +265,7 @@ fn base_chunk(id: &str, stream: &str, content: &str, ts: i64, level: i32) -> Chu
         n_ratings: 0,
         last_rated_at: None,
         provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+        fragment: None,
     }
 }
 
@@ -286,6 +287,7 @@ fn probe_config() -> loomem_core::config::Config {
             intent_log: loomem_core::config::IntentLogConfig::default(),
         },
         search: loomem_core::config::SearchConfig {
+            max_request_top_k: 1000,
             top_k: 10,
             surprise_boost: 1.5,
             hybrid_weights: loomem_core::config::HybridWeightsConfig {
@@ -316,6 +318,8 @@ fn probe_config() -> loomem_core::config::Config {
             vector_similarity_floor: 0.0,
             decay_match_relief: 0.0,
             tier1: loomem_core::search::tier1::Tier1Config::default(),
+            operation: loomem_core::hybrid_search::OperationSearchConfig::default(),
+            evidence_fields: false,
         },
         advisor: loomem_core::config::AdvisorConfig::default(),
         worker: loomem_core::config::WorkerConfig::default(),
@@ -346,6 +350,7 @@ fn probe_config() -> loomem_core::config::Config {
         access_audit: loomem_core::config::AccessAuditConfig::default(),
         rate_limit: loomem_core::config::RateLimitConfig::default(),
         mcp: loomem_core::config::McpConfig::default(),
+        fragments: loomem_core::config::FragmentsConfig::default(),
         dream: loomem_core::config::DreamConfig::default(),
     }
 }

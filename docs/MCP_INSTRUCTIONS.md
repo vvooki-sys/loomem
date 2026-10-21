@@ -25,9 +25,9 @@ single confirmed facts.
 - memory_namespaces — see available memory namespaces (personal, projects, etc.)
 
 ### Storing memory
-- memory_ingest — PREFERRED: extract structured facts from a conversation
-  via LLM. Produces typed facts with subject, date, confidence. Use instead
-  of memory_store when processing conversations.
+- memory_ingest — PREFERRED: preserve a sanitized, searchable conversation source,
+  then extract linked typed facts via LLM. Returns the source ID even when
+  extraction fails. Use instead of memory_store when processing conversations.
 - memory_store — store a single, confirmed fact. Use for explicit user
   statements ("I prefer X", "My name is Y"). NOT for raw text.
 
@@ -37,7 +37,7 @@ single confirmed facts.
 - memory_reflect — check memory quality. Reports noise level, missing
   metadata, suggestions for cleanup. Use periodically.
 - memory_history — trace how a fact evolved over time (version chain).
-- memory_delete — delete a specific memory by ID.
+- memory_delete — soft-delete a memory by ID; deleting an ingestion source also removes its same-stream linked family from retrieval.
 - memory_feedback — rate how useful a specific chunk was for a task.
 
 ### Info
@@ -89,6 +89,12 @@ memory_ingest(
   Note: exact extraction depends on LLM judgment — count and phrasing may vary.
 ```
 
+The sanitized source is stored before extraction and retained if extraction fails or finds no facts. Capture its returned ID. This path does not automatically deduplicate or supersede existing facts; repeating ingestion creates another source. Source-linked content and provenance are immutable: delete the source and ingest a corrected transcript to make a correction.
+
+Content that does not stabilise under sanitization within four passes (deeply nested HTML entity encoding) is refused as invalid params and nothing is stored — re-send it decoded. When the server has `[fragments] enabled = true` (off by default), the response text also ends with ` Stored N fragments.`: one turn-level fragment per conversation turn, deleted together with the source; a fragment problem is reported in that sentence and never blocks extraction.
+
+Supply the conversation date only when known. It is observation time, not an event-date fallback. Without a known reference date, relative expressions must remain unresolved; explicit absolute source dates can still be used. New ingestion labels distinguish `[event:YYYY-MM-DD]`, `[observed:YYYY-MM-DD]`, and `[recorded:YYYY-MM-DD]`. Legacy `[YYYY-MM-DD]` labels do not prove when an event happened. Do not infer current state solely from a later observation or storage date. For records with the recognized versioned ingestion contract, date-range searches require a known event date; an unknown event date does not match a date range. Conversation and storage dates do not substitute for event time. Legacy records without that contract retain their existing event dates and recorded-time fallback when undated. Startup repairs older versioned index entries in place without resetting the index, and stops if repair fails. The separate valid_at filter retains its validity/history semantics.
+
 ### memory_store
 Call for **single, confirmed facts** only:
 - User explicitly states a preference: "I prefer dark mode"
@@ -110,6 +116,8 @@ Call when:
 - User asks about something they mentioned before
 - You need context before answering about their work/preferences
 - Checking if something was already decided
+
+When the server enables `[search] evidence_fields` (off by default), each result line carries a bracketed `[author: …; conversation: …; event: … (resolved|unknown); source: …]` tag before the score, listing only the parts known for that memory. Treat `conversation` as observation time, not as the event date.
 
 ### memory_dream
 Call:
@@ -137,10 +145,14 @@ Call when:
 - Understanding relationships between people, projects, technologies
 - User asks "who works on X?" or "what's connected to Y?"
 
+New graph names, aliases and relations are bound to the contributing memory, stream, entity or edge, and current content generation, using the configured at-rest encryption. Lookup and display require live support for each contribution in the active stream; a deleted conversation’s alias cannot borrow support from another memory of the same entity. Older graph data contributes only explicit stored per-memory entity names and relation tuples. Unsupported aliases and connections remain hidden until re-extraction, and legacy entity types may appear as Unknown; source-text resemblance is not used to reconstruct missing provenance.
+
 ### memory_delete
 Call when:
 - User explicitly asks to forget something: "delete that", "forget X"
 - Never delete without user confirmation
+
+Deleting a recognized ingestion source tombstones its same-stream linked descendants before index cleanup. Deleting one derived fact retains the source and other facts; surface the returned source ID so the user can choose whether to remove the conversation too. Report partial cleanup and retry when requested. Soft deletion follows the existing recovery/purge policy; it is not immediate physical erasure or deletion of every semantic copy. Graph names, aliases and connections remain visible only with their own live supporting memories.
 
 ### memory_status
 Call when:
@@ -157,7 +169,7 @@ Call when:
 
 ## What NOT to do
 
-- **NEVER store raw conversation text** — use memory_ingest to extract facts
+- Do not dump raw conversations through memory_store — memory_ingest preserves the sanitized source and extracts linked facts
 - Do not store: temporary status, small talk, questions without answers
 - Do not call memory_search for every response — only when recall matters
 - Do not store sensitive data (passwords, API keys)

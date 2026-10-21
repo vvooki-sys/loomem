@@ -7,6 +7,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `fragments` domain module: deterministic segmentation of a canonical
+  conversation source into turn-level fragments (long turns split further at
+  paragraph, sentence and whitespace boundaries) that carry the author role,
+  the conversation date and an exact byte range into the source. Line-prefix
+  turn markers are trusted only when at least two marker lines are present
+  and one of them is `user`/`human`; a lone `AI:` bullet inside prose stays
+  one unlabelled turn. New `[fragments]` config section (`enabled = false`
+  by default) and an optional `fragment` provenance field on stored chunks;
+  existing databases and configurations load unchanged. `Config::validate`
+  rejects `max_fragment_tokens = 0` and, with `embedding_provider = "local"`,
+  a `max_fragment_tokens + prefix_reserve_tokens` above the local embedder's
+  512-token window. (`prefix_reserve_tokens` is headroom above the text
+  budget — the embedder adds only its two special tokens; Loomem prepends
+  no `passage:` prefix.)
+- Opt-in fragment persistence on `memory_ingest` (`[fragments] enabled = true`):
+  right after the canonical source is stored, its fragments are persisted as
+  level-0 chunks (`"{source_id}:f{index}"`, marker kind `fragment`, linked to
+  the source through `source_ids` and `fragment`) through the same sink,
+  before extraction. Byte ranges index into the source *as persisted*: the
+  ingest content is sanitised to a fixpoint up front (this applies to every
+  `memory_ingest` call; input that keeps changing after four passes, e.g.
+  deeply nested HTML entity encoding, is refused with nothing stored, and
+  extraction now sees exactly the persisted text), the source is read back
+  from storage before
+  segmentation, and a slice the sink would trim is stored with its range
+  narrowed to the surviving bytes. Fragments are additive: a failed fragment
+  write is reported in the tool text (`Stored N fragments, M fragment writes
+  failed.`) and never blocks fact extraction. Like the source, fragments are
+  `consolidated` from birth, so raw turns never enter L0 consolidation, the
+  pending-L0 counter or the `memory_context` "recent" section; their index
+  event date is unknown (never the storage timestamp) and their `memory_search`
+  line carries the source's `observed:`/`recorded:` date. New keys
+  `provenance_role` (`"claim"` default | `"evidence"` | `"cue"`, the ranking
+  knob for fragment chunks; it affects ranking only on fused (vector)
+  retrieval — BM25-only queries, i.e. under 5 words without a routing keyword
+  or `vector_enabled = false`, apply no provenance multiplier) and
+  `token_counter` (`"embedder"` default — the loaded local embedding
+  model's own tokenizer, the only counter whose budget is the embedder's;
+  with fragments enabled it requires `embedding_provider = "local"` at
+  config load, and it fails segmentation loudly instead of falling back if
+  no local model is loaded | `"approx"` | `"tiktoken"`, the model-free
+  counters for non-local embedding providers and offline tests); unknown
+  values fail config load. In search, the content-prefix dedup never
+  collapses a fragment against its own source (the source begins with turn
+  0, so the two share a prefix) nor fragments of different sources against
+  each other. Fragments
+  share the source's lifecycle: deleting the source tombstones them with the
+  facts, and the startup event-date index repair covers them. With fragments
+  disabled (the default) the ingest path performs exactly the writes and
+  returns exactly the text it did before.
+- Opt-in knowledge extraction controls in `[knowledge_extraction]`:
+  `input_chunk_tokens` splits a transcript at line boundaries into smaller
+  per-call chunks, and `split_on_truncation` re-extracts a chunk whose
+  completion hit the output token limit as two line-aligned halves (at most
+  four extra calls per chunk). Both default off; `max_tokens` is now spelled
+  out in `config.toml` at its existing default. Extraction outcomes report
+  attempted, completed and truncated calls. A truncated reply is still never
+  admitted.
+- Shared evidence renderer behind the new `[search] evidence_fields` flag
+  (default `false`, responses unchanged). When enabled, every `/v1/search`
+  hit (cold and cached) and `GET /api/memories/:id` item carries an
+  additive `evidence` object with exactly `author`, `conversation_date`,
+  `event_date`, `event_date_provenance`, `source_id`, `byte_start` and
+  `byte_end` (unknowns are `null`, never a substituted date; only
+  calendar-valid ISO dates are emitted), and `memory_search` lines carry
+  the same facts, minus the byte range, as a compact bracketed tag before
+  the score.
+  `event_date_provenance` is `resolved` when the engine recorded the
+  temporal cue the date came from and `unknown` otherwise; `explicit` is
+  reserved until the extractor persists that distinction.
+- Stage diagnostics: a traced search (`trace: true`) now reports
+  `trace_metadata.rejections`, one `{chunk_id, stage, reason}` per candidate
+  dropped between the existing evidence stages (soft delete, event-date,
+  bitemporal and supersession filters, extraction-metadata filters, prefix
+  and aggregation dedup, source-agent filters, top-k truncation). The
+  `evidence` block itself is unchanged.
+
+### Changed
+
+- HTML tag stripping in the ingress sanitizer no longer matches across lines.
+  Previously a lone `<` early in a multi-turn transcript and a `>` many turns
+  later were treated as one tag and everything between them was deleted from
+  the stored content. This applies on the default path to every ingress —
+  `memory_ingest`, `/v1/store` and every other write or LLM-input path that
+  goes through the sanitizer. Single-line tags (`<b>bold</b>`) are stripped as before; a tag
+  broken across lines (`<div\nclass="x">`) is now left in place, an accepted
+  trade-off since stored content is read by LLMs, not browsers. Entity
+  decoding, whitespace collapsing and the `html_stripped` flag are unchanged.
+- Knowledge extraction rejects explicitly truncated or refused model completions
+  before admitting facts, while retaining the stored conversation source and
+  reporting partial extraction failures. Completion metadata omitted by legacy
+  compatible providers retains its existing behavior.
+
+- MCP conversation ingestion now preserves a sanitized, searchable source before
+  extraction and links each derived fact to it. Extraction failure or cancellation
+  retains that source; responses report its ID and any incomplete fact writes.
+  Source-linked content and provenance are immutable: correct them by deleting
+  the source and ingesting the corrected conversation.
+- New ingestion records distinguish event dates, conversation dates (`observed`),
+  and storage dates (`recorded`). Missing event dates remain unknown; unresolved
+  relative dates without a conversation date are not anchored to the current day.
+  Existing records retain their previous date rendering. Date-range searches for
+  recognized versioned ingestion records require known event dates, including
+  cached, vector and graph results. Legacy unmarked records retain existing event
+  dates and their recorded-time fallback when undated. Startup repairs older
+  versioned index entries in place without resetting the index; repair failures
+  prevent serving stale temporal data. The separate `valid_at` scope is unchanged.
+- Deleting an ingestion source atomically tombstones its same-stream descendants
+  before retryable index cleanup. Deleting one derived fact retains the source
+  and sibling facts and reports that retention. Tombstones retain the existing
+  recovery/purge lifecycle; this operation does not promise immediate physical erasure.
+  Existing databases require no schema migration; historical provenance is not inferred.
+- Cached search results, associations, and context packing check current record
+  visibility before returning text, so stale derived indexes cannot override tombstones.
+- Graph lookup and display require live per-memory contributions for names,
+  aliases and relations, bound to their owner, stream and content generation and
+  stored through the existing encryption provider. Legacy support uses explicit
+  per-memory entity names and relation tuples; unproven aliases stay hidden until
+  re-extraction, and legacy entity types may appear as Unknown.
+- Content or stream edits invalidate entity, relation and extraction-completion
+  caches. Startup removes obsolete raw JSON extraction-completion hints without
+  deleting canonical memories or making model calls. New completion hints contain
+  only a static marker.
+- Existing encryption backfill covers graph label and relation sidecars; upgrading
+  from plaintext still requires the separate name-index rekey step. Physical purge
+  removes associated graph sidecars in batched namespace scans. Source-family
+  deletion still uses full-store discovery; no reverse index or source-family deletion speedup
+  is claimed.
+
 ## [0.5.3] - 2026-07-07
 
 Search-quality release: rare-term guarantee lane with per-channel diagnostics.
