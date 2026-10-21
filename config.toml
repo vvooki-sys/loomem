@@ -215,10 +215,17 @@ aggregation_max_top_k = 30      # cap for aggregation queries
 # ("passage: "), so text + prefix must fit the embedder's input window
 # (max_fragment_tokens + prefix_reserve_tokens <= 512 for the local
 # multilingual-e5-small, which silently truncates longer input).
+# When enabled, memory_ingest persists the fragments of each source right
+# after the source itself (before extraction); fragments are additive and
+# never block fact extraction. provenance_role is the ranking knob applied to
+# every fragment chunk ("claim" = full weight, "evidence" = x0.5, "cue" =
+# x0.8 in hybrid search); token_counter picks how fragment size is measured.
 [fragments]
 enabled = false
 max_fragment_tokens = 400       # token budget for a fragment's text
 prefix_reserve_tokens = 16      # tokens kept free for the embedding prefix
+provenance_role = "claim"       # "claim" | "evidence" | "cue" — role of fragment chunks
+token_counter = "approx"        # "approx" (chars / 3) | "tiktoken" (cl100k_base)
 
 [resource_guards]
 max_cpu_cores = 1.0
