@@ -197,7 +197,7 @@ curl http://localhost:3030/health
 </code></pre>
 <h3 id="local-embeddings-no-openai-dependency">Local embeddings (no OpenAI dependency)</h3>
 <p>Set <code>embedding_provider = "local"</code> in <code>config.toml</code> under <code>[llm]</code> — this is the default on a fresh install. Uses the tract ONNX runtime — pure Rust, no native dependencies, and nothing leaves the machine.</p>
-<p>Note: consolidation, extraction, and dream use OpenAI completions (<code>gpt-4.1-mini</code>). Without an <code>OPENAI_API_KEY</code> the server refuses to start unless <code>LOOMEM_ALLOW_KEYLESS=1</code> is set, and then those steps fail (<code>memory_ingest</code> returns a missing-key error); embeddings and search stay fully local either way.</p>
+<p>Note: consolidation, extraction, and dream use OpenAI completions (<code>gpt-4.1-mini</code>). Without an <code>OPENAI_API_KEY</code> the default config refuses to start unless <code>LOOMEM_ALLOW_KEYLESS=1</code> is set, and then those steps fail (<code>memory_ingest</code> returns a missing-key error); embeddings and search stay fully local either way.</p>
 <hr />
 <h2 id="docker">Docker</h2>
 <h3 id="build">Build</h3>

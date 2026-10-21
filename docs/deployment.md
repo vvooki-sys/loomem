@@ -41,7 +41,7 @@ curl -X POST http://localhost:3030/v1/store \
 
 Set `embedding_provider = "local"` in `config.toml` under `[llm]` — this is the default on a fresh install. Uses the tract ONNX runtime — pure Rust, no native dependencies, and nothing leaves the machine.
 
-Note: consolidation, extraction, and dream use OpenAI completions (`gpt-4.1-mini`). Without an `OPENAI_API_KEY` the server refuses to start unless `LOOMEM_ALLOW_KEYLESS=1` is set, and then those steps fail (`memory_ingest` returns a missing-key error); embeddings and search stay fully local either way.
+Note: consolidation, extraction, and dream use OpenAI completions (`gpt-4.1-mini`). Without an `OPENAI_API_KEY` the default config refuses to start unless `LOOMEM_ALLOW_KEYLESS=1` is set, and then those steps fail (`memory_ingest` returns a missing-key error); embeddings and search stay fully local either way.
 
 ---
 

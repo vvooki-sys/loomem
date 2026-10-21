@@ -249,7 +249,7 @@ Loomem ships as a single Rust binary with no external services — most alternat
 Yes — Apache-2.0, free to self-host. Source is in this repository.
 
 **Does Loomem require an internet connection or OpenAI?**
-No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching context works fully offline. An OpenAI API key is needed only for the LLM-backed steps (`memory_ingest` extraction, consolidation, dream, contradiction detection); without it those steps are unavailable and the server starts only with `LOOMEM_ALLOW_KEYLESS=1`, while `memory_store` and search keep working.
+No internet is required for core use. Embeddings can run on-device with a local ONNX model, and storing and searching context works fully offline. An OpenAI API key is needed only for the LLM-backed steps (`memory_ingest` extraction, consolidation, dream, contradiction detection); without it those steps are unavailable and the default config starts only with `LOOMEM_ALLOW_KEYLESS=1`, while `memory_store` and search keep working.
 
 **Which LLM clients can connect?**
 Any MCP-capable client. Loomem speaks MCP over streamable HTTP and provides recipes for Claude, Claude Code, ChatGPT, Codex, and Cursor, plus OAuth dynamic client registration for remote connectors.

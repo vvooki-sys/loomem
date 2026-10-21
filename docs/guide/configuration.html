@@ -670,11 +670,14 @@ on-device with a quantization-free ONNX model (default
 ships in the default build; obtain the model files with:</p>
 <pre><code class="language-sh">./scripts/fetch-embedding-model.sh         # → ~/.loomem/models/multilingual-e5-small
 </code></pre>
-<p>The completions LLM (consolidation, fact extraction, dream) is independent: with
-no <code>OPENAI_API_KEY</code> the server refuses to start unless <code>LOOMEM_ALLOW_KEYLESS=1</code>
-is set, and then <code>memory_ingest</code> returns a missing-key error (nothing stored),
-entity extraction is off and dream/consolidation fail, while <code>memory_store</code> and
-semantic search work fully locally. To use a local LLM for
+<p>The completions LLM (consolidation, fact extraction, dream) is independent. With
+the default config (those subsystems enabled) and no <code>OPENAI_API_KEY</code>, the server
+refuses to start unless <code>LOOMEM_ALLOW_KEYLESS=1</code> is set, and then <code>memory_ingest</code>
+returns a missing-key error (nothing stored), entity extraction is off and
+dream/consolidation fail, while <code>memory_store</code> and semantic search work fully
+locally. Disabling those subsystems in <code>config.toml</code> lifts the startup check, and
+with <code>knowledge_extraction.enabled = false</code> <code>memory_ingest</code> stores the raw
+transcript instead. To use a local LLM for
 completions too, point <code>provider</code> at an OpenAI-compatible endpoint (future cycle).</p>
 <h3 id="embedding-dimension-re-embedding">Embedding dimension &amp; re-embedding</h3>
 <p><code>embedding_dim</code> <strong>must</strong> match the active embedding model
@@ -985,7 +988,7 @@ model = &quot;gpt-4.1-mini&quot;
 <tr>
 <td><code>OPENAI_API_KEY</code></td>
 <td>LLM API key (name configurable via <code>llm.api_key_env</code>)</td>
-<td>Only for OpenAI completions (<code>provider = "openai"</code>) or OpenAI embeddings (<code>embedding_provider = "openai"</code>). With local embeddings (default) and no key, the server starts only with <code>LOOMEM_ALLOW_KEYLESS=1</code> and the LLM steps are unavailable (<code>memory_store</code> and search still work).</td>
+<td>Only for OpenAI completions (<code>provider = "openai"</code>) or OpenAI embeddings (<code>embedding_provider = "openai"</code>). With local embeddings and no key, the default config starts only with <code>LOOMEM_ALLOW_KEYLESS=1</code> and the LLM steps are unavailable (<code>memory_store</code> and search still work).</td>
 </tr>
 <tr>
 <td><code>LOOMEM_CONFIG</code></td>
