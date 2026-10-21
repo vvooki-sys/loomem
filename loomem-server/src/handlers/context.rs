@@ -30,6 +30,23 @@ fn truncate_to_budget(text: &str, budget_tokens: usize) -> (String, bool) {
     }
 }
 
+/// Membership test for the "recent" sections.
+///
+/// SEC-memctx-stream-leak: tombstoned chunks (`deleted_at.is_some()`) must
+/// be excluded — same gate as `tool_status` (dispatcher.rs). Without this
+/// check Recent Context resurrects soft-deleted chunks that no other read
+/// path surfaces. Source fragments are excluded too: all fragments of one
+/// ingest share the source's timestamp, so one long transcript would
+/// otherwise fill every recent slot with its raw turns while the source
+/// itself already represents that session here.
+fn is_recent_candidate(chunk: &loomem_core::storage::Chunk, stream: &str) -> bool {
+    chunk.stream == stream
+        && chunk.is_latest
+        && !chunk.dormant
+        && chunk.deleted_at.is_none()
+        && chunk.fragment.is_none()
+}
+
 pub async fn context_pack_handler(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
@@ -158,16 +175,7 @@ pub async fn context_pack_handler(
                     let prefix = format!("chunk:L{}:", level);
                     for (_key, value) in state.store.prefix_scan(prefix.as_bytes()) {
                         if let Ok(chunk) = state.store.decode_chunk(&value) {
-                            // SEC-memctx-stream-leak: tombstoned chunks
-                            // (`deleted_at.is_some()`) must be excluded — same
-                            // gate as `tool_status` (dispatcher.rs). Without this check
-                            // Recent Context resurrects soft-deleted chunks
-                            // that no other read path surfaces.
-                            if chunk.stream == stream
-                                && chunk.is_latest
-                                && !chunk.dormant
-                                && chunk.deleted_at.is_none()
-                            {
+                            if is_recent_candidate(&chunk, &stream) {
                                 recent_chunks.push(chunk);
                             }
                         }

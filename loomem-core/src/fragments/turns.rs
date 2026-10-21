@@ -8,6 +8,11 @@
 //! `user` and `ai` to `assistant` so the reader sees one author vocabulary.
 //! Other JSONL roles are kept as given (lowercased).
 //!
+//! Marker mode is trusted only when the text looks like a transcript: at
+//! least two marker lines, at least one of them `user` (or `human`). A lone
+//! `AI:` bullet inside prose, or `System:` lines in a pasted log, therefore
+//! do not split the text or invent an author — it stays one unlabelled turn.
+//!
 //! Turn byte ranges tile the whole text: sorted, contiguous, starting at 0
 //! and ending at `text.len()`. Whitespace between turns belongs to the
 //! preceding turn; a whitespace-only prefix before the first marker is folded
@@ -78,12 +83,23 @@ fn jsonl_turn_starts(text: &str) -> Option<TurnStarts> {
     }
 }
 
+/// Minimum number of marker lines before line-prefix mode is trusted.
+const MIN_MARKER_LINES: usize = 2;
+
 /// Line-prefix mode: every line whose prefix is a recognised role marker
-/// starts a turn.
+/// starts a turn — provided the markers form a plausible transcript (see
+/// the module docs); otherwise no turn starts at all.
 fn marker_turn_starts(text: &str) -> TurnStarts {
-    lines_with_offsets(text)
+    let starts: TurnStarts = lines_with_offsets(text)
         .filter_map(|(offset, line)| marker_role(line).map(|role| (offset, role)))
-        .collect()
+        .collect();
+    let plausible =
+        starts.len() >= MIN_MARKER_LINES && starts.iter().any(|(_, role)| role == "user");
+    if plausible {
+        starts
+    } else {
+        TurnStarts::new()
+    }
 }
 
 /// The normalised role when `line` begins with a recognised marker.

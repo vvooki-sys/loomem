@@ -40,6 +40,27 @@ fn fact(parent: &Chunk, date: Option<&str>) -> Chunk {
     c.extraction_meta=Some(serde_json::from_value(serde_json::json!({"fact_type":"fact","subject":null,"event_date":date,"event_date_context":null,"supersedes":null,"superseded_by":null,"confidence":1.0,"extracted_from":parent.id,"extraction_model":null})).unwrap());
     c
 }
+fn fragment(parent: &Chunk) -> Chunk {
+    let mut template = chunk("template");
+    template.consolidated = true;
+    template.source = Some(SourceTag::from_agent("mcp-ingest"));
+    template.trust_level = Some("a2".into());
+    template.metadata = Some(serde_json::json!({"_loomem_ingest":{"version":1,"kind":"fragment"}}));
+    crate::fragments::fragment_chunk(
+        &crate::fragments::SourceFragment {
+            id: crate::fragments::fragment_id(&parent.id, 0),
+            source_id: parent.id.clone(),
+            index: 0,
+            byte_start: 0,
+            byte_end: parent.content.len(),
+            turn_index: 0,
+            role: Some("user".into()),
+            conversation_date: Some("2024-03-20".into()),
+            text: parent.content.clone(),
+        },
+        &template,
+    )
+}
 fn doc(c: &Chunk) -> TextDocument {
     TextDocument {
         id: c.id.clone(),
@@ -108,6 +129,24 @@ fn nullable_events_known_pre_epoch_and_legacy_all_date_routes() {
     assert_eq!(event_timestamp_for_chunk(&invalid), None);
     invalid.extraction_meta.as_mut().unwrap().event_date = Some("2026-1-01".into());
     assert_eq!(event_timestamp_for_chunk(&invalid), None);
+}
+/// A fragment's event date is unknown like its source's: the date-range lane
+/// must not match it by storage timestamp, while plain search still finds it.
+#[test]
+fn fragment_event_date_is_never_the_storage_timestamp() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut idx = index(temp.path());
+    let root = source();
+    let piece = fragment(&root);
+    assert!(crate::storage::is_ingest_fragment(&piece));
+    assert_eq!(event_timestamp_for_chunk(&piece), None);
+    let legacy = chunk("legacy");
+    for c in [&root, &piece, &legacy] {
+        idx.index_chunk_document(doc(c), c).unwrap();
+    }
+    idx.commit().unwrap();
+    assert_eq!(ids(&idx, 1699999999, 1700000001), vec![legacy.id.clone()]);
+    assert_eq!(idx.search("temporal", 20).unwrap().len(), 3);
 }
 #[test]
 fn old_index_repair_is_non_destructive_idempotent_and_survives_reopen() {

@@ -30,7 +30,7 @@ fn assert_well_formed(src: &CanonicalSource, fragments: &[SourceFragment], max_t
         assert!(src.text.is_char_boundary(f.byte_end));
         let chars = f.text.chars().count();
         assert!(
-            ApproxTokenCounter.count(&f.text) <= max_tokens || chars == 1,
+            ApproxTokenCounter.count(&f.text).unwrap() <= max_tokens || chars == 1,
             "fragment {} over budget: {} chars",
             f.id,
             chars
@@ -119,14 +119,46 @@ fn bracket_bold_and_dash_markers() {
 
 #[test]
 fn unknown_prefixes_are_not_markers() {
-    let text = "Note: this is not a role\nuser: real turn\nTODO: still inside the turn";
+    let text =
+        "Note: this is not a role\nuser: real turn\nTODO: still inside the turn\nassistant: reply";
     let fragments = segment(text, 400);
-    assert_eq!(roles(&fragments), vec![None, Some("user")]);
+    assert_eq!(
+        roles(&fragments),
+        vec![None, Some("user"), Some("assistant")]
+    );
     assert_eq!(fragments[0].text, "Note: this is not a role\n");
     assert_eq!(
         fragments[1].text,
-        "user: real turn\nTODO: still inside the turn"
+        "user: real turn\nTODO: still inside the turn\n"
     );
+}
+
+/// A single marker-looking line inside prose is not a transcript: no split,
+/// no invented author. Two markers without a user side are not one either.
+#[test]
+fn lone_or_userless_markers_do_not_split_prose() {
+    let prose = "Quarterly notes.\nAI: adoption grew 40% this year.\nNext steps follow.";
+    let fragments = segment(prose, 400);
+    assert_eq!(roles(&fragments), vec![None]);
+    assert_eq!(fragments[0].text, prose);
+
+    let log = "System: boot ok\nSystem: disk ok\nAssistant: ready";
+    let fragments = segment(log, 400);
+    assert_eq!(roles(&fragments), vec![None]);
+    assert_eq!(fragments[0].text, log);
+
+    let one_turn = "user: just one line";
+    let fragments = segment(one_turn, 400);
+    assert_eq!(roles(&fragments), vec![None]);
+}
+
+/// The smallest real transcript — one user line, one reply — still parses.
+#[test]
+fn two_line_transcript_still_parses() {
+    let fragments = segment("Human: where are my keys?\nAI: in the jacket.", 400);
+    assert_eq!(roles(&fragments), vec![Some("user"), Some("assistant")]);
+    assert_eq!(fragments[0].text, "Human: where are my keys?\n");
+    assert_eq!(fragments[1].text, "AI: in the jacket.");
 }
 
 #[test]
@@ -163,10 +195,12 @@ fn jsonl_requires_every_line_to_qualify() {
 #[test]
 fn long_turn_prefers_paragraph_then_sentence_boundaries() {
     let paragraph = "First sentence here. Second sentence here. Third sentence here.";
-    let text = format!("user: {paragraph}\n\n{paragraph}\n\n{paragraph}");
+    let text = format!("user: {paragraph}\n\n{paragraph}\n\n{paragraph}\nassistant: ok");
     // Budget: ~1 paragraph (63 chars ≈ 21 tokens) + marker.
-    let fragments = segment(&text, 30);
-    assert_well_formed(&source(&text), &fragments, 30);
+    let all = segment(&text, 30);
+    assert_well_formed(&source(&text), &all, 30);
+    assert_eq!(all.last().unwrap().text, "assistant: ok");
+    let fragments = &all[..all.len() - 1];
     assert!(fragments.len() >= 3, "got {}", fragments.len());
     assert!(fragments.iter().all(|f| f.role.as_deref() == Some("user")));
     assert!(fragments.iter().all(|f| f.turn_index == 0));
@@ -176,8 +210,9 @@ fn long_turn_prefers_paragraph_then_sentence_boundaries() {
     }
 
     // A tighter budget forces sentence-level cuts inside each paragraph.
-    let tight = segment(&text, 10);
-    assert_well_formed(&source(&text), &tight, 10);
+    let all = segment(&text, 10);
+    assert_well_formed(&source(&text), &all, 10);
+    let tight = &all[..all.len() - 1];
     assert!(tight.len() > fragments.len());
     for f in &tight[1..] {
         assert!(
@@ -214,8 +249,8 @@ fn multibyte_text_is_never_split_inside_a_char() {
 fn single_char_over_budget_is_emitted_as_is() {
     struct Huge;
     impl TokenCounter for Huge {
-        fn count(&self, text: &str) -> usize {
-            text.chars().count() * 100
+        fn count(&self, text: &str) -> Result<usize, FragmentError> {
+            Ok(text.chars().count() * 100)
         }
     }
     let src = source("ab");
@@ -290,8 +325,8 @@ fn random_inputs_keep_invariants() {
 #[test]
 fn tiktoken_counter_counts_and_splits() {
     let counter = TiktokenCounter::new().expect("cl100k");
-    assert_eq!(counter.count(""), 0);
-    assert!(counter.count("hello world") >= 2);
+    assert_eq!(counter.count("").unwrap(), 0);
+    assert!(counter.count("hello world").unwrap() >= 2);
     let text = format!(
         "user: {}",
         "The quick brown fox jumps over the lazy dog. ".repeat(40)
@@ -300,7 +335,9 @@ fn tiktoken_counter_counts_and_splits() {
     let fragments = segment_source(&src, &cfg(50), &counter).expect("segment");
     verify_invariants(&src, &fragments).expect("invariants");
     assert!(fragments.len() > 1);
-    assert!(fragments.iter().all(|f| counter.count(&f.text) <= 50));
+    assert!(fragments
+        .iter()
+        .all(|f| counter.count(&f.text).unwrap() <= 50));
 }
 
 #[test]
@@ -449,7 +486,11 @@ fn config_role_and_counter_keys_default_and_reject_unknown_values() {
         toml::from_str(&toml::to_string(&set).expect("serialize")).expect("round trip");
     assert_eq!(round_trip, set);
     assert_eq!(
-        TokenCounterKind::Approx.counter().unwrap().count("abcdef"),
+        TokenCounterKind::Approx
+            .counter()
+            .unwrap()
+            .count("abcdef")
+            .unwrap(),
         2
     );
     assert!(
@@ -457,6 +498,63 @@ fn config_role_and_counter_keys_default_and_reject_unknown_values() {
             .counter()
             .unwrap()
             .count("hello world")
+            .unwrap()
             >= 2
     );
+    let embedder: FragmentsConfig =
+        toml::from_str("token_counter = \"embedder\"").expect("embedder kind");
+    assert_eq!(embedder.token_counter, TokenCounterKind::Embedder);
+    let err = TokenCounterKind::Embedder
+        .counter()
+        .err()
+        .expect("embedder counter is caller-supplied, never built here");
+    assert!(matches!(err, FragmentError::Tokenizer(_)));
+}
+
+#[test]
+fn a_failing_counter_fails_segmentation_instead_of_guessing() {
+    struct Broken;
+    impl TokenCounter for Broken {
+        fn count(&self, _text: &str) -> Result<usize, FragmentError> {
+            Err(FragmentError::Tokenizer("synthetic".into()))
+        }
+    }
+    let err = segment_source(&source("user: hi"), &cfg(400), &Broken).expect_err("fails");
+    assert!(matches!(err, FragmentError::Tokenizer(_)));
+}
+
+#[test]
+fn validate_rejects_zero_budget_and_local_window_overflow() {
+    let dflt = FragmentsConfig::default();
+    dflt.validate(true).expect("defaults fit the local window");
+    dflt.validate(false)
+        .expect("defaults are valid for any provider");
+    let zero = FragmentsConfig {
+        max_fragment_tokens: 0,
+        ..FragmentsConfig::default()
+    };
+    assert!(zero
+        .validate(false)
+        .unwrap_err()
+        .to_string()
+        .contains("max_fragment_tokens"));
+    let wide = FragmentsConfig {
+        max_fragment_tokens: 500,
+        prefix_reserve_tokens: 16,
+        ..FragmentsConfig::default()
+    };
+    assert_eq!(wide.window_tokens(), 516);
+    assert!(wide
+        .validate(true)
+        .unwrap_err()
+        .to_string()
+        .contains("512-token window"));
+    wide.validate(false)
+        .expect("a remote provider's window is not checked");
+    let exact = FragmentsConfig {
+        max_fragment_tokens: LOCAL_EMBEDDER_WINDOW_TOKENS - 16,
+        prefix_reserve_tokens: 16,
+        ..FragmentsConfig::default()
+    };
+    exact.validate(true).expect("exactly the window is allowed");
 }

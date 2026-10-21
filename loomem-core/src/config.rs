@@ -507,6 +507,9 @@ impl Config {
             "llm.timeout_secs must be positive"
         );
 
+        self.fragments
+            .validate(self.llm.embedding_provider == "local")?;
+
         // Server validation
         anyhow::ensure!(
             !self.server.host.is_empty(),

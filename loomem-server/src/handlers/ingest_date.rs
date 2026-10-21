@@ -1,11 +1,13 @@
 //! Date provenance for the versioned MCP ingestion contract only.
 use chrono::{DateTime, NaiveDate};
-use loomem_core::storage::{is_ingest_fact_shape, is_ingest_source, Chunk};
+use loomem_core::storage::{is_ingest_fact_shape, is_ingest_fragment, is_ingest_source, Chunk};
 
 /// Date prefix contents (without brackets), or `None` for unchanged legacy rendering.
-/// Only recognized server-owned source/fact provenance enables these labels.
+/// Only recognized server-owned source/fact/fragment provenance enables these
+/// labels; a fragment renders like its source (`observed:` or `recorded:`,
+/// never a bare date, never an event date of its own).
 pub(crate) fn new_ingest_date_prefix(chunk: &Chunk) -> Option<String> {
-    if !is_ingest_source(chunk) && !is_ingest_fact_shape(chunk) {
+    if !is_ingest_source(chunk) && !is_ingest_fact_shape(chunk) && !is_ingest_fragment(chunk) {
         return None;
     }
     let marker = chunk.metadata.as_ref()?.get("_loomem_ingest")?;

@@ -1,12 +1,16 @@
 //! Event time is nullable for versioned ingest; legacy index callers retain
 //! recorded-time fallback. Uses existing fields, with no schema migration.
 use super::{TantivyIndex, TextDocument};
-use crate::storage::{is_ingest_fact_shape, is_ingest_source, Chunk, RocksDbStore};
+use crate::storage::{
+    is_ingest_fact_shape, is_ingest_fragment, is_ingest_source, Chunk, RocksDbStore,
+};
 use anyhow::{ensure, Context, Result};
 use tantivy::{doc, Term};
 
+/// Source, fact and fragment: a fragment carries no `extraction_meta`, so
+/// its event time is always unknown — never the storage timestamp.
 fn owned(chunk: &Chunk) -> bool {
-    is_ingest_source(chunk) || is_ingest_fact_shape(chunk)
+    is_ingest_source(chunk) || is_ingest_fact_shape(chunk) || is_ingest_fragment(chunk)
 }
 
 /// Authoritative event time for recognized versioned ingest only. Missing or

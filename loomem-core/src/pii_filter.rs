@@ -295,6 +295,25 @@ impl PiiFilter {
         self.sanitize(&crate::sanitizer::sanitize(raw).content).0
     }
 
+    /// [`Self::redact_for_sink`] applied until the text stops changing, at
+    /// most `max_passes` times. The HTML pass is not idempotent on its own:
+    /// it decodes entities *after* stripping tags, so `&lt;b&gt;` becomes
+    /// `<b>` on one pass and is stripped as a tag on the next. A caller that
+    /// derives byte ranges from the text it hands to storage needs the text
+    /// to be stable under the re-application `persist_chunk` performs.
+    /// Returns `None` when the text is still drifting after `max_passes`.
+    pub fn redact_for_sink_fixpoint(&self, raw: &str, max_passes: usize) -> Option<String> {
+        let mut current = raw.to_string();
+        for _ in 0..max_passes {
+            let next = self.redact_for_sink(&current);
+            if next == current {
+                return Some(current);
+            }
+            current = next;
+        }
+        None
+    }
+
     /// Recursively redact every string position of a JSON value via
     /// [`Self::redact_for_sink`] — both object **keys** and string values, at
     /// every depth — preserving array order and non-string scalars (numbers,
@@ -429,6 +448,37 @@ mod tests {
         // Idempotent: re-running over already-redacted text is a no-op, so
         // `persist_chunk` re-applying the same pipeline cannot corrupt content.
         assert_eq!(filter.redact_for_sink(&redacted), redacted);
+    }
+
+    #[test]
+    fn test_redact_for_sink_fixpoint_converges_on_encoded_html() {
+        let config = PiiConfig {
+            enabled: true,
+            blocklist_file: "nonexistent.txt".to_string(),
+            ..Default::default()
+        };
+        let filter = PiiFilter::new(config).expect("Failed to create filter");
+
+        // One pass decodes `&lt;b&gt;` into a real tag; a second strips it.
+        let raw = "user: say &lt;b&gt;hi&lt;/b&gt;\nassistant: ok";
+        assert_ne!(filter.redact_for_sink(raw), "user: say hi\nassistant: ok");
+        let stable = filter.redact_for_sink_fixpoint(raw, 4).expect("converges");
+        assert_eq!(stable, "user: say hi\nassistant: ok");
+        assert_eq!(filter.redact_for_sink(&stable), stable);
+
+        // Double-encoded input needs one more pass and still converges.
+        let double = "user: say &amp;lt;b&amp;gt;hi&amp;lt;/b&amp;gt;\nassistant: ok";
+        let stable = filter
+            .redact_for_sink_fixpoint(double, 4)
+            .expect("converges");
+        assert_eq!(stable, "user: say hi\nassistant: ok");
+
+        // A pass budget too small to converge is reported, never a drifting result.
+        assert_eq!(filter.redact_for_sink_fixpoint(double, 1), None);
+        assert_eq!(
+            filter.redact_for_sink_fixpoint("plain text", 1).as_deref(),
+            Some("plain text")
+        );
     }
 
     #[test]

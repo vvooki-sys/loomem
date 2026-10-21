@@ -380,6 +380,7 @@ fn fragment(parent: &Chunk, index: u32) -> Chunk {
         text: parent.content.clone(),
     };
     let mut template = chunk("template");
+    template.consolidated = true;
     template.source = Some(SourceTag::from_agent("mcp-ingest"));
     template.trust_level = Some("a2".into());
     template.metadata = Some(serde_json::json!({"_loomem_ingest":{"version":1,"kind":"fragment"}}));
@@ -408,6 +409,12 @@ fn fragment_shape_requires_marker_link_and_no_extraction_meta() {
     forged = f.clone();
     forged.level = 1;
     assert!(!is_ingest_fragment(&forged));
+    forged = f.clone();
+    forged.consolidated = false;
+    assert!(!is_ingest_fragment(&forged));
+    forged = f.clone();
+    forged.dormant = true;
+    assert!(!is_ingest_fragment(&forged));
     let mut legacy = chunk("legacy-fragment-marker");
     legacy.metadata = f.metadata.clone();
     assert!(!is_ingest_fragment(&legacy));
@@ -430,6 +437,19 @@ fn fragment_admission_requires_live_same_stream_source() {
     let mut moved = f.clone();
     moved.fragment.as_mut().unwrap().byte_end = 1;
     assert!(store.store_chunk(&moved).is_err());
+    let mut unconsolidated = fragment(&root, 2);
+    unconsolidated.consolidated = false;
+    assert!(store.store_chunk(&unconsolidated).is_err());
+    store.store_chunk(&chunk("plain-l0")).unwrap();
+    let pending: Vec<String> = store
+        .scan_l0_unconsolidated(0, 100)
+        .unwrap()
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
+    assert!(pending.contains(&"plain-l0".to_string()));
+    assert!(!pending.contains(&f.id));
+    assert!(!pending.contains(&root.id));
     store.tombstone_ingest_source(&root.id, 42).unwrap();
     assert!(store.store_chunk(&fragment(&root, 1)).is_err());
 }

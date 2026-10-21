@@ -1,7 +1,9 @@
 //! Opt-in source fragments on the MCP ingest path, over real storage.
 use super::fixtures::*;
 
-use loomem_core::fragments::fragment_id;
+use loomem_core::fragments::{
+    fragment_id, verify_invariants, CanonicalSource, SourceFragment, TokenCounterKind,
+};
 use loomem_core::storage::{is_ingest_fragment, Chunk, ProvenanceRole};
 use std::sync::Arc;
 
@@ -179,6 +181,291 @@ async fn fragments_are_slices_of_the_sanitized_persisted_source() {
         assert!(!serialized.contains(address));
         assert!(!serialized.contains("<b>") && !serialized.contains("<i>"));
     }
+}
+
+/// Rebuild the fragment set of `source` from what the store holds, so the
+/// domain invariants can be re-checked over the persisted bytes.
+fn persisted_fragments(state: &AppState, source: &Chunk) -> (CanonicalSource, Vec<SourceFragment>) {
+    let mut fragments: Vec<SourceFragment> = chunks(state, STREAM)
+        .into_iter()
+        .filter(|chunk| kind(chunk) == "fragment")
+        .map(|chunk| persisted(state, &chunk.id))
+        .map(|chunk| {
+            let meta = chunk.fragment.clone().unwrap();
+            let index: u32 = chunk.id.rsplit(":f").next().unwrap().parse().unwrap();
+            SourceFragment {
+                id: chunk.id.clone(),
+                source_id: meta.source_id,
+                index,
+                byte_start: meta.byte_start,
+                byte_end: meta.byte_end,
+                turn_index: meta.turn_index,
+                role: meta.role,
+                conversation_date: meta.conversation_date,
+                text: chunk.content,
+            }
+        })
+        .collect();
+    fragments.sort_by_key(|fragment| fragment.byte_start);
+    let canonical = CanonicalSource {
+        id: source.id.clone(),
+        text: persisted(state, &source.id).content,
+        conversation_date: Some("2024-03-20".into()),
+    };
+    (canonical, fragments)
+}
+
+/// BLOCKER-1 repro: HTML entities decode on one sanitiser pass and are
+/// stripped as tags on the next, so the persisted source is shorter than a
+/// single pass of the input. Ranges must index into the persisted bytes.
+#[tokio::test]
+async fn fragments_index_into_the_persisted_source_after_entity_decoding() {
+    for (name, transcript) in [
+        ("single", "user: say &lt;b&gt;hi&lt;/b&gt;\nassistant: ok"),
+        (
+            "double",
+            "user: say &amp;lt;b&amp;gt;hi&amp;lt;/b&amp;gt;\nassistant: ok",
+        ),
+    ] {
+        let (_, state) = enabled(ProvenanceRole::Claim);
+        let chat = Chat::facts(vec![fact(None)]);
+        let result = tool_ingest_with(&chat, &state, args(transcript), STREAM, None)
+            .await
+            .unwrap();
+        assert_ne!(result.is_error, Some(true), "{name}");
+        let records = chunks(&state, STREAM);
+        let source = persisted(&state, &by_kind(&records, "source")[0].id);
+        assert_eq!(source.content, "user: say hi\nassistant: ok", "{name}");
+        let (canonical, fragments) = persisted_fragments(&state, &source);
+        assert_eq!(fragments.len(), 2, "{name}");
+        for fragment in &fragments {
+            assert_eq!(
+                fragment.text,
+                &canonical.text[fragment.byte_start..fragment.byte_end],
+                "{name}: {}",
+                fragment.id
+            );
+        }
+        verify_invariants(&canonical, &fragments).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(
+            result.content[0].text.ends_with(" Stored 2 fragments."),
+            "{name}"
+        );
+    }
+}
+
+/// Input that is still drifting after the pass budget is refused up front,
+/// with nothing stored.
+#[tokio::test]
+async fn deeply_encoded_content_is_refused_before_any_write() {
+    let (_, state) = enabled(ProvenanceRole::Claim);
+    let chat = Chat::facts(vec![fact(None)]);
+    let quad = "user: &amp;amp;amp;lt;b&amp;amp;amp;gt;x\nassistant: ok";
+    let error = tool_ingest_with(&chat, &state, args(quad), STREAM, None)
+        .await
+        .expect_err("refused");
+    assert!(
+        error.message.contains("did not stabilise"),
+        "{}",
+        error.message
+    );
+    assert!(chunks(&state, STREAM).is_empty());
+    assert_eq!(chat.calls(), 0);
+}
+
+/// A turn the sink would only trim (an `assistant:` line holding a lone `<`
+/// ends with the newline that belongs to it) is stored with its range
+/// narrowed to the surviving bytes, still an exact slice of the source.
+#[tokio::test]
+async fn trimmed_fragment_ranges_follow_the_stored_bytes() {
+    let (_, state) = enabled(ProvenanceRole::Claim);
+    let chat = Chat::facts(vec![fact(None)]);
+    let transcript = "user: is 1 < 2?\nassistant: yes, 1 < 2\nuser: thanks";
+    let result = tool_ingest_with(&chat, &state, args(transcript), STREAM, None)
+        .await
+        .unwrap();
+    assert_ne!(result.is_error, Some(true));
+    let records = chunks(&state, STREAM);
+    let source = persisted(&state, &by_kind(&records, "source")[0].id);
+    assert_eq!(source.content, transcript);
+    let (canonical, fragments) = persisted_fragments(&state, &source);
+    assert_eq!(fragments.len(), 3);
+    for fragment in &fragments {
+        assert_eq!(
+            fragment.text,
+            &canonical.text[fragment.byte_start..fragment.byte_end],
+            "{}",
+            fragment.id
+        );
+    }
+    assert_eq!(fragments[1].text, "assistant: yes, 1 < 2");
+    assert_eq!(fragments[1].byte_end, fragments[2].byte_start - 1);
+    assert!(result.content[0].text.ends_with(" Stored 3 fragments."));
+}
+
+#[test]
+fn align_to_sink_narrows_trimmed_slices_and_rejects_rewritten_ones() {
+    let (_, state) = enabled(ProvenanceRole::Claim);
+    let fragment = SourceFragment {
+        id: "src:f1".into(),
+        source_id: "src".into(),
+        index: 1,
+        byte_start: 10,
+        byte_end: 32,
+        turn_index: 1,
+        role: Some("assistant".into()),
+        conversation_date: None,
+        text: "assistant: yes, 1 < 2\n".into(),
+    };
+    let aligned = fragments::align_to_sink(&state.pii_filter, &fragment).unwrap();
+    assert_eq!(aligned.text, "assistant: yes, 1 < 2");
+    assert_eq!((aligned.byte_start, aligned.byte_end), (10, 31));
+    let plain = SourceFragment {
+        text: "user: plain\n".into(),
+        ..fragment.clone()
+    };
+    assert_eq!(
+        fragments::align_to_sink(&state.pii_filter, &plain).unwrap(),
+        plain
+    );
+    let rewritten = SourceFragment {
+        text: "assistant: mail synthetic-person@example.invalid\n".into(),
+        ..fragment.clone()
+    };
+    assert!(fragments::align_to_sink(&state.pii_filter, &rewritten).is_none());
+}
+
+/// BLOCKER-2: fragments are consolidated from birth, so they never enter the
+/// L0 consolidation scan, the pending-L0 counter or "recent" context; their
+/// search line carries the conversation date like the source's does.
+#[tokio::test]
+async fn fragments_stay_out_of_consolidation_recent_context_and_carry_observed_date() {
+    let (_, state) = enabled(ProvenanceRole::Claim);
+    let chat = Chat::facts(vec![fact(None)]);
+    tool_ingest_with(&chat, &state, args(TRANSCRIPT), STREAM, None)
+        .await
+        .unwrap();
+    let records = chunks(&state, STREAM);
+    let fragments = by_kind(&records, "fragment");
+    assert_eq!(fragments.len(), 3);
+    assert!(fragments.iter().all(|chunk| chunk.consolidated));
+    let pending = state.store.scan_l0_unconsolidated(0, 100).unwrap();
+    assert!(pending
+        .iter()
+        .all(|chunk| chunk.stream != STREAM || chunk.fragment.is_none()));
+
+    let context = crate::mcp::dispatcher::tool_context(
+        &state,
+        serde_json::json!({"query":"accommodation", "budget_tokens":8000, "sections":["recent"]}),
+        STREAM,
+    )
+    .await
+    .unwrap();
+    let text = &context.content[0].text;
+    let (_, recent) = text.split_once("## Recent Context\n\n").unwrap();
+    let lines: Vec<&str> = recent
+        .lines()
+        .filter(|line| line.starts_with("- ["))
+        .collect();
+    assert_eq!(lines.len(), 2, "source + fact only: {recent}");
+    assert!(lines
+        .iter()
+        .any(|line| line.starts_with("- [observed:2024-03-20] user: I prefer")));
+
+    let search = crate::mcp::dispatcher::tool_search(
+        &state,
+        serde_json::json!({"query":"lively hotel", "top_k":20}),
+        STREAM,
+    )
+    .await
+    .unwrap();
+    assert_ne!(search.is_error, Some(true));
+    let fragment = fragments
+        .iter()
+        .find(|chunk| chunk.content.contains("lively hotel"))
+        .unwrap();
+    // The fragment's text ends with its newline, so its entry spans two
+    // physical lines: locate the entry by its id and read back to "N. [".
+    let text = &search.content[0].text;
+    let id_at = text
+        .find(&format!("(id: {})", fragment.id))
+        .unwrap_or_else(|| panic!("fragment entry missing: {text}"));
+    let entry_at = text[..id_at].rfind(". [").unwrap() + 2;
+    let entry = &text[entry_at..id_at];
+    assert!(entry.starts_with("[observed:2024-03-20]"), "{entry}");
+    assert!(!entry.contains("[2026-"), "{entry}");
+}
+
+/// A sink whose stored source does not match the segmented text (synthetic
+/// drift) yields no fragments at all — never ranges into the wrong bytes.
+struct DriftingReadBack;
+
+impl IngestPersistence for DriftingReadBack {
+    async fn persist(
+        &self,
+        state: &Arc<crate::AppState>,
+        chunk: Chunk,
+    ) -> Result<String, crate::handlers::AppError> {
+        RealPersistence.persist(state, chunk).await
+    }
+
+    async fn persisted(
+        &self,
+        state: &Arc<crate::AppState>,
+        id: &str,
+    ) -> Result<Option<Chunk>, crate::handlers::AppError> {
+        let mut stored = RealPersistence.persisted(state, id).await?;
+        if let Some(chunk) = stored.as_mut() {
+            chunk.content.push_str(" (drifted)");
+        }
+        Ok(stored)
+    }
+}
+
+#[tokio::test]
+async fn a_source_that_reads_back_differently_gets_no_fragments() {
+    let (_, state) = enabled(ProvenanceRole::Claim);
+    let chat = Chat::facts(vec![fact(None)]);
+    let result = tool_ingest_with_sink(
+        &chat,
+        &DriftingReadBack,
+        &state,
+        args(TRANSCRIPT),
+        STREAM,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_ne!(result.is_error, Some(true));
+    let records = chunks(&state, STREAM);
+    assert!(by_kind(&records, "fragment").is_empty());
+    assert_eq!(by_kind(&records, "fact").len(), 1);
+    assert!(result.content[0]
+        .text
+        .ends_with(" Stored 0 fragments (segmentation skipped: persisted source differs)."));
+}
+
+/// `"embedder"` never falls back to an approximation: without a loaded local
+/// model the tool says so and stores no fragment.
+#[tokio::test]
+async fn embedder_counter_without_a_loaded_model_fails_segmentation_loudly() {
+    let (_, original) = fixture(20000);
+    let mut config = original.config.clone();
+    config.fragments.enabled = true;
+    config.fragments.token_counter = TokenCounterKind::Embedder;
+    let (_, state) = crate::tests::make_test_app_cfg(config);
+    assert!(state.local_embedder.is_none());
+    let chat = Chat::facts(vec![fact(None)]);
+    let result = tool_ingest_with(&chat, &state, args(TRANSCRIPT), STREAM, None)
+        .await
+        .unwrap();
+    assert_ne!(result.is_error, Some(true));
+    let records = chunks(&state, STREAM);
+    assert!(by_kind(&records, "fragment").is_empty());
+    assert_eq!(by_kind(&records, "fact").len(), 1);
+    assert!(result.content[0].text.ends_with(
+        " Stored 0 fragments (segmentation failed: embedder tokenizer unavailable (no local embedding model loaded))."
+    ), "{}", result.content[0].text);
 }
 
 struct FailWrite {
