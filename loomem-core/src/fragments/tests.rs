@@ -470,7 +470,8 @@ fn config_role_and_counter_keys_default_and_reject_unknown_values() {
     let bare: FragmentsConfig = toml::from_str("enabled = true").expect("bare section");
     assert!(bare.enabled);
     assert_eq!(bare.provenance_role, ProvenanceRole::Claim);
-    assert_eq!(bare.token_counter, TokenCounterKind::Approx);
+    assert_eq!(bare.token_counter, TokenCounterKind::Embedder);
+    assert_eq!(TokenCounterKind::default(), TokenCounterKind::Embedder);
     let set: FragmentsConfig =
         toml::from_str("provenance_role = \"evidence\"\ntoken_counter = \"tiktoken\"")
             .expect("explicit values");
@@ -582,4 +583,24 @@ fn validate_rejects_embedder_counter_without_the_local_provider() {
     disabled
         .validate(false)
         .expect("a disabled section does not need the tokenizer");
+}
+
+/// The default counter is the embedder's, so enabling fragments on a
+/// non-local provider needs an explicit model-free counter.
+#[test]
+fn enabling_fragments_with_the_default_counter_needs_the_local_provider() {
+    let enabled = FragmentsConfig {
+        enabled: true,
+        ..FragmentsConfig::default()
+    };
+    assert_eq!(enabled.token_counter, TokenCounterKind::Embedder);
+    enabled.validate(true).expect("local provider");
+    assert!(enabled.validate(false).is_err());
+    let approx = FragmentsConfig {
+        token_counter: TokenCounterKind::Approx,
+        ..enabled
+    };
+    approx
+        .validate(false)
+        .expect("an explicit model-free counter works with any provider");
 }

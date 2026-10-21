@@ -11,7 +11,7 @@
 //! prove is the storage, evidence and lifecycle contract of the fragments.
 use super::fixtures::*;
 
-use loomem_core::fragments::{fragment_id, FragmentMeta};
+use loomem_core::fragments::{fragment_id, FragmentMeta, TokenCounterKind};
 use loomem_core::memory_extractor::ChatHttpReply;
 use loomem_core::storage::{Chunk, ProvenanceRole};
 use serde_json::{json, Value};
@@ -89,7 +89,9 @@ fn long_conversation() -> String {
 /// Test app with fragments on and time decay off (scores then depend only
 /// on BM25 and the per-chunk multipliers, so they are reproducible).
 /// `extraction` selects the extraction-enabled fixture base (injected chat,
-/// no API key) or the default app (extraction disabled).
+/// no API key) or the default app (extraction disabled). The test app loads
+/// no local embedding model, so the default `"embedder"` counter is replaced
+/// by the model-free one.
 fn stage1_app(
     extraction: bool,
     configure: impl FnOnce(&mut loomem_core::Config),
@@ -101,6 +103,7 @@ fn stage1_app(
     };
     let mut config = base.config.clone();
     config.fragments.enabled = true;
+    config.fragments.token_counter = TokenCounterKind::Approx;
     config.search.decay.l0_lambda = 0.0;
     config.search.decay.l1_lambda = 0.0;
     configure(&mut config);

@@ -45,12 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   knob for fragment chunks; it affects ranking only on fused (vector)
   retrieval — BM25-only queries, i.e. under 5 words without a routing keyword
   or `vector_enabled = false`, apply no provenance multiplier) and
-  `token_counter` (`"approx"` default |
-  `"tiktoken"` | `"embedder"`, the loaded local embedding model's own
-  tokenizer — the recommended counter, since it is the only one whose budget
-  is the embedder's; with fragments enabled it requires
-  `embedding_provider = "local"` at config load, and it fails segmentation
-  loudly instead of falling back if no local model is loaded); unknown
+  `token_counter` (`"embedder"` default — the loaded local embedding
+  model's own tokenizer, the only counter whose budget is the embedder's;
+  with fragments enabled it requires `embedding_provider = "local"` at
+  config load, and it fails segmentation loudly instead of falling back if
+  no local model is loaded | `"approx"` | `"tiktoken"`, the model-free
+  counters for non-local embedding providers and offline tests); unknown
   values fail config load. In search, the content-prefix dedup never
   collapses a fragment against its own source (the source begins with turn
   0, so the two share a prefix) nor fragments of different sources against
@@ -88,6 +88,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- HTML tag stripping in the ingress sanitizer no longer matches across lines.
+  Previously a lone `<` early in a multi-turn transcript and a `>` many turns
+  later were treated as one tag and everything between them was deleted from
+  the stored content. This applies on the default path to every ingress —
+  `memory_ingest`, `/v1/store` and every other write or LLM-input path that
+  goes through the sanitizer. Single-line tags (`<b>bold</b>`) are stripped as before; a tag
+  broken across lines (`<div\nclass="x">`) is now left in place, an accepted
+  trade-off since stored content is read by LLMs, not browsers. Entity
+  decoding, whitespace collapsing and the `html_stripped` flag are unchanged.
 - Knowledge extraction rejects explicitly truncated or refused model completions
   before admitting facts, while retaining the stored conversation source and
   reporting partial extraction failures. Completion metadata omitted by legacy

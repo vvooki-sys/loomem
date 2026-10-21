@@ -102,7 +102,11 @@ fn strip_html(text: &str) -> (String, bool) {
         return (text.to_string(), false);
     }
 
-    let tag_re = Regex::new(r"<[^>]+>").unwrap();
+    // A tag never spans a line: otherwise a lone `<` early in a transcript and
+    // a `>` many turns later would delete everything in between. A tag broken
+    // across lines (`<div\nclass="x">`) is left in place — an accepted
+    // trade-off, since stored content is read by LLMs, not browsers.
+    let tag_re = Regex::new(r"<[^>\n]+>").unwrap();
     let stripped = tag_re.replace_all(text, "").to_string();
     let had_tags = stripped.len() != text.len();
 
@@ -289,6 +293,45 @@ mod tests {
         assert_eq!(result.content, "Tom & Jerry <3");
     }
 
+    /// A lone `<` on one turn and a `>` on a later turn are not a tag: no
+    /// line of the transcript is lost. Only the entity and whitespace rules
+    /// apply (none here), so the content is unchanged and nothing is flagged
+    /// as stripped.
+    #[test]
+    fn tag_stripping_never_spans_lines_in_a_transcript() {
+        let transcript = "user: a < b\nassistant: x > y\nuser: keep me";
+        let result = sanitize(transcript);
+        assert_eq!(result.content, transcript);
+        assert!(!result.html_stripped);
+        let ex = sanitize_with_sources(transcript);
+        assert_eq!(ex.content, transcript);
+        assert!(!ex.html_stripped);
+    }
+
+    /// A tag that opens and closes on one line is still stripped.
+    #[test]
+    fn single_line_tag_is_still_stripped() {
+        let result = sanitize("<b>bold</b>");
+        assert_eq!(result.content, "bold");
+        assert!(result.html_stripped);
+        let result = sanitize("line one\n<i>two</i>\nline three");
+        assert_eq!(result.content, "line one\ntwo\nline three");
+        assert!(result.html_stripped);
+    }
+
+    /// Accepted trade-off: a tag broken across lines (`<div\nclass="x">`) is
+    /// no longer recognised and stays in the content. Stored content goes to
+    /// LLMs, not browsers, so an unstripped attribute line is harmless, while
+    /// a tag match spanning turns deleted real memory.
+    #[test]
+    fn multi_line_tag_is_not_stripped_accepted_trade_off() {
+        let input = "<div\nclass=\"x\">text</div>";
+        let result = sanitize(input);
+        // Only the single-line `</div>` is a tag; `<div\nclass="x">` stays.
+        assert_eq!(result.content, "<div\nclass=\"x\">text");
+        assert!(result.html_stripped);
+    }
+
     #[test]
     fn wrap_untrusted_adds_boundary_markers() {
         let wrapped = wrap_untrusted("L0:abc", "the user likes dark mode");
@@ -473,7 +516,7 @@ mod regression_18_patterns {
     //!   (2) tags it with the expected `DetectionSource` — `Both` for plain-text
     //!       patterns (strip_html is a noop when input has no `<`/entity), `Raw`
     //!       for patterns containing `<` (stripped pass loses them to the
-    //!       `<[^>]+>` regex).
+    //!       `<[^>\n]+>` regex).
     //!
     //! **Scope:** this suite does NOT extend `detect_injection` — it asserts
     //! the current surface survives the raw+stripped split. Adding new patterns

@@ -443,7 +443,7 @@ enabled = false
 max_fragment_tokens = 400
 prefix_reserve_tokens = 16
 provenance_role = "claim"
-token_counter = "approx"
+token_counter = "embedder"
 ```
 
 | Key | Type | Default | Description |
@@ -452,11 +452,11 @@ token_counter = "approx"
 | `max_fragment_tokens` | int | 400 | Token budget for a fragment's text, as measured by `token_counter`. Must be positive |
 | `prefix_reserve_tokens` | int | 16 | Headroom above the text budget. The local embedder adds exactly two special tokens to the content (no `passage:` prefix is prepended); the rest absorbs the gap between the chosen counter and the embedder's own tokenizer |
 | `provenance_role` | string | `"claim"` | Role stamped on every fragment chunk: `"claim"` (full weight), `"evidence"` (×0.5) or `"cue"` (×0.8). Any other value fails config load |
-| `token_counter` | string | `"approx"` | `"approx"` (`ceil(chars / 3)`, model-free), `"tiktoken"` (`cl100k_base` BPE) or `"embedder"` (the loaded local embedding model's own tokenizer — recommended with `embedding_provider = "local"`, the only counter whose budget is the embedder's). Any other value fails config load |
+| `token_counter` | string | `"embedder"` | `"embedder"` (default and recommended: the loaded local embedding model's own tokenizer, the only counter whose budget is the embedder's), `"approx"` (`ceil(chars / 3)`, model-free) or `"tiktoken"` (`cl100k_base` BPE) — the two model-free counters are for non-local embedding providers and offline tests. Any other value fails config load |
 
 When enabled, `memory_ingest` stores, right after the whole-conversation source and before extraction, one chunk per conversation turn (long turns are split further at paragraph, sentence and whitespace boundaries). Each fragment carries the author role, the conversation date and an exact byte range into the stored source. Fragments are `consolidated` from birth (never consolidation or dream input), are excluded from the `recent` section of `memory_context`, carry no event date of their own (their `memory_search` line shows the source's `observed:`/`recorded:` date), and are deleted together with their source. The tool result gains a trailing ` Stored N fragments.` sentence (see [MCP Tools](mcp-tools.md#memory_ingest)). Fragment writes are additive and never block fact extraction.
 
-Validation at startup: `max_fragment_tokens` must be positive, and with `embedding_provider = "local"` the sum `max_fragment_tokens + prefix_reserve_tokens` must not exceed the local embedder's 512-token window. With `token_counter = "embedder"` and no local model loaded, segmentation fails and the `memory_ingest` text says so (there is no silent fallback to an approximation).
+Validation at startup: `max_fragment_tokens` must be positive, and with `embedding_provider = "local"` the sum `max_fragment_tokens + prefix_reserve_tokens` must not exceed the local embedder's 512-token window. `enabled = true` with `token_counter = "embedder"` (the default) requires `embedding_provider = "local"` — with another provider, set `token_counter = "approx"` or `"tiktoken"` explicitly or config load fails. With `token_counter = "embedder"` and no local model loaded, segmentation fails and the `memory_ingest` text says so (there is no silent fallback to an approximation).
 
 `provenance_role` affects ranking only on fused retrieval (vector-enabled, non-simple queries). The BM25-only path applies no provenance multiplier, so on short queries `claim` and `evidence` fragments score identically.
 
