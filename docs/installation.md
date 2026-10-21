@@ -1,6 +1,6 @@
 # Installation Guide
 
-Loomem ships as three static binaries — `loomem-server`, `loomem-cli`, `loomem-migrate` — with no runtime dependencies (RocksDB and Tantivy are compiled in). This guide covers every supported install path, verification, upgrades, and troubleshooting.
+Loomem ships as three self-contained binaries — `loomem-server`, `loomem-cli`, `loomem-migrate` — with RocksDB and Tantivy compiled in; they need only the system C and C++ runtime libraries. The local embedding model is a separate download. This guide covers every supported install path, verification, upgrades, and troubleshooting.
 
 ## Supported platforms
 
@@ -54,6 +54,8 @@ curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.gith
 6. Copies config templates (`config.toml`, `entities.toml.example`, `synonyms.toml.example`) to `~/.loomem` and seeds `entities.toml` from the example (the server requires it at startup) — **never overwrites existing files**, so re-running is safe.
 7. Prints PATH instructions if `~/.loomem/bin` isn't on your PATH yet.
 
+The installer does **not** download the local embedding model. Fetch it once before the [first run](#first-run).
+
 ### Installer environment variables
 
 | Variable | Default | Purpose |
@@ -83,9 +85,13 @@ exec $SHELL
 ## First run
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/scripts/fetch-embedding-model.sh | sh   # local embedding model, required
+export OPENAI_API_KEY="sk-..."     # or: export LOOMEM_ALLOW_KEYLESS=1
 cd ~/.loomem
 loomem-server
 ```
+
+The server refuses to start without the local embedding model (~113 MB, fetched once into `~/.loomem/models`). With the default config it also needs an LLM key, or `LOOMEM_ALLOW_KEYLESS=1` for keyless mode — see [From source](#from-source) for what keyless mode turns off.
 
 The server **requires** `config.toml` and `entities.toml` in its working directory — the installer seeds both, so running from `~/.loomem` just works. Edit `entities.toml` to teach Loomem your people/projects/aliases (see the comments inside).
 
@@ -144,7 +150,7 @@ cargo build --release -p loomem-server -p loomem-cli -p loomem-migrate
 
 Requires Rust (stable), Node.js (for the dashboard) and libclang for the RocksDB build: `apt install libclang-dev` on Debian/Ubuntu; on macOS it ships with the Xcode Command Line Tools. On Windows, see [INSTALL_WINDOWS.md](https://github.com/vvooki-sys/loomem/blob/main/INSTALL_WINDOWS.md).
 
-Skipping the dashboard build leaves the dashboard returning 404. Skip the model fetch with care: when `OPENAI_API_KEY` is set, the server sends your stored text to the OpenAI embeddings API instead (this costs money, and its 1536-dim vectors do not match the default `embedding_dim = 384`); with no key, vector search is off. The default config enables LLM-backed extraction and dreaming, so before starting the server set your LLM key (`export OPENAI_API_KEY=...`) or set `LOOMEM_ALLOW_KEYLESS=1` — otherwise it refuses to start. `LOOMEM_ALLOW_KEYLESS=1` only skips the startup check: `memory_ingest` then returns a missing-key error and stores nothing, and dreaming fails. Write memories with `memory_store`, which works without a key.
+Skipping the dashboard build leaves the dashboard returning 404. The local embedding model is **required**: with the default `embedding_provider = "local"`, the server refuses to start without it (`refusing cloud fallback`), with or without an API key. The default config also enables LLM-backed extraction and dreaming, so the server **refuses to start** unless an LLM key is set (`export OPENAI_API_KEY=...`) or `LOOMEM_ALLOW_KEYLESS=1` is set. In keyless mode, `memory_ingest` returns a missing-key error and stores nothing, entity extraction is off, and dreaming fails; `memory_store` and search keep working.
 
 ## Docker
 
@@ -152,11 +158,15 @@ Skipping the dashboard build leaves the dashboard returning 404. Skip the model 
 docker build -t loomem .
 export LOOMEM_AUTH_TOKEN=$(openssl rand -hex 32)
 export LOOMEM_AT_REST_MASTER_KEY=$(openssl rand -base64 32)
+export OPENAI_API_KEY="sk-..."
 docker run -p 3030:3030 -v loomem-data:/data \
-  -e LOOMEM_AUTH_TOKEN -e LOOMEM_AT_REST_MASTER_KEY loomem
+  -e LOOMEM_AUTH_TOKEN -e LOOMEM_AT_REST_MASTER_KEY -e OPENAI_API_KEY \
+  -e LOOMEM_EMBEDDING_PROVIDER=openai -e LOOMEM_EMBEDDING_DIM=1536 loomem
 ```
 
 The image binds `0.0.0.0` and therefore requires an auth token and (by default) an at-rest master key — the server refuses to start without them. Deliberate opt-outs: `LOOMEM_ALLOW_UNAUTH=1`, `LOOMEM_AT_REST_EXPECT_ENABLED=0`. See [deployment.md](deployment.md) for reverse-proxy, TLS, and cloud options, and [SECURITY.md](SECURITY.md) for the security model.
+
+The image contains no local embedding model, so the command switches embeddings to OpenAI (`LOOMEM_EMBEDDING_PROVIDER=openai`, `LOOMEM_EMBEDDING_DIM=1536`) and passes `OPENAI_API_KEY`. Stored text is then sent to the OpenAI API. Without these variables the server refuses to start (`refusing cloud fallback`).
 
 ## Troubleshooting
 
@@ -170,5 +180,7 @@ The image binds `0.0.0.0` and therefore requires an auth token and (by default) 
 | `version 'GLIBC_2.35' not found` (or similar) | Your distro's glibc is older than the build baseline — [build from source](#from-source) or use [Docker](#docker). |
 | `loomem-server: command not found` after install | `~/.loomem/bin` not on PATH — see [PATH setup](#path-setup). |
 | `gh: Not Found (HTTP 404)` on the `gh api` one-liner | Your GitHub account has no access to the private repo, or you're logged into the wrong account (`gh auth status`). |
+| `Local embedding provider could not load its model; refusing cloud fallback` | The local embedding model is missing or unreadable. Fetch it as in [First run](#first-run), or point `embedding_model_path` in `config.toml` at the model directory. |
+| `… enabled but no LLM API key found` | The default config needs an LLM key. Set `OPENAI_API_KEY`, or start with `LOOMEM_ALLOW_KEYLESS=1` for keyless mode. |
 | `Error: Failed to load entities file (entities.toml)` | The server needs `entities.toml` in its working directory — `cp ~/.loomem/entities.toml.example ~/.loomem/entities.toml` and run from `~/.loomem`. |
 | Server starts but `curl /health` fails | First start builds indexes (can take a few seconds). Port 3030 taken? Check the server log; the bind address/port live in `config.toml`. |

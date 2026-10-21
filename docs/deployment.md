@@ -6,7 +6,8 @@
 
 - Rust toolchain (stable)
 - clang + libclang-dev (for RocksDB)
-- OpenAI API key (optional — local embeddings available)
+- Node.js (builds the dashboard, which the server embeds at compile time)
+- OpenAI API key for the LLM steps (extraction, consolidation, dream); without one, start with `LOOMEM_ALLOW_KEYLESS=1`
 
 ### Build and run
 
@@ -14,11 +15,16 @@
 git clone <repository-url>
 cd loomem
 
-# Build
+# Build (dashboard first: the server embeds it at compile time)
+cp entities.toml.example entities.toml
+(cd loomem-dashboard && npm ci && npm run build)
 cargo build --release -p loomem-server
 
-# Set environment (optional)
-export OPENAI_API_KEY="sk-..."
+# Local embedding model (required with the default embedding_provider = "local")
+./scripts/fetch-embedding-model.sh
+
+# Set environment
+export OPENAI_API_KEY="sk-..."       # or: export LOOMEM_ALLOW_KEYLESS=1
 export LOOMEM_AUTH_TOKEN="your-secret-token"
 
 # Run
@@ -39,7 +45,7 @@ curl -X POST http://localhost:3030/v1/store \
 
 ### Local embeddings (no OpenAI dependency)
 
-Set `embedding_provider = "local"` in `config.toml` under `[llm]` — this is the default on a fresh install. Uses the tract ONNX runtime — pure Rust, no native dependencies, and nothing leaves the machine.
+Set `embedding_provider = "local"` in `config.toml` under `[llm]` — this is the default on a fresh install. Uses the tract ONNX runtime — pure Rust, no native dependencies, and nothing leaves the machine. The model is a separate download (`./scripts/fetch-embedding-model.sh`); without it the server refuses to start (`refusing cloud fallback`) instead of falling back to OpenAI.
 
 Note: consolidation, extraction, and dream use OpenAI completions (`gpt-4.1-mini`). Without an `OPENAI_API_KEY` the default config refuses to start unless `LOOMEM_ALLOW_KEYLESS=1` is set, and then those steps fail (`memory_ingest` returns a missing-key error); embeddings and search stay fully local either way.
 
@@ -61,6 +67,8 @@ docker run -d \
   -p 3030:3030 \
   -v loomem-data:/data \
   -e OPENAI_API_KEY="sk-..." \
+  -e LOOMEM_EMBEDDING_PROVIDER=openai \
+  -e LOOMEM_EMBEDDING_DIM=1536 \
   -e LOOMEM_AUTH_TOKEN="your-secret-token" \
   -e LOOMEM_AT_REST_MASTER_KEY="base64-encoded-32-bytes" \
   loomem
@@ -71,6 +79,7 @@ The Dockerfile automatically:
 - Sets data directory to `/data` (mount a volume here)
 - Requires `LOOMEM_AUTH_TOKEN` and `LOOMEM_AT_REST_MASTER_KEY` at startup — the server refuses to start without them (deliberate opt-outs: `LOOMEM_ALLOW_UNAUTH=1`, `LOOMEM_AT_REST_EXPECT_ENABLED=0`)
 - Enables per-stream rate limiting (`[rate_limit]`; over-limit requests get HTTP 429 with `Retry-After`)
+- Ships **without** the local embedding model — set `LOOMEM_EMBEDDING_PROVIDER=openai` and `LOOMEM_EMBEDDING_DIM=1536` (as above), or the server refuses to start. Stored text is then sent to the OpenAI embeddings API. A database already built with 384-dim local vectors needs `loomem-server --reembed` after the switch.
 
 ### Docker Compose
 
@@ -85,6 +94,8 @@ services:
       - loomem-data:/data
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LOOMEM_EMBEDDING_PROVIDER=openai
+      - LOOMEM_EMBEDDING_DIM=1536
       - LOOMEM_AUTH_TOKEN=${LOOMEM_AUTH_TOKEN}
       - LOOMEM_AT_REST_MASTER_KEY=${LOOMEM_AT_REST_MASTER_KEY}
     restart: unless-stopped
@@ -109,6 +120,7 @@ volumes:
 3. Create new project → Deploy from GitHub repo
 4. Add environment variables:
    - `OPENAI_API_KEY` — your OpenAI API key
+   - `LOOMEM_EMBEDDING_PROVIDER=openai` and `LOOMEM_EMBEDDING_DIM=1536` — the image has no local embedding model
    - `LOOMEM_AUTH_TOKEN` — admin token (generate a random string)
 5. Add a volume mounted at `/data` for persistent storage
 6. Deploy
