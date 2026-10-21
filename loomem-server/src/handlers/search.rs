@@ -25,6 +25,7 @@ mod evidence;
 mod evidence_fields_tests;
 mod operation;
 mod operation_lane;
+mod prefix_dedup;
 mod rejections;
 mod request_scope;
 mod telemetry;
@@ -2392,30 +2393,17 @@ fn filter_candidates(
 
     // Deduplicate near-identical results: keep highest-scored, collapse similar content.
     // Uses first 150 chars as fingerprint — catches duplicate ingest from daily logs.
+    // Fragments of different sources are distinct evidence and never collapse.
     let count_before_dedup = hybrid_results.len();
     {
-        let mut seen_fingerprints: Vec<String> = Vec::new();
+        let mut seen_fingerprints: Vec<prefix_dedup::Fingerprint> = Vec::new();
         let reason = super::types::RejectionReason::ContentPrefixDedup;
         log.retain(&mut hybrid_results, stage, reason, |r| {
-            let fp: String = r
-                .content
-                .chars()
-                .take(150)
-                .collect::<String>()
-                .to_lowercase();
-            // Check if any existing fingerprint shares >80% prefix
-            let dominated = seen_fingerprints.iter().any(|existing| {
-                let min_len = fp.len().min(existing.len());
-                if min_len < 30 {
-                    return false;
-                }
-                let common = fp
-                    .chars()
-                    .zip(existing.chars())
-                    .take_while(|(a, b)| a == b)
-                    .count();
-                common as f64 / min_len as f64 > 0.8
-            });
+            let source = prefix_dedup::fragment_source(&state.store, &r.id);
+            let fp = prefix_dedup::Fingerprint::new(&r.content, source.as_deref());
+            let dominated = seen_fingerprints
+                .iter()
+                .any(|existing| fp.dominated_by(existing));
             if dominated {
                 tracing::debug!("Dedup: dropped duplicate result {}", r.id);
                 false

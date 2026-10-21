@@ -83,7 +83,8 @@ async fn suffix_is_absent_by_default_and_present_before_score_when_enabled() {
     let on = state(true);
     seed(&on).await;
     let tagged = search_line(&on).await;
-    let tag = " [author: user; conversation: 2024-01-01; source: source-9#0-39]";
+    // The byte range stays on the REST surface; the MCP tag names only the source.
+    let tag = " [author: user; conversation: 2024-01-01; source: source-9]";
     assert!(tagged.contains(&format!("{tag} (score: ")), "{tagged}");
     assert!(tagged.ends_with("(id: frag-1)"), "{tagged}");
     assert_eq!(tagged.replacen(tag, "", 1), plain);
