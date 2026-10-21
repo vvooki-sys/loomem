@@ -10,12 +10,13 @@ use tracing::{debug, warn};
 
 use crate::config::LlmConfig;
 
+mod chunking;
 mod config_validation;
 mod http;
 mod reply;
+use chunking::extract_chunk_with_split;
 use config_validation::transcript_chunks;
 pub use http::HttpExtractionChat;
-use reply::parse_extraction_reply;
 
 /// /153: an operator-defined extraction category. `fact_type` is the wire key
 /// used in the `## Types` list and the JSON `fact_type` enum; when absent,
@@ -42,6 +43,21 @@ pub struct KnowledgeExtractionConfig {
     /// without this field producing a byte-identical request.
     #[serde(default = "default_extraction_max_tokens")]
     pub max_tokens: u32,
+    /// Input budget (tokens, 4 chars ≈ 1 token) per extraction call. `0`
+    /// (default) keeps the legacy pipeline: one call per transcript up to
+    /// `max_transcript_tokens`, overlapping character windows above it. Any
+    /// other value splits the transcript at line boundaries into chunks of at
+    /// most `min(input_chunk_tokens, max_transcript_tokens)` tokens, one call
+    /// each (see [`chunking::line_aligned_chunks`]).
+    #[serde(default)]
+    pub input_chunk_tokens: usize,
+    /// Re-extract a chunk whose completion was truncated (`finish_reason:
+    /// length`) as two line-aligned halves. Bounded by
+    /// [`chunking::MAX_SPLIT_DEPTH`] / [`chunking::MAX_SPLIT_CALLS_PER_CHUNK`];
+    /// a truncated reply is never admitted. `false` (default) rejects and
+    /// reports the chunk without any retry.
+    #[serde(default)]
+    pub split_on_truncation: bool,
     /// /153: operator-defined extraction categories. `None`/empty preserves
     /// the built-in [`EXTRACTION_PROMPT`] byte-for-byte (serde default keeps
     /// a config without this field deserializing unchanged).
@@ -64,6 +80,8 @@ impl Default for KnowledgeExtractionConfig {
             contradiction_cosine_min: 0.5,
             max_facts_per_transcript: 20,
             max_tokens: default_extraction_max_tokens(),
+            input_chunk_tokens: 0,
+            split_on_truncation: false,
             topics: None,
         }
     }
@@ -370,6 +388,13 @@ pub struct ExtractionOutcome {
     /// success). Empty on full success; all-chunks-failed is
     /// [`ExtractionError::AllChunksFailed`] instead.
     pub failures: Vec<ChunkFailure>,
+    /// Extraction calls issued (transcript chunks plus any split retries).
+    pub chunks_attempted: usize,
+    /// Calls that returned a complete, parseable reply.
+    pub chunks_completed: usize,
+    /// Calls whose completion was truncated (`finish_reason: length`),
+    /// whether or not a split retry recovered them.
+    pub chunks_truncated: usize,
 }
 
 /// Build the chat-completion request body for one transcript chunk.
@@ -396,48 +421,6 @@ fn build_extraction_request(
         "max_tokens": max_tokens,
         "temperature": 0.0
     })
-}
-
-/// Run one chunk's request → parse pipeline. `Err` carries the per-chunk
-/// failure (HTTP non-2xx, transport, or parse) for aggregation (/157 S1).
-async fn extract_chunk(
-    chat: &impl ExtractionChat,
-    request_body: &serde_json::Value,
-    chunk_index: usize,
-) -> Result<Vec<ExtractedFact>, ChunkFailure> {
-    let reply = match chat.chat(request_body).await {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(ChunkFailure {
-                chunk_index,
-                status: None,
-                reason: truncate_reason(&format!("{e:#}")),
-            })
-        }
-    };
-
-    if !(200..300).contains(&reply.status) {
-        return Err(ChunkFailure {
-            chunk_index,
-            status: Some(reply.status),
-            reason: truncate_reason(&reply.body),
-        });
-    }
-
-    let facts = parse_extraction_reply(&reply, chunk_index)?;
-    // Diagnostic for the silent-degradation signature (server-degradation brief
-    // §4.1): a 2xx that parses to zero facts. `body_len` separates a healthy
-    // "model legitimately found nothing" (full body) from a degraded transport
-    // returning a near-empty body. Pairs with the windowed extraction_empty
-    // counter; kept at debug so normal empty ingests don't spam logs.
-    if facts.is_empty() {
-        debug!(
-            "Extraction chunk {chunk_index} returned 2xx with zero facts (status={}, body_len={})",
-            reply.status,
-            reply.body.len()
-        );
-    }
-    Ok(facts)
 }
 
 /// Extract knowledge facts from conversation text using LLM.
@@ -478,7 +461,6 @@ pub async fn extract_knowledge_with(
     let system_prompt = build_extraction_prompt(extraction_config, conversation_date);
 
     let mut outcome = ExtractionOutcome::default();
-    let mut succeeded_chunks = 0usize;
     // Raw facts parsed across all chunks, before the confidence filter below.
     // Lets the empty-extraction log distinguish "no facts in the response body"
     // (transport degradation — cross-reference the per-chunk body_len log) from
@@ -493,40 +475,31 @@ pub async fn extract_knowledge_with(
             chunk_text.len()
         );
 
-        let request_body = build_extraction_request(
-            &extraction_config.model,
-            &system_prompt,
-            i,
-            chunk_text,
-            extraction_config.max_tokens,
+        let run =
+            extract_chunk_with_split(chat, extraction_config, &system_prompt, i, chunk_text).await;
+        outcome.chunks_attempted += run.calls_attempted;
+        outcome.chunks_completed += run.calls_completed;
+        outcome.chunks_truncated += run.calls_truncated;
+        raw_facts_seen += run.facts.len();
+        let before = outcome.facts.len();
+        outcome
+            .facts
+            .extend(run.facts.into_iter().filter(|f| f.confidence >= 0.5));
+        debug!(
+            "Extracted {} facts (filtered by confidence >= 0.5)",
+            outcome.facts.len() - before
         );
-
-        match extract_chunk(chat, &request_body, i).await {
-            Ok(facts) => {
-                succeeded_chunks += 1;
-                raw_facts_seen += facts.len();
-                let before = outcome.facts.len();
-                outcome
-                    .facts
-                    .extend(facts.into_iter().filter(|f| f.confidence >= 0.5));
-                debug!(
-                    "Extracted {} facts (filtered by confidence >= 0.5)",
-                    outcome.facts.len() - before
-                );
-            }
-            Err(failure) => {
-                warn!(
-                    "Extraction LLM call failed for chunk {}/{} ({}): {}",
-                    i + 1,
-                    chunks.len(),
-                    failure.status_label(),
-                    failure.reason
-                );
-                // /157 S3: counted for llm_failures_recent in status payloads.
-                crate::llm_failures::global()
-                    .record(crate::llm_failures::LlmFailureKind::Extraction);
-                outcome.failures.push(failure);
-            }
+        for failure in run.failures {
+            warn!(
+                "Extraction LLM call failed for chunk {}/{} ({}): {}",
+                i + 1,
+                chunks.len(),
+                failure.status_label(),
+                failure.reason
+            );
+            // /157 S3: counted for llm_failures_recent in status payloads.
+            crate::llm_failures::global().record(crate::llm_failures::LlmFailureKind::Extraction);
+            outcome.failures.push(failure);
         }
 
         // Respect extraction cap
@@ -538,9 +511,10 @@ pub async fn extract_knowledge_with(
         }
     }
 
+    let succeeded_chunks = outcome.chunks_completed;
     if succeeded_chunks == 0 && !outcome.failures.is_empty() {
         return Err(ExtractionError::AllChunksFailed {
-            chunks_attempted: chunks.len(),
+            chunks_attempted: outcome.chunks_attempted,
             failures: outcome.failures,
         });
     }

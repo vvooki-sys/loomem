@@ -248,6 +248,9 @@ dedup_cosine_threshold = 0.92
 contradiction_check = true
 contradiction_cosine_min = 0.5   # Skip LLM judge if top-1 cosine < this
 max_facts_per_transcript = 20
+max_tokens = 2000                # Completion cap per extraction call; a reply that hits it (finish_reason "length") is rejected, never partially admitted
+input_chunk_tokens = 0           # 0 = one call per transcript up to max_transcript_tokens (legacy). >0 = split at line boundaries into chunks of at most min(this, max_transcript_tokens) tokens, one call each
+split_on_truncation = false      # true = re-extract a truncated chunk as two line-aligned halves (at most 4 extra calls per chunk, depth 2). false = reject and report, no retry
 
 [entity_extraction]
 enabled = true               # Phase 4: entity linking for cross-session retrieval
