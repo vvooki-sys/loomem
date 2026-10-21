@@ -4,4 +4,5 @@
 [advisories]
 ignore = [
     "RUSTSEC-2024-0436",  # paste unmaintained — transitive via tokenizers
+    "RUSTSEC-2026-0319",  # anymap2 unmaintained (2026-10-02) — transitive via tract-nnef → liquid → liquid-core; no upstream release without it yet (liquid-core 0.26.11 is latest)
 ]
