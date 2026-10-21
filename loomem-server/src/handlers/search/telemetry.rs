@@ -255,9 +255,16 @@ pub(super) struct RequestTelemetry {
 impl RequestTelemetry {
     fn record(slot: &AtomicU64, started: Instant) {
         let elapsed = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        let _ = slot.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            Some(current.saturating_add(elapsed))
-        });
+        // Saturating accumulate via a CAS loop: `fetch_update` is deprecated on
+        // current stable and its replacement `try_update` is above the MSRV.
+        let mut current = slot.load(Ordering::Relaxed);
+        loop {
+            let next = current.saturating_add(elapsed);
+            match slot.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
     }
 
     pub(super) fn record_embedding_attempt(&self) {
