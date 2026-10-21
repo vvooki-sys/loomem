@@ -28,7 +28,7 @@ use std::collections::HashSet;
 use tiktoken_rs::CoreBPE;
 
 use crate::storage::Chunk;
-pub use config::FragmentsConfig;
+pub use config::{FragmentsConfig, TokenCounterKind};
 
 /// The canonical source a fragment set is derived from.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -154,6 +154,17 @@ impl std::fmt::Debug for TiktokenCounter {
 impl TokenCounter for TiktokenCounter {
     fn count(&self, text: &str) -> usize {
         self.bpe.encode_ordinary(text).len()
+    }
+}
+
+impl TokenCounterKind {
+    /// Build the counter this config value names. Only `Tiktoken` can fail
+    /// (encoder construction).
+    pub fn counter(self) -> Result<Box<dyn TokenCounter>, FragmentError> {
+        Ok(match self {
+            Self::Approx => Box::new(ApproxTokenCounter),
+            Self::Tiktoken => Box::new(TiktokenCounter::new()?),
+        })
     }
 }
 

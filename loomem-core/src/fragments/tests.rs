@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::Config;
+use crate::storage::ProvenanceRole;
 
 fn source(text: &str) -> CanonicalSource {
     CanonicalSource {
@@ -13,7 +14,7 @@ fn cfg(max_fragment_tokens: usize) -> FragmentsConfig {
     FragmentsConfig {
         enabled: true,
         max_fragment_tokens,
-        prefix_reserve_tokens: 16,
+        ..FragmentsConfig::default()
     }
 }
 
@@ -425,4 +426,37 @@ fn config_toml_fragments_section_matches_default_and_is_optional() {
         .join("\n");
     let cfg: Config = toml::from_str(&without).expect("parse without [fragments]");
     assert_eq!(cfg.fragments, FragmentsConfig::default());
+}
+
+#[test]
+fn config_role_and_counter_keys_default_and_reject_unknown_values() {
+    let bare: FragmentsConfig = toml::from_str("enabled = true").expect("bare section");
+    assert!(bare.enabled);
+    assert_eq!(bare.provenance_role, ProvenanceRole::Claim);
+    assert_eq!(bare.token_counter, TokenCounterKind::Approx);
+    let set: FragmentsConfig =
+        toml::from_str("provenance_role = \"evidence\"\ntoken_counter = \"tiktoken\"")
+            .expect("explicit values");
+    assert_eq!(set.provenance_role, ProvenanceRole::Evidence);
+    assert_eq!(set.token_counter, TokenCounterKind::Tiktoken);
+    let cue: FragmentsConfig = toml::from_str("provenance_role = \"cue\"").expect("cue");
+    assert_eq!(cue.provenance_role, ProvenanceRole::Cue);
+    let bad_role = toml::from_str::<FragmentsConfig>("provenance_role = \"Claim\"")
+        .expect_err("capitalised role is rejected");
+    assert!(bad_role.to_string().contains("provenance_role"));
+    assert!(toml::from_str::<FragmentsConfig>("token_counter = \"bpe\"").is_err());
+    let round_trip: FragmentsConfig =
+        toml::from_str(&toml::to_string(&set).expect("serialize")).expect("round trip");
+    assert_eq!(round_trip, set);
+    assert_eq!(
+        TokenCounterKind::Approx.counter().unwrap().count("abcdef"),
+        2
+    );
+    assert!(
+        TokenCounterKind::Tiktoken
+            .counter()
+            .unwrap()
+            .count("hello world")
+            >= 2
+    );
 }

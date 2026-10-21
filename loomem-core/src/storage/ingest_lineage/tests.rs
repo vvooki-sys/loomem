@@ -366,3 +366,102 @@ fn explicit_other_parent_cannot_hide_singular_extracted_owner() {
     late.extraction_meta = fact(&root).extraction_meta;
     assert!(store.store_chunk(&late).is_err());
 }
+
+fn fragment(parent: &Chunk, index: u32) -> Chunk {
+    let fragment = crate::fragments::SourceFragment {
+        id: crate::fragments::fragment_id(&parent.id, index),
+        source_id: parent.id.clone(),
+        index,
+        byte_start: 0,
+        byte_end: parent.content.len(),
+        turn_index: 0,
+        role: Some("user".into()),
+        conversation_date: None,
+        text: parent.content.clone(),
+    };
+    let mut template = chunk("template");
+    template.source = Some(SourceTag::from_agent("mcp-ingest"));
+    template.trust_level = Some("a2".into());
+    template.metadata = Some(serde_json::json!({"_loomem_ingest":{"version":1,"kind":"fragment"}}));
+    crate::fragments::fragment_chunk(&fragment, &template)
+}
+
+#[test]
+fn fragment_shape_requires_marker_link_and_no_extraction_meta() {
+    let root = source();
+    let f = fragment(&root, 0);
+    assert!(is_ingest_fragment(&f));
+    assert!(!is_ingest_fact_shape(&f));
+    assert!(!is_ingest_source(&f));
+    let mut forged = f.clone();
+    forged.fragment = None;
+    assert!(!is_ingest_fragment(&forged));
+    forged = f.clone();
+    forged.source_ids = Some(vec![uuid::Uuid::new_v4().to_string()]);
+    assert!(!is_ingest_fragment(&forged));
+    forged = f.clone();
+    forged.extraction_meta = fact(&root).extraction_meta;
+    assert!(!is_ingest_fragment(&forged));
+    forged = f.clone();
+    forged.id = "foreign-id".into();
+    assert!(!is_ingest_fragment(&forged));
+    forged = f.clone();
+    forged.level = 1;
+    assert!(!is_ingest_fragment(&forged));
+    let mut legacy = chunk("legacy-fragment-marker");
+    legacy.metadata = f.metadata.clone();
+    assert!(!is_ingest_fragment(&legacy));
+}
+
+#[test]
+fn fragment_admission_requires_live_same_stream_source() {
+    let (_temp, store) = setup();
+    let root = source();
+    let f = fragment(&root, 0);
+    assert!(store.store_chunk(&f).is_err());
+    store.store_chunk(&root).unwrap();
+    let mut bad = f.clone();
+    bad.stream = "other".into();
+    assert!(store.store_chunk(&bad).is_err());
+    bad = f.clone();
+    bad.fragment = None;
+    assert!(store.store_chunk(&bad).is_err());
+    store.store_chunk(&f).unwrap();
+    let mut moved = f.clone();
+    moved.fragment.as_mut().unwrap().byte_end = 1;
+    assert!(store.store_chunk(&moved).is_err());
+    store.tombstone_ingest_source(&root.id, 42).unwrap();
+    assert!(store.store_chunk(&fragment(&root, 1)).is_err());
+}
+
+#[test]
+fn source_tombstone_cascades_to_fragments_and_repair_snapshot_includes_them() {
+    let (_temp, store) = setup();
+    let root = source();
+    store.store_chunk(&root).unwrap();
+    let first = fragment(&root, 0);
+    let second = fragment(&root, 1);
+    let derived = fact(&root);
+    for c in [&first, &second, &derived] {
+        store.store_chunk(c).unwrap();
+    }
+    let snapshot = store.ingest_chunks_for_index_repair().unwrap();
+    for c in [&root, &first, &second, &derived] {
+        assert!(snapshot.iter().any(|row| row.id == c.id), "{}", c.id);
+    }
+    let ids = store.tombstone_ingest_source(&root.id, 9).unwrap().unwrap();
+    assert_eq!(ids.len(), 4);
+    for c in [&first, &second, &derived] {
+        assert!(ids.contains(&c.id));
+        assert_eq!(store.get_chunk(&c.id).unwrap().unwrap().deleted_at, Some(9));
+    }
+    let after = store.ingest_chunks_for_index_repair().unwrap();
+    assert!(after
+        .iter()
+        .filter(|row| is_ingest_fragment(row))
+        .all(|row| row.deleted_at == Some(9)));
+    assert_eq!(
+        after.iter().filter(|row| is_ingest_fragment(row)).count(),
+        2
+    );
+}

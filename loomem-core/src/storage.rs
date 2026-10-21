@@ -13,7 +13,7 @@ mod consolidation;
 mod ingest_lineage;
 mod lifecycle;
 mod provenance_role;
-pub use ingest_lineage::{is_ingest_fact_shape, is_ingest_source};
+pub use ingest_lineage::{is_ingest_fact_shape, is_ingest_fragment, is_ingest_source};
 pub use lifecycle::EmbeddingTarget;
 pub use provenance_role::ProvenanceRole;
 pub mod persist;
