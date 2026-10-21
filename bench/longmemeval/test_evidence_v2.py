@@ -86,10 +86,34 @@ class E0EnvelopeTests(unittest.TestCase):
                 self.assertEqual(record["content"], text)
                 self.assertEqual({k: record[k] for k in null_metadata()}, null_metadata())
 
-    def test_envelope_dates_are_never_rewritten(self):
+    def test_dataset_envelope_date_is_normalised_at_the_adapter_boundary(self):
+        # The E0 ingest copied the dataset `haystack_dates` string verbatim;
+        # the control arm renders it as the ISO date the E1 arm sends.
         stored = json.dumps({"role": "user", "date": "2023/05/20 (Sat) 02:30", "content": "x"})
+        record = from_e0_turn_json(stored, "r")
+        self.assertEqual(record["conversation_date"], "2023-05-20")
+        self.assertEqual(record["author"], "user")
+        self.assertEqual(record["content"], "x")
+
+    def test_iso_envelope_date_passes_through(self):
+        stored = json.dumps({"role": "assistant", "date": "2026-05-01", "content": "x"})
+        self.assertEqual(from_e0_turn_json(stored, "r")["conversation_date"], "2026-05-01")
+
+    def test_unrecognised_envelope_date_is_null_never_guessed(self):
+        for date in ["2023/5/20", "2023/05/20 (Sat)", "May 20, 2023", "", "2023/05/20 (Fri) 02:30"]:
+            with self.subTest(date=date):
+                stored = json.dumps({"role": "user", "date": date, "content": "x"})
+                record = from_e0_turn_json(stored, "r")
+                self.assertIsNone(record["conversation_date"])
+                self.assertEqual(record["author"], "user")
+                self.assertEqual(record["content"], "x")
+
+    def test_engine_dates_are_still_never_rewritten(self):
+        hit = {"id": "e", "content": "t", "evidence": dict(EVIDENCE, conversation_date="2023/05/20 (Sat) 02:30")}
         with self.assertRaises(ValueError):
-            from_e0_turn_json(stored, "r")
+            from_engine_hit(hit, "r")
+        with self.assertRaises(ValueError):
+            from_memory_item({"id": "e", "content": "t", "evidence": dict(EVIDENCE, event_date="2023/05/20 (Sat) 02:30")}, "r")
         with self.assertRaises(ValueError):
             from_e0_turn_json(None, "r")
 

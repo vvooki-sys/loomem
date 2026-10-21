@@ -14,12 +14,18 @@ each turn as `json.dumps({"role", "date", "content"})` (see
 lets the E0 arm be rendered through the same v2 renderer with the same fields
 (role -> author, date -> conversation_date, event fields null). It is applied
 only when the returned string is exactly such an object, byte for byte what
-that ingest wrote; any other string stays verbatim with null metadata. Dates are never reformatted: an envelope
-whose date is not already an ISO calendar date is rejected rather than
-rewritten.
+that ingest wrote; any other string stays verbatim with null metadata. The
+envelope date is DATASET input (the `haystack_dates` string the ingest copied
+verbatim), so it is normalised at this adapter boundary with
+`longmemeval_dates.to_iso`, the same function the E1 ingest arm uses for
+`conversation_date`; a date that is neither the dataset pattern nor ISO
+becomes null, never a guess. Engine-returned dates (`from_engine_hit`,
+`from_memory_item`) are never reformatted: `validate_record_v2` rejects them
+unless they already are ISO calendar dates.
 """
 import json
 
+from longmemeval_dates import to_iso
 from qa_context_v2 import METADATA_FIELDS_V2, validate_record_v2
 
 E0_ENVELOPE_KEYS = frozenset({"role", "date", "content"})
@@ -58,10 +64,12 @@ def from_engine_hit(hit, record_id):
 def from_memory_item(item, record_id):
     """Map one `GET /api/memories/<id>` item to a v2 record.
 
-    Today the endpoint exposes no `evidence` object; its top-level
-    `event_date` has no provenance and is therefore NOT lifted (the benchmark
-    must not assert a provenance the engine did not state). When the engine
-    adds the same `evidence` object as search hits, it is mapped identically.
+    With `[search] evidence_fields = true` the endpoint attaches the same
+    additive `evidence` object as `/v1/search` hits and it is mapped
+    identically. Without the flag (the engine default) the object is absent
+    and every metadata field is null; the item's top-level `event_date` has
+    no provenance and is therefore NOT lifted (the benchmark must not assert
+    a provenance the engine did not state).
     """
     metadata = _evidence_object(item, "Memory item")
     if not isinstance(item.get("id"), str) or not item["id"]:
@@ -90,9 +98,9 @@ def from_e0_turn_json(content, record_id):
     """Control-arm mapping of an E0 `{"role","date","content"}` envelope.
 
     A non-envelope string is returned verbatim with null metadata. An envelope
-    yields author=role, conversation_date=date and the inner text as content;
-    event_date, its provenance, source_id and byte offsets stay null because
-    the E0 ingest never recorded them.
+    yields author=role, conversation_date=to_iso(date) and the inner text as
+    content; event_date, its provenance, source_id and byte offsets stay null
+    because the E0 ingest never recorded them.
     """
     if not isinstance(content, str):
         raise ValueError("E0 content must be the returned string")
@@ -100,5 +108,5 @@ def from_e0_turn_json(content, record_id):
     if envelope is None:
         return _record(record_id, content, null_metadata())
     metadata = null_metadata()
-    metadata.update(author=envelope["role"], conversation_date=envelope["date"])
+    metadata.update(author=envelope["role"], conversation_date=to_iso(envelope["date"]))
     return _record(record_id, envelope["content"], metadata)
