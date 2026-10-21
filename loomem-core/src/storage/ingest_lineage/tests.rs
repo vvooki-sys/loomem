@@ -485,3 +485,42 @@ fn source_tombstone_cascades_to_fragments_and_repair_snapshot_includes_them() {
         2
     );
 }
+
+#[test]
+fn dream_retirement_of_an_ingest_fact_keeps_provenance_frozen() {
+    let (_temp, store) = setup();
+    let root = source();
+    store.store_chunk(&root).unwrap();
+    let f = fact(&root);
+    store.store_chunk(&f).unwrap();
+    // The exact write dream performs when it retires an input fact
+    // (`contradiction::try_supersede_with_guard` + the `dream_security` mutator).
+    let mut retired = f.clone();
+    retired.is_latest = false;
+    retired.superseded_by = Some("dream:replacement".into());
+    retired.updated_at = Some(2);
+    retired.valid_until = Some(2);
+    retired.extraction_meta.as_mut().unwrap().superseded_by = Some("dream-consolidated".into());
+    store.store_chunk(&retired).unwrap();
+    let stored = store.get_chunk(&f.id).unwrap().unwrap();
+    assert!(!stored.is_latest);
+    assert_eq!(
+        stored
+            .extraction_meta
+            .as_ref()
+            .unwrap()
+            .superseded_by
+            .as_deref(),
+        Some("dream-consolidated")
+    );
+    // Every other extraction field remains provenance and stays frozen.
+    let mut forged = retired.clone();
+    forged.extraction_meta.as_mut().unwrap().event_date = Some("2024-01-01".into());
+    assert!(store.store_chunk(&forged).is_err());
+    forged = retired.clone();
+    forged.extraction_meta.as_mut().unwrap().subject = Some("other".into());
+    assert!(store.store_chunk(&forged).is_err());
+    forged = retired.clone();
+    forged.extraction_meta.as_mut().unwrap().supersedes = Some("older".into());
+    assert!(store.store_chunk(&forged).is_err());
+}
