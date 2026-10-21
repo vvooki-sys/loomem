@@ -387,12 +387,80 @@ names minus `record_id`) and rejects any unexpected type or key; a hit without
 the object yields null metadata. `evidence_v2.from_e0_turn_json` is a
 control-arm convenience that parses only an exact E0 `{"role","date","content"}`
 envelope into `author`/`conversation_date`; any other string stays verbatim with
-null metadata, and dates are never reformatted. `runner_local_v2.LocalEngineAdapterV2`
+null metadata. `runner_local_v2.LocalEngineAdapterV2`
 adds `retrieved_records_v2` next to the unchanged v1 `retrieved_records` when
-`capture_context` is on, plus `fetch_records_v2` over `GET /api/memories/<id>`,
-which currently exposes no `evidence` object and therefore yields null metadata.
-These modules are not wired into the default QA runner; an experiment injects
-the v2 packer explicitly and binds its own artifacts.
+`capture_context` is on, plus `fetch_records_v2` over `GET /api/memories/<id>`;
+with `[search] evidence_fields = true` that endpoint attaches the same
+`evidence` object as search hits, without the flag (the engine default) its
+records carry null metadata. These modules are not wired into the default QA
+runner; an experiment injects the v2 packer explicitly and binds its own artifacts.
+
+**Date normalisation rule.** The dataset gives session dates as
+`YYYY/MM/DD (Www) HH:MM` (`haystack_dates`). `longmemeval_dates.to_iso(value)`
+converts exactly that pattern to `YYYY-MM-DD`, passes an ISO date through and
+returns `None` for anything else (a near-miss such as `2023/5/20` is never
+guessed). It is applied once, at the adapter boundary, by both arms:
+`from_e0_turn_json` normalises the envelope date the E0 ingest copied verbatim,
+and the E1 adapter passes the same value as `conversation_date` to
+`memory_ingest`. Engine-returned dates are never reformatted;
+`validate_record_v2` keeps rejecting a non-ISO engine date. v1 record ids are
+unaffected because the records themselves keep the dataset string.
+
+**Rejections sidecar.** The engine's `trace_metadata.rejections`
+(`{chunk_id, stage, reason}` with raw engine ids) are mapped by
+`LocalEngineAdapterV2` through its id mapping (entries for ids the adapter
+never wrote are dropped) and returned at the top level of the search result as
+`rejections`, because the frozen v1 `trace_projection` keeps only
+`coverage`/`stages`. `runner_local_v2.trace_row_v2` / `write_trace_row_v2`
+persist a row `{question_id, manifest_sha256, status, retrieved_ids, evidence
+(the unchanged v1 projection), rejections}` (a failed row carries
+`failure_stage` instead of `retrieved_ids`/`evidence`). `stage_diagnostics.py
+--trace` reads this sidecar directly; `runner.py --resume` does not accept it.
+
+**E1 adapter (fragments arm).** `runner_local_e1.py` ingests each session as
+ONE `memory_ingest` call to the owned engine over its MCP endpoint (`POST
+/mcp`, JSON-RPC 2.0, `initialize` once per process then `tools/call` with the
+returned `Mcp-Session-Id`, the same Bearer token as the REST calls). The
+transcript is rendered deterministically as `role: content` lines joined by a
+single `\n` (no trailing newline; roles restricted to `user`/`assistant`, the
+markers the engine's turn parser recognises), and `conversation_date` is
+`to_iso(session date)` (omitted when it does not normalise). The generated
+config is the v1 template with `[fragments] enabled = true`, the two adapter
+knobs `runner_e1.provenance_role` (`claim`/`evidence`/`cue`) and
+`runner_e1.token_counter` (`approx`/`tiktoken`) from a top-level `runner_e1`
+object in the frozen config, and `[search] evidence_fields = true`; extraction
+stays disabled, keyless and offline. The tool text
+`Stored source transcript (id: <uuid>). Knowledge extraction disabled. Stored N
+fragments.` is parsed strictly (a segmentation failure or partial fragment write
+fails the ingest stage), and readiness reuses the v1 barrier with expected count
+= sources + fragments. Session records are v1 `representations._record`s of kind
+`session` (content = transcript, sources = every turn, `date` = dataset string
+verbatim); the engine source id maps to that record id and an engine fragment
+chunk `<source uuid>:f<k>` maps to `<session record id>:f<k>`, with the
+engine's indices (whitespace-only fragments are skipped at ingest, so indices
+may have gaps). Search hits become v2 records through `from_engine_hit`. The
+driver `retrieve_e1`/`run_e1` writes the rejections sidecar above and optional
+v2 context artifacts; E1 runs are create-only. Nothing here has been run against
+a live engine yet: the MCP request shape, result text and readiness counts are
+implemented against the source contracts and tested with a fake transport.
+
+```sh
+python3 bench/longmemeval/runner_local_e1.py \
+  --dataset /absolute/path/dataset.json --config /absolute/path/run-config.json \
+  --manifest /absolute/path/run-manifest.json --trace /absolute/path/trace-e1.jsonl \
+  --contexts /absolute/path/contexts-e1 --dry-run
+```
+
+**Stage-2 experiment recipe.** E0 stores one raw turn per chunk via
+`/v1/store` (`runner_local.py`, rendered through v2 by `from_e0_turn_json`);
+E1 stores one source per session plus engine fragments via `memory_ingest`
+(`runner_local_e1.py`). Both arms use the same dataset, manifest-bound config,
+reader, judge and evidence budget, with contexts packed by `pack_context_v2`.
+`runner_e1.provenance_role` is a separate switch: run E1 once per role value
+(`claim`, `evidence`, `cue`) so the unit-of-retrieval effect (E0 vs E1 at
+`claim`) is read apart from the ranking-role effect (E1 across roles).
+Compare `stage_diagnostics` reports over the two sidecars before reading
+accuracy, so a difference is attributed to a stage, not guessed.
 
 `stage_diagnostics.py` is an offline, text-free tool over a retrieval trace
 JSONL, an externally supplied `{question_id: [relevant record IDs]}` file (never
