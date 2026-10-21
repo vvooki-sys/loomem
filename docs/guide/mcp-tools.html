@@ -302,7 +302,8 @@ a:hover{text-decoration:underline}
 </code></pre>
 <p><strong>What happens:</strong></p>
 <ol>
-<li>The sanitized transcript is stored first as a persistent, searchable supporting source.</li>
+<li>The sanitized transcript is stored first as a persistent, searchable supporting source. Content is sanitized to a fixpoint before storage: input that keeps changing after four sanitization passes (for example deeply nested HTML entity encoding) is refused as invalid params with nothing stored, so extraction always sees exactly the persisted text.</li>
+<li><strong>Opt-in</strong> (<code>[fragments] enabled = true</code>, off by default — see <a href="configuration.html#fragments">Configuration</a>): right after the source and before extraction, one fragment chunk per conversation turn is stored, each with the author role, the conversation date and an exact byte range into the source. The response text then ends with <code> Stored N fragments.</code> — or <code> Stored N fragments, M fragment writes failed.</code>, <code> Stored N fragments, M fragments skipped (sanitizer would rewrite the slice).</code>, or <code> Stored 0 fragments (segmentation failed: …).</code> / <code> Stored 0 fragments (segmentation skipped: …).</code> when something went wrong. Fragment writes never block fact extraction; with fragments disabled the response is unchanged.</li>
 <li>When extraction is enabled, the LLM extracts typed facts linked to that source, with subject, confidence, optional speaker attribution and resolved event dates.</li>
 <li>The response includes the source ID even when extraction fails, credentials are missing, or no facts are found. Partial fact writes are reported; the source is retained.</li>
 </ol>
@@ -355,7 +356,8 @@ a:hover{text-decoration:underline}
 - Deduplicates near-identical results
 - Marks superseded facts with <code>[UPDATED]</code>
 - For aggregation queries ("how many..."), boosts <code>top_k</code> to 30
-- Each result line ends with its <code>chunk_id</code> — usable directly for <code>memory_history</code>, <code>memory_delete</code>, or <code>memory_feedback</code></p>
+- Each result line ends with its <code>chunk_id</code> — usable directly for <code>memory_history</code>, <code>memory_delete</code>, or <code>memory_feedback</code>
+- <strong>Opt-in</strong> (<code>[search] evidence_fields = true</code>, off by default — see <a href="configuration.html#search">Configuration</a>): each line carries a bracketed evidence tag before the score — <code>[author: user; conversation: YYYY-MM-DD; event: YYYY-MM-DD (resolved|unknown); source: &lt;id&gt;]</code> — listing only the parts known for that memory (a line with none of them is unchanged). The source byte range (<code>byte_start</code>/<code>byte_end</code>) is exposed on the REST surface only</p>
 <hr />
 <h3 id="memory_context">memory_context</h3>
 <p>Load relevant background at the start of a task. Token-budgeted — won't overwhelm the context window.</p>

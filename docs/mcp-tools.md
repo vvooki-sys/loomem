@@ -79,9 +79,10 @@ memory_ingest(
 
 **What happens:**
 
-1. The sanitized transcript is stored first as a persistent, searchable supporting source.
-2. When extraction is enabled, the LLM extracts typed facts linked to that source, with subject, confidence, optional speaker attribution and resolved event dates.
-3. The response includes the source ID even when extraction fails, credentials are missing, or no facts are found. Partial fact writes are reported; the source is retained.
+1. The sanitized transcript is stored first as a persistent, searchable supporting source. Content is sanitized to a fixpoint before storage: input that keeps changing after four sanitization passes (for example deeply nested HTML entity encoding) is refused as invalid params with nothing stored, so extraction always sees exactly the persisted text.
+2. **Opt-in** (`[fragments] enabled = true`, off by default — see [Configuration](configuration.md#fragments)): right after the source and before extraction, one fragment chunk per conversation turn is stored, each with the author role, the conversation date and an exact byte range into the source. The response text then ends with ` Stored N fragments.` — or ` Stored N fragments, M fragment writes failed.`, ` Stored N fragments, M fragments skipped (sanitizer would rewrite the slice).`, or ` Stored 0 fragments (segmentation failed: …).` / ` Stored 0 fragments (segmentation skipped: …).` when something went wrong. Fragment writes never block fact extraction; with fragments disabled the response is unchanged.
+3. When extraction is enabled, the LLM extracts typed facts linked to that source, with subject, confidence, optional speaker attribution and resolved event dates.
+4. The response includes the source ID even when extraction fails, credentials are missing, or no facts are found. Partial fact writes are reported; the source is retained.
 
 This ingestion path does not automatically deduplicate or supersede existing facts. Repeating ingestion creates another source. Source-linked content and provenance are immutable: to correct a conversation, delete its source ID and ingest the corrected transcript.
 
@@ -120,6 +121,7 @@ memory_search(query: "What IDE does the user prefer?")
 - Marks superseded facts with `[UPDATED]`
 - For aggregation queries ("how many..."), boosts `top_k` to 30
 - Each result line ends with its `chunk_id` — usable directly for `memory_history`, `memory_delete`, or `memory_feedback`
+- **Opt-in** (`[search] evidence_fields = true`, off by default — see [Configuration](configuration.md#search)): each line carries a bracketed evidence tag before the score — `[author: user; conversation: YYYY-MM-DD; event: YYYY-MM-DD (resolved|unknown); source: <id>]` — listing only the parts known for that memory (a line with none of them is unchanged). The source byte range (`byte_start`/`byte_end`) is exposed on the REST surface only
 
 ---
 

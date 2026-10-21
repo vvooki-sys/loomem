@@ -211,6 +211,8 @@ Input content
 
 The sanitizer detects but does not block injection attempts — content is stored after stripping. PII redaction replaces sensitive data with `[PHONE]`, `[EMAIL]`, `[ID]`, `[REDACTED]` tokens before storage.
 
+**Source → fragments → index (opt-in, `[fragments] enabled = true`, off by default).** On `memory_ingest`, the whole conversation is stored first as a canonical source chunk; the fragments step then reads that source back as persisted and cuts it into turn-level fragments (one per transcript turn, long turns split further at paragraph, sentence and whitespace boundaries) that fit the embedder's input window. Each fragment is a level-0 chunk (`{source_id}:f{index}`) carrying the author role, the conversation date and an exact byte range into the source, and goes through the same `persist_chunk` path as the source (RocksDB store, entity extraction, Tantivy indexing, embedding queue), so it is indexed and embedded on its own. Fragments are `consolidated` from birth (never consolidation or dream input), carry no event date of their own, and are tombstoned together with their source. Fact extraction runs after the fragments step and is never blocked by it. See [Configuration](configuration.md#fragments).
+
 ---
 
 ## Search pipeline
