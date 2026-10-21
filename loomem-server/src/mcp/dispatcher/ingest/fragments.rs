@@ -9,8 +9,9 @@
 //! bytes — if they differ from what was handed in, no fragment is written
 //! and the tool text says so. Each fragment is checked the same way before
 //! its write (`align_to_sink`): when the pipeline would merely trim a slice
-//! (an injection-pattern line that also contains a lone `<`), the range is
-//! narrowed to the bytes that will actually be stored; a slice the pipeline
+//! (the HTML pass runs on any slice holding a `<` or an entity and trims its
+//! ends; injection patterns never change content), the range is narrowed to
+//! the bytes that will actually be stored; a slice the pipeline
 //! would rewrite is skipped and counted, never stored with a range that no
 //! longer indexes into the source.
 use super::{base_chunk, IngestContext, IngestPersistence, ToolResult};
@@ -111,7 +112,7 @@ async fn persisted_source(
     let stored = sink
         .persisted(context.state, &source.id)
         .await
-        .map_err(|error| format!("segmentation skipped: source read-back failed: {error:?}"))?
+        .map_err(|error| format!("segmentation skipped: source read-back failed: {error}"))?
         .ok_or_else(|| "segmentation skipped: persisted source not found".to_string())?;
     if stored.content != source.content {
         return Err("segmentation skipped: persisted source differs".to_string());

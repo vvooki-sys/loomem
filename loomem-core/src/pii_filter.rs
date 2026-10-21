@@ -473,6 +473,27 @@ mod tests {
             .expect("converges");
         assert_eq!(stable, "user: say hi\nassistant: ok");
 
+        // The entity decode chains `&amp;` → `&` and then `&lt;` → `<` on the
+        // same string, so one pass peels `&amp;lt;` straight to `<`. Triple
+        // encoding therefore takes two decode passes, one strip and one
+        // confirming pass: it converges at four. Quadruple needs a fifth and
+        // is the shallowest depth a four-pass budget refuses.
+        let triple =
+            "user: say &amp;amp;lt;b&amp;amp;gt;hi&amp;amp;lt;/b&amp;amp;gt;\nassistant: ok";
+        assert_eq!(filter.redact_for_sink_fixpoint(triple, 3), None);
+        assert_eq!(
+            filter.redact_for_sink_fixpoint(triple, 4).as_deref(),
+            Some("user: say hi\nassistant: ok")
+        );
+        let quadruple =
+            "user: say &amp;amp;amp;lt;b&amp;amp;amp;gt;hi&amp;amp;amp;lt;/b&amp;amp;amp;gt;\n\
+                         assistant: ok";
+        assert_eq!(filter.redact_for_sink_fixpoint(quadruple, 4), None);
+        assert_eq!(
+            filter.redact_for_sink_fixpoint(quadruple, 5).as_deref(),
+            Some("user: say hi\nassistant: ok")
+        );
+
         // A pass budget too small to converge is reported, never a drifting result.
         assert_eq!(filter.redact_for_sink_fixpoint(double, 1), None);
         assert_eq!(

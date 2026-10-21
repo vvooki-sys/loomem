@@ -427,7 +427,9 @@ markers the engine's turn parser recognises), and `conversation_date` is
 `to_iso(session date)` (omitted when it does not normalise). The generated
 config is the v1 template with `[fragments] enabled = true`, the two adapter
 knobs `runner_e1.provenance_role` (`claim`/`evidence`/`cue`) and
-`runner_e1.token_counter` (`approx`/`tiktoken`) from a top-level `runner_e1`
+`runner_e1.token_counter` (`approx`/`tiktoken`/`embedder`; the generated
+config always loads the local model, so `embedder` — the only counter whose
+budget is the embedder's own — is available) from a top-level `runner_e1`
 object in the frozen config, and `[search] evidence_fields = true`; extraction
 stays disabled, keyless and offline. The tool text
 `Stored source transcript (id: <uuid>). Knowledge extraction disabled. Stored N

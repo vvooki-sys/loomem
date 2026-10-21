@@ -25,9 +25,13 @@ impl Clock for FixedClock {
     }
 }
 
-/// Upper bound on sanitisation passes in `prepare`. Each level of HTML entity
-/// encoding costs one pass (`&amp;lt;` → `&lt;` → `<tag>` → stripped), so four
-/// covers triple-encoded input; anything deeper is refused.
+/// Upper bound on sanitisation passes in `prepare`. The sanitizer's entity
+/// decode chains `&amp;` → `&` and `&lt;` → `<` within one pass, so a pass
+/// peels `&amp;lt;` straight to `<tag>`; each further `&amp;` layer costs one
+/// more pass, then one pass strips the tag and one confirms the fixpoint
+/// (`&amp;amp;lt;` → `&amp;lt;` → `<tag>` → stripped → stable). Four covers
+/// triple-encoded input; quadruple and deeper is refused. Pinned by
+/// `test_redact_for_sink_fixpoint_converges_on_encoded_html`.
 const SANITIZE_MAX_PASSES: usize = 4;
 
 #[derive(Deserialize)]

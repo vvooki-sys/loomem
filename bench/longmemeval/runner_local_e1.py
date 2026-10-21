@@ -67,7 +67,7 @@ from validate import canonical_hash, check_manifest, decode, fail
 
 TRANSCRIPT_ROLES = ("user", "assistant")
 PROVENANCE_ROLES = ("claim", "evidence", "cue")
-TOKEN_COUNTERS = ("approx", "tiktoken")
+TOKEN_COUNTERS = ("approx", "tiktoken", "embedder")
 E1_SETTINGS_KEYS = frozenset({"provenance_role", "token_counter"})
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 INGEST_RESULT = re.compile(
@@ -149,7 +149,7 @@ def e1_settings(config):
     if found["provenance_role"] not in PROVENANCE_ROLES:
         fail("runner_e1.provenance_role must be claim, evidence or cue")
     if found["token_counter"] not in TOKEN_COUNTERS:
-        fail("runner_e1.token_counter must be approx or tiktoken")
+        fail("runner_e1.token_counter must be approx, tiktoken or embedder")
     return dict(found)
 
 

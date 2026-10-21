@@ -317,6 +317,57 @@ async fn control_without_fragments_bm25_returns_the_whole_session_source() {
     assert!(persisted(&state, &source.id).fragment.is_none());
 }
 
+/// Appears only in turn 0 of its conversation.
+const TURN0_NEEDLE: &str = "quartzite-bellows-2207";
+
+/// A needle in turn 0. The source's content begins with turn 0, so the
+/// source and its fragment `f0` share their first 150 chars and the
+/// content-prefix dedup in `filter_candidates` would collapse whichever
+/// ranks lower. Under `provenance_role = "evidence"` the whole source can
+/// outrank `f0`; a fragment is never deduplicated against its own source,
+/// so the role-carrying, quotable unit reaches the reader alongside it.
+#[tokio::test]
+async fn turn_zero_fragment_survives_dedup_against_its_own_source() {
+    let (app, state) = stage1_app(false, |config| {
+        config.fragments.provenance_role = ProvenanceRole::Evidence;
+    });
+    let content = conversation(LONG_TURNS, Some((0, TURN0_NEEDLE)));
+    ingest(&state, &content).await;
+    let source = source_for(&state, &content);
+    let f0 = fragment_id(&source.id, 0);
+    let first = persisted(&state, &f0);
+    assert_eq!(meta(&first).turn_index, 0);
+    assert!(
+        first.content.len() >= 150 && source.content.starts_with(&first.content),
+        "turn 0 must be the source's own prefix ({} chars)",
+        first.content.len()
+    );
+    let response = search_json(
+        &app,
+        json!({"query": TURN0_NEEDLE, "streams": [STREAM], "top_k": 10, "trace": true}),
+    )
+    .await;
+    let ids = hit_ids(&response);
+    assert!(
+        ids.contains(&f0),
+        "turn-0 fragment lost among {ids:?}; rejections: {}",
+        response["trace_metadata"]["rejections"]
+    );
+    assert!(
+        ids.contains(&source.id),
+        "source lost among {ids:?}; rejections: {}",
+        response["trace_metadata"]["rejections"]
+    );
+    let hit = fragment_hit_containing(&state, &source, &ids, TURN0_NEEDLE);
+    assert_eq!(hit.id, f0);
+    assert_eq!(hit.provenance_role, ProvenanceRole::Evidence);
+    let mcp = mcp_ids(&mcp_search(&state, TURN0_NEEDLE).await);
+    assert!(
+        mcp.contains(&f0),
+        "memory_search lost the turn-0 fragment: {mcp:?}"
+    );
+}
+
 // ── Contract 2: appending turns never removes earlier evidence ───────────
 
 const SHORT_TURNS: usize = 8;
@@ -699,8 +750,10 @@ async fn needle_score_with_role(role: ProvenanceRole) -> f64 {
 /// (`bm25_only_with_budget`, `final_score = normalized_score * time_decay`),
 /// never loads the chunk and applies no provenance or trust multiplier. The
 /// handler routes a query there whenever `[storage] vector_enabled = false`
-/// or the query classifies as `Simple` (under 5 or over 15 words with no
-/// routing keyword) — `loomem-server/src/handlers/search/candidates.rs:85-105`. So
+/// or the query classifies as `Simple` (under 5 words with no routing
+/// keyword — `classify_query` in `handlers/search.rs`; over 15 words routes
+/// to `Complex`, which is fused) —
+/// `loomem-server/src/handlers/search/candidates.rs:85-105`. So
 /// the `[fragments] provenance_role` knob affects only fused (vector-enabled,
 /// non-Simple) retrieval; on short queries claim and evidence fragments
 /// score identically. This harness has no embedder, so it exercises exactly
