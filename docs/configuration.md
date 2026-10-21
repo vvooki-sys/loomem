@@ -277,7 +277,7 @@ fallback_to_regex = true
 | `embedding_dim` | int | Embedding vector dimensions — **must match the active model** |
 | `compression_model` | string | Model for consolidation, extraction, dream |
 | `timeout_secs` | int | API call timeout |
-| `fallback_to_regex` | bool | Use regex extraction if the completions LLM is unavailable |
+| `fallback_to_regex` | bool | Consolidation only: regex compression when the completions API call fails (does not cover a missing key) |
 
 ### Local embeddings (default)
 
@@ -292,8 +292,10 @@ ships in the default build; obtain the model files with:
 ```
 
 The completions LLM (consolidation, fact extraction, dream) is independent: with
-no `OPENAI_API_KEY`, those steps fall back to regex (`fallback_to_regex`), while
-`memory_store` and semantic search work fully locally. To use a local LLM for
+no `OPENAI_API_KEY` the server refuses to start unless `LOOMEM_ALLOW_KEYLESS=1`
+is set, and then `memory_ingest` returns a missing-key error (nothing stored),
+entity extraction is off and dream/consolidation fail, while `memory_store` and
+semantic search work fully locally. To use a local LLM for
 completions too, point `provider` at an OpenAI-compatible endpoint (future cycle).
 
 ### Embedding dimension & re-embedding
@@ -556,7 +558,7 @@ Controls `generate-memory-md` endpoint output.
 | Variable | Purpose | Required |
 |----------|---------|----------|
 | `LOOMEM_AUTH_TOKEN` | API Bearer key (name configurable via `server.auth_token_env`) | No (auth disabled if unset — local passthrough mode) |
-| `OPENAI_API_KEY` | LLM API key (name configurable via `llm.api_key_env`) | Only for OpenAI completions (`provider = "openai"`) or OpenAI embeddings (`embedding_provider = "openai"`). With local embeddings (default) and no key, the LLM steps fall back to regex. |
+| `OPENAI_API_KEY` | LLM API key (name configurable via `llm.api_key_env`) | Only for OpenAI completions (`provider = "openai"`) or OpenAI embeddings (`embedding_provider = "openai"`). With local embeddings (default) and no key, the server starts only with `LOOMEM_ALLOW_KEYLESS=1` and the LLM steps are unavailable (`memory_store` and search still work). |
 | `LOOMEM_CONFIG` | Config file path | No (default: `config.toml`) |
 | `PORT` | Override server port | No |
 | `SERVER_ORIGIN` | OAuth redirect base URL | No (for MCP Remote) |
