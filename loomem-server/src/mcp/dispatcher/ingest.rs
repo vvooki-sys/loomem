@@ -357,4 +357,6 @@ mod fixtures;
 #[cfg(test)]
 mod fragment_tests;
 #[cfg(test)]
+mod stage1_acceptance_tests;
+#[cfg(test)]
 mod tests;
