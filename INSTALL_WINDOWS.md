@@ -46,18 +46,50 @@ echo 'export PATH="$LIBCLANG_PATH:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
+**6. Node.js** (LTS, builds the web dashboard that gets embedded into the server):
+
+```bash
+winget install OpenJS.NodeJS.LTS
+```
+
 ## Build from source
 
 ```bash
 git clone https://github.com/vvooki-sys/loomem.git
 cd loomem
 cp entities.toml.example entities.toml   # personal entity config (gitignored)
-cargo build --release -p loomem-server
+
+# 1. Dashboard — must be built BEFORE the server, which embeds it at compile time
+(cd loomem-dashboard && npm ci && npm run build)
+
+# 2. Local embedding model (~113 MB) → ~/.loomem/models/multilingual-e5-small
+./scripts/fetch-embedding-model.sh
+
+# 3. Server + CLI (the CLI is the stdio bridge for the Claude desktop app)
+cargo build --release -p loomem-server -p loomem-cli
 ```
 
-The first build compiles RocksDB (C++) and takes a while. The binary lands in `target/release/loomem-server.exe`, unless your global cargo config redirects `target-dir`.
+The first build compiles RocksDB (C++) and takes a while. The binaries land in `target/release/` (`loomem-server.exe`, `loomem-cli.exe`), unless your global cargo config redirects `target-dir`.
+
+Skipping a step doesn't fail the build, but it silently degrades the result:
+
+- Without step 1, the dashboard returns 404.
+- Without step 2 and with `OPENAI_API_KEY` set, the server sends your stored text to the OpenAI embeddings API instead. This costs money, and its 1536-dim vectors do not match the default `embedding_dim = 384`.
+- Without step 2 and without a key, vector search is off (keyword search only).
 
 ## Run
+
+The default config enables LLM-backed features (knowledge extraction, entity extraction, dreaming), so the server **refuses to start without an LLM API key**. Pick one:
+
+```bash
+export OPENAI_API_KEY="sk-..."    # full functionality
+# or
+export LOOMEM_ALLOW_KEYLESS=1     # no key: skips the startup check only (see below)
+```
+
+`LOOMEM_ALLOW_KEYLESS=1` only skips the startup check. With it, `memory_ingest` returns a missing-key error and stores nothing, and dreaming fails. Write memories with `memory_store`, which works without a key.
+
+Then start the server from the repo root, in Git Bash:
 
 ```bash
 cargo run --release -p loomem-server
@@ -80,11 +112,14 @@ Same as on macOS and Linux — see [Connect an MCP client](README.md#connect-an-
 claude mcp add --transport http loomem http://localhost:3030/mcp
 ```
 
-For the Claude desktop app, the config file is `%APPDATA%\Claude\claude_desktop_config.json`, and the `command` must be the absolute Windows path to `loomem-cli.exe`.
+For the Claude desktop app, the config file is `%APPDATA%\Claude\claude_desktop_config.json`, and the `command` must be the absolute Windows path to `loomem-cli.exe` built above (e.g. `C:\\path\\to\\loomem\\target\\release\\loomem-cli.exe` — backslashes doubled in JSON).
 
 ## Troubleshooting
 
 - **`Unable to find libclang`** — `LIBCLANG_PATH` is unset or wrong. Run `ls "$LIBCLANG_PATH"/libclang.dll` to check it.
 - **`link.exe not found`** or MSVC linker errors — the Build Tools C++ workload is missing. Re-run step 2 with the `--override` flag.
 - **`cargo: command not found`** — open a new Git Bash window after installing Rust, so the updated `PATH` is loaded.
+- **`enabled but no LLM API key found`** — set `OPENAI_API_KEY` or `LOOMEM_ALLOW_KEYLESS=1` (see [Run](#run)).
+- **Dashboard returns 404** — the dashboard wasn't built before the server. Run step 1 of the build, then rebuild `loomem-server`.
+- **Vector search disabled / no embedder in the startup log** — the embedding model is missing (with `OPENAI_API_KEY` set, the server uses OpenAI embeddings instead). Run `./scripts/fetch-embedding-model.sh`. Start the server from Git Bash: it finds the model through `HOME`, which plain `cmd`/PowerShell usually don't set.
 - **Disk-space guard** — the startup disk-space check is not implemented on Windows; the server logs a warning and continues.

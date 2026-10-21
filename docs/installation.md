@@ -136,11 +136,15 @@ Remove the PATH line from your shell config if you added one. If you ran the ser
 git clone https://github.com/vvooki-sys/loomem.git
 cd loomem
 cp entities.toml.example entities.toml
+(cd loomem-dashboard && npm ci && npm run build)   # dashboard, embedded at compile time
+./scripts/fetch-embedding-model.sh                 # local embedding model → ~/.loomem/models
 cargo build --release -p loomem-server -p loomem-cli -p loomem-migrate
 # binaries in target/release/
 ```
 
-Requires Rust (stable) and libclang for the RocksDB build: `apt install libclang-dev` on Debian/Ubuntu; on macOS it ships with the Xcode Command Line Tools.
+Requires Rust (stable), Node.js (for the dashboard) and libclang for the RocksDB build: `apt install libclang-dev` on Debian/Ubuntu; on macOS it ships with the Xcode Command Line Tools. On Windows, see [INSTALL_WINDOWS.md](https://github.com/vvooki-sys/loomem/blob/main/INSTALL_WINDOWS.md).
+
+Skipping the dashboard build leaves the dashboard returning 404. Skip the model fetch with care: when `OPENAI_API_KEY` is set, the server sends your stored text to the OpenAI embeddings API instead (this costs money, and its 1536-dim vectors do not match the default `embedding_dim = 384`); with no key, vector search is off. The default config enables LLM-backed extraction and dreaming, so before starting the server set your LLM key (`export OPENAI_API_KEY=...`) or set `LOOMEM_ALLOW_KEYLESS=1` — otherwise it refuses to start. `LOOMEM_ALLOW_KEYLESS=1` only skips the startup check: `memory_ingest` then returns a missing-key error and stores nothing, and dreaming fails. Write memories with `memory_store`, which works without a key.
 
 ## Docker
 
