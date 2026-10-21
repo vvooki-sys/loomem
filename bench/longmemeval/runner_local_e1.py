@@ -335,13 +335,26 @@ class LocalEngineAdapterE1(LocalEngineAdapterV2):
     def expected_chunks(self):
         return len(self.mapping) + sum(self.fragment_counts.values())
 
+    # The E1 corpus is one source plus every fragment per session (hundreds of
+    # chunks per LongMemEval-S question, against tens for the per-turn E0 barrier),
+    # so the deadline scales with the expected count instead of inheriting E0's
+    # flat 45 s: a floor of READY_DEADLINE_SECONDS plus READY_SECONDS_PER_CHUNK for
+    # every expected chunk. First live run (2026-10-21, release binary, M-series):
+    # ~660 chunks per question embedded in roughly two minutes.
     READY_DEADLINE_SECONDS = 45
+    READY_SECONDS_PER_CHUNK = 0.5
+    # Each poll scans the embeddings and chunk keyspaces server-side; polling at
+    # 20 Hz throttled the embedding worker it was waiting for.
+    READY_POLL_SECONDS = 0.5
+
+    def ready_deadline_seconds(self, expected):
+        return self.READY_DEADLINE_SECONDS + self.READY_SECONDS_PER_CHUNK * expected
 
     def ready(self, payload):
         if set(id_list(payload["expected_ids"])) != set(self.mapping.values()):
             fail("Readiness expected IDs differ from ingested sessions")
         expected = self.expected_chunks()
-        deadline = time.monotonic() + self.READY_DEADLINE_SECONDS
+        deadline = time.monotonic() + self.ready_deadline_seconds(expected)
         while time.monotonic() < deadline:
             status = self.engine_request("/v1/status")["config_summary"]
             sync = self.engine_request("/v1/health/index-sync")
@@ -349,7 +362,7 @@ class LocalEngineAdapterE1(LocalEngineAdapterV2):
                     and sync["rocksdb_chunks"] == expected and sync["tantivy_docs"] == expected):
                 return {"ready": True, "pending_jobs": 0, "indexes_ready": True,
                         "indexed_ids": list(self.mapping.values())}
-            time.sleep(0.05)
+            time.sleep(self.READY_POLL_SECONDS)
         fail("Local source+fragment indexing incomplete")
 
 

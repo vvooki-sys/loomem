@@ -287,13 +287,23 @@ class AdapterTests(unittest.TestCase):
         adapter.engine_request = lambda path, payload=None: {
             "config_summary": {"embeddings_count": 1, "tantivy_docs": 1},
             "rocksdb_chunks": 1, "tantivy_docs": 1}
-        original = runner_local_e1.LocalEngineAdapterE1.READY_DEADLINE_SECONDS
-        runner_local_e1.LocalEngineAdapterE1.READY_DEADLINE_SECONDS = 0.05
+        cls = runner_local_e1.LocalEngineAdapterE1
+        original = (cls.READY_DEADLINE_SECONDS, cls.READY_SECONDS_PER_CHUNK, cls.READY_POLL_SECONDS)
+        cls.READY_DEADLINE_SECONDS, cls.READY_SECONDS_PER_CHUNK, cls.READY_POLL_SECONDS = 0.05, 0.0, 0.01
         try:
             with self.assertRaises(ValidationError):
                 adapter.request("/ready", {"scope": "x", "expected_ids": ["r"]})
         finally:
-            runner_local_e1.LocalEngineAdapterE1.READY_DEADLINE_SECONDS = original
+            cls.READY_DEADLINE_SECONDS, cls.READY_SECONDS_PER_CHUNK, cls.READY_POLL_SECONDS = original
+
+    def test_readiness_deadline_scales_with_expected_chunks(self):
+        adapter = fake_adapter()
+        adapter.mapping, adapter.fragment_counts = {SOURCE_A: "r", SOURCE_B: "s"}, {SOURCE_A: 300, SOURCE_B: 358}
+        cls = runner_local_e1.LocalEngineAdapterE1
+        self.assertEqual(adapter.expected_chunks(), 660)
+        self.assertEqual(adapter.ready_deadline_seconds(adapter.expected_chunks()),
+                         cls.READY_DEADLINE_SECONDS + cls.READY_SECONDS_PER_CHUNK * 660)
+        self.assertGreaterEqual(adapter.ready_deadline_seconds(0), 45)
 
     def test_search_maps_source_and_fragment_ids_and_rejections(self):
         adapter = fake_adapter()
