@@ -88,6 +88,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- HTML tag stripping in the ingress sanitizer no longer matches across lines.
+  Previously a lone `<` early in a multi-turn transcript and a `>` many turns
+  later were treated as one tag and everything between them was deleted from
+  the stored content. This applies on the default path to every ingress —
+  `memory_ingest`, `/v1/store` and every other write or LLM-input path that
+  goes through the sanitizer. Single-line tags (`<b>bold</b>`) are stripped as before; a tag
+  broken across lines (`<div\nclass="x">`) is now left in place, an accepted
+  trade-off since stored content is read by LLMs, not browsers. Entity
+  decoding, whitespace collapsing and the `html_stripped` flag are unchanged.
 - Knowledge extraction rejects explicitly truncated or refused model completions
   before admitting facts, while retaining the stored conversation source and
   reporting partial extraction failures. Completion metadata omitted by legacy
