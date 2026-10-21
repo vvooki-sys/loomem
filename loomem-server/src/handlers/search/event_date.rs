@@ -62,19 +62,37 @@ pub(super) fn multi_query_embeddings(
 }
 
 /// Keep event-date semantics separate from the existing bitemporal valid_at scope.
+/// `log` records each dropped id with its reason (inert unless tracing).
 pub(super) fn apply(
     results: &mut Vec<HybridSearchResult>,
     ctx: &QueryContext,
     payload: &SearchRequest,
     state: &AppState,
+    log: &mut super::rejections::RejectionLog,
 ) {
-    results.retain(|result| allows_id(&result.id, ctx.date_filter.as_ref(), state));
+    use crate::handlers::types::RejectionReason;
+    let stage = super::rejections::STAGE_FILTERS;
+    log.retain(
+        results,
+        stage,
+        RejectionReason::EventDateOutOfRange,
+        |result| allows_id(&result.id, ctx.date_filter.as_ref(), state),
+    );
     // Preserve existing metadata-load failure policies for validity and supersession.
     if let Some(valid_at) = payload.valid_at {
+        let before = log.snapshot(results);
         super::filter_bitemporal(results, &state.store, valid_at);
+        log.record_dropped(
+            before,
+            results,
+            stage,
+            RejectionReason::BitemporalOutOfRange,
+        );
     }
     if !payload.include_superseded {
+        let before = log.snapshot(results);
         super::filter_superseded(results, &state.store);
+        log.record_dropped(before, results, stage, RejectionReason::Superseded);
     }
 }
 

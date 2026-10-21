@@ -235,11 +235,19 @@ pub struct SearchResult {
     pub content_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type_source: Option<String>,
+    /// Additive evidence object (author, conversation date, event date +
+    /// provenance, source id, byte range), rendered by
+    /// `crate::evidence::render_evidence`. Present on every hit when
+    /// `[search] evidence_fields = true`; omitted otherwise so the default
+    /// response stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<crate::evidence::Evidence>,
 }
 
 mod search_trace;
 pub use search_trace::{
-    EvidenceStage, EvidenceTrace, OperationTelemetry, TraceInfo, TraceMetadata,
+    EvidenceStage, EvidenceTrace, OperationTelemetry, Rejection, RejectionReason, TraceInfo,
+    TraceMetadata,
 };
 
 #[derive(Debug, Serialize)]

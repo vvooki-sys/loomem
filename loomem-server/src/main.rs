@@ -3,6 +3,7 @@ mod auth;
 mod content_type;
 mod entity_worker;
 mod evaluation_clock;
+mod evidence;
 mod handlers;
 mod local_embedding;
 mod maintenance;
@@ -1413,6 +1414,7 @@ mod tests {
                 decay_match_relief: 0.0,
                 tier1: loomem_core::search::tier1::Tier1Config::default(),
                 operation: loomem_core::hybrid_search::OperationSearchConfig::default(),
+                evidence_fields: false,
             },
             advisor: cfg::AdvisorConfig::default(),
             worker: cfg::WorkerConfig::default(),

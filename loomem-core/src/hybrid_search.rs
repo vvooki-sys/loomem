@@ -106,6 +106,13 @@ pub struct SearchConfig {
     /// request opt in.
     #[serde(default)]
     pub operation: OperationSearchConfig,
+    /// Attach the additive `evidence` object (author, conversation date,
+    /// event date + provenance, source id, byte range) to every `/v1/search`
+    /// hit and `GET /api/memories/:id` item, and the matching bracketed
+    /// suffix to `memory_search` lines. Default off: responses stay
+    /// byte-identical to pre-flag output.
+    #[serde(default)]
+    pub evidence_fields: bool,
 }
 
 fn default_rerank_candidates() -> usize {
@@ -695,6 +702,7 @@ mod tests {
                 decay_match_relief: 0.0,
                 tier1: crate::search::tier1::Tier1Config::default(),
                 operation: OperationSearchConfig::default(),
+                evidence_fields: false,
             },
             advisor: crate::config::AdvisorConfig::default(),
             worker: crate::config::WorkerConfig::default(),

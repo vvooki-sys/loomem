@@ -19,7 +19,7 @@ pub(super) fn results(
         .filter_map(|result| {
             // A stale cache entry or in-flight reinsert never overrides a tombstone.
             let chunk = state.store.get_chunk(&result.id).ok().flatten()?;
-            visible(&chunk, ctx, payload).then(|| serialize(result, state, is_reranked))
+            visible(&chunk, ctx, payload).then(|| serialize(result, &chunk, state, is_reranked))
         })
         .collect()
 }
@@ -36,7 +36,12 @@ fn visible(chunk: &Chunk, ctx: &QueryContext, payload: &SearchRequest) -> bool {
         && (payload.include_superseded || (chunk.is_latest && chunk.superseded_by.is_none()))
 }
 
-fn serialize(result: &HybridSearchResult, state: &AppState, is_reranked: bool) -> SearchResult {
+fn serialize(
+    result: &HybridSearchResult,
+    chunk: &Chunk,
+    state: &AppState,
+    is_reranked: bool,
+) -> SearchResult {
     let content_type = loomem_core::content_type::get_content_type(&state.store, &result.id);
     SearchResult {
         id: result.id.clone(),
@@ -55,6 +60,7 @@ fn serialize(result: &HybridSearchResult, state: &AppState, is_reranked: bool) -
         signal_breakdown: None,
         content_type: content_type.map(|value| value.content_type.as_str().to_string()),
         content_type_source: content_type.map(|value| value.source.as_str().to_string()),
+        evidence: crate::evidence::hit_evidence(state.config.search.evidence_fields, Some(chunk)),
     }
 }
 

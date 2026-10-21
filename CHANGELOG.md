@@ -24,6 +24,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out in `config.toml` at its existing default. Extraction outcomes report
   attempted, completed and truncated calls. A truncated reply is still never
   admitted.
+- Shared evidence renderer behind the new `[search] evidence_fields` flag
+  (default `false`, responses unchanged). When enabled, every `/v1/search`
+  hit (cold and cached) and `GET /api/memories/:id` item carries an
+  additive `evidence` object with exactly `author`, `conversation_date`,
+  `event_date`, `event_date_provenance`, `source_id`, `byte_start` and
+  `byte_end` (unknowns are `null`, never a substituted date; only
+  calendar-valid ISO dates are emitted), and `memory_search` lines carry
+  the same facts as a compact bracketed tag before the score.
+  `event_date_provenance` is `resolved` when the engine recorded the
+  temporal cue the date came from and `unknown` otherwise; `explicit` is
+  reserved until the extractor persists that distinction.
+- Stage diagnostics: a traced search (`trace: true`) now reports
+  `trace_metadata.rejections`, one `{chunk_id, stage, reason}` per candidate
+  dropped between the existing evidence stages (soft delete, event-date,
+  bitemporal and supersession filters, extraction-metadata filters, prefix
+  and aggregation dedup, source-agent filters, top-k truncation). The
+  `evidence` block itself is unchanged.
 
 ### Changed
 

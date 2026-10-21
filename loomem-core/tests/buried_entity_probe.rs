@@ -319,6 +319,7 @@ fn probe_config() -> loomem_core::config::Config {
             decay_match_relief: 0.0,
             tier1: loomem_core::search::tier1::Tier1Config::default(),
             operation: loomem_core::hybrid_search::OperationSearchConfig::default(),
+            evidence_fields: false,
         },
         advisor: loomem_core::config::AdvisorConfig::default(),
         worker: loomem_core::config::WorkerConfig::default(),
