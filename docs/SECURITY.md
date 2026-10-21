@@ -1,6 +1,6 @@
 # Security overview
 
-*Last updated: 2026-10-20*
+*Last updated: 2026-10-21*
 
 This document describes Loomem's security model: authentication, encryption at rest, data in transit, PII handling, and logging. Where Loomem does not have a control in place, the gap is named explicitly under [Known limitations](#known-limitations).
 
@@ -82,6 +82,12 @@ Set `LOOMEM_AT_REST_MASTER_KEY` (32-byte, base64-encoded) to enable application-
 Graph contributions are bound to their entity/edge owner, memory ID, stream and content generation. Lookup and display require live supporting memories. Older aliases without explicit per-memory evidence remain hidden until re-extraction. Startup removes obsolete raw JSON extraction-completion hints without deleting canonical memories or calling a model. Physical purge removes associated graph contribution rows; logical deletion still follows the existing recovery/purge policy and is not immediate physical erasure.
 
 **Back up the master key separately from the data.** An encrypted checkpoint without the matching master key is unrecoverable. See [Backup and Restore](backup-and-restore.md).
+
+### Source fragments and the envelope
+
+The opt-in source-fragment feature ([`[fragments]`](configuration.md#fragments), `enabled = false` by default) stores each fragment's provenance — source chunk id, byte range within the source, turn index, author role, and the conversation date — as a top-level chunk field, **outside** the encrypted payload. The envelope covers only `(content, metadata, extraction_meta)`; the fragment provenance is persisted next to the plaintext routing fields. Consequence: with at-rest encryption enabled and fragments enabled, the day of each conversation, its turn structure, and the author role of every fragment are readable from the raw database, even though the same conversation date inside the chunk's encrypted metadata is not. Fragment text itself is encrypted like any other chunk content.
+
+**Operating rule:** do not enable `[fragments]` on an instance that uses at-rest encryption until the fragment provenance is moved inside the envelope (planned as a separate, migrating change). On self-host instances without at-rest encryption this makes no difference — every chunk field is plaintext there anyway.
 
 ---
 

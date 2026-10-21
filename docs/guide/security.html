@@ -166,7 +166,7 @@ a:hover{text-decoration:underline}
 <nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
 </div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html" class="active">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Project</div><article class="doc-content"><h1 id="security-overview">Security overview</h1>
-<p class="doc-updated">Last updated: 2026-10-20</p>
+<p class="doc-updated">Last updated: 2026-10-21</p>
 <p>This document describes Loomem's security model: authentication, encryption at rest, data in transit, PII handling, and logging. Where Loomem does not have a control in place, the gap is named explicitly under <a href="#known-limitations">Known limitations</a>.</p>
 <hr />
 <h2 id="threat-model-summary">Threat model summary</h2>
@@ -259,6 +259,9 @@ a:hover{text-decoration:underline}
 </ul>
 <p>Graph contributions are bound to their entity/edge owner, memory ID, stream and content generation. Lookup and display require live supporting memories. Older aliases without explicit per-memory evidence remain hidden until re-extraction. Startup removes obsolete raw JSON extraction-completion hints without deleting canonical memories or calling a model. Physical purge removes associated graph contribution rows; logical deletion still follows the existing recovery/purge policy and is not immediate physical erasure.</p>
 <p><strong>Back up the master key separately from the data.</strong> An encrypted checkpoint without the matching master key is unrecoverable. See <a href="backup-and-restore.html">Backup and Restore</a>.</p>
+<h3 id="source-fragments-and-the-envelope">Source fragments and the envelope</h3>
+<p>The opt-in source-fragment feature (<a href="configuration.html#fragments"><code>[fragments]</code></a>, <code>enabled = false</code> by default) stores each fragment's provenance — source chunk id, byte range within the source, turn index, author role, and the conversation date — as a top-level chunk field, <strong>outside</strong> the encrypted payload. The envelope covers only <code>(content, metadata, extraction_meta)</code>; the fragment provenance is persisted next to the plaintext routing fields. Consequence: with at-rest encryption enabled and fragments enabled, the day of each conversation, its turn structure, and the author role of every fragment are readable from the raw database, even though the same conversation date inside the chunk's encrypted metadata is not. Fragment text itself is encrypted like any other chunk content.</p>
+<p><strong>Operating rule:</strong> do not enable <code>[fragments]</code> on an instance that uses at-rest encryption until the fragment provenance is moved inside the envelope (planned as a separate, migrating change). On self-host instances without at-rest encryption this makes no difference — every chunk field is plaintext there anyway.</p>
 <hr />
 <h2 id="data-in-transit">Data in transit</h2>
 <ul>
