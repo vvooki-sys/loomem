@@ -657,7 +657,18 @@ pub async fn api_get_memory_handler(
     // — the same reverse index the list endpoint builds, reduced to one id.
     let entity_ids = super::graph_visibility::entity_ids_for_chunk(&state, &chunk);
 
-    Ok(Json(chunk_to_memory_item(&chunk, source, &entity_ids)))
+    let mut item = chunk_to_memory_item(&chunk, source, &entity_ids);
+    // Same additive `evidence` object as `/v1/search` hits, same flag.
+    if state.config.search.evidence_fields {
+        item["evidence"] =
+            serde_json::to_value(crate::evidence::render_evidence(&chunk)).map_err(|e| {
+                AppError::Internal(
+                    anyhow::Error::new(e)
+                        .context("GET /api/memories/:id: evidence serialization failed"),
+                )
+            })?;
+    }
+    Ok(Json(item))
 }
 
 /// Render one chunk as a REST memory item. Cycle/003 S9: extracted from the

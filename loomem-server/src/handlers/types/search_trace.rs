@@ -22,6 +22,11 @@ pub struct TraceMetadata {
     pub query_complexity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<EvidenceTrace>,
+    /// Why each candidate left the pool between `evidence` stages. Lifted
+    /// out of `EvidenceTrace` so the frozen v1 `evidence` projection keeps
+    /// its exact keys; present whenever `evidence` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rejections: Option<Vec<Rejection>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation: Option<OperationTelemetry>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,15 +90,19 @@ impl TraceMetadata {
         dedup_removed: usize,
         search_latency_us: u64,
         query_complexity: Option<String>,
-        evidence: Option<EvidenceTrace>,
+        mut evidence: Option<EvidenceTrace>,
         operation: Option<OperationTelemetry>,
     ) -> Self {
+        let rejections = evidence
+            .as_mut()
+            .map(|trace| std::mem::take(&mut trace.rejections));
         Self {
             total_results_before_topk,
             dedup_removed,
             search_latency_us,
             query_complexity,
             evidence,
+            rejections,
             operation,
             retrieval_v2: None,
         }
@@ -198,12 +207,46 @@ pub struct EvidenceTrace {
     pub schema_version: u8,
     pub coverage: &'static str,
     pub stages: Vec<EvidenceStage>,
+    /// Carried with the stages it explains, but never serialized here:
+    /// `TraceMetadata::new` lifts it to the sibling `rejections` key.
+    #[serde(skip)]
+    pub rejections: Vec<Rejection>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct EvidenceStage {
     pub stage: &'static str,
     pub chunk_ids: Vec<String>,
+}
+
+/// One candidate dropped from the pool. `stage` is the first `evidence`
+/// stage the id is absent from; `reason` says which filter removed it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Rejection {
+    pub chunk_id: String,
+    pub stage: &'static str,
+    pub reason: RejectionReason,
+}
+
+/// Stable reason strings (serialized in `snake_case`). Only reasons the
+/// post-rank pipeline can actually produce are listed; the MCP
+/// `max_context_tokens` cut happens after the traced pipeline and is not
+/// observed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectionReason {
+    SoftDeleted,
+    EventDateOutOfRange,
+    BitemporalOutOfRange,
+    Superseded,
+    ExtractionMetaMissing,
+    FactTypeFilter,
+    SubjectFilter,
+    MinConfidence,
+    ContentPrefixDedup,
+    AggregationSubjectDedup,
+    SourceAgentFilter,
+    TruncatedTopK,
 }
 
 #[cfg(test)]
@@ -219,6 +262,32 @@ mod tests {
         let value = serde_json::to_value(trace(None)).unwrap();
         assert!(value.get("operation").is_none());
         assert_eq!(value.as_object().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn rejections_are_lifted_beside_evidence_not_inside_it() {
+        let evidence = EvidenceTrace {
+            schema_version: 1,
+            coverage: "post_rank_to_response",
+            stages: vec![EvidenceStage {
+                stage: "response",
+                chunk_ids: vec!["kept".into()],
+            }],
+            rejections: vec![Rejection {
+                chunk_id: "gone".into(),
+                stage: "response",
+                reason: RejectionReason::TruncatedTopK,
+            }],
+        };
+        let value =
+            serde_json::to_value(TraceMetadata::new(0, 0, 0, None, Some(evidence), None)).unwrap();
+        assert_eq!(value["evidence"].as_object().unwrap().len(), 3);
+        assert_eq!(
+            value["rejections"],
+            serde_json::json!([
+                {"chunk_id": "gone", "stage": "response", "reason": "truncated_top_k"}
+            ])
+        );
     }
 
     #[test]

@@ -21,8 +21,11 @@ mod candidates;
 mod evaluation_evidence;
 mod event_date;
 mod evidence;
+#[cfg(test)]
+mod evidence_fields_tests;
 mod operation;
 mod operation_lane;
+mod rejections;
 mod request_scope;
 mod telemetry;
 use request_scope::validated_search_streams;
@@ -267,6 +270,8 @@ struct FilterOutcome {
     dedup_removed: usize,
     total_results_before_topk: usize,
     final_top_k: usize,
+    /// Per-id drop reasons; empty unless the request asked for `trace`.
+    rejections: Vec<super::types::Rejection>,
 }
 
 /// Whether the request carries a `source_agent` include or
@@ -1141,6 +1146,11 @@ async fn build_response(
                 signal_breakdown: signal_breakdowns.get(idx).cloned().flatten(),
                 content_type: content_type_meta.map(|m| m.content_type.as_str().to_string()),
                 content_type_source: content_type_meta.map(|m| m.source.as_str().to_string()),
+                // Evidence object from the chunk already loaded above (flag-gated).
+                evidence: crate::evidence::hit_evidence(
+                    state.config.search.evidence_fields,
+                    chunk_opt.as_ref(),
+                ),
             }
         })
         .collect();
@@ -2362,44 +2372,20 @@ fn filter_candidates(
     payload: &SearchRequest,
     state: &Arc<AppState>,
 ) -> FilterOutcome {
-    event_date::apply(&mut hybrid_results, ctx, payload, state);
+    // Stage diagnostics (trace only): each `retain` below is wrapped so the
+    // dropped ids are recorded with the filter that removed them.
+    let mut log = rejections::RejectionLog::new(payload.trace);
+    let stage = rejections::STAGE_FILTERS;
+    event_date::apply(&mut hybrid_results, ctx, payload, state, &mut log);
 
     // Filter by extraction_meta fields (fact_type, subject, min_confidence)
     if payload.fact_type.is_some() || payload.subject.is_some() || payload.min_confidence.is_some()
     {
-        hybrid_results.retain(|r| {
+        log.retain_explained(&mut hybrid_results, stage, |r| {
             if let Ok(Some(chunk)) = state.store.get_chunk(&r.id) {
-                if let Some(ref meta) = chunk.extraction_meta {
-                    let type_ok = payload.fact_type.as_ref().is_none_or(|ft| {
-                        let chunk_type = match meta.fact_type {
-                            loomem_core::storage::FactType::PreferenceOrDecision => {
-                                "preference_or_decision"
-                            }
-                            loomem_core::storage::FactType::ProjectState => "project_state",
-                            loomem_core::storage::FactType::Fact => "fact",
-                            loomem_core::storage::FactType::Event => "event",
-                            loomem_core::storage::FactType::Experience => "experience",
-                        };
-                        // Match the built-in enum string, or an operator-configured
-                        // custom topic preserved in `meta.topic` (collapses to Fact
-                        // in the enum, so the raw key is the only way to filter it).
-                        chunk_type == ft.as_str() || meta.topic.as_deref() == Some(ft.as_str())
-                    });
-                    let subject_ok = payload.subject.as_ref().is_none_or(|s| {
-                        meta.subject
-                            .as_ref()
-                            .is_some_and(|ms| ms.to_lowercase().contains(&s.to_lowercase()))
-                    });
-                    let conf_ok = payload
-                        .min_confidence
-                        .is_none_or(|mc| meta.confidence >= mc);
-                    type_ok && subject_ok && conf_ok
-                } else {
-                    // No extraction_meta — exclude if any extraction filter is set
-                    false
-                }
+                rejections::extraction_filter_rejection(chunk.extraction_meta.as_ref(), payload)
             } else {
-                true
+                None
             }
         });
     }
@@ -2409,7 +2395,8 @@ fn filter_candidates(
     let count_before_dedup = hybrid_results.len();
     {
         let mut seen_fingerprints: Vec<String> = Vec::new();
-        hybrid_results.retain(|r| {
+        let reason = super::types::RejectionReason::ContentPrefixDedup;
+        log.retain(&mut hybrid_results, stage, reason, |r| {
             let fp: String = r
                 .content
                 .chars()
@@ -2441,7 +2428,8 @@ fn filter_candidates(
     // Aggregation dedup: keep only the highest-scored chunk per subject
     if matches!(ctx.complexity, QueryComplexity::Aggregation) {
         let mut seen_subjects: std::collections::HashSet<String> = std::collections::HashSet::new();
-        hybrid_results.retain(|r| {
+        let reason = super::types::RejectionReason::AggregationSubjectDedup;
+        log.retain(&mut hybrid_results, stage, reason, |r| {
             if let Ok(Some(chunk)) = state.store.get_chunk(&r.id) {
                 if let Some(ref meta) = chunk.extraction_meta {
                     if let Some(ref subject) = meta.subject {
@@ -2460,8 +2448,9 @@ fn filter_candidates(
     let dedup_removed = count_before_dedup - hybrid_results.len();
 
     // Source agent filtering (post-retrieval)
+    let reason = super::types::RejectionReason::SourceAgentFilter;
     if let Some(ref agent) = payload.source_agent {
-        hybrid_results.retain(|r| {
+        log.retain(&mut hybrid_results, stage, reason, |r| {
             if let Ok(Some(chunk)) = state.store.get_chunk(&r.id) {
                 chunk
                     .source
@@ -2474,7 +2463,7 @@ fn filter_candidates(
         });
     }
     if let Some(ref exclude) = payload.exclude_source_agents {
-        hybrid_results.retain(|r| {
+        log.retain(&mut hybrid_results, stage, reason, |r| {
             if let Ok(Some(chunk)) = state.store.get_chunk(&r.id) {
                 chunk
                     .source
@@ -2512,6 +2501,7 @@ fn filter_candidates(
         dedup_removed,
         total_results_before_topk,
         final_top_k,
+        rejections: log.into_entries(),
     }
 }
 
@@ -3746,6 +3736,7 @@ mod tests {
                 signal_breakdown: sb,
                 content_type: None,
                 content_type_source: None,
+                evidence: None,
             }
         }
 
@@ -4059,6 +4050,7 @@ mod tests {
                 decay_match_relief: 0.0,
                 tier1: loomem_core::search::tier1::Tier1Config::default(),
                 operation: loomem_core::hybrid_search::OperationSearchConfig::default(),
+                evidence_fields: false,
             }
         }
 

@@ -27,7 +27,7 @@ Default when `stream=` is omitted = `__user_default__` (call `memory_namespaces`
 Loading:
 - memory_context: token-budgeted markdown context block at task start. Does NOT emit chunk_ids.
 - memory_profile: synthesized user profile (name, preferences, frequent topics, key facts).
-- memory_search: hybrid BM25 + vector + graph search; scored plain-text list. Each line ends with its `(id: <uuid>)` — usable directly for history/delete/feedback.
+- memory_search: hybrid BM25 + vector + graph search; scored plain-text list. Each line ends with its `(id: <uuid>)` — usable directly for history/delete/feedback. When the server enables evidence fields, a bracketed `[author: …; conversation: …; event: … (…); source: …]` tag precedes the score.
 - memory_namespaces: list accessible streams and their IDs.
 
 Storing:

@@ -1,8 +1,9 @@
 //! Search-only evidence snapshots. Does not observe ingest, extraction, channel
 //! truncation, or context packing by the caller. Traced requests bypass cache;
 //! async reranking is consequently not observed. Tier-1 does not emit this block.
+use super::rejections::{RejectionLog, STAGE_SOFT_DELETE};
 use super::{filter_candidates, AppState, FilterOutcome, QueryContext, SearchRequest};
-use crate::handlers::types::{EvidenceStage, EvidenceTrace};
+use crate::handlers::types::{EvidenceStage, EvidenceTrace, RejectionReason};
 use loomem_core::HybridSearchResult;
 use std::sync::Arc;
 
@@ -16,15 +17,20 @@ pub(super) fn filter_with_trace(
         schema_version: 1,
         coverage: "post_rank_to_response",
         stages: Vec::new(),
+        rejections: Vec::new(),
     });
+    let mut log = RejectionLog::new(payload.trace);
     capture(&mut trace, "ranked_candidates", &candidates, ctx, state);
     // Preserve the existing defense-in-depth filter before the external reranker.
-    let candidates: Vec<_> = candidates
-        .into_iter()
-        .filter(|r| !crate::handlers::delete::is_deleted_in_store(state, &r.id))
-        .collect();
+    let mut candidates = candidates;
+    log.retain(
+        &mut candidates,
+        STAGE_SOFT_DELETE,
+        RejectionReason::SoftDeleted,
+        |r| !crate::handlers::delete::is_deleted_in_store(state, &r.id),
+    );
     capture(&mut trace, "after_soft_delete", &candidates, ctx, state);
-    let outcome = filter_candidates(candidates, ctx, payload, state);
+    let mut outcome = filter_candidates(candidates, ctx, payload, state);
     capture(
         &mut trace,
         "after_filters_and_dedup",
@@ -39,7 +45,23 @@ pub(super) fn filter_with_trace(
         ctx,
         state,
     );
+    log.append(std::mem::take(&mut outcome.rejections));
+    log.record_truncated(&outcome.results, outcome.final_top_k);
+    if let Some(trace) = trace.as_mut() {
+        trace.rejections = log
+            .into_entries()
+            .into_iter()
+            .filter(|rejection| in_scope(&rejection.chunk_id, ctx, state))
+            .collect();
+    }
     (outcome, trace)
+}
+
+/// Even diagnostic IDs must not expose a different stream. Missing or
+/// unreadable chunks are omitted from snapshots, not inferred as evidence.
+fn in_scope(id: &str, ctx: &QueryContext, state: &Arc<AppState>) -> bool {
+    matches!(state.store.get_chunk(id), Ok(Some(chunk))
+        if ctx.stream_list.as_ref().is_none_or(|s| s.contains(&chunk.stream)))
 }
 
 fn capture(
@@ -50,14 +72,9 @@ fn capture(
     state: &Arc<AppState>,
 ) {
     let Some(trace) = trace else { return };
-    // Even diagnostic IDs must not expose a different stream. Missing or
-    // unreadable chunks are omitted from snapshots, not inferred as evidence.
     let chunk_ids = candidates
         .iter()
-        .filter(|r| {
-            matches!(state.store.get_chunk(&r.id), Ok(Some(chunk))
-                if ctx.stream_list.as_ref().is_none_or(|s| s.contains(&chunk.stream)))
-        })
+        .filter(|r| in_scope(&r.id, ctx, state))
         .map(|r| r.id.clone())
         .collect();
     trace.stages.push(EvidenceStage { stage, chunk_ids });
@@ -178,17 +195,111 @@ mod tests {
         assert_eq!(trace.stages[1].chunk_ids, ["first", "superseded", "last"]);
         assert_eq!(trace.stages[2].chunk_ids, ["first", "last"]);
         assert_eq!(trace.stages[3].chunk_ids, ["first"]);
+        let rejected: Vec<_> = trace
+            .rejections
+            .iter()
+            .map(|r| (r.chunk_id.as_str(), r.stage, r.reason))
+            .collect();
+        assert_eq!(
+            rejected,
+            [
+                ("deleted", "after_soft_delete", RejectionReason::SoftDeleted),
+                (
+                    "superseded",
+                    "after_filters_and_dedup",
+                    RejectionReason::Superseded
+                ),
+                ("last", "response", RejectionReason::TruncatedTopK),
+            ]
+        );
         let serialized = serde_json::to_string(&trace).unwrap();
         assert!(!serialized.contains(&payload.query));
         assert!(!serialized.contains("independent"));
         assert!(!serialized.contains("foreign"));
+        assert!(
+            !serialized.contains("rejections"),
+            "lifted by TraceMetadata"
+        );
         let mut disabled = payload;
         disabled.trace = false;
         let (plain, absent) = filter_with_trace(candidates, &ctx, &disabled, &state);
         assert!(absent.is_none());
+        assert!(plain.rejections.is_empty());
         assert_eq!(
             plain.results.iter().map(|r| &r.id).collect::<Vec<_>>(),
             outcome.results.iter().map(|r| &r.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rejections_name_dedup_and_filter_reasons() {
+        let (_, state) = crate::tests::make_test_app();
+        let payload: SearchRequest = serde_json::from_value(json!({
+            "query": "q", "trace": true, "top_k": 10, "stream": "test", "dry_run": true,
+            "min_confidence": 0.5
+        }))
+        .unwrap();
+        let auth =
+            AuthContext::single_stream("test", UserRole::Admin, KeyScope::Shared, None, true);
+        let ctx = super::super::prepare_query_context(&state, &auth, &payload).unwrap();
+        let mut candidates = vec![
+            seed(&state, "twin-a", "test"),
+            seed(&state, "twin-b", "test"),
+            seed(&state, "weak", "test"),
+        ];
+        // Near-identical long content: the second twin is dominated by the
+        // first (>80% shared 150-char prefix).
+        for result in candidates.iter_mut().take(2) {
+            result.content = format!("{} tail {}", "same prefix ".repeat(20), result.id);
+        }
+        for result in &candidates {
+            let mut chunk = state.store.get_chunk(&result.id).unwrap().unwrap();
+            chunk.content = result.content.clone();
+            chunk.extraction_meta = Some(loomem_core::storage::ExtractionMeta {
+                fact_type: loomem_core::storage::FactType::Fact,
+                subject: None,
+                event_date: None,
+                event_date_context: None,
+                supersedes: None,
+                superseded_by: None,
+                confidence: if result.id == "weak" { 0.2 } else { 0.9 },
+                extracted_from: None,
+                extraction_model: None,
+                original_content: None,
+                topic: None,
+                attributed_to: None,
+            });
+            state.store.store_chunk(&chunk).unwrap();
+        }
+        let (outcome, trace) = filter_with_trace(candidates, &ctx, &payload, &state);
+        assert_eq!(
+            outcome
+                .results
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            ["twin-a"]
+        );
+        let trace = trace.unwrap();
+        let rejected: Vec<_> = trace
+            .rejections
+            .iter()
+            .map(|r| (r.chunk_id.as_str(), r.stage, r.reason))
+            .collect();
+        assert_eq!(
+            rejected,
+            [
+                (
+                    "weak",
+                    "after_filters_and_dedup",
+                    RejectionReason::MinConfidence
+                ),
+                (
+                    "twin-b",
+                    "after_filters_and_dedup",
+                    RejectionReason::ContentPrefixDedup
+                ),
+            ]
         );
     }
     #[tokio::test]
@@ -216,6 +327,8 @@ mod tests {
                 assert_eq!(evidence["schema_version"], 1);
                 assert_eq!(evidence["stages"][3]["chunk_ids"], json!([]));
                 assert!(!evidence.to_string().contains("private-canary"));
+                assert!(evidence.get("rejections").is_none());
+                assert_eq!(value["trace_metadata"]["rejections"], json!([]));
             }
         }
     }

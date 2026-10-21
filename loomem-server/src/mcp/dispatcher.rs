@@ -2,6 +2,8 @@ mod caller_relations;
 use caller_relations::inject_caller_relations;
 mod delete_notice;
 mod dream;
+#[cfg(test)]
+mod evidence_suffix_tests;
 mod ingest;
 use dream::tool_dream;
 use ingest::tool_ingest;
@@ -950,15 +952,18 @@ async fn tool_search(
                 // it after a search alone — needed for memory_delete,
                 // memory_history and memory_feedback, which all key on
                 // chunk_id. Previously only memory_store/_ingest surfaced ids,
-                // forcing callers to capture them at write time.
+                // forcing callers to capture them at write time. The evidence
+                // tag (`[search] evidence_fields`) sits before `(score:` so the
+                // line still ends with the id; empty when the flag is off.
                 text.push_str(&format!(
-                    "{}. [{}]{}{} {}{} (score: {:.2}) (id: {})\n",
+                    "{}. [{}]{}{} {}{}{} (score: {:.2}) (id: {})\n",
                     i + 1,
                     ts,
                     content_type_tag,
                     trust_tag,
                     r.content,
                     supersedes_note,
+                    crate::evidence::hit_text_suffix(r.evidence.as_ref()),
                     r.score,
                     r.id
                 ));
