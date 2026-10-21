@@ -228,9 +228,14 @@ aggregation_max_top_k = 30      # cap for aggregation queries
 # silent fallback to an approximation).
 # When enabled, memory_ingest persists the fragments of each source right
 # after the source itself (before extraction); fragments are additive and
-# never block fact extraction. provenance_role is the ranking knob applied to
-# every fragment chunk ("claim" = full weight, "evidence" = x0.5, "cue" =
-# x0.8 in hybrid search).
+# never block fact extraction. With the flag on, the same text is embedded
+# and entity-extracted once for the source and once for each fragment, and
+# chunk counts (status, stats, dashboard) grow by the turn count per ingest.
+# provenance_role is the ranking knob applied to every fragment chunk
+# ("claim" = full weight, "evidence" = x0.5, "cue" = x0.8 in hybrid search).
+# It affects ranking only on fused (vector) retrieval; BM25-only queries
+# (under 5 words without a routing keyword, or vector_enabled = false) apply
+# no provenance multiplier.
 [fragments]
 enabled = false
 max_fragment_tokens = 400       # token budget for a fragment's text

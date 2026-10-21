@@ -177,11 +177,13 @@ class ConfigTests(unittest.TestCase):
     def test_e1_settings_are_strict(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config.json"
-            good = {"runner_e1": {"provenance_role": "cue", "token_counter": "approx"}}
-            config.write_text(json.dumps(good))
-            self.assertEqual(e1_settings(config), good["runner_e1"])
+            for good in [{"runner_e1": {"provenance_role": "cue", "token_counter": "approx"}},
+                         {"runner_e1": {"provenance_role": "claim", "token_counter": "embedder"}}]:
+                config.write_text(json.dumps(good))
+                with self.subTest(good=good):
+                    self.assertEqual(e1_settings(config), good["runner_e1"])
             for bad in [{}, {"runner_e1": {"provenance_role": "cue"}},
-                        {"runner_e1": {"provenance_role": "claim", "token_counter": "embedder"}},
+                        {"runner_e1": {"provenance_role": "claim", "token_counter": "chars"}},
                         {"runner_e1": {"provenance_role": "fact", "token_counter": "approx"}},
                         {"runner_e1": {"provenance_role": "claim", "token_counter": "approx", "x": 1}}]:
                 config.write_text(json.dumps(bad))

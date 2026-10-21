@@ -2393,14 +2393,15 @@ fn filter_candidates(
 
     // Deduplicate near-identical results: keep highest-scored, collapse similar content.
     // Uses first 150 chars as fingerprint — catches duplicate ingest from daily logs.
-    // Fragments of different sources are distinct evidence and never collapse.
+    // Fragments of different sources are distinct evidence and never collapse,
+    // nor does a fragment collapse against its own source.
     let count_before_dedup = hybrid_results.len();
     {
         let mut seen_fingerprints: Vec<prefix_dedup::Fingerprint> = Vec::new();
         let reason = super::types::RejectionReason::ContentPrefixDedup;
         log.retain(&mut hybrid_results, stage, reason, |r| {
             let source = prefix_dedup::fragment_source(&state.store, &r.id);
-            let fp = prefix_dedup::Fingerprint::new(&r.content, source.as_deref());
+            let fp = prefix_dedup::Fingerprint::new(&r.id, &r.content, source.as_deref());
             let dominated = seen_fingerprints
                 .iter()
                 .any(|existing| fp.dominated_by(existing));

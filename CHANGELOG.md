@@ -42,11 +42,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event date is unknown (never the storage timestamp) and their `memory_search`
   line carries the source's `observed:`/`recorded:` date. New keys
   `provenance_role` (`"claim"` default | `"evidence"` | `"cue"`, the ranking
-  knob for fragment chunks) and `token_counter` (`"approx"` default |
+  knob for fragment chunks; it affects ranking only on fused (vector)
+  retrieval — BM25-only queries, i.e. under 5 words without a routing keyword
+  or `vector_enabled = false`, apply no provenance multiplier) and
+  `token_counter` (`"approx"` default |
   `"tiktoken"` | `"embedder"`, the loaded local embedding model's own
   tokenizer — the recommended counter, since it is the only one whose budget
-  is the embedder's; it fails segmentation loudly instead of falling back
-  when no local model is loaded); unknown values fail config load. Fragments
+  is the embedder's; with fragments enabled it requires
+  `embedding_provider = "local"` at config load, and it fails segmentation
+  loudly instead of falling back if no local model is loaded); unknown
+  values fail config load. In search, the content-prefix dedup never
+  collapses a fragment against its own source (the source begins with turn
+  0, so the two share a prefix) nor fragments of different sources against
+  each other. Fragments
   share the source's lifecycle: deleting the source tombstones them with the
   facts, and the startup event-date index repair covers them. With fragments
   disabled (the default) the ingest path performs exactly the writes and

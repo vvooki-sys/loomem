@@ -75,6 +75,20 @@ pub enum AppError {
     PayloadTooLarge(String),
 }
 
+/// The same message `IntoResponse` puts in the JSON `error` field, for
+/// callers that render an error into text (e.g. MCP tool output).
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AppError::Internal(err) => write!(f, "{err:#}"),
+            AppError::BadRequest(message)
+            | AppError::Forbidden(message)
+            | AppError::NotFound(message)
+            | AppError::PayloadTooLarge(message) => f.write_str(message),
+        }
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {

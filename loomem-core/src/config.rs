@@ -378,6 +378,12 @@ impl Config {
         Ok(config)
     }
 
+    /// `[fragments]` checks that depend on the embedding provider.
+    fn validate_fragments(&self) -> Result<()> {
+        self.fragments
+            .validate(self.llm.embedding_provider == "local")
+    }
+
     pub fn validate(&self) -> Result<()> {
         // Storage validation
         anyhow::ensure!(
@@ -507,8 +513,7 @@ impl Config {
             "llm.timeout_secs must be positive"
         );
 
-        self.fragments
-            .validate(self.llm.embedding_provider == "local")?;
+        self.validate_fragments()?;
 
         // Server validation
         anyhow::ensure!(

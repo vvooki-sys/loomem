@@ -558,3 +558,28 @@ fn validate_rejects_zero_budget_and_local_window_overflow() {
     };
     exact.validate(true).expect("exactly the window is allowed");
 }
+
+#[test]
+fn validate_rejects_embedder_counter_without_the_local_provider() {
+    let embedder = FragmentsConfig {
+        enabled: true,
+        token_counter: TokenCounterKind::Embedder,
+        ..FragmentsConfig::default()
+    };
+    embedder
+        .validate(true)
+        .expect("the local provider loads the embedder tokenizer");
+    let err = embedder.validate(false).unwrap_err().to_string();
+    assert!(
+        err.contains("token_counter = \"embedder\" requires embedding_provider = \"local\""),
+        "{err}"
+    );
+    // With fragments off the counter is never used, so the combination is allowed.
+    let disabled = FragmentsConfig {
+        enabled: false,
+        ..embedder
+    };
+    disabled
+        .validate(false)
+        .expect("a disabled section does not need the tokenizer");
+}

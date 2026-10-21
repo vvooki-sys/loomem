@@ -139,11 +139,16 @@ impl FragmentsConfig {
 
     /// Startup checks (called from `Config::validate`). `local_provider` is
     /// whether `llm.embedding_provider` is `"local"`, the only provider whose
-    /// window Loomem knows.
+    /// window Loomem knows and the only one that loads the tokenizer the
+    /// `embedder` counter needs.
     pub fn validate(&self, local_provider: bool) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.max_fragment_tokens > 0,
             "fragments.max_fragment_tokens must be positive"
+        );
+        anyhow::ensure!(
+            !(self.enabled && self.token_counter == TokenCounterKind::Embedder) || local_provider,
+            "fragments.token_counter = \"embedder\" requires embedding_provider = \"local\""
         );
         if local_provider {
             anyhow::ensure!(

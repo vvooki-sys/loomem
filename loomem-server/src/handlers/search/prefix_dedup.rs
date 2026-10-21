@@ -2,16 +2,23 @@
 //!
 //! The dedup pass collapses near-identical results (first 150 lowercase
 //! chars, >80% shared prefix) to absorb repeated ingests of the same daily
-//! log. Source fragments break that assumption: two conversations can hold
-//! a byte-identical turn and each is distinct evidence (its own source, its
-//! own date), so fragments of *different* sources are never collapsed into
-//! each other. Every other pairing — two plain chunks, two fragments of one
-//! source, a fragment against a non-fragment — keeps the pre-existing rule.
+//! log. Source fragments break that assumption in two ways: two
+//! conversations can hold a byte-identical turn and each is distinct
+//! evidence (its own source, its own date), so fragments of *different*
+//! sources are never collapsed into each other; and a source's content
+//! begins with its first turn, so the source and its fragment `f0` share a
+//! prefix whenever that turn is long enough — a fragment is never collapsed
+//! against its own source (nor the source against it), whichever ranks
+//! higher. Every other pairing — two plain chunks, two fragments of one
+//! source, a fragment against an unrelated non-fragment — keeps the
+//! pre-existing rule.
 use loomem_core::RocksDbStore;
 
 /// Dedup key of one ranked candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Fingerprint {
+    /// Chunk id of the candidate.
+    id: String,
     /// First 150 chars of the content, lowercased.
     prefix: String,
     /// `Chunk::fragment.source_id` when the candidate is a fragment.
@@ -19,8 +26,9 @@ pub(super) struct Fingerprint {
 }
 
 impl Fingerprint {
-    pub(super) fn new(content: &str, fragment_source: Option<&str>) -> Self {
+    pub(super) fn new(id: &str, content: &str, fragment_source: Option<&str>) -> Self {
         Self {
+            id: id.to_owned(),
             prefix: content.chars().take(150).collect::<String>().to_lowercase(),
             fragment_source: fragment_source.map(str::to_owned),
         }
@@ -29,8 +37,12 @@ impl Fingerprint {
     /// Whether `existing` (already kept, higher-ranked) makes this candidate
     /// a duplicate: both prefixes are at least 30 bytes and share more than
     /// 80% of the shorter one — unless both are fragments of different
-    /// sources, which are distinct evidence by definition.
+    /// sources, or one is a fragment of the other, which are distinct
+    /// evidence by definition.
     pub(super) fn dominated_by(&self, existing: &Self) -> bool {
+        if self.is_source_of(existing) || existing.is_source_of(self) {
+            return false;
+        }
         if let (Some(mine), Some(theirs)) = (&self.fragment_source, &existing.fragment_source) {
             if mine != theirs {
                 return false;
@@ -48,6 +60,11 @@ impl Fingerprint {
             .count();
         // `common / min_len > 0.8` in exact integer arithmetic.
         common * 5 > min_len * 4
+    }
+
+    /// Whether `other` is a fragment persisted from this candidate's chunk.
+    fn is_source_of(&self, other: &Self) -> bool {
+        other.fragment_source.as_deref() == Some(self.id.as_str())
     }
 }
 
@@ -69,15 +86,22 @@ mod tests {
     const TURN: &str = "user: Turn 2 is about copper boilers; the lighthouse keeper logged it. \
                         More notes on copper boilers follow for turn 2.";
 
+    fn plain(id: &str, content: &str) -> Fingerprint {
+        Fingerprint::new(id, content, None)
+    }
+
+    fn fragment(id: &str, content: &str, source: &str) -> Fingerprint {
+        Fingerprint::new(id, content, Some(source))
+    }
+
     #[test]
     fn plain_chunks_keep_the_prefix_rule() {
-        let kept = Fingerprint::new(TURN, None);
-        assert!(Fingerprint::new(TURN, None).dominated_by(&kept));
-        assert!(Fingerprint::new(&TURN.to_uppercase(), None).dominated_by(&kept));
-        assert!(!Fingerprint::new("short", None).dominated_by(&kept));
+        let kept = plain("a", TURN);
+        assert!(plain("b", TURN).dominated_by(&kept));
+        assert!(plain("c", &TURN.to_uppercase()).dominated_by(&kept));
+        assert!(!plain("d", "short").dominated_by(&kept));
         assert!(
-            !Fingerprint::new("assistant: Turn 3 is about something else entirely", None)
-                .dominated_by(&kept)
+            !plain("e", "assistant: Turn 3 is about something else entirely").dominated_by(&kept)
         );
     }
 
@@ -85,25 +109,38 @@ mod tests {
     fn exact_eighty_percent_overlap_is_not_a_duplicate() {
         // 40 shared chars of a 50-char prefix is exactly 0.8: keep both.
         let base = "a".repeat(40);
-        let kept = Fingerprint::new(&format!("{base}bbbbbbbbbb"), None);
-        assert!(!Fingerprint::new(&format!("{base}cccccccccc"), None).dominated_by(&kept));
+        let kept = plain("a", &format!("{base}bbbbbbbbbb"));
+        assert!(!plain("b", &format!("{base}cccccccccc")).dominated_by(&kept));
         // 41 of 50 is over the line.
-        let kept = Fingerprint::new(&format!("{base}bbbbbbbbbb"), None);
-        assert!(Fingerprint::new(&format!("{base}bccccccccc"), None).dominated_by(&kept));
+        let kept = plain("a", &format!("{base}bbbbbbbbbb"));
+        assert!(plain("b", &format!("{base}bccccccccc")).dominated_by(&kept));
     }
 
     #[test]
     fn identical_fragments_of_different_sources_both_survive() {
-        let kept = Fingerprint::new(TURN, Some("src-1"));
-        assert!(!Fingerprint::new(TURN, Some("src-2")).dominated_by(&kept));
+        let kept = fragment("src-1:f0", TURN, "src-1");
+        assert!(!fragment("src-2:f0", TURN, "src-2").dominated_by(&kept));
+    }
+
+    #[test]
+    fn a_fragment_and_its_own_source_both_survive_in_either_order() {
+        // Source ranked higher: its first fragment is not a duplicate.
+        let source = plain("src-1", TURN);
+        assert!(!fragment("src-1:f0", TURN, "src-1").dominated_by(&source));
+        // Fragment ranked higher: its own source is not a duplicate either.
+        let first = fragment("src-1:f0", TURN, "src-1");
+        assert!(!plain("src-1", TURN).dominated_by(&first));
+        // An unrelated chunk with the same prefix still collapses against both.
+        assert!(plain("other", TURN).dominated_by(&source));
+        assert!(plain("other", TURN).dominated_by(&first));
     }
 
     #[test]
     fn fragments_of_one_source_and_mixed_pairs_still_collapse() {
-        let kept = Fingerprint::new(TURN, Some("src-1"));
-        assert!(Fingerprint::new(TURN, Some("src-1")).dominated_by(&kept));
-        assert!(Fingerprint::new(TURN, None).dominated_by(&kept));
-        let plain = Fingerprint::new(TURN, None);
-        assert!(Fingerprint::new(TURN, Some("src-2")).dominated_by(&plain));
+        let kept = fragment("src-1:f0", TURN, "src-1");
+        assert!(fragment("src-1:f1", TURN, "src-1").dominated_by(&kept));
+        assert!(plain("other", TURN).dominated_by(&kept));
+        let unrelated = plain("other", TURN);
+        assert!(fragment("src-2:f0", TURN, "src-2").dominated_by(&unrelated));
     }
 }
