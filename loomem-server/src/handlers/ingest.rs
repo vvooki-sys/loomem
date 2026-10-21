@@ -1,4 +1,5 @@
 pub(crate) mod graph;
+pub(crate) mod sanitize;
 use axum::{extract::State, http::StatusCode, Json};
 use chrono::Utc;
 use loomem_core::intent_log::OpType;
@@ -47,28 +48,20 @@ pub async fn persist_chunk(
     _stream_id: Option<&str>,
     _metadata: Option<&serde_json::Value>,
 ) -> Result<String, AppError> {
-    // Pre-ingestion sanitization: HTML strip + injection detection
-    let sanitize_result = loomem_core::sanitizer::sanitize(content);
-    let content = &sanitize_result.content;
-    let chunk = if sanitize_result.html_stripped || sanitize_result.injection_detected {
+    // Pre-ingestion sanitization (HTML strip + injection detection, then PII
+    // redaction before any storage) — see `sanitize::persist_content`.
+    let prepared = sanitize::persist_content(&state.pii_filter, content);
+    let content = &prepared.text;
+    let chunk = if let Some(replacement) = prepared.chunk_content {
         let mut c = chunk;
-        c.content = sanitize_result.content.clone();
-        c
-    } else {
-        chunk
-    };
-
-    // PII sanitization at ingest — redact before any storage
-    let (sanitized_content, pii_redactions) = state.pii_filter.sanitize(content);
-    let content = &sanitized_content;
-    let chunk = if !pii_redactions.is_empty() {
-        let mut c = chunk;
-        c.content = sanitized_content.clone();
-        tracing::info!(
-            "PII: redacted {} items at ingest for chunk {}",
-            pii_redactions.len(),
-            c.id
-        );
+        c.content = replacement;
+        if prepared.pii_redactions > 0 {
+            tracing::info!(
+                "PII: redacted {} items at ingest for chunk {}",
+                prepared.pii_redactions,
+                c.id
+            );
+        }
         c
     } else {
         chunk

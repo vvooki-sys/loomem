@@ -25,6 +25,11 @@ impl Clock for FixedClock {
     }
 }
 
+/// Upper bound on sanitisation passes in `prepare`. Each level of HTML entity
+/// encoding costs one pass (`&amp;lt;` → `&lt;` → `<tag>` → stripped), so four
+/// covers triple-encoded input; anything deeper is refused.
+const SANITIZE_MAX_PASSES: usize = 4;
+
 #[derive(Deserialize)]
 pub(super) struct IngestArgs {
     content: String,
@@ -47,6 +52,19 @@ pub(super) trait IngestPersistence {
         state: &Arc<AppState>,
         chunk: Chunk,
     ) -> Result<String, handlers::AppError>;
+
+    /// Read a chunk back exactly as the sink stored it, so byte ranges can
+    /// be cut from the persisted bytes rather than from what was handed in.
+    async fn persisted(
+        &self,
+        state: &Arc<AppState>,
+        id: &str,
+    ) -> Result<Option<Chunk>, handlers::AppError> {
+        state
+            .store
+            .get_chunk(id)
+            .map_err(handlers::AppError::Internal)
+    }
 }
 
 pub(super) struct RealPersistence;
@@ -156,10 +174,22 @@ fn prepare<'a>(
     }
     let timestamp = u64::try_from(clock.timestamp())
         .map_err(|_| JsonRpcError::invalid_params("Ingest timestamp out of range"))?;
+    // Sanitise to a fixpoint: the sink re-applies the same pipeline on every
+    // write, and byte ranges (fragments) are only meaningful if that
+    // re-application changes nothing. Drifting content is refused outright
+    // rather than stored in a form the segmenter never saw.
+    let content = state
+        .pii_filter
+        .redact_for_sink_fixpoint(&args.content, SANITIZE_MAX_PASSES)
+        .ok_or_else(|| {
+            JsonRpcError::invalid_params(
+                "content did not stabilise under sanitisation (nested HTML encoding); nothing stored",
+            )
+        })?;
     Ok(IngestContext {
         state,
         source_id: uuid::Uuid::new_v4().to_string(),
-        content: state.pii_filter.redact_for_sink(&args.content),
+        content,
         conversation_date: args.conversation_date,
         stream,
         user_id,
@@ -168,7 +198,8 @@ fn prepare<'a>(
 }
 
 /// Persist the canonical source; on success returns the chunk exactly as it
-/// was handed to the sink, so fragments can be cut from the same content.
+/// was handed to the sink. Fragments are cut from the bytes the sink actually
+/// stored (`fragments::store` reads them back and checks they match).
 async fn store_source(
     context: &IngestContext<'_>,
     sink: &impl IngestPersistence,

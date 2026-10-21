@@ -2,8 +2,9 @@
 //!
 //! Why: a whole session stored as one source chunk never reaches the reader.
 //! The local embedder (`local_embeddings.rs`, `multilingual-e5-small`)
-//! silently truncates its input at 512 tokens *including* the `"passage: "`
-//! prefix, so the embedding of a long source only covers its first few
+//! silently truncates its input at 512 positions — the chunk content as-is
+//! (no `query:`/`passage:` prefix is added) plus the tokenizer's two special
+//! tokens — so the embedding of a long source only covers its first few
 //! hundred tokens, and ranking multipliers then push the source out of the
 //! final top-k. This module turns a canonical source into small, quotable
 //! fragments — one per transcript turn, long turns split further — that
@@ -28,7 +29,7 @@ use std::collections::HashSet;
 use tiktoken_rs::CoreBPE;
 
 use crate::storage::Chunk;
-pub use config::{FragmentsConfig, TokenCounterKind};
+pub use config::{FragmentsConfig, TokenCounterKind, LOCAL_EMBEDDER_WINDOW_TOKENS};
 
 /// The canonical source a fragment set is derived from.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -106,8 +107,16 @@ pub enum FragmentError {
 
 /// Token counting injected into segmentation, so the domain stays
 /// independent of the optional `tokenizers` feature and of any one model.
+/// A counter that cannot measure a text fails segmentation (`Tokenizer`)
+/// rather than guessing — a guess is how hidden truncation gets in.
 pub trait TokenCounter {
-    fn count(&self, text: &str) -> usize;
+    fn count(&self, text: &str) -> Result<usize, FragmentError>;
+}
+
+impl<T: TokenCounter + ?Sized> TokenCounter for &T {
+    fn count(&self, text: &str) -> Result<usize, FragmentError> {
+        (**self).count(text)
+    }
 }
 
 /// Deterministic model-free counter: `ceil(chars / 3)`. Conservative
@@ -118,8 +127,8 @@ pub trait TokenCounter {
 pub struct ApproxTokenCounter;
 
 impl TokenCounter for ApproxTokenCounter {
-    fn count(&self, text: &str) -> usize {
-        text.chars().count().div_ceil(3)
+    fn count(&self, text: &str) -> Result<usize, FragmentError> {
+        Ok(text.chars().count().div_ceil(3))
     }
 }
 
@@ -152,18 +161,27 @@ impl std::fmt::Debug for TiktokenCounter {
 }
 
 impl TokenCounter for TiktokenCounter {
-    fn count(&self, text: &str) -> usize {
-        self.bpe.encode_ordinary(text).len()
+    fn count(&self, text: &str) -> Result<usize, FragmentError> {
+        Ok(self.bpe.encode_ordinary(text).len())
     }
 }
 
 impl TokenCounterKind {
-    /// Build the counter this config value names. Only `Tiktoken` can fail
-    /// (encoder construction).
+    /// Build the model-free counter this config value names. `Tiktoken` can
+    /// fail (encoder construction). `Embedder` is not built here: it wraps
+    /// the loaded local embedding model's tokenizer, which only the caller
+    /// that owns that model can supply (`local_embeddings::LocalEmbedder::
+    /// token_counter`); asking for it without one is an error, never a
+    /// fallback to an approximation.
     pub fn counter(self) -> Result<Box<dyn TokenCounter>, FragmentError> {
         Ok(match self {
             Self::Approx => Box::new(ApproxTokenCounter),
             Self::Tiktoken => Box::new(TiktokenCounter::new()?),
+            Self::Embedder => {
+                return Err(FragmentError::Tokenizer(
+                    "embedder tokenizer must be supplied by the caller".to_string(),
+                ))
+            }
         })
     }
 }
@@ -181,7 +199,7 @@ impl TokenCounterKind {
 /// gaps or overlaps, from byte 0 to `text.len()`; each `text` is the exact
 /// slice of its range; `index` is the position in the returned vector;
 /// ids are unique and equal `"{source_id}:f{index}"`. Budget: every
-/// fragment satisfies `counter.count(text) <= cfg.max_fragment_tokens`,
+/// fragment satisfies `counter.count(text)? <= cfg.max_fragment_tokens`,
 /// except a fragment that is a single char (it cannot be cut further and
 /// is emitted as-is). The function is pure: identical input yields
 /// identical output. Empty text yields an empty vector.

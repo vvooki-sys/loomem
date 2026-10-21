@@ -26,6 +26,37 @@ mod inner {
         model: Model,
         tokenizer: Tokenizer,
         dim: usize,
+        /// Built on first use by [`LocalEmbedder::token_counter`].
+        counter: std::sync::OnceLock<EmbedderTokenCounter>,
+    }
+
+    /// Counts tokens exactly as [`LocalEmbedder::embed`] would see them:
+    /// `encode(text, add_special_tokens = true)` with the two special tokens
+    /// included and **without** the embedding tokenizer's truncation, so a
+    /// text longer than the window reports its real length instead of the
+    /// cap. This is the only counter whose budget is the embedder's.
+    pub struct EmbedderTokenCounter {
+        tokenizer: Tokenizer,
+    }
+
+    impl EmbedderTokenCounter {
+        /// Wrap a copy of `tokenizer` with truncation removed.
+        pub fn from_tokenizer(tokenizer: &Tokenizer) -> Result<Self> {
+            let mut tokenizer = tokenizer.clone();
+            tokenizer
+                .with_truncation(None)
+                .map_err(|e| anyhow::anyhow!("Failed to disable tokenizer truncation: {}", e))?;
+            Ok(Self { tokenizer })
+        }
+    }
+
+    impl crate::fragments::TokenCounter for EmbedderTokenCounter {
+        fn count(&self, text: &str) -> Result<usize, crate::fragments::FragmentError> {
+            self.tokenizer
+                .encode(text, true)
+                .map(|encoding| encoding.len())
+                .map_err(|e| crate::fragments::FragmentError::Tokenizer(e.to_string()))
+        }
     }
 
     impl LocalEmbedder {
@@ -72,7 +103,18 @@ mod inner {
                 model,
                 tokenizer,
                 dim: expected_dim,
+                counter: std::sync::OnceLock::new(),
             })
+        }
+
+        /// The embedder's own token counter (see [`EmbedderTokenCounter`]),
+        /// built once per process on first use.
+        pub fn token_counter(&self) -> Result<&EmbedderTokenCounter> {
+            if let Some(counter) = self.counter.get() {
+                return Ok(counter);
+            }
+            let built = EmbedderTokenCounter::from_tokenizer(&self.tokenizer)?;
+            Ok(self.counter.get_or_init(|| built))
         }
 
         /// Embed a single text. Returns normalized vector.
@@ -229,7 +271,7 @@ mod dimension_tests {
 }
 
 #[cfg(feature = "local-embeddings")]
-pub use inner::LocalEmbedder;
+pub use inner::{EmbedderTokenCounter, LocalEmbedder};
 
 /// Stub when feature disabled
 #[cfg(not(feature = "local-embeddings"))]
@@ -255,6 +297,9 @@ impl LocalEmbedder {
     }
     pub fn dim(&self) -> usize {
         0
+    }
+    pub fn token_counter(&self) -> anyhow::Result<&dyn crate::fragments::TokenCounter> {
+        anyhow::bail!("Local embeddings require local-embeddings feature")
     }
 }
 
@@ -356,6 +401,91 @@ mod tests {
             .expect("load local embedding model");
         let error = embedder.embed("A short memory.").unwrap_err();
         assert!(error.to_string().contains("model returned 384-dim"));
+    }
+
+    /// The embedder counter measures what `embed` sees (special tokens
+    /// included, no truncation cap). The shipped `approx` budget keeps
+    /// Latin-script prose (Polish sample) inside the window; structured text
+    /// (JSON/hashes/URLs, which XLM-R tokenises at far fewer chars per
+    /// token) is kept inside it by the `embedder` counter — the reason it is
+    /// the documented recommendation. Needs only `tokenizer.json`, so it runs wherever
+    /// `LOOMEM_TEST_EMBED_MODEL` points at the model directory; skipped (with
+    /// a printed reason) elsewhere.
+    #[test]
+    fn embedder_counter_matches_tokenizer_and_approx_budget_fits_window() {
+        use crate::fragments::{
+            segment_source, ApproxTokenCounter, CanonicalSource, FragmentsConfig, TokenCounter,
+            LOCAL_EMBEDDER_WINDOW_TOKENS,
+        };
+        use tokenizers::{Tokenizer, TruncationParams};
+        let Ok(model_dir) = std::env::var("LOOMEM_TEST_EMBED_MODEL") else {
+            eprintln!("skip: set LOOMEM_TEST_EMBED_MODEL=<dir> (needs tokenizer.json) to run");
+            return;
+        };
+        let path = std::path::Path::new(&model_dir).join("tokenizer.json");
+        let mut tokenizer = Tokenizer::from_file(&path).expect("load tokenizer.json");
+        // Reproduce the embedder's own setup, truncation included.
+        tokenizer
+            .with_truncation(Some(TruncationParams {
+                max_length: LOCAL_EMBEDDER_WINDOW_TOKENS,
+                ..Default::default()
+            }))
+            .expect("truncation");
+        let counter = EmbedderTokenCounter::from_tokenizer(&tokenizer).expect("counter");
+
+        let json = format!(
+            "user: here is the payload\n{}",
+            (0..80)
+                .map(|i| format!(
+                    "{{\"id\":\"a1b2c3d4-{i:04}\",\"sha\":\"9f86d081884c7d659a2feaa0c55ad015\",\"url\":\"https://example.invalid/v1/items/{i}?x=1&y=2\"}}"
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let polish = format!(
+            "user: {}\nassistant: {}",
+            "Zażółć gęślą jaźń — przepis na ciasto drożdżowe z owocami sezonowymi. ".repeat(60),
+            "Nie mogę znaleźć kluczy od auta, sprawdź w kurtce. ".repeat(60)
+        );
+        let cfg = FragmentsConfig {
+            enabled: true,
+            ..FragmentsConfig::default()
+        };
+        let approx: &dyn TokenCounter = &ApproxTokenCounter;
+        let embedder: &dyn TokenCounter = &counter;
+        for (name, text, segmenter) in [("json", json, embedder), ("polish", polish, approx)] {
+            let whole = tokenizer.encode(text.as_str(), true).expect("encode");
+            let untruncated = counter.count(&text).expect("count");
+            assert!(
+                untruncated > LOCAL_EMBEDDER_WINDOW_TOKENS
+                    && whole.len() == LOCAL_EMBEDDER_WINDOW_TOKENS,
+                "{name}: sample must exceed the window (counter {untruncated}, capped {})",
+                whole.len()
+            );
+            let source = CanonicalSource {
+                id: "src".into(),
+                text,
+                conversation_date: None,
+            };
+            let fragments = segment_source(&source, &cfg, segmenter).expect("segment");
+            assert!(fragments.len() > 1, "{name}: sample must split");
+            for fragment in &fragments {
+                let encoded = tokenizer
+                    .encode(fragment.text.as_str(), true)
+                    .expect("encode");
+                assert_eq!(
+                    counter.count(&fragment.text).expect("count"),
+                    encoded.len(),
+                    "{name}: counter must agree with Tokenizer::encode"
+                );
+                assert!(
+                    encoded.len() <= LOCAL_EMBEDDER_WINDOW_TOKENS,
+                    "{name}: budgeted fragment {} encodes to {} > window",
+                    fragment.id,
+                    encoded.len()
+                );
+            }
+        }
     }
 
     /// Cycle /015: input longer than the model's 512-position window must be

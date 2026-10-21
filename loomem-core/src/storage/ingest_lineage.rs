@@ -59,14 +59,18 @@ fn has_fragment_marker(chunk: &Chunk) -> bool {
 
 /// Strict wire shape for a server-owned fragment of a recognized source: a
 /// level-0 slice (`Chunk::fragment`) whose only parent is the source it was
-/// cut from, never an extracted fact (no `extraction_meta`). Lifecycle is
-/// top-down only — tombstoning the source cascades to its fragments; a
-/// fragment deleted on its own leaves the source live, which is consistent
-/// because the source holds no forward list of its fragments.
+/// cut from, never an extracted fact (no `extraction_meta`). Like its source
+/// it is `consolidated` from birth (raw transcript text is never
+/// consolidation/dream input) and never dormant. Lifecycle is top-down only
+/// — tombstoning the source cascades to its fragments; a fragment deleted on
+/// its own leaves the source live, which is consistent because the source
+/// holds no forward list of its fragments.
 #[must_use]
 pub fn is_ingest_fragment(chunk: &Chunk) -> bool {
     has_fragment_marker(chunk)
         && chunk.level == 0
+        && chunk.consolidated
+        && !chunk.dormant
         && chunk.extraction_meta.is_none()
         && fragment_link(chunk).is_some()
 }

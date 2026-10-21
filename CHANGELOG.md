@@ -12,23 +12,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fragments` domain module: deterministic segmentation of a canonical
   conversation source into turn-level fragments (long turns split further at
   paragraph, sentence and whitespace boundaries) that carry the author role,
-  the conversation date and an exact byte range into the source. New
-  `[fragments]` config section (`enabled = false` by default) and an optional
-  `fragment` provenance field on stored chunks; existing databases and
-  configurations load unchanged.
+  the conversation date and an exact byte range into the source. Line-prefix
+  turn markers are trusted only when at least two marker lines are present
+  and one of them is `user`/`human`; a lone `AI:` bullet inside prose stays
+  one unlabelled turn. New `[fragments]` config section (`enabled = false`
+  by default) and an optional `fragment` provenance field on stored chunks;
+  existing databases and configurations load unchanged. `Config::validate`
+  rejects `max_fragment_tokens = 0` and, with `embedding_provider = "local"`,
+  a `max_fragment_tokens + prefix_reserve_tokens` above the local embedder's
+  512-token window. (`prefix_reserve_tokens` is headroom above the text
+  budget — the embedder adds only its two special tokens; Loomem prepends
+  no `passage:` prefix.)
 - Opt-in fragment persistence on `memory_ingest` (`[fragments] enabled = true`):
   right after the canonical source is stored, its fragments are persisted as
   level-0 chunks (`"{source_id}:f{index}"`, marker kind `fragment`, linked to
   the source through `source_ids` and `fragment`) through the same sink,
-  before extraction. Fragments are additive: a failed fragment write is
-  reported in the tool text (`Stored N fragments, M fragment writes failed.`)
-  and never blocks fact extraction. New keys `provenance_role`
-  (`"claim"` default | `"evidence"` | `"cue"`, the ranking knob for fragment
-  chunks) and `token_counter` (`"approx"` default | `"tiktoken"`); unknown
-  values fail config load. Fragments share the source's lifecycle: deleting
-  the source tombstones them with the facts, and the startup event-date index
-  repair covers them. With fragments disabled (the default) the ingest path
-  performs exactly the writes and returns exactly the text it did before.
+  before extraction. Byte ranges index into the source *as persisted*: the
+  ingest content is sanitised to a fixpoint up front (this applies to every
+  `memory_ingest` call; input that keeps changing after four passes, e.g.
+  deeply nested HTML entity encoding, is refused with nothing stored, and
+  extraction now sees exactly the persisted text), the source is read back
+  from storage before
+  segmentation, and a slice the sink would trim is stored with its range
+  narrowed to the surviving bytes. Fragments are additive: a failed fragment
+  write is reported in the tool text (`Stored N fragments, M fragment writes
+  failed.`) and never blocks fact extraction. Like the source, fragments are
+  `consolidated` from birth, so raw turns never enter L0 consolidation, the
+  pending-L0 counter or the `memory_context` "recent" section; their index
+  event date is unknown (never the storage timestamp) and their `memory_search`
+  line carries the source's `observed:`/`recorded:` date. New keys
+  `provenance_role` (`"claim"` default | `"evidence"` | `"cue"`, the ranking
+  knob for fragment chunks) and `token_counter` (`"approx"` default |
+  `"tiktoken"` | `"embedder"`, the loaded local embedding model's own
+  tokenizer — the recommended counter, since it is the only one whose budget
+  is the embedder's; it fails segmentation loudly instead of falling back
+  when no local model is loaded); unknown values fail config load. Fragments
+  share the source's lifecycle: deleting the source tombstones them with the
+  facts, and the startup event-date index repair covers them. With fragments
+  disabled (the default) the ingest path performs exactly the writes and
+  returns exactly the text it did before.
 - Opt-in knowledge extraction controls in `[knowledge_extraction]`:
   `input_chunk_tokens` splits a transcript at line boundaries into smaller
   per-call chunks, and `split_on_truncation` re-extracts a chunk whose

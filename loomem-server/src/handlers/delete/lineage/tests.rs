@@ -144,6 +144,7 @@ async fn source_delete_cleans_fragment_from_store_index_and_embedding() {
     root.source = Some(SourceTag::from_agent("mcp-ingest-source"));
     root.metadata = Some(serde_json::json!({"_loomem_ingest":{"version":1,"kind":"source"}}));
     let mut template = chunk("template");
+    template.consolidated = true;
     template.trust_level = Some("a2".into());
     template.source = Some(SourceTag::from_agent("mcp-ingest"));
     template.metadata = Some(serde_json::json!({"_loomem_ingest":{"version":1,"kind":"fragment"}}));

@@ -35,7 +35,7 @@ pub(super) fn split_to_budget(
         let piece = text.get(s..e).ok_or_else(|| {
             FragmentError::Invariant(format!("range {s}..{e} is not on char boundaries"))
         })?;
-        if counter.count(piece) <= max_tokens {
+        if counter.count(piece)? <= max_tokens {
             out.push((s, e));
             continue;
         }
