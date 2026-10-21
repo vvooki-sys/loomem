@@ -52,6 +52,38 @@ fn canonical_uuid(id: &str) -> bool {
     uuid::Uuid::parse_str(id).is_ok_and(|uuid| uuid.to_string() == id)
 }
 
+fn has_fragment_marker(chunk: &Chunk) -> bool {
+    marker_kind(chunk) == Some("fragment")
+        && chunk.source.as_ref().map(|tag| tag.agent.as_str()) == Some("mcp-ingest")
+}
+
+/// Strict wire shape for a server-owned fragment of a recognized source: a
+/// level-0 slice (`Chunk::fragment`) whose only parent is the source it was
+/// cut from, never an extracted fact (no `extraction_meta`). Lifecycle is
+/// top-down only — tombstoning the source cascades to its fragments; a
+/// fragment deleted on its own leaves the source live, which is consistent
+/// because the source holds no forward list of its fragments.
+#[must_use]
+pub fn is_ingest_fragment(chunk: &Chunk) -> bool {
+    has_fragment_marker(chunk)
+        && chunk.level == 0
+        && chunk.extraction_meta.is_none()
+        && fragment_link(chunk).is_some()
+}
+
+fn fragment_link(chunk: &Chunk) -> Option<&str> {
+    let source_id = chunk.fragment.as_ref()?.source_id.as_str();
+    let ids = chunk.source_ids.as_deref()?;
+    (matches!(ids, [only] if only == source_id)
+        && canonical_uuid(source_id)
+        && chunk.id.starts_with(&format!("{source_id}:f")))
+    .then_some(source_id)
+}
+
+fn is_owned(chunk: &Chunk) -> bool {
+    is_ingest_source(chunk) || is_ingest_fact(chunk) || is_ingest_fragment(chunk)
+}
+
 // Legacy dream rows also carry source_ids.join(",") as an audit string.
 // That composite is not a second foreign key. Keep singular extracted_from
 // independently, so other explicit IDs cannot hide an owned-source link.
@@ -89,6 +121,7 @@ fn immutable_provenance(chunk: &Chunk) -> Result<serde_json::Value> {
         chunk.persistent,
         chunk.timestamp,
         is_ingest_source(chunk).then_some((chunk.consolidated, chunk.dormant)),
+        &chunk.fragment,
     ))?)
 }
 
@@ -103,7 +136,16 @@ impl RocksDbStore {
         if is_ingest_fact(chunk) {
             self.validate_fact_sources(chunk)?;
         }
+        if has_fragment_marker(chunk) {
+            self.validate_fragment_source(chunk)?;
+        }
         Ok(())
+    }
+
+    fn validate_fragment_source(&self, chunk: &Chunk) -> Result<()> {
+        ensure!(is_ingest_fragment(chunk), "invalid ingest fragment shape");
+        let id = fragment_link(chunk).context("invalid ingest fragment lineage")?;
+        self.require_live_source(chunk, id)
     }
 
     fn validate_live_ancestry(&self, chunk: &Chunk) -> Result<()> {
@@ -122,19 +164,24 @@ impl RocksDbStore {
         ensure!(is_ingest_fact_shape(chunk), "invalid ingest fact shape");
         let ids = fact_links(chunk).context("invalid ingest fact lineage")?;
         for id in ids {
-            let source = self
-                .get_chunk(id)?
-                .context("ingest source does not exist")?;
-            ensure!(
-                is_ingest_source(&source),
-                "ingest parent is not a recognized source"
-            );
-            ensure!(
-                source.stream == chunk.stream,
-                "ingest source stream mismatch"
-            );
-            ensure!(source.deleted_at.is_none(), "ingest source is deleted");
+            self.require_live_source(chunk, id)?;
         }
+        Ok(())
+    }
+
+    fn require_live_source(&self, chunk: &Chunk, id: &str) -> Result<()> {
+        let source = self
+            .get_chunk(id)?
+            .context("ingest source does not exist")?;
+        ensure!(
+            is_ingest_source(&source),
+            "ingest parent is not a recognized source"
+        );
+        ensure!(
+            source.stream == chunk.stream,
+            "ingest source stream mismatch"
+        );
+        ensure!(source.deleted_at.is_none(), "ingest source is deleted");
         Ok(())
     }
 
@@ -158,7 +205,7 @@ impl RocksDbStore {
 
     fn ingest_ancestry(&self, chunk: &Chunk) -> Result<Ancestry> {
         let mut state = Ancestry {
-            owned: is_ingest_source(chunk) || is_ingest_fact(chunk),
+            owned: is_owned(chunk),
             invalid: false,
         };
         let mut pending: Vec<String> = parents(chunk).map(str::to_owned).collect();
@@ -174,7 +221,7 @@ impl RocksDbStore {
                 state.invalid = true;
                 continue;
             };
-            state.owned |= is_ingest_source(&parent) || is_ingest_fact(&parent);
+            state.owned |= is_owned(&parent);
             state.invalid |= parent.deleted_at.is_some() || parent.stream != chunk.stream;
             pending.extend(parents(&parent).map(str::to_owned));
         }
@@ -222,14 +269,17 @@ impl RocksDbStore {
     }
 
     /// Strict startup snapshot, including tombstones, for non-destructive
-    /// repair of versioned ingest event-date index semantics.
+    /// repair of versioned ingest event-date index semantics. Fragments are
+    /// included so a cascaded tombstone also leaves the index on repair.
     pub fn ingest_chunks_for_index_repair(&self) -> Result<Vec<Chunk>> {
         let _guard = self.lock_lifecycle()?;
         Ok(self
             .lineage_rows()?
             .into_iter()
             .map(|(_, chunk)| chunk)
-            .filter(|chunk| is_ingest_source(chunk) || is_ingest_fact_shape(chunk))
+            .filter(|chunk| {
+                is_ingest_source(chunk) || is_ingest_fact_shape(chunk) || is_ingest_fragment(chunk)
+            })
             .collect())
     }
 

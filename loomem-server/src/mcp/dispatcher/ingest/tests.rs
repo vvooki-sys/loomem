@@ -1,7 +1,5 @@
 //! Phase15 source/date contract exercised with injected chat and real storage.
-#[path = "fixtures.rs"]
-mod fixtures;
-use fixtures::*;
+use super::fixtures::*;
 
 use loomem_core::memory_extractor::ChatHttpReply;
 use loomem_core::storage::ProvenanceRole;

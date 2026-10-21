@@ -77,9 +77,19 @@ pub(super) async fn tool_ingest(
     user_id: Option<String>,
 ) -> Result<ToolResult, JsonRpcError> {
     let context = prepare(state, args, stream, user_id, &SystemClock)?;
-    if let Err(result) = store_source(&context, &RealPersistence).await {
-        return Ok(result);
-    }
+    let source = match store_source(&context, &RealPersistence).await {
+        Ok(source) => source,
+        Err(result) => return Ok(result),
+    };
+    let report = fragments::store(&context, &source, &RealPersistence).await;
+    let result = extract_with_configured_chat(&context).await?;
+    Ok(fragments::append_report(result, report.as_ref()))
+}
+
+async fn extract_with_configured_chat(
+    context: &IngestContext<'_>,
+) -> Result<ToolResult, JsonRpcError> {
+    let state = context.state;
     if !state.config.knowledge_extraction.enabled {
         return Ok(ToolResult::text(format!(
             "Stored source transcript (id: {}). Knowledge extraction disabled.",
@@ -88,12 +98,12 @@ pub(super) async fn tool_ingest(
     }
     let Some(key) = state.config.llm.get_api_key() else {
         return Ok(ToolResult::error(with_source(
-            &context,
+            context,
             "Extraction failed: API key unavailable. No facts stored.",
         )));
     };
     let chat = loomem_core::memory_extractor::HttpExtractionChat::new(&state.http_client, key);
-    extract(&chat, &RealPersistence, &context).await
+    extract(&chat, &RealPersistence, context).await
 }
 
 #[cfg(test)]
@@ -117,10 +127,13 @@ pub(super) async fn tool_ingest_with_sink(
     user_id: Option<String>,
 ) -> Result<ToolResult, JsonRpcError> {
     let context = prepare(state, args, stream, user_id, &FixedClock)?;
-    if let Err(result) = store_source(&context, sink).await {
-        return Ok(result);
-    }
-    extract(chat, sink, &context).await
+    let source = match store_source(&context, sink).await {
+        Ok(source) => source,
+        Err(result) => return Ok(result),
+    };
+    let report = fragments::store(&context, &source, sink).await;
+    let result = extract(chat, sink, &context).await?;
+    Ok(fragments::append_report(result, report.as_ref()))
 }
 
 fn prepare<'a>(
@@ -154,10 +167,12 @@ fn prepare<'a>(
     })
 }
 
+/// Persist the canonical source; on success returns the chunk exactly as it
+/// was handed to the sink, so fragments can be cut from the same content.
 async fn store_source(
     context: &IngestContext<'_>,
     sink: &impl IngestPersistence,
-) -> Result<(), ToolResult> {
+) -> Result<Chunk, ToolResult> {
     let mut source = base_chunk(
         context,
         context.source_id.clone(),
@@ -167,7 +182,7 @@ async fn store_source(
     source.consolidated = true;
     source.provenance_role = ProvenanceRole::Evidence;
     source.source = Some(SourceTag::from_agent("mcp-ingest-source"));
-    sink.persist(context.state, source).await.map(|_| ()).map_err(|_| {
+    sink.persist(context.state, source.clone()).await.map(|_| source).map_err(|_| {
         ToolResult::error(format!(
             "Source persistence failed (id: {}). Source may exist; no extraction or fact writes started.",
             context.source_id))
@@ -335,5 +350,11 @@ fn ingest_summary(outcome: &ExtractionOutcome, stored: usize, skipped: usize) ->
     message
 }
 
+mod fragments;
+
+#[cfg(test)]
+mod fixtures;
+#[cfg(test)]
+mod fragment_tests;
 #[cfg(test)]
 mod tests;

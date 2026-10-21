@@ -15,7 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the conversation date and an exact byte range into the source. New
   `[fragments]` config section (`enabled = false` by default) and an optional
   `fragment` provenance field on stored chunks; existing databases and
-  configurations load unchanged. Not yet wired into ingestion.
+  configurations load unchanged.
+- Opt-in fragment persistence on `memory_ingest` (`[fragments] enabled = true`):
+  right after the canonical source is stored, its fragments are persisted as
+  level-0 chunks (`"{source_id}:f{index}"`, marker kind `fragment`, linked to
+  the source through `source_ids` and `fragment`) through the same sink,
+  before extraction. Fragments are additive: a failed fragment write is
+  reported in the tool text (`Stored N fragments, M fragment writes failed.`)
+  and never blocks fact extraction. New keys `provenance_role`
+  (`"claim"` default | `"evidence"` | `"cue"`, the ranking knob for fragment
+  chunks) and `token_counter` (`"approx"` default | `"tiktoken"`); unknown
+  values fail config load. Fragments share the source's lifecycle: deleting
+  the source tombstones them with the facts, and the startup event-date index
+  repair covers them. With fragments disabled (the default) the ingest path
+  performs exactly the writes and returns exactly the text it did before.
 - Opt-in knowledge extraction controls in `[knowledge_extraction]`:
   `input_chunk_tokens` splits a transcript at line boundaries into smaller
   per-call chunks, and `split_on_truncation` re-extracts a chunk whose

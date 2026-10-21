@@ -6,6 +6,7 @@
 //! a `[fragments]` section load and degrade to **off** — byte-identical
 //! behavior for existing deployments and clients.
 
+use crate::storage::ProvenanceRole;
 use serde::{Deserialize, Serialize};
 
 /// Default budget (in tokens) for a fragment's text. Chosen so that the text
@@ -36,6 +37,56 @@ pub struct FragmentsConfig {
     /// so the caller can check it against the embedder's window.
     #[serde(default = "default_prefix_reserve_tokens")]
     pub prefix_reserve_tokens: usize,
+    /// Provenance role stamped on every persisted fragment chunk — the
+    /// ranking knob for the fragments experiment (`hybrid_search` applies a
+    /// per-role multiplier). Written in `config.toml` as the lowercase name:
+    /// `"claim"` (default), `"evidence"` or `"cue"`; any other value is a
+    /// config load error.
+    #[serde(default, with = "role_name")]
+    pub provenance_role: ProvenanceRole,
+    /// Token counter segmentation measures fragments with: `"approx"`
+    /// (default, model-free `ceil(chars / 3)`) or `"tiktoken"`
+    /// (`cl100k_base` BPE). Any other value is a config load error.
+    #[serde(default)]
+    pub token_counter: TokenCounterKind,
+}
+
+/// Which [`super::TokenCounter`] segmentation uses. Lowercase in config.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TokenCounterKind {
+    /// [`super::ApproxTokenCounter`]: deterministic, no model.
+    #[default]
+    Approx,
+    /// [`super::TiktokenCounter`]: `cl100k_base` BPE.
+    Tiktoken,
+}
+
+/// Lowercase config spelling of [`ProvenanceRole`] (`claim` / `evidence` /
+/// `cue`); the enum's own serde form is the capitalised variant name used in
+/// stored chunks, which is not what a config file should have to spell.
+mod role_name {
+    use super::ProvenanceRole;
+    use serde::{de::Error, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(role: &ProvenanceRole, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(match role {
+            ProvenanceRole::Claim => "claim",
+            ProvenanceRole::Evidence => "evidence",
+            ProvenanceRole::Cue => "cue",
+        })
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<ProvenanceRole, D::Error> {
+        match String::deserialize(d)?.as_str() {
+            "claim" => Ok(ProvenanceRole::Claim),
+            "evidence" => Ok(ProvenanceRole::Evidence),
+            "cue" => Ok(ProvenanceRole::Cue),
+            other => Err(D::Error::custom(format!(
+                "fragments.provenance_role must be one of claim, evidence, cue (got {other:?})"
+            ))),
+        }
+    }
 }
 
 fn default_max_fragment_tokens() -> usize {
@@ -52,6 +103,8 @@ impl Default for FragmentsConfig {
             enabled: false,
             max_fragment_tokens: DEFAULT_MAX_FRAGMENT_TOKENS,
             prefix_reserve_tokens: DEFAULT_PREFIX_RESERVE_TOKENS,
+            provenance_role: ProvenanceRole::Claim,
+            token_counter: TokenCounterKind::Approx,
         }
     }
 }
