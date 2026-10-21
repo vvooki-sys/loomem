@@ -247,6 +247,10 @@ pub enum RejectionReason {
     AggregationSubjectDedup,
     SourceAgentFilter,
     TruncatedTopK,
+    /// Removed between the pre-lane `response` snapshot and the returned
+    /// list by the operation lane (E2 tail replacement, E6 selection) or
+    /// its event-date re-check.
+    OperationLane,
 }
 
 #[cfg(test)]

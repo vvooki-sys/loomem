@@ -1,9 +1,10 @@
 //! Search-only evidence snapshots. Does not observe ingest, extraction, channel
 //! truncation, or context packing by the caller. Traced requests bypass cache;
 //! async reranking is consequently not observed. Tier-1 does not emit this block.
-use super::rejections::{RejectionLog, STAGE_SOFT_DELETE};
+use super::rejections::{RejectionLog, STAGE_RESPONSE, STAGE_SOFT_DELETE};
+use super::telemetry::ResponseMetrics;
 use super::{filter_candidates, AppState, FilterOutcome, QueryContext, SearchRequest};
-use crate::handlers::types::{EvidenceStage, EvidenceTrace, RejectionReason};
+use crate::handlers::types::{EvidenceStage, EvidenceTrace, Rejection, RejectionReason};
 use loomem_core::HybridSearchResult;
 use std::sync::Arc;
 
@@ -55,6 +56,48 @@ pub(super) fn filter_with_trace(
             .collect();
     }
     (outcome, trace)
+}
+
+/// Re-snapshot the `response` stage from the list actually returned. The
+/// operation lane runs after `filter_with_trace` captured that stage (E2 may
+/// replace tail results, E4/E5 reorder, E6 select fewer) and
+/// `event_date::finish` re-checks lane admissions, so the frozen v1
+/// invariant — the final stage equals the returned ids in order — is
+/// restored here. Ids the lane removed become `operation_lane` rejections at
+/// stage `response`. Idempotent and a no-op when nothing changed (lane off).
+pub(super) fn reconcile_response(
+    mut metrics: ResponseMetrics,
+    results: &[HybridSearchResult],
+    ctx: &QueryContext,
+    state: &Arc<AppState>,
+) -> ResponseMetrics {
+    if let Some(trace) = metrics.evidence.as_mut() {
+        let returned = results
+            .iter()
+            .filter(|r| in_scope(&r.id, ctx, state))
+            .map(|r| r.id.clone())
+            .collect();
+        reconcile_response_stage(trace, returned);
+    }
+    metrics
+}
+
+fn reconcile_response_stage(trace: &mut EvidenceTrace, returned: Vec<String>) {
+    let Some(stage) = trace
+        .stages
+        .iter_mut()
+        .find(|stage| stage.stage == STAGE_RESPONSE)
+    else {
+        return;
+    };
+    for id in stage.chunk_ids.iter().filter(|id| !returned.contains(id)) {
+        trace.rejections.push(Rejection {
+            chunk_id: id.clone(),
+            stage: STAGE_RESPONSE,
+            reason: RejectionReason::OperationLane,
+        });
+    }
+    stage.chunk_ids = returned;
 }
 
 /// Even diagnostic IDs must not expose a different stream. Missing or
@@ -331,5 +374,44 @@ mod tests {
                 assert_eq!(value["trace_metadata"]["rejections"], json!([]));
             }
         }
+    }
+
+    #[test]
+    fn reconcile_response_stage_rewrites_snapshot_and_records_lane_removals() {
+        let mut trace = EvidenceTrace {
+            schema_version: 1,
+            coverage: "post_rank_to_response",
+            stages: vec![
+                EvidenceStage {
+                    stage: "after_filters_and_dedup",
+                    chunk_ids: vec!["a".into(), "b".into(), "c".into()],
+                },
+                EvidenceStage {
+                    stage: "response",
+                    chunk_ids: vec!["a".into(), "b".into(), "c".into()],
+                },
+            ],
+            rejections: Vec::new(),
+        };
+        // E2 tail replacement: `c` leaves, lane-admitted `d` enters, order kept.
+        reconcile_response_stage(&mut trace, vec!["a".into(), "d".into(), "b".into()]);
+        assert_eq!(trace.stages[0].chunk_ids, ["a", "b", "c"]);
+        assert_eq!(trace.stages[1].chunk_ids, ["a", "d", "b"]);
+        assert_eq!(
+            trace.rejections,
+            vec![Rejection {
+                chunk_id: "c".into(),
+                stage: "response",
+                reason: RejectionReason::OperationLane,
+            }]
+        );
+        // Idempotent: an unchanged list records nothing.
+        reconcile_response_stage(&mut trace, vec!["a".into(), "d".into(), "b".into()]);
+        assert_eq!(trace.rejections.len(), 1);
+        // No `response` stage (e.g. a trace someone else built) is left alone.
+        trace.stages.pop();
+        reconcile_response_stage(&mut trace, Vec::new());
+        assert_eq!(trace.stages.len(), 1);
+        assert_eq!(trace.rejections.len(), 1);
     }
 }

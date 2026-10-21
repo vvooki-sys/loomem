@@ -127,3 +127,56 @@ async fn disabled_e4_http_returns_and_caches_exact_e0() {
     assert_eq!(baseline, response(&app, OperationPolicy::E0).await);
     assert_eq!(state.query_cache.lock().await.len(), 1);
 }
+
+#[tokio::test]
+async fn e4_trace_response_stage_equals_returned_ids_in_order() {
+    let (_, original) = make_test_app();
+    let mut config = original.config.clone();
+    config.search.operation.enabled = true;
+    let (app, state) = make_test_app_cfg(config);
+    for (id, content) in [
+        ("a1", "apple orchard has green trees beside the northern field and quiet river"),
+        ("a2", "river apple orchard has green trees beside the northern field and quiet river"),
+        ("a3", "apple cider production requires crushing fruit pressing juice and careful fermentation with clean equipment correct storage suitable temperature and patient observation before bottling the finished drink for later serving"),
+    ] {
+        seed_one(&state, id, "streamA", content, None).await;
+    }
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/search")
+        .header("Authorization", "Bearer admin-token")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({"query": "apple", "operation_policy": OperationPolicy::E4, "top_k": 10, "streams": ["streamA"], "source_agent": "tester", "trace": true})).unwrap()))
+        .unwrap();
+    let (status, bytes) = send(app.clone(), request).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let returned = ids(&result);
+    assert_eq!(returned.len(), 3);
+    let stages = result["trace_metadata"]["evidence"]["stages"]
+        .as_array()
+        .unwrap();
+    let last = stages.last().unwrap();
+    assert_eq!(last["stage"], "response");
+    let traced: Vec<String> = last["chunk_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        traced, returned,
+        "final stage must equal returned ids in order"
+    );
+    let ranked: Vec<String> = stages[0]["chunk_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap().to_string())
+        .collect();
+    assert_ne!(ranked, returned, "fixture must exercise E4 reordering");
+    assert_eq!(
+        result["trace_metadata"]["rejections"],
+        serde_json::json!([])
+    );
+}

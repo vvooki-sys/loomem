@@ -794,6 +794,7 @@ pub async fn search_handler(
     )
     .await;
     let (hybrid_results, metrics) = event_date::finish(lane, metrics, &ctx, &state);
+    let metrics = evidence::reconcile_response(metrics, &hybrid_results, &ctx, &state);
 
     // Cache store — post-boost, post-filter, post-truncate. Warm-path cache
     // hits (line ~216) now return the same Vec<HybridSearchResult> that the
