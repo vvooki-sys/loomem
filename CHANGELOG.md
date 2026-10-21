@@ -45,12 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   knob for fragment chunks; it affects ranking only on fused (vector)
   retrieval — BM25-only queries, i.e. under 5 words without a routing keyword
   or `vector_enabled = false`, apply no provenance multiplier) and
-  `token_counter` (`"approx"` default |
-  `"tiktoken"` | `"embedder"`, the loaded local embedding model's own
-  tokenizer — the recommended counter, since it is the only one whose budget
-  is the embedder's; with fragments enabled it requires
-  `embedding_provider = "local"` at config load, and it fails segmentation
-  loudly instead of falling back if no local model is loaded); unknown
+  `token_counter` (`"embedder"` default — the loaded local embedding
+  model's own tokenizer, the only counter whose budget is the embedder's;
+  with fragments enabled it requires `embedding_provider = "local"` at
+  config load, and it fails segmentation loudly instead of falling back if
+  no local model is loaded | `"approx"` | `"tiktoken"`, the model-free
+  counters for non-local embedding providers and offline tests); unknown
   values fail config load. In search, the content-prefix dedup never
   collapses a fragment against its own source (the source begins with turn
   0, so the two share a prefix) nor fragments of different sources against

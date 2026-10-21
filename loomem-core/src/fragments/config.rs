@@ -55,13 +55,15 @@ pub struct FragmentsConfig {
     /// config load error.
     #[serde(default, with = "role_name")]
     pub provenance_role: ProvenanceRole,
-    /// Token counter segmentation measures fragments with: `"approx"`
-    /// (default, model-free `ceil(chars / 3)`), `"tiktoken"` (`cl100k_base`
-    /// BPE) or `"embedder"` (the loaded local embedding model's own
-    /// tokenizer — the only counter whose budget is the embedder's; requires
-    /// `embedding_provider = "local"` with the model loaded, otherwise
-    /// segmentation fails and the tool text says so). Any other value is a
-    /// config load error.
+    /// Token counter segmentation measures fragments with: `"embedder"`
+    /// (default and recommended — the loaded local embedding model's own
+    /// tokenizer, the only counter whose budget is the embedder's; with
+    /// fragments enabled it requires `embedding_provider = "local"` at config
+    /// load, and segmentation fails loudly if the model is not loaded),
+    /// `"approx"` (model-free `ceil(chars / 3)`) or `"tiktoken"`
+    /// (`cl100k_base` BPE) — the two model-free counters are for non-local
+    /// embedding providers and offline tests. Any other value is a config
+    /// load error.
     #[serde(default)]
     pub token_counter: TokenCounterKind,
 }
@@ -71,12 +73,13 @@ pub struct FragmentsConfig {
 #[serde(rename_all = "lowercase")]
 pub enum TokenCounterKind {
     /// [`super::ApproxTokenCounter`]: deterministic, no model.
-    #[default]
     Approx,
     /// [`super::TiktokenCounter`]: `cl100k_base` BPE.
     Tiktoken,
     /// The local embedder's tokenizer (`local_embeddings::LocalEmbedder::
     /// token_counter`), counting special tokens like the embedder does.
+    /// The default: the budget it enforces is the embedder's own.
+    #[default]
     Embedder,
 }
 
@@ -122,7 +125,7 @@ impl Default for FragmentsConfig {
             max_fragment_tokens: DEFAULT_MAX_FRAGMENT_TOKENS,
             prefix_reserve_tokens: DEFAULT_PREFIX_RESERVE_TOKENS,
             provenance_role: ProvenanceRole::Claim,
-            token_counter: TokenCounterKind::Approx,
+            token_counter: TokenCounterKind::Embedder,
         }
     }
 }

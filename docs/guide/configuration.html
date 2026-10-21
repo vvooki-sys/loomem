@@ -858,7 +858,7 @@ enabled = false
 max_fragment_tokens = 400
 prefix_reserve_tokens = 16
 provenance_role = &quot;claim&quot;
-token_counter = &quot;approx&quot;
+token_counter = &quot;embedder&quot;
 </code></pre>
 <table>
 <thead>
@@ -897,13 +897,13 @@ token_counter = &quot;approx&quot;
 <tr>
 <td><code>token_counter</code></td>
 <td>string</td>
-<td><code>"approx"</code></td>
-<td><code>"approx"</code> (<code>ceil(chars / 3)</code>, model-free), <code>"tiktoken"</code> (<code>cl100k_base</code> BPE) or <code>"embedder"</code> (the loaded local embedding model's own tokenizer — recommended with <code>embedding_provider = "local"</code>, the only counter whose budget is the embedder's). Any other value fails config load</td>
+<td><code>"embedder"</code></td>
+<td><code>"embedder"</code> (default and recommended: the loaded local embedding model's own tokenizer, the only counter whose budget is the embedder's), <code>"approx"</code> (<code>ceil(chars / 3)</code>, model-free) or <code>"tiktoken"</code> (<code>cl100k_base</code> BPE) — the two model-free counters are for non-local embedding providers and offline tests. Any other value fails config load</td>
 </tr>
 </tbody>
 </table>
 <p>When enabled, <code>memory_ingest</code> stores, right after the whole-conversation source and before extraction, one chunk per conversation turn (long turns are split further at paragraph, sentence and whitespace boundaries). Each fragment carries the author role, the conversation date and an exact byte range into the stored source. Fragments are <code>consolidated</code> from birth (never consolidation or dream input), are excluded from the <code>recent</code> section of <code>memory_context</code>, carry no event date of their own (their <code>memory_search</code> line shows the source's <code>observed:</code>/<code>recorded:</code> date), and are deleted together with their source. The tool result gains a trailing <code> Stored N fragments.</code> sentence (see <a href="mcp-tools.html#memory_ingest">MCP Tools</a>). Fragment writes are additive and never block fact extraction.</p>
-<p>Validation at startup: <code>max_fragment_tokens</code> must be positive, and with <code>embedding_provider = "local"</code> the sum <code>max_fragment_tokens + prefix_reserve_tokens</code> must not exceed the local embedder's 512-token window. With <code>token_counter = "embedder"</code> and no local model loaded, segmentation fails and the <code>memory_ingest</code> text says so (there is no silent fallback to an approximation).</p>
+<p>Validation at startup: <code>max_fragment_tokens</code> must be positive, and with <code>embedding_provider = "local"</code> the sum <code>max_fragment_tokens + prefix_reserve_tokens</code> must not exceed the local embedder's 512-token window. <code>enabled = true</code> with <code>token_counter = "embedder"</code> (the default) requires <code>embedding_provider = "local"</code> — with another provider, set <code>token_counter = "approx"</code> or <code>"tiktoken"</code> explicitly or config load fails. With <code>token_counter = "embedder"</code> and no local model loaded, segmentation fails and the <code>memory_ingest</code> text says so (there is no silent fallback to an approximation).</p>
 <p><code>provenance_role</code> affects ranking only on fused retrieval (vector-enabled, non-simple queries). The BM25-only path applies no provenance multiplier, so on short queries <code>claim</code> and <code>evidence</code> fragments score identically.</p>
 <hr />
 <h2 id="entity_extraction">[entity_extraction]</h2>

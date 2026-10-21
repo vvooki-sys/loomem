@@ -12,11 +12,14 @@ use super::*;
 const STREAM: &str = "fragments";
 const TRANSCRIPT: &str = "user: I prefer quiet accommodation.\nassistant: A lively hotel is another option.\nuser: Please keep my original preference.";
 
+/// The test app loads no local embedding model, so the default `"embedder"`
+/// counter is unavailable; these tests pin the model-free one explicitly.
 fn enabled(role: ProvenanceRole) -> (axum::Router, Arc<AppState>) {
     let (_, original) = fixture(20000);
     let mut config = original.config.clone();
     config.fragments.enabled = true;
     config.fragments.provenance_role = role;
+    config.fragments.token_counter = TokenCounterKind::Approx;
     crate::tests::make_test_app_cfg(config)
 }
 
@@ -445,14 +448,14 @@ async fn a_source_that_reads_back_differently_gets_no_fragments() {
         .ends_with(" Stored 0 fragments (segmentation skipped: persisted source differs)."));
 }
 
-/// `"embedder"` never falls back to an approximation: without a loaded local
-/// model the tool says so and stores no fragment.
+/// `"embedder"` (the default counter) never falls back to an approximation:
+/// without a loaded local model the tool says so and stores no fragment.
 #[tokio::test]
 async fn embedder_counter_without_a_loaded_model_fails_segmentation_loudly() {
     let (_, original) = fixture(20000);
     let mut config = original.config.clone();
     config.fragments.enabled = true;
-    config.fragments.token_counter = TokenCounterKind::Embedder;
+    assert_eq!(config.fragments.token_counter, TokenCounterKind::Embedder);
     let (_, state) = crate::tests::make_test_app_cfg(config);
     assert!(state.local_embedder.is_none());
     let chat = Chat::facts(vec![fact(None)]);
@@ -520,6 +523,7 @@ async fn extraction_disabled_still_reports_fragments() {
     let (_, original) = crate::tests::make_test_app();
     let mut config = original.config.clone();
     config.fragments.enabled = true;
+    config.fragments.token_counter = TokenCounterKind::Approx;
     let (_, state) = crate::tests::make_test_app_cfg(config);
     let result = tool_ingest(&state, args(TRANSCRIPT), STREAM, None)
         .await
