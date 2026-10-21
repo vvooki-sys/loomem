@@ -205,3 +205,35 @@ fn source_linked_fact_shape_uses_event_time_and_spoofed_marker_stays_legacy() {
     assert!(!is_ingest_fact_shape(&fact));
     assert!(allows(&fact, Some(&DateFilter::Range(-1, 0))));
 }
+
+#[test]
+fn fragment_with_conversation_date_is_excluded_by_range_like_its_source() {
+    use loomem_core::fragments::FragmentMeta;
+    use loomem_core::storage::is_ingest_fragment;
+    let source_id = "00000000-0000-4000-8000-000000000002";
+    let mut source = chunk(source_id, None, true);
+    source.metadata = Some(json!({"_loomem_ingest":{
+        "version":1,"kind":"source","conversation_date":"2024-02-03"}}));
+    let mut fragment = chunk(&format!("{source_id}:f0"), None, true);
+    fragment.metadata = Some(json!({"_loomem_ingest":{
+        "version":1,"kind":"fragment","conversation_date":"2024-02-03"}}));
+    fragment.provenance_role = ProvenanceRole::Evidence;
+    fragment.source = Some(SourceTag::from_agent("mcp-ingest"));
+    fragment.source_ids = Some(vec![source_id.into()]);
+    fragment.extraction_meta = None;
+    fragment.fragment = Some(FragmentMeta {
+        source_id: source_id.into(),
+        byte_start: 0,
+        byte_end: 7,
+        turn_index: 0,
+        role: Some("user".into()),
+        conversation_date: Some("2024-02-03".into()),
+    });
+    assert!(is_ingest_fragment(&fragment));
+    // The conversation date is observation time, never event time: a
+    // fragment is unknown-dated exactly like its source, in every lane.
+    let range = DateFilter::Range(1_704_067_200, 1_735_689_599);
+    assert!(!allows(&source, Some(&range)));
+    assert!(!allows(&fragment, Some(&range)));
+    assert!(allows(&fragment, None));
+}

@@ -1,6 +1,6 @@
 //! Admission and atomic source tombstones share the chunk lifecycle mutex.
 use super::lifecycle::generation_key;
-use super::{Chunk, ProvenanceRole, RocksDbStore};
+use super::{Chunk, ExtractionMeta, ProvenanceRole, RocksDbStore};
 use anyhow::{ensure, Context, Result};
 use rocksdb::WriteBatch;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -110,6 +110,20 @@ struct Ancestry {
     invalid: bool,
 }
 
+/// `extraction_meta` with its one lifecycle field normalised out.
+/// `superseded_by` is version bookkeeping, not provenance: dream retires an
+/// input fact by writing it (`dream_security::resolve_dream_contradictions`,
+/// in the same `store_chunk` as `is_latest`/`valid_until`), so freezing it
+/// would make dream fail after the replacement summary is already durable.
+/// Every other extraction field (event date, subject, `supersedes`,
+/// `extracted_from`, …) describes what was extracted and stays frozen.
+fn frozen_extraction_meta(chunk: &Chunk) -> Option<ExtractionMeta> {
+    chunk.extraction_meta.clone().map(|mut meta| {
+        meta.superseded_by = None;
+        meta
+    })
+}
+
 fn immutable_provenance(chunk: &Chunk) -> Result<serde_json::Value> {
     Ok(serde_json::to_value((
         &chunk.content,
@@ -120,7 +134,7 @@ fn immutable_provenance(chunk: &Chunk) -> Result<serde_json::Value> {
         &chunk.trust_level,
         &chunk.source_ids,
         chunk.valid_from,
-        &chunk.extraction_meta,
+        frozen_extraction_meta(chunk),
         chunk.level,
         chunk.persistent,
         chunk.timestamp,
