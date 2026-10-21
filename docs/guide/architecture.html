@@ -526,6 +526,7 @@ graph:chunk:{chunk_id}               → [entity_ids]  (reverse index)
  8. Contradiction detection
 </code></pre>
 <p>The sanitizer detects but does not block injection attempts — content is stored after stripping. PII redaction replaces sensitive data with <code>[PHONE]</code>, <code>[EMAIL]</code>, <code>[ID]</code>, <code>[REDACTED]</code> tokens before storage.</p>
+<p><strong>Source → fragments → index (opt-in, <code>[fragments] enabled = true</code>, off by default).</strong> On <code>memory_ingest</code>, the whole conversation is stored first as a canonical source chunk; the fragments step then reads that source back as persisted and cuts it into turn-level fragments (one per transcript turn, long turns split further at paragraph, sentence and whitespace boundaries) that fit the embedder's input window. Each fragment is a level-0 chunk (<code>{source_id}:f{index}</code>) carrying the author role, the conversation date and an exact byte range into the source, and goes through the same <code>persist_chunk</code> path as the source (RocksDB store, entity extraction, Tantivy indexing, embedding queue), so it is indexed and embedded on its own. Fragments are <code>consolidated</code> from birth (never consolidation or dream input), carry no event date of their own, and are tombstoned together with their source. Fact extraction runs after the fragments step and is never blocked by it. See <a href="configuration.html#fragments">Configuration</a>.</p>
 <hr />
 <h2 id="search-pipeline">Search pipeline</h2>
 <p>A query flows through multiple stages:</p>

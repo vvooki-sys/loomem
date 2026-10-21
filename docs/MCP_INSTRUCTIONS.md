@@ -91,6 +91,8 @@ memory_ingest(
 
 The sanitized source is stored before extraction and retained if extraction fails or finds no facts. Capture its returned ID. This path does not automatically deduplicate or supersede existing facts; repeating ingestion creates another source. Source-linked content and provenance are immutable: delete the source and ingest a corrected transcript to make a correction.
 
+Content that does not stabilise under sanitization within four passes (deeply nested HTML entity encoding) is refused as invalid params and nothing is stored — re-send it decoded. When the server has `[fragments] enabled = true` (off by default), the response text also ends with ` Stored N fragments.`: one turn-level fragment per conversation turn, deleted together with the source; a fragment problem is reported in that sentence and never blocks extraction.
+
 Supply the conversation date only when known. It is observation time, not an event-date fallback. Without a known reference date, relative expressions must remain unresolved; explicit absolute source dates can still be used. New ingestion labels distinguish `[event:YYYY-MM-DD]`, `[observed:YYYY-MM-DD]`, and `[recorded:YYYY-MM-DD]`. Legacy `[YYYY-MM-DD]` labels do not prove when an event happened. Do not infer current state solely from a later observation or storage date. For records with the recognized versioned ingestion contract, date-range searches require a known event date; an unknown event date does not match a date range. Conversation and storage dates do not substitute for event time. Legacy records without that contract retain their existing event dates and recorded-time fallback when undated. Startup repairs older versioned index entries in place without resetting the index, and stops if repair fails. The separate valid_at filter retains its validity/history semantics.
 
 ### memory_store
@@ -114,6 +116,8 @@ Call when:
 - User asks about something they mentioned before
 - You need context before answering about their work/preferences
 - Checking if something was already decided
+
+When the server enables `[search] evidence_fields` (off by default), each result line carries a bracketed `[author: …; conversation: …; event: … (resolved|unknown); source: …]` tag before the score, listing only the parts known for that memory. Treat `conversation` as observation time, not as the event date.
 
 ### memory_dream
 Call:

@@ -127,6 +127,40 @@ Hybrid search across all memory tiers.
 }
 ```
 
+**Evidence object (experimental, opt-in):** when `[search] evidence_fields = true` in `config.toml`, every hit (cold and cached) carries an additive `evidence` key. The key is omitted entirely while the flag is off, so default responses are unchanged. The object has exactly seven keys, all always present; an unknown value is `null`, never a substituted date.
+
+```json
+"evidence": {
+  "author": "user",
+  "conversation_date": "2026-04-02",
+  "event_date": "2026-03-26",
+  "event_date_provenance": "resolved",
+  "source_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "byte_start": 0,
+  "byte_end": 142
+}
+```
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `author` | string? | Normalised author role: `user`, `assistant`, `system` or `tool`. Anything else (a person's name, free text) is `null` |
+| `conversation_date` | string? | Date the conversation took place (`YYYY-MM-DD`), as stored |
+| `event_date` | string? | Date the described event happened (`YYYY-MM-DD`), as extracted. Only calendar-valid ISO dates are emitted |
+| `event_date_provenance` | string? | `resolved` when the engine recorded the temporal cue the date was resolved from, `unknown` otherwise; `null` exactly when `event_date` is `null`. `explicit` is reserved and not emitted today |
+| `source_id` | string? | Canonical source chunk this memory was cut or extracted from |
+| `byte_start`, `byte_end` | int? | Byte range of a source fragment within its source (see [`[fragments]`](configuration.md#fragments)); both set or both `null` |
+
+**Stage rejections (traced requests):** with `trace: true`, `trace_metadata` also carries `rejections` — one entry per candidate dropped between the traced post-rank stages — next to the existing `evidence` stage snapshots. `stage` is the first stage the id is absent from (`after_soft_delete`, `after_filters_and_dedup` or `response`); `reason` is one of `soft_deleted`, `event_date_out_of_range`, `bitemporal_out_of_range`, `superseded`, `extraction_meta_missing`, `fact_type_filter`, `subject_filter`, `min_confidence`, `content_prefix_dedup`, `aggregation_subject_dedup`, `source_agent_filter`, `truncated_top_k`. The MCP `max_context_tokens` trim happens after the traced stages, so a result it drops is not listed here.
+
+```json
+"trace_metadata": {
+  "rejections": [
+    { "chunk_id": "def-456", "stage": "after_filters_and_dedup", "reason": "superseded" },
+    { "chunk_id": "ghi-789", "stage": "response", "reason": "truncated_top_k" }
+  ]
+}
+```
+
 ---
 
 ### POST /v1/context-pack
@@ -189,6 +223,12 @@ Response: `{ "status": "deleted", "id": "abc-123" }`
 REST-compliant delete. Optional `?ns=<namespace>` query parameter.
 
 Response: `{ "deleted": true, "id": "abc-123" }`
+
+### GET /api/memories/{id}
+
+Returns one memory item (`id`, `content`, `layer`, `confidence`, `decay`, `event_date`, `created_at`, `category`, `entity_ids`, `version`, `is_latest`, `superseded_by`, `source_stream`, `source`, `source_agent`). 404 for unknown or soft-deleted ids; non-admin callers may only read chunks in their own stream.
+
+When `[search] evidence_fields = true`, the item also carries the same additive `evidence` object as a `/v1/search` hit (see above). The dashboard list endpoint does not carry it.
 
 ---
 
