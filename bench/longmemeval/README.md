@@ -357,3 +357,56 @@ still requires direct evidence or abstention. The function accepts only question
 date, and evidence. The user-message template, escaping, judge, and default
 `qa_prompts` module remain unchanged. This prompt is not wired into the default
 `QARunner`; an experiment must inject it explicitly and bind its prompt hash.
+
+## Evidence contract v2 (experimental)
+
+The default reader evidence stays protocol v1: `qa_context.pack_context` over
+`{record_id, content}` records, frozen and unchanged. Contract v2 is a separate,
+opt-in record shape for experiments that need conversation dates, authorship and
+source provenance at the reader boundary. Every v2 record carries exactly these
+keys, all present; an unknown value is JSON `null`, never a substituted date:
+
+| Field | Type |
+|---|---|
+| `record_id` | string |
+| `content` | string, the exact returned text, never parsed or rebuilt |
+| `author` | string or null (`user`, `assistant` or another role string) |
+| `conversation_date` | ISO date `YYYY-MM-DD` as stored, or null |
+| `event_date` | ISO date `YYYY-MM-DD` as stored, or null |
+| `event_date_provenance` | `explicit`, `resolved` or `unknown`; null exactly when `event_date` is null |
+| `source_id` | string or null |
+| `byte_start`, `byte_end` | non-negative integers (both) or null (both) |
+
+`qa_context_v2.pack_context_v2(records, token_budget, reader_model)` keeps v1's
+budget semantics, tokenizer, serialization, first-fit packing and dropped-record
+accounting; its output adds `evidence_schema: 2`. Null fields are serialized
+literally and cost reader tokens: metadata, known or unknown, is paid for out of
+the evidence budget. `evidence_v2.from_engine_hit(hit, record_id)` maps a
+`/v1/search` result with or without an additive `evidence` object (same field
+names minus `record_id`) and rejects any unexpected type or key; a hit without
+the object yields null metadata. `evidence_v2.from_e0_turn_json` is a
+control-arm convenience that parses only an exact E0 `{"role","date","content"}`
+envelope into `author`/`conversation_date`; any other string stays verbatim with
+null metadata, and dates are never reformatted. `runner_local_v2.LocalEngineAdapterV2`
+adds `retrieved_records_v2` next to the unchanged v1 `retrieved_records` when
+`capture_context` is on, plus `fetch_records_v2` over `GET /api/memories/<id>`,
+which currently exposes no `evidence` object and therefore yields null metadata.
+These modules are not wired into the default QA runner; an experiment injects
+the v2 packer explicitly and binds its own artifacts.
+
+`stage_diagnostics.py` is an offline, text-free tool over a retrieval trace
+JSONL, an externally supplied `{question_id: [relevant record IDs]}` file (never
+derived from gold answers) and an optional packed-context file keyed by question
+ID with `selected_ids`/`dropped_ids`. It reports, per question and aggregated,
+whether each relevant ID was present in `ranked_candidates`, after soft delete,
+after filters/dedup, in the response and in the packed context, its first rank
+per stage, records dropped per stage, and a histogram of optional
+`rejections` (`{chunk_id, stage, reason}`, top-level or inside `evidence`).
+Unobserved stages report `null`, never absence.
+
+```sh
+python3 bench/longmemeval/stage_diagnostics.py \
+  --trace /absolute/path/trace.jsonl --relevant /absolute/path/relevant.json \
+  --packed /absolute/path/packed.json --output /absolute/path/report.json \
+  --markdown /absolute/path/report.md --format markdown
+```
