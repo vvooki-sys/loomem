@@ -333,8 +333,9 @@ impl Default for ResourceGuardsConfig {
 impl Config {
     /// Issue #65: names of the LLM-backed subsystems that are enabled while no
     /// API key is resolvable. A non-empty result means the engine would come up
-    /// silently degraded — extraction falls back to regex and the dream worker
-    /// fails on every use — while `/health` still reports ok. Callers should
+    /// silently degraded — `memory_ingest` returns a missing-key error, entity
+    /// extraction is off and the dream worker fails on every use — while
+    /// `/health` still reports ok. Callers should
     /// refuse to start unless the operator opted in via `LOOMEM_ALLOW_KEYLESS=1`.
     pub fn llm_dependent_enabled_without_key(&self) -> Vec<&'static str> {
         if self.llm.get_api_key().is_some() {
