@@ -353,7 +353,9 @@ async fn main() -> Result<()> {
         if std::env::var("LOOMEM_ALLOW_KEYLESS").as_deref() == Ok("1") {
             tracing::warn!(
                 "Running WITHOUT an LLM API key while [{}] are enabled (LOOMEM_ALLOW_KEYLESS=1): \
-                 extraction falls back to regex and dream will fail on every use",
+                 memory_ingest fails with a missing-key error (nothing stored), entity \
+                 extraction is off, dream/consolidation fail on every use; memory_store \
+                 and search keep working",
                 keyless_subsystems.join(", ")
             );
         } else {

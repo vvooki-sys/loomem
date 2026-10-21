@@ -131,8 +131,9 @@ hard_purge_interval_secs = 86400  # daily
 enabled = true  # Phase 3: enabled
 
 [llm]
-# Completions (consolidation / reflect). Uses OPENAI_API_KEY when set; without
-# a key these degrade to the regex fallback below.
+# Completions (knowledge/entity extraction, consolidation, dream). Need
+# OPENAI_API_KEY; without a key the server refuses to start unless
+# LOOMEM_ALLOW_KEYLESS=1, and then these steps fail (memory_store still works).
 provider = "openai"
 # api_key = ""  # DO NOT hardcode — use OPENAI_API_KEY env var
 api_key_env = "OPENAI_API_KEY"
@@ -157,7 +158,7 @@ embedding_dim = 384
 
 compression_model = "gpt-4.1-mini"
 timeout_secs = 10
-fallback_to_regex = true  # Graceful degradation if LLM unavailable
+fallback_to_regex = true  # Consolidation only: regex compression when the completions API call fails (does not cover a missing key)
 
 # HTTP connection-pool tuning for the shared OpenAI client. Long-running
 # instances degrade silently when keep-alive sockets go stale over hours
