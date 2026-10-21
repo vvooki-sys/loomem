@@ -543,6 +543,7 @@ pub async fn store_handler(
         n_ratings: 0,
         last_rated_at: None,
         provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+        fragment: None,
     };
 
     // Contradiction detection: check if new chunk updates/extends existing memory
@@ -951,6 +952,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 

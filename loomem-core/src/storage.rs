@@ -220,6 +220,12 @@ pub struct Chunk {
     /// field is backward-compatible with databases written before this cycle.
     #[serde(default)]
     pub provenance_role: ProvenanceRole,
+
+    /// Source-fragment provenance (`fragments` module): `Some` only for a
+    /// chunk cut from a canonical source. `#[serde(default)]` → existing
+    /// rows deserialize as `None`.
+    #[serde(default)]
+    pub fragment: Option<crate::fragments::FragmentMeta>,
 }
 
 /// /138 phase 2: storage-layer envelope for a chunk written with field-level
@@ -1871,6 +1877,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: crate::storage::ProvenanceRole::Claim,
+            fragment: None,
         };
         store.store_chunk(&chunk)?;
 
@@ -2142,6 +2149,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: crate::storage::ProvenanceRole::Claim,
+            fragment: None,
         };
         let orphan2 = Chunk {
             id: "orphan-2".to_string(),
@@ -2182,6 +2190,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: crate::storage::ProvenanceRole::Claim,
+            fragment: None,
         };
         let normal = Chunk {
             id: "normal-1".to_string(),
@@ -2222,6 +2231,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: crate::storage::ProvenanceRole::Claim,
+            fragment: None,
         };
 
         store.store_chunk(&orphan1)?;
@@ -2297,6 +2307,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: crate::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 
@@ -2754,6 +2765,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: crate::storage::ProvenanceRole::Claim,
+            fragment: None,
         };
 
         store.store_chunk(&chunk)?;
@@ -2835,6 +2847,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: crate::storage::ProvenanceRole::Claim,
+            fragment: None,
         };
 
         let chunk2 = Chunk {
@@ -2876,6 +2889,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: crate::storage::ProvenanceRole::Claim,
+            fragment: None,
         };
 
         let chunk3 = Chunk {
@@ -2917,6 +2931,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: crate::storage::ProvenanceRole::Claim,
+            fragment: None,
         };
 
         store.store_chunk(&chunk1)?;

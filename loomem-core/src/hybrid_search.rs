@@ -727,6 +727,7 @@ mod tests {
             access_audit: crate::config::AccessAuditConfig::default(),
             rate_limit: crate::config::RateLimitConfig::default(),
             mcp: crate::config::McpConfig::default(),
+            fragments: crate::config::FragmentsConfig::default(),
         }
     }
 
@@ -944,6 +945,7 @@ mod tests {
             n_ratings: 0,
             last_rated_at: None,
             provenance_role: crate::storage::ProvenanceRole::Claim,
+            fragment: None,
         }
     }
 

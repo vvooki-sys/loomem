@@ -521,6 +521,7 @@ async fn tool_store(
         n_ratings: 0,
         last_rated_at: None,
         provenance_role: loomem_core::storage::ProvenanceRole::Claim,
+        fragment: None,
     };
 
     // Brief 2026-09-02 O1: explicit versioning. Validated and linked before

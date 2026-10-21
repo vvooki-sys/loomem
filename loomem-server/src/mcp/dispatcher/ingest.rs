@@ -260,6 +260,7 @@ fn base_chunk(context: &IngestContext<'_>, id: String, content: String, kind: &s
         n_ratings: 0,
         last_rated_at: None,
         provenance_role: ProvenanceRole::Claim,
+        fragment: None,
     }
 }
 

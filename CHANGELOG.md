@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `fragments` domain module: deterministic segmentation of a canonical
+  conversation source into turn-level fragments (long turns split further at
+  paragraph, sentence and whitespace boundaries) that carry the author role,
+  the conversation date and an exact byte range into the source. New
+  `[fragments]` config section (`enabled = false` by default) and an optional
+  `fragment` provenance field on stored chunks; existing databases and
+  configurations load unchanged. Not yet wired into ingestion.
+
 ### Changed
 
 - Knowledge extraction rejects explicitly truncated or refused model completions
