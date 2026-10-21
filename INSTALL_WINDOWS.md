@@ -54,47 +54,30 @@ winget install OpenJS.NodeJS.LTS
 
 ## Build from source
 
+Run these commands in Git Bash. They are the same as in [From source](docs/installation.md#from-source), which explains what each step does and what breaks if you skip one.
+
 ```bash
 git clone https://github.com/vvooki-sys/loomem.git
 cd loomem
-cp entities.toml.example entities.toml   # personal entity config (gitignored)
-
-# 1. Dashboard — must be built BEFORE the server, which embeds it at compile time
-(cd loomem-dashboard && npm ci && npm run build)
-
-# 2. Local embedding model (~113 MB) → ~/.loomem/models/multilingual-e5-small
-./scripts/fetch-embedding-model.sh
-
-# 3. Server + CLI (the CLI is the stdio bridge for the Claude desktop app)
+cp entities.toml.example entities.toml             # personal entity config (gitignored)
+(cd loomem-dashboard && npm ci && npm run build)   # dashboard, embedded at compile time
+./scripts/fetch-embedding-model.sh                 # local embedding model, required
 cargo build --release -p loomem-server -p loomem-cli
 ```
 
 The first build compiles RocksDB (C++) and takes a while. The binaries land in `target/release/` (`loomem-server.exe`, `loomem-cli.exe`), unless your global cargo config redirects `target-dir`.
 
-Skipping a step doesn't fail the build, but it silently degrades the result:
-
-- Without step 1, the dashboard returns 404.
-- Without step 2 and with `OPENAI_API_KEY` set, the server sends your stored text to the OpenAI embeddings API instead. This costs money, and its 1536-dim vectors do not match the default `embedding_dim = 384`.
-- Without step 2 and without a key, vector search is off (keyword search only).
-
 ## Run
 
-The default config enables LLM-backed features (knowledge extraction, entity extraction, dreaming), so the server **refuses to start without an LLM API key**. Pick one:
+Set an LLM key, or accept keyless mode. The default config refuses to start without one of them; [From source](docs/installation.md#from-source) lists what keyless mode turns off.
 
 ```bash
-export OPENAI_API_KEY="sk-..."    # full functionality
-# or
-export LOOMEM_ALLOW_KEYLESS=1     # no key: skips the startup check only (see below)
-```
-
-`LOOMEM_ALLOW_KEYLESS=1` only skips the startup check. With it, `memory_ingest` returns a missing-key error and stores nothing, and dreaming fails. Write memories with `memory_store`, which works without a key.
-
-Then start the server from the repo root, in Git Bash:
-
-```bash
+export OPENAI_API_KEY="sk-..."     # or: export LOOMEM_ALLOW_KEYLESS=1
 cargo run --release -p loomem-server
 # server listens on http://127.0.0.1:3030, data in ./data
 ```
+
+Start the server from Git Bash, in the repo root. The server finds the embedding model through `HOME`, which Git Bash sets and plain `cmd`/PowerShell usually don't.
 
 Check it's alive (in another Git Bash window):
 
@@ -116,10 +99,10 @@ For the Claude desktop app, the config file is `%APPDATA%\Claude\claude_desktop_
 
 ## Troubleshooting
 
+Windows-specific problems are below. For startup errors on every platform (missing model, missing key, missing `entities.toml`), see [Troubleshooting](docs/installation.md#troubleshooting).
+
 - **`Unable to find libclang`** — `LIBCLANG_PATH` is unset or wrong. Run `ls "$LIBCLANG_PATH"/libclang.dll` to check it.
 - **`link.exe not found`** or MSVC linker errors — the Build Tools C++ workload is missing. Re-run step 2 with the `--override` flag.
 - **`cargo: command not found`** — open a new Git Bash window after installing Rust, so the updated `PATH` is loaded.
-- **`enabled but no LLM API key found`** — set `OPENAI_API_KEY` or `LOOMEM_ALLOW_KEYLESS=1` (see [Run](#run)).
-- **Dashboard returns 404** — the dashboard wasn't built before the server. Run step 1 of the build, then rebuild `loomem-server`.
-- **Vector search disabled / no embedder in the startup log** — the embedding model is missing (with `OPENAI_API_KEY` set, the server uses OpenAI embeddings instead). Run `./scripts/fetch-embedding-model.sh`. Start the server from Git Bash: it finds the model through `HOME`, which plain `cmd`/PowerShell usually don't set.
+- **`refusing cloud fallback` although you fetched the model** — the server was started outside Git Bash, so `HOME` is unset and it looks for the model in the wrong place. Start it from Git Bash, or set `embedding_model_path` in `config.toml`.
 - **Disk-space guard** — the startup disk-space check is not implemented on Windows; the server logs a warning and continues.

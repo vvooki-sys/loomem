@@ -48,13 +48,25 @@ echo 'export PATH="$HOME/.loomem/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
 exec $SHELL
 ```
 
-**3. Start the server** (config is already seeded in `~/.loomem`):
+**3. Download the local embedding model** (~113 MB, once). The installer does not fetch it, and the server refuses to start without it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/scripts/fetch-embedding-model.sh | sh
+```
+
+**4. Set an LLM key** for extraction, consolidation and dreaming, or accept keyless mode (see the [FAQ](#faq)):
+
+```bash
+export OPENAI_API_KEY="sk-..."     # or: export LOOMEM_ALLOW_KEYLESS=1
+```
+
+**5. Start the server** (config is already seeded in `~/.loomem`):
 
 ```bash
 cd ~/.loomem && loomem-server
 ```
 
-**4. Check it's alive** (in another terminal):
+**6. Check it's alive** (in another terminal):
 
 ```bash
 curl http://localhost:3030/health
@@ -63,13 +75,13 @@ curl http://localhost:3030/health
 
 > The installer uses port **3030** by default and asks for an alternative if it's already taken (set `LOOMEM_PORT` to skip the prompt). If you picked a different port, use it in the commands below.
 
-**5. Connect Claude Code:**
+**7. Connect Claude Code:**
 
 ```bash
 claude mcp add --transport http loomem http://localhost:3030/mcp
 ```
 
-**5b. Using the Claude desktop app (or Cowork) instead?** It connects to local servers over stdio, not HTTP, so bridge it in `claude_desktop_config.json`, then restart Claude. Native, no Node (Loomem ≥ v0.2.1):
+**7b. Using the Claude desktop app (or Cowork) instead?** It connects to local servers over stdio, not HTTP, so bridge it in `claude_desktop_config.json`, then restart Claude. Native, no Node (Loomem ≥ v0.2.1):
 
 ```json
 { "mcpServers": { "loomem": { "command": "/absolute/path/to/.loomem/bin/loomem-cli", "args": ["mcp-stdio", "--url", "http://127.0.0.1:3030"] } } }
@@ -77,7 +89,7 @@ claude mcp add --transport http loomem http://localhost:3030/mcp
 
 (Any version, needs Node: `"command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"]`.) See [Connect an MCP client](#connect-an-mcp-client) for auth and details.
 
-**6. Try it.** In Claude: *"Remember that I prefer dark mode in all my tools."* Then, in a fresh conversation: *"What do you know about my preferences?"* — the answer comes back from Loomem.
+**8. Try it.** In Claude: *"Remember that I prefer dark mode in all my tools."* Then, in a fresh conversation: *"What do you know about my preferences?"* — the answer comes back from Loomem.
 
 Other clients (claude.ai, ChatGPT, OpenClaw), TLS/remote exposure, and the full options matrix are below and in [docs/installation.md](docs/installation.md).
 
@@ -89,7 +101,7 @@ Other clients (claude.ai, ChatGPT, OpenClaw), TLS/remote exposure, and the full 
 curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/install.sh | sh
 ```
 
-Installs `loomem-server`, `loomem-cli`, and `loomem-migrate` to `~/.loomem/bin` (no sudo) and drops config templates into `~/.loomem`. Pin a version with `LOOMEM_VERSION=v0.2.0`, change the location with `LOOMEM_INSTALL_DIR`. Archives are verified against `SHA256SUMS` from the [releases page](https://github.com/vvooki-sys/loomem/releases).
+Installs `loomem-server`, `loomem-cli`, and `loomem-migrate` to `~/.loomem/bin` (no sudo) and drops config templates into `~/.loomem`. Pin a version with `LOOMEM_VERSION=v0.2.0`, change the location with `LOOMEM_INSTALL_DIR`. Archives are verified against `SHA256SUMS` from the [releases page](https://github.com/vvooki-sys/loomem/releases). The installer does not download the local embedding model: fetch it as in step 3 of the [Quickstart](#quickstart).
 
 **Full guide** — requirements, version pinning, manual checksum verification, upgrading, uninstalling, troubleshooting: [docs/installation.md](docs/installation.md).
 
@@ -109,7 +121,7 @@ cargo run --release -p loomem-server
 
 Requires Rust (stable), Node.js (for the dashboard) and libclang (for the RocksDB build): `apt install libclang-dev` on Debian/Ubuntu, included with Xcode CLT on macOS. On Windows, see [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md).
 
-Each step matters even though skipping one doesn't fail the build: without the dashboard build it returns 404, and without `loomem-cli` there is no stdio bridge for the Claude desktop app. Skip the model fetch with care: when `OPENAI_API_KEY` is set, the server sends your stored text to the OpenAI embeddings API instead (this costs money, and its 1536-dim vectors do not match the default `embedding_dim = 384`); with no key, vector search is off. The default config enables LLM-backed extraction and dreaming, so the server **refuses to start** unless an LLM key is set. `LOOMEM_ALLOW_KEYLESS=1` only skips the startup check: `memory_ingest` then returns a missing-key error and stores nothing, and dreaming fails. Write memories with `memory_store`, which works without a key.
+Each step matters even though skipping one doesn't fail the build: without the dashboard build the dashboard returns 404, and without `loomem-cli` there is no stdio bridge for the Claude desktop app. The local embedding model is **required**: with the default `embedding_provider = "local"`, the server refuses to start without it (`refusing cloud fallback`), with or without an API key. The default config also enables LLM-backed extraction and dreaming, so the server **refuses to start** unless an LLM key is set (`export OPENAI_API_KEY=...`) or `LOOMEM_ALLOW_KEYLESS=1` is set. In keyless mode, `memory_ingest` returns a missing-key error and stores nothing, entity extraction is off, and dreaming fails; `memory_store` and search keep working.
 
 ### Docker
 
@@ -117,11 +129,15 @@ Each step matters even though skipping one doesn't fail the build: without the d
 docker build -t loomem .
 export LOOMEM_AUTH_TOKEN=$(openssl rand -hex 32)
 export LOOMEM_AT_REST_MASTER_KEY=$(openssl rand -base64 32)
+export OPENAI_API_KEY="sk-..."
 docker run -p 3030:3030 -v loomem-data:/data \
-  -e LOOMEM_AUTH_TOKEN -e LOOMEM_AT_REST_MASTER_KEY loomem
+  -e LOOMEM_AUTH_TOKEN -e LOOMEM_AT_REST_MASTER_KEY -e OPENAI_API_KEY \
+  -e LOOMEM_EMBEDDING_PROVIDER=openai -e LOOMEM_EMBEDDING_DIM=1536 loomem
 ```
 
 Authentication is off by default only for **local** (loopback) runs. The Docker image binds `0.0.0.0`, so the server requires `LOOMEM_AUTH_TOKEN` (refusing to start without it) and, by image default, an at-rest master key. Pass the key as `Authorization: Bearer <key>`. Deliberate opt-outs: `LOOMEM_ALLOW_UNAUTH=1` (no auth) and `LOOMEM_AT_REST_EXPECT_ENABLED=0` (plaintext at rest) — see [docs/SECURITY.md](docs/SECURITY.md).
+
+The image contains no local embedding model, so the command switches embeddings to OpenAI (`LOOMEM_EMBEDDING_PROVIDER=openai`, `LOOMEM_EMBEDDING_DIM=1536`) and passes `OPENAI_API_KEY`. Stored text is then sent to the OpenAI API. Without these variables the server refuses to start (`refusing cloud fallback`).
 
 ## Connect an MCP client
 
