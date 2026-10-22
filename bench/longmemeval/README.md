@@ -436,16 +436,19 @@ stays disabled, keyless and offline. The tool text
 `Stored source transcript (id: <uuid>). Knowledge extraction disabled. Stored N
 fragments.` is parsed strictly (a segmentation failure or partial fragment write
 fails the ingest stage), and readiness reuses the v1 barrier with expected count
-= sources + fragments. Session records are v1 `representations._record`s of kind
+= sources + fragments and a deadline that scales with that count (45 s plus
+0.5 s per expected chunk, polled every 0.5 s — a LongMemEval-S question yields
+several hundred fragments, which the flat 45 s E0 deadline never covered). Session records are v1 `representations._record`s of kind
 `session` (content = transcript, sources = every turn, `date` = dataset string
 verbatim); the engine source id maps to that record id and an engine fragment
 chunk `<source uuid>:f<k>` maps to `<session record id>:f<k>`, with the
 engine's indices (whitespace-only fragments are skipped at ingest, so indices
 may have gaps). Search hits become v2 records through `from_engine_hit`. The
 driver `retrieve_e1`/`run_e1` writes the rejections sidecar above and optional
-v2 context artifacts; E1 runs are create-only. Nothing here has been run against
-a live engine yet: the MCP request shape, result text and readiness counts are
-implemented against the source contracts and tested with a fake transport.
+v2 context artifacts; E1 runs are create-only. First live run 2026-10-21 (3 questions,
+release binary, local e5): MCP handshake, `memory_ingest` result text and the
+readiness counts behaved as implemented; the only live correction was the
+readiness deadline above.
 
 ```sh
 python3 bench/longmemeval/runner_local_e1.py \
