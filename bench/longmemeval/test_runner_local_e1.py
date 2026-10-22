@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 from unittest.mock import patch
 
 from representations import _record
@@ -299,11 +300,57 @@ class AdapterTests(unittest.TestCase):
     def test_readiness_deadline_scales_with_expected_chunks(self):
         adapter = fake_adapter()
         adapter.mapping, adapter.fragment_counts = {SOURCE_A: "r", SOURCE_B: "s"}, {SOURCE_A: 300, SOURCE_B: 358}
-        cls = runner_local_e1.LocalEngineAdapterE1
         self.assertEqual(adapter.expected_chunks(), 660)
-        self.assertEqual(adapter.ready_deadline_seconds(adapter.expected_chunks()),
-                         cls.READY_DEADLINE_SECONDS + cls.READY_SECONDS_PER_CHUNK * 660)
-        self.assertGreaterEqual(adapter.ready_deadline_seconds(0), 45)
+        # Fixed expectations, not the constants the helper reads: 45 s floor plus
+        # 0.5 s per expected chunk. A regression to the flat E0 deadline fails here.
+        self.assertEqual(adapter.ready_deadline_seconds(660), 375.0)
+        self.assertEqual(adapter.ready_deadline_seconds(0), 45.0)
+
+    def test_readiness_waits_past_the_flat_deadline_for_a_large_corpus(self):
+        """Indexing that completes after 45 s but before the scaled deadline is ready.
+
+        A fake clock drives both ``time.monotonic`` and ``time.sleep`` so the test
+        is deterministic: the engine reports the full count only once 100 s have
+        elapsed, which the old flat 45 s deadline would have declared a failure.
+        """
+        adapter = fake_adapter()
+        adapter.mapping, adapter.fragment_counts = {SOURCE_A: "r", SOURCE_B: "s"}, {SOURCE_A: 300, SOURCE_B: 358}
+        clock = {"now": 1000.0}
+
+        def monotonic():
+            return clock["now"]
+
+        def sleep(seconds):
+            clock["now"] += seconds
+
+        def engine_request(path, payload=None):
+            elapsed = clock["now"] - 1000.0
+            count = 660 if elapsed >= 100.0 else 400
+            if path == "/v1/status":
+                return {"config_summary": {"embeddings_count": count, "tantivy_docs": 660}}
+            self.assertEqual(path, "/v1/health/index-sync")
+            return {"rocksdb_chunks": 660, "tantivy_docs": 660}
+        adapter.engine_request = engine_request
+        with mock.patch.object(runner_local_e1.time, "monotonic", monotonic), \
+                mock.patch.object(runner_local_e1.time, "sleep", sleep):
+            ready = adapter.request("/ready", {"scope": "x", "expected_ids": ["r", "s"]})
+        self.assertTrue(ready["ready"])
+        self.assertGreaterEqual(clock["now"] - 1000.0, 100.0)
+        self.assertLess(clock["now"] - 1000.0, 375.0)
+
+    def test_readiness_still_fails_at_the_scaled_deadline(self):
+        adapter = fake_adapter()
+        adapter.mapping, adapter.fragment_counts = {SOURCE_A: "r", SOURCE_B: "s"}, {SOURCE_A: 300, SOURCE_B: 358}
+        clock = {"now": 0.0}
+        adapter.engine_request = lambda path, payload=None: {
+            "config_summary": {"embeddings_count": 400, "tantivy_docs": 660},
+            "rocksdb_chunks": 660, "tantivy_docs": 660}
+        with mock.patch.object(runner_local_e1.time, "monotonic", lambda: clock["now"]), \
+                mock.patch.object(runner_local_e1.time, "sleep", lambda s: clock.__setitem__("now", clock["now"] + s)):
+            with self.assertRaises(ValidationError):
+                adapter.request("/ready", {"scope": "x", "expected_ids": ["r", "s"]})
+        self.assertGreaterEqual(clock["now"], 375.0)
+        self.assertLess(clock["now"], 376.0)
 
     def test_search_maps_source_and_fragment_ids_and_rejections(self):
         adapter = fake_adapter()
