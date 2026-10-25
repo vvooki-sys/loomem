@@ -247,6 +247,7 @@ pub enum RejectionReason {
     AggregationSubjectDedup,
     SourceAgentFilter,
     TruncatedTopK,
+    OperationFinalization,
 }
 
 #[cfg(test)]
