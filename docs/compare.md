@@ -1,7 +1,7 @@
 # Loomem vs Mem0, Zep, Letta, and cognee
 
 Loomem vs Mem0, Zep, Letta, and cognee
-Loomem is the open-source context layer for AI agents that runs as a single Rust binary with no external services. The other open-source memory layers are strong tools, but every one of them needs at least one external datastore to run. This page lays them side by side on the axes that matter when you self-host: runtime dependencies, interface, licensing, and portability. Facts are current as of July 2026 — verify against each project's own docs before quoting.
+Loomem is the open-source context layer for AI agents that runs as a single Rust binary with no external services. Storage requirements vary by project and deployment mode: Mem0's library defaults to local Qdrant and SQLite history without a separate database service, while its self-hosted server stack uses Postgres + pgvector. This page lays them side by side on the axes that matter when you self-host: runtime dependencies, interface, licensing, and portability. Facts are current as of July 2026, with Mem0 storage details checked October 25, 2026 — verify against each project's own docs before quoting.
 
 At a glance
 
@@ -9,7 +9,7 @@ At a glance
 
 The projects, briefly
 Mem0
-Apache-2.0, self-hostable as a library or a server. Mem0 is not itself a database — it orchestrates a vector store (Qdrant by default) plus Postgres for history, and supports 20+ vector backends. Great if you want broad framework and vector-store integrations and are happy running that infrastructure.
+Apache-2.0, self-hostable as a library or a server. The library defaults to local Qdrant for vectors and SQLite for history, so it does not require a separate database service. The self-hosted server stack uses Postgres + pgvector. Mem0 supports pluggable vector backends and broad framework integrations; infrastructure requirements depend on the deployment mode and providers you choose. See reference 1.
 Zep / Graphiti
 Zep is built on Graphiti, a temporal knowledge-graph engine with bi-temporal edges (valid-from / valid-until). The Graphiti core is open source; the Zep Community Edition has been deprecated, so self-hosting means running Graphiti directly against your own graph database (Neo4j, FalkorDB, or Kuzu). The right pick if graph-first temporal reasoning at team scale is the point.
 Letta (MemGPT)
@@ -29,7 +29,7 @@ Because of the name, Loomem is sometimes confused with two unrelated projects. L
 
 ## References
 
-1. Mem0 — self-hosted Docker stack uses Postgres + pgvector (plus Neo4j for entities); library default is local Qdrant + SQLite; 20+ vector backends pluggable. https://docs.mem0.ai/open-source/overview , https://github.com/mem0ai/mem0
+1. Mem0 — the library defaults to local Qdrant + SQLite history, without a separate database service; the self-hosted server stack uses Postgres + pgvector. Vector backends are pluggable. Storage details checked October 25, 2026 against the official overview and default-component tables: https://docs.mem0.ai/open-source/overview ; repo: https://github.com/mem0ai/mem0
 2. Zep / Graphiti — requires a graph database (Neo4j, FalkorDB, Kuzu, or Amazon Neptune). https://github.com/getzep/graphiti , https://help.getzep.com/graphiti/getting-started/quick-start
 3. Letta (MemGPT) — self-host uses Postgres with the pgvector extension (LETTA_PG_URI). https://docs.letta.com/guides/selfhosting/postgres
 4. cognee — relational (Postgres/SQLite) + graph (Kuzu/Neo4j/FalkorDB) + vector (LanceDB default, Qdrant, others). https://docs.cognee.ai/setup-configuration/relational-databases
