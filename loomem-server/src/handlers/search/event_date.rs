@@ -1,5 +1,5 @@
 //! Authoritative event-date admission for versioned ingest, independent of stale indexes.
-use loomem_core::storage::{is_ingest_fact_shape, is_ingest_source, Chunk};
+use loomem_core::storage::{is_ingest_fact_shape, is_ingest_fragment, is_ingest_source, Chunk};
 use loomem_core::{tantivy_index::event_timestamp_for_chunk, HybridSearchResult};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ pub(super) fn allows(chunk: &Chunk, filter: Option<&DateFilter>) -> bool {
     let Some(DateFilter::Range(start, end)) = filter else {
         return true;
     };
-    if !is_ingest_source(chunk) && !is_ingest_fact_shape(chunk) {
+    if !is_ingest_source(chunk) && !is_ingest_fact_shape(chunk) && !is_ingest_fragment(chunk) {
         return true;
     }
     event_timestamp_for_chunk(chunk).is_some_and(|event| (*start..=*end).contains(&event))

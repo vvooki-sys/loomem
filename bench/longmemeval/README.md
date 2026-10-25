@@ -445,10 +445,10 @@ chunk `<source uuid>:f<k>` maps to `<session record id>:f<k>`, with the
 engine's indices (whitespace-only fragments are skipped at ingest, so indices
 may have gaps). Search hits become v2 records through `from_engine_hit`. The
 driver `retrieve_e1`/`run_e1` writes the rejections sidecar above and optional
-v2 context artifacts; E1 runs are create-only. First live run 2026-10-21 (3 questions,
-release binary, local e5): MCP handshake, `memory_ingest` result text and the
-readiness counts behaved as implemented; the only live correction was the
-readiness deadline above.
+v2 context artifacts; E1 runs are create-only. The MCP request shape, result
+text, readiness counts and evidence metadata have also passed the synthetic
+real-engine smoke below with a cached local model. This does not establish
+LongMemEval answer quality; fake-transport unit tests remain separate.
 
 ```sh
 python3 bench/longmemeval/runner_local_e1.py \
@@ -456,6 +456,50 @@ python3 bench/longmemeval/runner_local_e1.py \
   --manifest /absolute/path/run-manifest.json --trace /absolute/path/trace-e1.jsonl \
   --contexts /absolute/path/contexts-e1 --dry-run
 ```
+
+**Synthetic real-engine smoke (macOS).** The opt-in driver below starts the
+actual `loomem-server` binary twice, each with a fresh temporary database, and
+runs the existing owned E0 and E1 adapters over REST/MCP. Use Python 3.11+
+(without `-O`, because the smoke asserts its invariants). It requires an already
+cached real E5 ONNX model and tokenizer; it never downloads a model. Server
+outbound traffic is restricted to loopback by macOS `sandbox-exec`, with no
+unsandboxed fallback, and Python blocks non-loopback DNS (including tokenizer
+cache misses). Extraction, reranking and background LLM work are disabled;
+the server inherits no API keys. A cached `tiktoken` encoding is required for
+`pack_context_v2`, but no reader or judge is invoked. Use a freshly built,
+source-bound immutable server binary: hashing executable bytes alone does not
+prove which source was compiled. A shared Cargo target reused across worktrees
+produced an invalid cached artifact during integration; that artifact was
+rejected rather than accepted by widening the trace contract.
+
+```sh
+python3 bench/longmemeval/smoke_local_e1.py \
+  --binary /absolute/path/loomem-server \
+  --template /absolute/path/config.toml \
+  --model-dir /absolute/path/cached-multilingual-e5-small \
+  --output /absolute/path/new-synthetic-smoke-output
+```
+
+The workload is constructed in the driver and contains no benchmark questions
+or gold. Checks cover ingest/readiness, a late user turn, original UTF-8 byte
+ranges, role/conversation-date metadata, null event dates, evidence-v2 packing,
+ID mapping, E1 rejection sidecars, stage diagnostics, event-date filtering and
+source-delete cascade. E0 deliberately uses the frozen v1 adapter: its context
+and stage IDs are checked, but v1 does not lift rejection reasons into the v2
+sidecar. An E0 `rejections_captured: 0` is therefore unavailable rejection
+telemetry, not evidence that the engine rejected no records. The output binds
+hashes of the binary, model, tokenizer, template, driver and effective configurations; database directories are removed
+and child processes stopped on exit. These are integration assertions, not
+LongMemEval answer-quality or latency measurements. Pure guard tests in
+`test_smoke_local_e1.py` do not substitute for executing this command.
+
+The real smoke passed, and the verified unfixed baseline failed the intended
+unknown-event-date assertion. Separate fresh E0 imports differed in lower
+filler results, so the smoke does not establish full baseline equivalence.
+A follow-up using identical persisted synthetic DB copies and zero decay for
+both binaries matched actual IDs, order and scores across three queries, with
+trace on and off. This controlled follow-up did not capture context/packing;
+it is not an answer-quality result or a claim of general ranking equivalence.
 
 **Stage-2 experiment recipe.** E0 stores one raw turn per chunk via
 `/v1/store` (`runner_local.py`, rendered through v2 by `from_e0_turn_json`);

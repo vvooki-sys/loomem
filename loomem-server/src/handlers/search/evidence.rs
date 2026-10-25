@@ -57,6 +57,105 @@ pub(super) fn filter_with_trace(
     (outcome, trace)
 }
 
+/// Observe the final lane and authoritative date pass without changing either.
+pub(super) fn finish(
+    lane: super::operation_lane::LaneOutcome,
+    mut metrics: super::telemetry::ResponseMetrics,
+    ctx: &QueryContext,
+    state: &Arc<AppState>,
+) -> (Vec<HybridSearchResult>, super::telemetry::ResponseMetrics) {
+    capture(
+        &mut metrics.evidence,
+        "after_operation",
+        &lane.results,
+        ctx,
+        state,
+    );
+    let (results, mut metrics) = super::event_date::finish(lane, metrics, ctx, state);
+    reconcile(&mut metrics.evidence, &results, ctx, state);
+    // The temporary lane snapshot is internal. Preserve the v1 four-stage
+    // contract and replace its provisional response only after every final pass.
+    if let Some(trace) = metrics.evidence.as_mut() {
+        trace.stages.truncate(3);
+    }
+    capture(&mut metrics.evidence, "response", &results, ctx, state);
+    (results, metrics)
+}
+
+fn reconcile(
+    trace: &mut Option<EvidenceTrace>,
+    results: &[HybridSearchResult],
+    ctx: &QueryContext,
+    state: &Arc<AppState>,
+) {
+    let Some(trace) = trace else { return };
+    let returned = |id: &str| results.iter().any(|result| result.id == id);
+    // A lane may restore a candidate previously filtered or cut by top-k.
+    // Historical snapshots preserve that loss; terminal rejections must not lie.
+    let admitted: Vec<_> = trace
+        .stages
+        .iter()
+        .filter(|stage| stage.stage == "after_operation")
+        .flat_map(|stage| stage.chunk_ids.iter().cloned())
+        .collect();
+    trace
+        .rejections
+        .retain(|entry| !returned(&entry.chunk_id) && !admitted.contains(&entry.chunk_id));
+    record_stage_loss(
+        trace,
+        "response",
+        "after_operation",
+        RejectionReason::OperationFinalization,
+    );
+    let rejected: Vec<_> = trace
+        .stages
+        .iter()
+        .filter(|stage| stage.stage == "after_operation")
+        .flat_map(|stage| &stage.chunk_ids)
+        .filter(|id| !returned(id) && in_scope(id, ctx, state))
+        .cloned()
+        .collect();
+    trace
+        .rejections
+        .extend(
+            rejected
+                .into_iter()
+                .map(|chunk_id| crate::handlers::types::Rejection {
+                    chunk_id,
+                    stage: "response",
+                    reason: RejectionReason::EventDateOutOfRange,
+                }),
+        );
+}
+
+fn record_stage_loss(
+    trace: &mut EvidenceTrace,
+    before: &str,
+    after: &'static str,
+    reason: RejectionReason,
+) {
+    let ids = |name| {
+        trace
+            .stages
+            .iter()
+            .find(|stage| stage.stage == name)
+            .map(|stage| stage.chunk_ids.clone())
+            .unwrap_or_default()
+    };
+    let retained = ids(after);
+    let dropped: Vec<_> = ids(before)
+        .into_iter()
+        .filter(|id| !retained.contains(id))
+        .collect();
+    trace.rejections.extend(dropped.into_iter().map(|chunk_id| {
+        crate::handlers::types::Rejection {
+            chunk_id,
+            stage: "response",
+            reason,
+        }
+    }));
+}
+
 /// Even diagnostic IDs must not expose a different stream. Missing or
 /// unreadable chunks are omitted from snapshots, not inferred as evidence.
 fn in_scope(id: &str, ctx: &QueryContext, state: &Arc<AppState>) -> bool {
@@ -109,7 +208,7 @@ mod tests {
     use loomem_core::storage::{Chunk, UserRole};
     use serde_json::json;
 
-    fn seed(state: &Arc<AppState>, id: &str, stream: &str) -> HybridSearchResult {
+    pub(super) fn seed(state: &Arc<AppState>, id: &str, stream: &str) -> HybridSearchResult {
         let mut chunk = Chunk {
             id: id.to_string(),
             content: format!("independent {id}"),
@@ -325,7 +424,10 @@ mod tests {
             if trace {
                 let evidence = &value["trace_metadata"]["evidence"];
                 assert_eq!(evidence["schema_version"], 1);
-                assert_eq!(evidence["stages"][3]["chunk_ids"], json!([]));
+                assert_eq!(
+                    evidence["stages"].as_array().unwrap().last().unwrap()["chunk_ids"],
+                    json!([])
+                );
                 assert!(!evidence.to_string().contains("private-canary"));
                 assert!(evidence.get("rejections").is_none());
                 assert_eq!(value["trace_metadata"]["rejections"], json!([]));
@@ -333,3 +435,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "evidence/final_tests.rs"]
+mod final_tests;

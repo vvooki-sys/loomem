@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Lock the Tokio runtime to 1.51.6, addressing RUSTSEC-2026-0386
+  (`AsyncFd` I/O safety) without suppressing the dependency audit.
+- Date-range searches apply the authoritative unknown-event-date rule to source
+  fragments in vector admission and final filtering, matching the lexical index.
+  Conversation and storage dates do not substitute for unknown event dates;
+  unfiltered and legacy-record behavior is unchanged.
+- Traced search's final `response` snapshot is captured after operation-policy
+  finalization and the last event-date check. Returned IDs and order match the
+  actual response; restored records are not reported as rejected. The existing
+  four-stage evidence contract is preserved, with an additive
+  `operation_finalization` rejection reason for displaced primary results.
+
 ### Added
 
 - `fragments` domain module: deterministic segmentation of a canonical

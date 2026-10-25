@@ -7,6 +7,8 @@ use loomem_core::tantivy_index::TextDocument;
 use serde_json::json;
 use std::sync::Arc;
 
+mod fragments;
+
 const RECORDED: u64 = 1_704_067_200;
 
 fn chunk(id: &str, event: Option<&str>, owned: bool) -> Chunk {
