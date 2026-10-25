@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Lock the Tokio runtime to 1.51.6, addressing RUSTSEC-2026-0386
+  (`AsyncFd` I/O safety) without suppressing the dependency audit.
 - Date-range searches apply the authoritative unknown-event-date rule to source
   fragments in vector admission and final filtering, matching the lexical index.
   Conversation and storage dates do not substitute for unknown event dates;
