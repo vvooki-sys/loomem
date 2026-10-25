@@ -4,17 +4,17 @@
 <meta property="og:site_name" content="Loomem"/>
 <meta property="og:url" content="https://loomem.ai/compare.html"/>
 <meta property="og:title" content="Loomem vs Mem0, Zep, Letta, and cognee — comparison"/>
-<meta property="og:description" content="How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem is the only one that runs as a single Rust binary with no external database."/>
+<meta property="og:description" content="How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem runs as a single Rust binary with embedded storage; Mem0 offers local library storage or a Postgres-backed server stack."/>
 <meta property="og:image" content="https://loomem.ai/og-image.png"/>
 <meta name="twitter:card" content="summary_large_image"/>
 <meta name="twitter:title" content="Loomem vs Mem0, Zep, Letta, and cognee — comparison"/>
-<meta name="twitter:description" content="How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem is the only one that runs as a single Rust binary with no external database."/>
+<meta name="twitter:description" content="How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem runs as a single Rust binary with embedded storage; Mem0 offers local library storage or a Postgres-backed server stack."/>
 <meta name="twitter:image" content="https://loomem.ai/og-image.png"/>
 
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Loomem vs Mem0, Zep, Letta, and cognee — comparison</title>
-<meta name="description" content="How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem is the only one that runs as a single Rust binary with no external database."/>
+<meta name="description" content="How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem runs as a single Rust binary with embedded storage; Mem0 offers local library storage or a Postgres-backed server stack."/>
 <link rel="canonical" href="https://loomem.ai/compare.html"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -102,7 +102,7 @@ a:hover{text-decoration:underline}
       "@type": "TechArticle",
       "headline": "Loomem vs Mem0, Zep, Letta, and cognee",
       "name": "Loomem vs Mem0, Zep, Letta, and cognee",
-      "description": "How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem is the only one that runs as a single Rust binary with no external database.",
+      "description": "How Loomem compares to Mem0, Zep/Graphiti, Letta (MemGPT), and cognee: the open-source AI-memory layers side by side on dependencies, interface, licensing, and portability. Loomem runs as a single Rust binary with embedded storage; Mem0 offers local library storage or a Postgres-backed server stack.",
       "url": "https://loomem.ai/compare.html",
       "inLanguage": "en",
       "isPartOf": {
@@ -155,7 +155,7 @@ a:hover{text-decoration:underline}
 <header class="topbar"><div class="wrap inner"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Loomem</a><nav class="topnav"><a href="/">Home</a><a href="/guide/">Docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav></div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="/" style="font-weight:600;margin-bottom:6px;display:block">← Home</a><div class="grp">Reference</div><a href="/compare.html" class="active">Loomem vs alternatives</a><a href="/benchmarks.html">Benchmarks</a><div class="grp">Docs</div><a href="/guide/">All documentation</a><a href="/guide/architecture.html">Architecture</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></aside><main class="doc-main"><div class="doc-eyebrow">Reference</div><article class="doc-content">
 <h1 id="loomem-vs-alternatives">Loomem vs Mem0, Zep, Letta, and cognee</h1>
-<p><strong>Loomem is the open-source context layer for AI agents that runs as a single Rust binary with no external services.</strong> The other open-source memory layers are strong tools, but every one of them needs at least one external datastore to run. This page lays them side by side on the axes that matter when you self-host: runtime dependencies, interface, licensing, and portability. Facts are current as of July 2026 — verify against each project's own docs before quoting.</p>
+<p><strong>Loomem is the open-source context layer for AI agents that runs as a single Rust binary with no external services.</strong> Storage requirements vary by project and deployment mode: Mem0's library defaults to local Qdrant and SQLite history without a separate database service, while its self-hosted server stack uses Postgres + pgvector. This page lays them side by side on the axes that matter when you self-host: runtime dependencies, interface, licensing, and portability. Facts are current as of July 2026, with Mem0 storage details checked October 25, 2026 — verify against each project's own docs before quoting.</p>
 
 <h2 id="at-a-glance">At a glance</h2>
 <div style="overflow-x:auto">
@@ -165,7 +165,7 @@ a:hover{text-decoration:underline}
 <tr><td><strong>What it is</strong></td><td>Context layer for LLM agents</td><td>Memory layer (library + server)</td><td>Temporal knowledge-graph memory</td><td>Stateful-agent framework with memory</td><td>Memory / GraphRAG platform</td></tr>
 <tr><td><strong>License</strong></td><td>Apache-2.0</td><td>Apache-2.0</td><td>Graphiti core Apache-2.0 (Zep Community Edition deprecated)</td><td>Apache-2.0</td><td>Apache-2.0</td></tr>
 <tr><td><strong>Language</strong></td><td>Rust</td><td>Python / Node</td><td>Python</td><td>Python</td><td>Python (+ new Rust core)</td></tr>
-<tr><td><strong>External services to run</strong></td><td><strong>None</strong> — embedded</td><td>Vector store (Qdrant by default) + Postgres for history<sup><a href="#r1">1</a></sup></td><td>A graph database (Neo4j, FalkorDB, or Kuzu)<sup><a href="#r2">2</a></sup></td><td>Postgres + pgvector<sup><a href="#r3">3</a></sup></td><td>Graph + vector + relational stores<sup><a href="#r4">4</a></sup></td></tr>
+<tr><td><strong>External services to run</strong></td><td><strong>None</strong> — embedded</td><td>Library: no separate database service (local Qdrant + SQLite history). Server stack: Postgres + pgvector<sup><a href="#r1">1</a></sup></td><td>A graph database (Neo4j, FalkorDB, or Kuzu)<sup><a href="#r2">2</a></sup></td><td>Postgres + pgvector<sup><a href="#r3">3</a></sup></td><td>Graph + vector + relational stores<sup><a href="#r4">4</a></sup></td></tr>
 <tr><td><strong>Storage engine</strong></td><td>RocksDB + Tantivy, one binary</td><td>Pluggable (20+ vector DBs)</td><td>Graph DB</td><td>Postgres / pgvector</td><td>Pluggable graph + vector</td></tr>
 <tr><td><strong>MCP-native</strong></td><td>Yes — <code>memory_*</code> tools out of the box</td><td>Primarily SDK / REST</td><td>Primarily SDK / API</td><td>Primarily SDK / API</td><td>Primarily SDK / API</td></tr>
 <tr><td><strong>Local-first &amp; offline</strong></td><td>Yes — local ONNX embeddings</td><td>Depends on the stack you wire up</td><td>Needs a graph DB running</td><td>Needs Postgres running</td><td>Self-host, heavier stack</td></tr>
@@ -176,7 +176,7 @@ a:hover{text-decoration:underline}
 
 <h2 id="the-projects">The projects, briefly</h2>
 <h3>Mem0</h3>
-<p>Apache-2.0, self-hostable as a library or a server. Mem0 is not itself a database — it orchestrates a vector store (Qdrant by default) plus Postgres for history, and supports 20+ vector backends. Great if you want broad framework and vector-store integrations and are happy running that infrastructure.</p>
+<p>Apache-2.0, self-hostable as a library or a server. The library defaults to local Qdrant for vectors and SQLite for history, so it does not require a separate database service. The self-hosted server stack uses Postgres + pgvector. Mem0 supports pluggable vector backends and broad framework integrations; infrastructure requirements depend on the deployment mode and providers you choose.<sup><a href="#r1">1</a></sup></p>
 <h3>Zep / Graphiti</h3>
 <p>Zep is built on Graphiti, a temporal knowledge-graph engine with bi-temporal edges (valid-from / valid-until). The Graphiti core is open source; the Zep Community Edition has been deprecated, so self-hosting means running Graphiti directly against your own graph database (Neo4j, FalkorDB, or Kuzu). The right pick if graph-first temporal reasoning at team scale is the point.</p>
 <h3>Letta (MemGPT)</h3>
@@ -194,7 +194,7 @@ a:hover{text-decoration:underline}
 <p>See the numbers on the <a href="/benchmarks.html">benchmarks page</a>, or get started from the <a href="/">home page</a>.</p>
 <h2 id="references">References</h2>
 <ol style="color:var(--lm-ink-600);font-size:0.92em">
-<li id="r1"><strong>Mem0</strong> — the self-hosted Docker stack uses Postgres + pgvector (plus Neo4j for entity relationships); the library default is local Qdrant + SQLite history, and 20+ vector backends are pluggable. <a href="https://docs.mem0.ai/open-source/overview">docs.mem0.ai/open-source/overview</a>, <a href="https://mem0.ai/blog/self-host-mem0-docker">self-host guide</a>, <a href="https://github.com/mem0ai/mem0">repo</a>.</li>
+<li id="r1"><strong>Mem0</strong> — the library defaults to local Qdrant + SQLite history, without a separate database service; the self-hosted server stack uses Postgres + pgvector. Vector backends are pluggable. Storage details checked October 25, 2026 against the <a href="https://docs.mem0.ai/open-source/overview">official overview and default-component tables</a>; <a href="https://github.com/mem0ai/mem0">repo</a>.</li>
 <li id="r2"><strong>Zep / Graphiti</strong> — requires a graph database: Neo4j, FalkorDB, Kuzu, or Amazon Neptune. <a href="https://github.com/getzep/graphiti">github.com/getzep/graphiti</a>, <a href="https://help.getzep.com/graphiti/getting-started/quick-start">help.getzep.com</a>.</li>
 <li id="r3"><strong>Letta (MemGPT)</strong> — self-host uses Postgres with the <code>pgvector</code> extension (<code>LETTA_PG_URI</code>). <a href="https://docs.letta.com/guides/selfhosting/postgres">docs.letta.com/guides/selfhosting/postgres</a>.</li>
 <li id="r4"><strong>cognee</strong> — relational (Postgres/SQLite) + graph (Kuzu/Neo4j/FalkorDB) + vector (LanceDB default, Qdrant, and others) stores. <a href="https://docs.cognee.ai/setup-configuration/relational-databases">docs.cognee.ai</a>.</li>

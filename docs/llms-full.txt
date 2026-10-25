@@ -22,7 +22,7 @@ This file is a fuller, self-contained brief intended for language models and AI 
 - Optional field-level AES-GCM at-rest encryption, with a master key supplied from the environment.
 
 ## How it compares
-Loomem is the only one of the common open-source memory layers that runs as a single binary with no external datastore. Mem0 (Apache-2.0) orchestrates an external vector store (Qdrant) plus Postgres. Zep is built on Graphiti and needs a graph database (Neo4j, FalkorDB, or Kuzu); the Zep Community Edition is deprecated. Letta / MemGPT (Apache-2.0) stores everything in Postgres + pgvector. cognee (Apache-2.0) combines graph, vector, and relational stores. Full side-by-side: https://loomem.ai/compare.html
+Loomem runs as a single Rust binary with embedded RocksDB + Tantivy and no separate database service. Mem0 (Apache-2.0) has different storage defaults by deployment mode: its library uses local Qdrant for vectors and SQLite for history, without a separate database service; its self-hosted server stack uses Postgres + pgvector. Mem0 storage details checked October 25, 2026: https://docs.mem0.ai/open-source/overview. Zep is built on Graphiti and needs a graph database (Neo4j, FalkorDB, or Kuzu); the Zep Community Edition is deprecated. Letta / MemGPT (Apache-2.0) stores everything in Postgres + pgvector. cognee (Apache-2.0) combines graph, vector, and relational stores. Full side-by-side: https://loomem.ai/compare.html
 
 ## Benchmarks
 - Loomem scores 75.0% (375/500) on LongMemEval-S (cleaned, xiaowu0162/longmemeval-cleaned), fully self-hosted.
