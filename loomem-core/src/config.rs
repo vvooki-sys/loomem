@@ -513,6 +513,7 @@ impl Config {
             self.llm.timeout_secs > 0,
             "llm.timeout_secs must be positive"
         );
+        crate::llm_provider::validate(&self.llm.provider, &self.llm.providers)?;
 
         self.validate_fragments()?;
 
@@ -591,10 +592,25 @@ impl Config {
             self.worker.clustering.interval_secs
         );
         tracing::info!(
-            "  LLM: provider={}, model={}, timeout={}s",
-            self.llm.provider,
-            self.llm.embedding_model,
+            "  LLM completions: {}, model={}, timeout={}s",
+            self.llm.provider_summary(),
+            self.llm.compression_model,
             self.llm.timeout_secs
+        );
+        // "local" reads the ONNX model dir; `embedding_model` applies to "openai" only.
+        let embedding_model = match self.llm.embedding_provider.as_str() {
+            "local" => self
+                .llm
+                .embedding_model_path
+                .as_deref()
+                .unwrap_or("default local model dir"),
+            _ => self.llm.embedding_model.as_str(),
+        };
+        tracing::info!(
+            "  LLM embeddings: provider={}, model={}, dim={}",
+            self.llm.embedding_provider,
+            embedding_model,
+            self.llm.embedding_dim
         );
         tracing::info!(
             "  Streams: shared={}, agents={}",
@@ -762,5 +778,34 @@ mod tests {
         // With a key present the list is empty regardless of the flags.
         cfg.llm.api_key = Some("sk-test".to_string());
         assert!(cfg.llm_dependent_enabled_without_key().is_empty());
+    }
+
+    #[test]
+    fn shipped_config_keeps_builtin_openai_provider() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+        let content = std::fs::read_to_string(path).expect("read config.toml");
+        let cfg: Config = toml::from_str(&content).expect("parse config.toml");
+        assert!(cfg.llm.providers.is_empty());
+        assert_eq!(cfg.llm.provider, "openai");
+        cfg.validate().expect("shipped config validates");
+    }
+
+    #[test]
+    fn llm_providers_table_parses_and_validates() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+        let content = std::fs::read_to_string(path).expect("read config.toml");
+        let with_providers = content.replacen("provider = \"openai\"", "provider = \"ollama\"", 1)
+            + "\n[llm.providers.ollama]\nbase_url = \"http://localhost:11434/v1\"\n";
+        let mut cfg: Config = toml::from_str(&with_providers).expect("parse with providers");
+        cfg.validate().expect("keyless provider validates");
+        let active = cfg
+            .llm
+            .active_provider()
+            .expect("keyless provider resolves");
+        assert_eq!(active.base_url, "http://localhost:11434/v1");
+        assert_eq!(active.api_key, None);
+
+        cfg.llm.provider = "missing".to_string();
+        assert!(cfg.validate().is_err(), "undefined provider must fail");
     }
 }

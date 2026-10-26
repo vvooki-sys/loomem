@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Named completion providers: `[llm.providers.<name>]` with `base_url` and an
+  optional `api_key_env`, selected by `llm.provider`. Every provider uses the
+  OpenAI chat-completions format. `api_key_env` set → that env var must hold
+  the key; omitted → the provider takes no key (e.g. Ollama, vLLM, a
+  gateway). Without the table, `"openai"` keeps resolving to
+  `https://api.openai.com/v1` with the existing `api_key` / `api_key_env`.
+  This change adds the config, validation and `LlmConfig::active_provider()`
+  only; LLM calls still go to OpenAI until the call sites move to it. The
+  startup log shows the active provider and where its key comes from (never
+  the key itself).
 - `fragments` domain module: deterministic segmentation of a canonical
   conversation source into turn-level fragments (long turns split further at
   paragraph, sentence and whitespace boundaries) that carry the author role,
@@ -102,6 +112,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`llm.provider` must name a known provider** (breaking for misconfigured
+  setups only). Previously any value was accepted and ignored — completions
+  always went to OpenAI. Now a value other than `"openai"` must match a
+  `[llm.providers.<name>]` entry, or the config fails to load with
+  `llm.provider "<name>" is not defined in [llm.providers]`. Configs with
+  `provider = "openai"` (the shipped default) load unchanged. The startup log
+  line `LLM: provider=…, model=…` is replaced by `LLM completions: …` and
+  `LLM embeddings: …`; the old line printed the embedding model as the
+  completion model.
 - HTML tag stripping in the ingress sanitizer no longer matches across lines.
   Previously a lone `<` early in a multi-turn transcript and a `>` many turns
   later were treated as one tag and everything between them was deleted from

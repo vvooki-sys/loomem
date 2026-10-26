@@ -32,6 +32,7 @@ pub mod intent_log;
 pub mod llm;
 pub mod llm_failures;
 pub mod llm_ner;
+pub mod llm_provider;
 pub mod local_embeddings;
 pub mod manifest;
 pub mod memory_extractor;
