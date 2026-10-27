@@ -120,9 +120,9 @@ pub async fn classify_relation(
     old_content: &str,
     new_content: &str,
 ) -> Result<ClassificationResult> {
-    let api_key = llm_config
-        .get_api_key()
-        .context("OpenAI API key not configured for contradiction detection")?;
+    let provider = llm_config
+        .active_provider()
+        .context("LLM provider not available for contradiction detection")?;
 
     let user_message = format!("OLD memory: {}\nNEW memory: {}", old_content, new_content);
 
@@ -136,13 +136,13 @@ pub async fn classify_relation(
         "temperature": 0.0
     });
 
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
+    let request = provider
+        .chat_request(client)
         .header("Content-Type", "application/json")
         .json(&request_body)
-        .timeout(Duration::from_secs(10))
-        .send()
+        .timeout(Duration::from_secs(10));
+    let response = provider
+        .send_chat(request, "contradiction.classify", model)
         .await
         .context("Failed to send contradiction classification request")?;
 
@@ -255,9 +255,9 @@ pub async fn rewrite_with_history(
     old_date: Option<&str>,
     new_date: Option<&str>,
 ) -> Result<String> {
-    let api_key = llm_config
-        .get_api_key()
-        .context("OpenAI API key not configured for history-preserving rewrite")?;
+    let provider = llm_config
+        .active_provider()
+        .context("LLM provider not available for history-preserving rewrite")?;
 
     let user_message = build_rewrite_user_message(old_content, new_content, old_date, new_date);
 
@@ -271,13 +271,13 @@ pub async fn rewrite_with_history(
         "temperature": 0.0
     });
 
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
+    let request = provider
+        .chat_request(client)
         .header("Content-Type", "application/json")
         .json(&request_body)
-        .timeout(Duration::from_secs(10))
-        .send()
+        .timeout(Duration::from_secs(10));
+    let response = provider
+        .send_chat(request, "contradiction.rewrite", model)
         .await
         .context("Failed to send history-preserving rewrite request")?;
 

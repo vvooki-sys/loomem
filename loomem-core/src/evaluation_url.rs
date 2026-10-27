@@ -4,24 +4,28 @@
 use anyhow::Context;
 use anyhow::Result;
 
-const PROVIDER_URL: &str = "https://api.openai.com/v1/chat/completions";
-
-/// Resolve an OpenAI-compatible chat endpoint without changing production routing.
-pub fn chat_completions(variable: &str) -> Result<String> {
+/// Chat endpoint for one call site: `provider_url` (the active provider's
+/// `<base_url>/chat/completions`), or in evaluation builds the loopback
+/// fixture named by `variable`. Production routing never reads `variable`.
+pub fn chat_completions(variable: &str, provider_url: &str) -> Result<String> {
     #[cfg(feature = "evaluation")]
-    return evaluation(variable, std::env::var(variable));
+    return evaluation(variable, provider_url, std::env::var(variable));
     #[cfg(not(feature = "evaluation"))]
     {
         let _ = variable;
-        Ok(PROVIDER_URL.to_string())
+        Ok(provider_url.to_string())
     }
 }
 
 #[cfg(feature = "evaluation")]
-fn evaluation(variable: &str, value: Result<String, std::env::VarError>) -> Result<String> {
+fn evaluation(
+    variable: &str,
+    provider_url: &str,
+    value: Result<String, std::env::VarError>,
+) -> Result<String> {
     let value = match value {
         Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => return Ok(PROVIDER_URL.to_string()),
+        Err(std::env::VarError::NotPresent) => return Ok(provider_url.to_string()),
         Err(std::env::VarError::NotUnicode(_)) => {
             anyhow::bail!("Invalid evaluation endpoint encoding for {variable}")
         }
@@ -50,12 +54,19 @@ fn is_loopback(url: &reqwest::Url) -> bool {
 mod tests {
     use super::*;
 
+    const PROVIDER_URL: &str = "https://api.openai.com/v1/chat/completions";
+
     #[cfg(not(feature = "evaluation"))]
     #[test]
     fn production_url_is_fixed() {
         assert_eq!(
-            chat_completions("LOOMEM_EVALUATION_PROFILE_URL").unwrap(),
+            chat_completions("LOOMEM_EVALUATION_PROFILE_URL", PROVIDER_URL).unwrap(),
             PROVIDER_URL
+        );
+        let ollama = "http://localhost:11434/v1/chat/completions";
+        assert_eq!(
+            chat_completions("LOOMEM_EVALUATION_PROFILE_URL", ollama).unwrap(),
+            ollama
         );
     }
 
@@ -63,16 +74,19 @@ mod tests {
     #[test]
     fn evaluation_url_requires_exact_loopback_endpoint() {
         let local = "http://127.0.0.1:49152/v1/chat/completions";
-        assert_eq!(evaluation("TEST", Ok(local.to_string())).unwrap(), local);
+        assert_eq!(
+            evaluation("TEST", PROVIDER_URL, Ok(local.to_string())).unwrap(),
+            local
+        );
         for invalid in [
             "https://api.openai.com/v1/chat/completions",
             "http://localhost:49152/v1/chat/completions",
             "http://127.0.0.1:49152/other",
         ] {
-            assert!(evaluation("TEST", Ok(invalid.to_string())).is_err());
+            assert!(evaluation("TEST", PROVIDER_URL, Ok(invalid.to_string())).is_err());
         }
         assert_eq!(
-            evaluation("TEST", Err(std::env::VarError::NotPresent)).unwrap(),
+            evaluation("TEST", PROVIDER_URL, Err(std::env::VarError::NotPresent)).unwrap(),
             PROVIDER_URL
         );
     }
