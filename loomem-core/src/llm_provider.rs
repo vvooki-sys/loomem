@@ -112,7 +112,8 @@ pub fn resolve(
 }
 
 /// Static checks (no env access): the active provider exists, every
-/// `base_url` is http(s), and no `api_key_env` is an empty string.
+/// `base_url` is a usable API root (see [`check_base_url`]), and no
+/// `api_key_env` is an empty string.
 pub fn validate(
     active: &str,
     providers: &BTreeMap<String, LlmProviderConfig>,
@@ -123,15 +124,36 @@ pub fn validate(
         ProviderError::Unknown(active.to_string())
     );
     for (name, p) in providers {
-        anyhow::ensure!(
-            p.base_url.starts_with("http://") || p.base_url.starts_with("https://"),
-            "llm.providers.{name}.base_url must start with http:// or https:// (got {:?})",
-            p.base_url
-        );
+        if let Err(why) = check_base_url(&p.base_url) {
+            anyhow::bail!("llm.providers.{name}.base_url {why}");
+        }
         anyhow::ensure!(
             p.api_key_env.as_deref() != Some(""),
             "llm.providers.{name}.api_key_env must not be empty; remove it for a provider without a key"
         );
+    }
+    Ok(())
+}
+
+/// Why a `base_url` cannot serve as an API root: it must be an absolute
+/// http(s) URL (which implies a host), and carry nothing that `chat_completions_url`
+/// would append to incorrectly (query, fragment) or that would leak through
+/// the startup log (`user:password@`). The value itself is never part of the
+/// message, so a rejected URL with credentials does not reach logs either.
+fn check_base_url(raw: &str) -> Result<(), &'static str> {
+    if !(raw.starts_with("http://") || raw.starts_with("https://")) {
+        return Err("must start with http:// or https://");
+    }
+    // For http(s) the parser already requires a host (`http://` is an error).
+    let url = reqwest::Url::parse(raw).map_err(|_| "is not a valid URL")?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("must not carry credentials; use api_key_env instead");
+    }
+    if url.query().is_some() {
+        return Err("must not have a query string");
+    }
+    if url.fragment().is_some() {
+        return Err("must not have a fragment");
     }
     Ok(())
 }
@@ -297,6 +319,42 @@ mod tests {
         assert!(validate("a", &providers(&[("a", "localhost:11434", None)])).is_err());
         assert!(validate("a", &providers(&[("a", "http://x", Some(""))])).is_err());
         assert!(validate("a", &providers(&[("a", "http://x", None)])).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_unusable_api_roots() {
+        let rejected: &[(&str, &str)] = &[
+            ("http://", "is not a valid URL"),
+            (
+                "https://user:secret@gateway.example/v1",
+                "must not carry credentials",
+            ),
+            (
+                "https://token@gateway.example/v1",
+                "must not carry credentials",
+            ),
+            (
+                "https://gateway.example/v1?region=eu",
+                "must not have a query string",
+            ),
+            ("https://gateway.example/v1#eu", "must not have a fragment"),
+            ("http://exa mple/v1", "is not a valid URL"),
+        ];
+        for (url, why) in rejected {
+            let err = validate("a", &providers(&[("a", url, None)]))
+                .expect_err(url)
+                .to_string();
+            assert!(err.starts_with("llm.providers.a.base_url "), "{err}");
+            assert!(err.contains(why), "{url}: {err}");
+            assert!(!err.contains("secret"), "URL credentials leaked: {err}");
+        }
+        for url in [
+            "http://localhost:11434/v1/",
+            "https://gateway.example:8443/v1",
+            "https://api.openai.com/v1",
+        ] {
+            validate("a", &providers(&[("a", url, None)])).expect(url);
+        }
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! `[llm.providers.<name>]` end to end through `Config::load` on a real file:
 //! an old OpenAI-only config keeps working unchanged, a keyless provider loads
 //! and resolves, a keyed provider without its env var fails at resolution, and
-//! an undefined provider or a bad `base_url` refuses to load.
+//! an undefined provider or a bad `base_url` (no scheme, or credentials that
+//! would otherwise reach the startup log) refuses to load.
 //!
 //! No test here mutates the process env (parallel tests would race); env var
 //! names that must be absent are unique to this file.
@@ -121,5 +122,24 @@ fn bad_base_url_refuses_to_load() {
     assert!(
         format!("{err:#}").contains("llm.providers.ollama.base_url must start with http"),
         "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn base_url_with_credentials_refuses_to_load_and_never_logs_them() {
+    let err = load(&config_with(
+        "gateway",
+        "api_key_env = \"OPENAI_API_KEY\"",
+        "[llm.providers.gateway]\nbase_url = \"https://user:s3cret-value@gateway.example/v1\"",
+    ))
+    .expect_err("base_url with credentials must not load");
+    let shown = format!("{err:#}");
+    assert!(
+        shown.contains("llm.providers.gateway.base_url must not carry credentials"),
+        "unexpected error: {shown}"
+    );
+    assert!(
+        !shown.contains("s3cret-value"),
+        "credentials leaked: {shown}"
     );
 }
