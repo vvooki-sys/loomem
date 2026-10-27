@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 use crate::llm_failures::{global as llm_failures, LlmFailureKind};
+use crate::llm_provider::{self, LlmProviderConfig, ProviderError, ResolvedProvider};
 
 /// Default embedding provider for configs that predate the
 /// `embedding_provider` field. Kept as "openai" so existing installations
@@ -19,8 +20,12 @@ fn default_embedding_provider() -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
-    /// Completions provider (compression / reflect). Currently "openai".
+    /// Completions provider: a key of `providers`, or the built-in "openai".
     pub provider: String,
+    /// Named OpenAI-compatible completion providers (`[llm.providers.<name>]`).
+    /// Missing in older configs → empty, which keeps the built-in "openai".
+    #[serde(default)]
+    pub providers: std::collections::BTreeMap<String, LlmProviderConfig>,
     /// Embedding provider: "local" (on-device ONNX) or "openai". Independent
     /// of `provider` so embeddings can run keyless while completions still use
     /// an API. Missing in older configs → defaults to "openai".
@@ -73,6 +78,7 @@ impl Default for LlmConfig {
     fn default() -> Self {
         Self {
             provider: "openai".to_string(),
+            providers: std::collections::BTreeMap::new(),
             embedding_provider: "openai".to_string(),
             api_key: None,
             api_key_env: "OPENAI_API_KEY".to_string(),
@@ -104,6 +110,28 @@ impl LlmConfig {
             .tcp_keepalive(Duration::from_secs(self.tcp_keepalive_secs))
             .build()
             .context("Failed to build HTTP client")
+    }
+
+    /// The active completions provider with its key read from the env.
+    pub fn active_provider(&self) -> Result<ResolvedProvider, ProviderError> {
+        llm_provider::resolve(
+            &self.provider,
+            &self.providers,
+            self.api_key.as_deref(),
+            &self.api_key_env,
+            |name| std::env::var(name).ok(),
+        )
+    }
+
+    /// Startup description of the active provider (no key value).
+    pub fn provider_summary(&self) -> String {
+        llm_provider::describe(
+            &self.provider,
+            &self.providers,
+            self.api_key.as_deref(),
+            &self.api_key_env,
+            |name| std::env::var(name).ok(),
+        )
     }
 
     pub fn get_api_key(&self) -> Option<String> {

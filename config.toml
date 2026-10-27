@@ -173,6 +173,19 @@ pool_max_idle_per_host = 16   # max idle keep-alive connections kept per host
 pool_idle_timeout_secs = 30   # recycle an idle connection after this many seconds
 tcp_keepalive_secs = 30       # TCP keep-alive probe interval for pooled connections
 
+# Named OpenAI-compatible completion providers. `provider` above picks one.
+# Without this table, "openai" uses https://api.openai.com/v1 and the
+# api_key / api_key_env keys above. `api_key_env` set → that env var must hold
+# the key; omitted → calls go out without a key (e.g. Ollama, vLLM, a gateway).
+# Embeddings are not affected: they follow `embedding_provider`.
+#
+# [llm.providers.ollama]
+# base_url = "http://localhost:11434/v1"
+#
+# [llm.providers.openrouter]
+# base_url = "https://openrouter.ai/api/v1"
+# api_key_env = "OPENROUTER_API_KEY"
+
 [server]
 host = "127.0.0.1"
 port = 3030
