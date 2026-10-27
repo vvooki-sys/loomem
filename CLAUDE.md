@@ -10,6 +10,7 @@ Hard rules every AI assistant (Claude Code, Cowork, Copilot, Cursor, …) must f
 
 - **Changing Rust code** → § Five hard rules + § Build & run + § Repo map + § Rust rules.
 - **Docs / landing / content / GEO** → § Docs & site + hard rule 5 (surgical). A docs task never touches Rust.
+- **Dashboard (`loomem-dashboard/`, React SPA)** → § Build & run (dashboard bullet) + hard rule 5. A dashboard task touches no Rust beyond `loomem-server/src/spa.rs`.
 - **Cutting a release** → § Releases.
 - **Always** → § Five hard rules, especially live-state (rule 4), product boundaries (rule 3), secrets (rule 1).
 
@@ -31,9 +32,12 @@ Hard rules every AI assistant (Claude Code, Cowork, Copilot, Cursor, …) must f
 
 ## Build & run
 
-Crates: `loomem-core` (domain + storage), `loomem-server` (HTTP/MCP), `loomem-cli` (stdio↔HTTP MCP bridge + ops), `loomem-migrate` (probes/migrations).
+Crates: `loomem-core` (domain + storage), `loomem-server` (HTTP/MCP), `loomem-cli` (stdio↔HTTP MCP bridge + ops), `loomem-migrate` (probes/migrations). Not a crate: `loomem-dashboard/` (React/Vite SPA, embedded into `loomem-server` by `rust-embed` from `loomem-dashboard/dist/`, see `loomem-server/src/spa.rs`).
 
 - **`loomem-core` and `loomem-server` compile RocksDB (C++) and need `libclang`.** Light/sandboxed environments often can't build them — don't assume a clean `cargo build` everywhere. CI installs `libclang-dev`.
+- **Dashboard build order: front end first, then cargo.** `cd loomem-dashboard && npm ci && npm run build` writes `dist/`; `cargo build -p loomem-server` then embeds it. With an empty `dist/` the server still compiles and `/` answers 404. `dist/` is gitignored — never commit it. The Rust gate does not cover the SPA: CI has a separate job (`npm run lint`, `npm test`, `npm run build`), so run those locally before pushing dashboard changes.
+- **Fail-closed startup.** With the default config the server **refuses to start** without the local embedding model (`embedding_provider = "local"`, no cloud fallback) and without an LLM key while LLM-backed subsystems are enabled. `LOOMEM_ALLOW_KEYLESS=1` opts into degraded keyless mode (`memory_ingest` stores nothing, extraction off, dreaming fails; `memory_store` and search work). Expect this when running the server locally or in tests — don't "fix" it by weakening the check.
+- **Windows:** `loomem-server` builds and runs on Windows (LLVM for `libclang`, `LIBCLANG_PATH`; see `INSTALL_WINDOWS.md`). Release archives still cover Linux and macOS only.
 - **`loomem-cli` pulls no RocksDB/Tantivy** (just tokio/reqwest/clap) — it compiles in seconds. Use it for fast bridge/CLI iteration.
 - **Fast feedback loop:** `cargo check -p <crate>` and `cargo test -p loomem-core --lib` run in seconds. A full `cargo build --workspace` (release especially) is slow — don't run it in a loop.
 - **macOS aarch64 release gotcha:** the release build SIGSEGVs rustc (LLVM SLP vectorizer, ThinLTO) without `-C no-vectorize-slp`. That flag is already pinned for the Mac target in `.cargo/config.toml` — don't remove it. Linux/Docker/Railway are unaffected.
@@ -73,7 +77,7 @@ A docs/landing/content task **never touches Rust** (and never `search.rs` / fusi
 - `docs/*.md` — source of truth for guide content.
 - `docs/guide/*.html` — **hand-maintained HTML mirrors of `docs/*.md`. There is no generator** — when you change a `.md`, sync the matching `.html` by hand.
 - `docs/index.html` — hand-written landing page.
-- Web-root / GEO files: `CNAME`, `robots.txt`, `sitemap.xml`, `llms.txt`, `og-image.png`, JSON-LD, `docs/assets/` (banner, logo).
+- Web-root / GEO files live under `docs/` (the site root), not the repo root: `docs/robots.txt`, `docs/sitemap.xml`, `docs/llms.txt`, `docs/llms-full.txt`, `docs/og-image.png`, JSON-LD inside `docs/index.html`, `docs/assets/` (banner, logo). There is no `CNAME` file in the repo.
 - `loomem-server/mcp_instructions.md` — canonical MCP handshake text.
 
 **Anti-drift (this bit earns its keep):** before writing any value into docs — a default, a config key name, a behavior — verify it against `config.toml` or the source. **Never copy a value from another docs page**; page-to-page copying is the root cause of drift (we have hit: backup retention, "RRF" vs weighted fusion, `provider` vs `embedding_provider`, OpenAI vs local embedding default). A user-facing claim (clients, install steps, feature list) must be synced across **all** surfaces at once: `README.md` + `docs/index.html` + `docs/guide/*.html` + `docs/*.md`.
@@ -82,7 +86,7 @@ A docs/landing/content task **never touches Rust** (and never `search.rs` / fusi
 
 **Naming canon:** brand is **Loomem**. The category label is **"context layer"**; **"memory"** is allowed as a benefit/bridge word in marketing copy — the canonical hero is H1 **"One memory. Every AI tool."** with the mantra *"Swap the model, switch the tool — your context follows."* as sub-headline. *"memory engine"* stays reserved for the one-line technical/GEO definition. Team tier is **"Loomem T"**. **"Engram" never appears in public-facing copy.**
 
-**Tool-set caveat:** Loomem exposes the **`memory_*` set only** — the dispatcher (`loomem-server/src/mcp/dispatcher.rs`) is the source of truth for which tools exist; don't hardcode a count in prose that can drift. There is **no file layer** in Loomem. Note: the live MCP endpoint at `loomem.ai` is currently served by an *Engram* instance (which does expose `file_*`) — do **not** "discover" `file_*` against the live server and document them as Loomem features.
+**Tool-set caveat:** Loomem exposes the **`memory_*` set only** — the dispatcher (`loomem-server/src/mcp/dispatcher.rs`) is the source of truth for which tools exist; don't hardcode a count in prose that can drift. There is **no file layer** in Loomem. `loomem.ai` and `try.loomem.ai` are marketing/trial pages, not an engine endpoint. Never "discover" a tool set against any live server and document it as Loomem features — a hosted instance may be *Engram* (which does expose `file_*`); the dispatcher is the only truth.
 
 ---
 
@@ -99,9 +103,9 @@ fix:  handle empty stream id in purge handler
 - **Do not add `Co-Authored-By: Claude`** unless explicitly asked.
 - A no-op delivery is valid but must be documented (one line: "NO-OP, pre-count confirms no work, because …"). Deviating from a brief needs a one-line rationale in the body.
 
-**Releases (SemVer):** in one commit, bump `[workspace.package] version` in `Cargo.toml`, add a `CHANGELOG.md` entry, and tag `vX.Y.Z`. Pushing the tag triggers `release.yml`, which builds 4 targets (x86_64/aarch64 Linux, aarch64/x86_64 macOS). **`main` should never be ahead of the latest tag** — tag the release commit itself.
+**Releases (SemVer):** in one commit, bump `[workspace.package] version` in `Cargo.toml`, add a `CHANGELOG.md` entry, and tag `vX.Y.Z`. Pushing the tag triggers `release.yml`, which builds the dashboard SPA and then 4 targets (x86_64/aarch64 Linux, aarch64/x86_64 macOS; no Windows archive). **`main` should never be ahead of the latest tag** — tag the release commit itself.
 
-**Workflow reality:** this is a solo, direct-to-`main` repo. The **pre-commit hook (fmt + clippy) is the real gate** — install it once with `scripts/install-hooks.sh`. CI re-runs the same checks on push. The numbered-cycle / critic-pass discipline (`multi-agent-workflow-lite`) is **optional**, used per cycle for risky engine work; cycle artifacts are not committed. PR + critic only becomes mandatory for external contributions.
+**Workflow reality:** solo repo, but **engine changes go through a PR on a feature branch** — since 2026-08 direct-to-`main` engine commits were reverted as a process violation. Only docs, `chore`, `ci` and release commits go straight to `main`. The `protect-main` ruleset blocks deletion and force-push only, so the PR rule is convention — follow it anyway. The **pre-commit hook (fmt + clippy) is the real local gate** — install it once with `scripts/install-hooks.sh`; CI re-runs the same checks on push and PR. The numbered-cycle / critic-pass discipline (`multi-agent-workflow-lite`) is **optional**, used per cycle for risky engine work; cycle artifacts are not committed. PR + critic is mandatory for external contributions.
 
 **Memory dogfooding:** Claude Code/Cowork now have a `loomem` MCP connector pointed at the product. Don't pollute product memory with dev-chatter — use a dedicated dev stream or skip storing ephemeral build/session notes.
 
