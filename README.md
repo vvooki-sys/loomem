@@ -70,7 +70,7 @@ cd ~/.loomem && loomem-server
 
 ```bash
 curl http://localhost:3030/health
-# {"status":"ok","version":"0.5.3"}
+# {"status":"ok","version":"0.5.4"}
 ```
 
 > The installer uses port **3030** by default and asks for an alternative if it's already taken (set `LOOMEM_PORT` to skip the prompt). If you picked a different port, use it in the commands below.

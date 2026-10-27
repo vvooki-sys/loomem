@@ -7,22 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [0.5.4] - 2026-10-27
 
-- Lock the Tokio runtime to 1.51.6, addressing RUSTSEC-2026-0386
-  (`AsyncFd` I/O safety) without suppressing the dependency audit.
-- Date-range searches apply the authoritative unknown-event-date rule to source
-  fragments in vector admission and final filtering, matching the lexical index.
-  Conversation and storage dates do not substitute for unknown event dates;
-  unfiltered and legacy-record behavior is unchanged.
-- Traced search's final `response` snapshot is captured after operation-policy
-  finalization and the last event-date check. Returned IDs and order match the
-  actual response; restored records are not reported as rejected. The existing
-  four-stage evidence contract is preserved, with an additive
-  `operation_finalization` rejection reason for displaced primary results.
+Catch-up release for everything that landed on `main` since v0.5.3: the embedded
+dashboard, the MCP 2026-07-28 stateless path, Windows builds, fail-closed startup
+without an LLM key or a local embedding model, source fragments with an evidence
+contract, named OpenAI-compatible LLM providers, and a run of dependency advisories.
+Existing databases and configurations load unchanged.
 
 ### Added
 
+- Embedded dashboard v1 (#60): the React SPA in `loomem-dashboard/` is compiled
+  into `loomem-server` (rust-embed) and served at `/` on every instance. Screens:
+  Connect (MCP endpoint from the page origin, unlock-token reveal, per-client
+  recipes for Claude Desktop / Claude Code / ChatGPT / Cursor, live `/v1/status`
+  probe), Memory (server-paginated list, substring and semantic search, inline
+  edit/delete, version history, related entities) and Settings. Login is a token
+  unlock over the existing auth middleware and `/v1/whoami`. New
+  `GET /api/dashboard/memory` and `GET /v1/memory-chain/:id`. The release workflow
+  and the Dockerfile build the SPA before `cargo`; with an unbuilt `dist/` the
+  server still compiles and `/` answers 404.
+- MCP 2026-07-28 revision (#63): a stateless protocol path selected by the
+  `MCP-Protocol-Version: 2026-07-28` header — no sessions read or minted,
+  per-request `_meta` validation, mirrored `Mcp-Method` / `Mcp-Name` header
+  checks (SEP-2243) and `server/discover` carrying supported versions,
+  capabilities, server info and instructions. Requests without the header, or
+  with an initialize-era version, take the existing session path byte-identically.
+- OAuth (#62): RFC 9207 `iss` on the authorization success redirect, advertised
+  through `authorization_response_iss_parameter_supported` in the AS metadata,
+  and `application_type` (web / native) accepted, validated and echoed by dynamic
+  client registration.
+- Windows support (#83, #85): `loomem-server` builds and runs on Windows (shutdown
+  now goes through `tokio::signal`, same behaviour on Unix); `INSTALL_WINDOWS.md`
+  documents the build. Release archives still cover Linux and macOS only.
+- Search WS-1 (#59): `[search] vector_similarity_floor` (raw-cosine floor for
+  the vector channel, `0.0` = off), `[search] decay_match_relief` (a strong
+  lexical/vector match relieves the age penalty) and `[search.tier1]` direct
+  entity→attribute lookup that answers a factual query from the entity chunk
+  index without embeddings, fusion or an LLM, stamping `"tier": 1` (REST) /
+  `[tier:1]` (MCP). After the cycle/015 freshness gate `decay_match_relief`
+  ships at `0.70` (#75); the floor and Tier-1 stay off.
+- `memory_store` accepts an optional `supersedes: <chunk_id>` (#76): the target
+  must be alive, in the caller's stream and the head of its chain; a chunk that
+  already has a newer version is refused with that id instead of forking the
+  chain.
+- `/health` reports `llm_key_present: bool` (never the key or a prefix) so
+  operators and benchmark pre-flights can detect keyless mode with one GET (#73).
 - Named completion providers: `[llm.providers.<name>]` with `base_url` and an
   optional `api_key_env`, selected by `llm.provider`. Every provider uses the
   OpenAI chat-completions format. `api_key_env` set → that env var must hold
@@ -32,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This change adds the config, validation and `LlmConfig::active_provider()`
   only; LLM calls still go to OpenAI until the call sites move to it. The
   startup log shows the active provider and where its key comes from (never
-  the key itself).
+  the key itself) (#95).
 - `fragments` domain module: deterministic segmentation of a canonical
   conversation source into turn-level fragments (long turns split further at
   paragraph, sentence and whitespace boundaries) that carry the author role,
@@ -120,7 +150,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `provider = "openai"` (the shipped default) load unchanged. The startup log
   line `LLM: provider=…, model=…` is replaced by `LLM completions: …` and
   `LLM embeddings: …`; the old line printed the embedding model as the
-  completion model.
+  completion model (#95).
+- Startup fails closed without an LLM key (#73, #69, #87): when any of
+  `entity_extraction`, `knowledge_extraction` or `dream` is enabled and no API key
+  resolves (an empty `OPENAI_API_KEY` counts as missing), the server refuses to
+  start and names the env var to export. `LOOMEM_ALLOW_KEYLESS=1` downgrades the
+  refusal to a WARN; in that mode `memory_ingest` returns a missing-key error and
+  stores nothing, entity extraction is off and dream/consolidation fail, while
+  `memory_store` and search keep working. The warning and the config comments no
+  longer claim a regex fallback — `fallback_to_regex` only covers consolidation
+  compression when the completions call itself fails.
+- Startup fails closed when `embedding_provider = "local"` and the model does not
+  load ("refusing cloud fallback"), with or without an API key (#89). Neither
+  `install.sh`, the release archive nor the Docker image ships the model, so the
+  install and deployment docs now include the model fetch or set
+  `LOOMEM_EMBEDDING_PROVIDER=openai` / `LOOMEM_EMBEDDING_DIM=1536` (#92).
+- `bincode` replaced by an in-tree persisted-row codec (#79, #81): the three
+  fixed-shape rows it encoded (embedding vectors, associator centroids, wrapped
+  per-scope DEKs) keep the exact wire format, so every row written by earlier
+  releases decodes and new rows are byte-identical. No migration. The fixture
+  generator lives outside the workspace in `tools/legacy-fixture-gen`.
+- `tantivy` is consumed as a pinned git dependency on the `vvooki-sys` fork
+  (0.25.0 plus dependency bumps) because no crates.io release clears the `lru`
+  and `zstd` advisories (#80, #96); `deny.toml` allows that one git source.
+- `GET /api/dashboard/memory` hides superseded versions by default;
+  `include_superseded=true` opts in and rows carry `is_latest` /
+  `superseded_by` (#76).
+- BM25 date-range and entity lanes apply stream scoping at index-query time
+  like the vector, graph and plain-BM25 lanes, with a fail-closed guard behind
+  them (#61).
 - HTML tag stripping in the ingress sanitizer no longer matches across lines.
   Previously a lone `<` early in a multi-turn transcript and a `>` many turns
   later were treated as one tag and everything between them was deleted from
@@ -170,6 +228,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removes associated graph sidecars in batched namespace scans. Source-family
   deletion still uses full-store discovery; no reverse index or source-family deletion speedup
   is claimed.
+
+### Fixed
+
+- Local embedder: input is truncated to the checkpoint's 512-token window and a
+  failing chunk no longer aborts its whole batch; one oversized chunk used to
+  cost up to 50 chunks their embedding, the mechanism behind the "buried entity"
+  incident (#68).
+- `memory_history` / `GET /v1/memory-chain/:id` traverse soft-deleted versions
+  for linkage but never return them, and the chain always contains the queried
+  id (the old root-first walk dropped side branches) (#76).
+- The reprocess-legacy path persisted the original chunk instead of the linked
+  successor returned by `apply_supersede`, leaving a dangling half-link (#77).
+- Phone redaction spares whitespace-separated numeric series (chart data,
+  measurement columns) and drops the last global replaces (#74).
+- Date-range searches apply the authoritative unknown-event-date rule to source
+  fragments in vector admission and final filtering, matching the lexical index.
+  Conversation and storage dates do not substitute for unknown event dates;
+  unfiltered and legacy-record behavior is unchanged (#94).
+- Traced search's final `response` snapshot is captured after operation-policy
+  finalization and the last event-date check. Returned IDs and order match the
+  actual response; restored records are not reported as rejected. The existing
+  four-stage evidence contract is preserved, with an additive
+  `operation_finalization` rejection reason for displaced primary results (#94).
+- Benchmark E1 adapter: the readiness deadline scales with the fragment corpus
+  (45 s floor plus 0.5 s per expected chunk) and polls every 500 ms (#93).
+- Clippy 1.98 lints and the Audit job unblocked on `main` (#72).
+
+### Security
+
+- `tokio` locked to 1.51.6, RUSTSEC-2026-0386 (`AsyncFd` I/O safety), without
+  suppressing the dependency audit.
+- `tract` family 0.22.1 → 0.22.2, RUSTSEC-2026-0217 (#64).
+- `rustls` 0.23.38 → 0.23.45 (RUSTSEC-2026-0285) and `rand` 0.8.5 → 0.8.8
+  (RUSTSEC-2026-0097), lockfile only (#78).
+- `lru` ≥ 0.18.2 via the tantivy fork, RUSTSEC-2026-0002 / -0253 (#80).
+- `rustls` 0.23.46, `quinn-proto` 0.11.19, `rustls-webpki` 0.103.16,
+  `webpki-root-certs` 1.0.10 (RUSTSEC-2026-0338..0349, -0382, -0383), lockfile
+  only; `anymap2` accepted as unmaintained (#86).
+- `zstd` 0.14.3 / `zstd-safe` 8.2 / `zstd-sys` 2.1.2 via the tantivy fork,
+  RUSTSEC-2026-0391 and related (#96).
+
+### Docs
+
+- Ring mark v2: triple weave-gradient ring across the docs site, 3D hero
+  animation aligned with the headline (#55, #56, #57).
+- `memory_*` tool count synced to 15 across the landing page, MCP instructions,
+  tools reference and `llms.txt`; `memory_stats` added to the reference.
+- README, landing page, configuration, deployment and `llms-full.txt` no longer
+  claim that LLM steps fall back to regex without an API key (#88, #92).
+- Install, Docker, Docker Compose and Railway instructions aligned with the
+  fail-closed model and key checks (#92); Mem0 comparison clarifies library vs
+  server storage requirements.
 
 ## [0.5.3] - 2026-07-07
 
