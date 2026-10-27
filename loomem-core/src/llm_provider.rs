@@ -43,6 +43,48 @@ impl ResolvedProvider {
     pub fn chat_completions_url(&self) -> String {
         format!("{}/chat/completions", self.base_url)
     }
+
+    /// POST to the chat-completions endpoint. `Authorization` is set only when
+    /// the provider has a key; a keyless provider gets no header at all.
+    pub fn chat_request(&self, client: &reqwest::Client) -> reqwest::RequestBuilder {
+        let request = client.post(self.chat_completions_url());
+        match &self.api_key {
+            Some(key) => request.bearer_auth(key),
+            None => request,
+        }
+    }
+
+    /// Send a request built by [`Self::chat_request`] and log the call: DEBUG
+    /// for every call, WARN on a transport error or a non-2xx status. The
+    /// response is returned untouched, so callers keep their own retry and
+    /// parsing. `call_site` is a short static tag such as `"llm.compress"`.
+    pub async fn send_chat(
+        &self,
+        request: reqwest::RequestBuilder,
+        call_site: &'static str,
+        model: &str,
+    ) -> reqwest::Result<reqwest::Response> {
+        let started = std::time::Instant::now();
+        let result = request.send().await;
+        let latency_ms = started.elapsed().as_millis();
+        match &result {
+            Ok(response) if response.status().is_success() => tracing::debug!(
+                "LLM chat: provider={} model={model} site={call_site} status={} latency_ms={latency_ms}",
+                self.name,
+                response.status().as_u16()
+            ),
+            Ok(response) => tracing::warn!(
+                "LLM chat failed: provider={} model={model} site={call_site} status={} latency_ms={latency_ms}",
+                self.name,
+                response.status().as_u16()
+            ),
+            Err(e) => tracing::warn!(
+                "LLM chat failed: provider={} model={model} site={call_site} error={e} latency_ms={latency_ms}",
+                self.name
+            ),
+        }
+        result
+    }
 }
 
 // Manual impl so a key never reaches logs through `{:?}`.
@@ -355,6 +397,41 @@ mod tests {
         ] {
             validate("a", &providers(&[("a", url, None)])).expect(url);
         }
+    }
+
+    fn built_chat_request(api_key: Option<&str>) -> reqwest::Request {
+        let provider = ResolvedProvider {
+            name: "p".into(),
+            base_url: "http://localhost:11434/v1".into(),
+            api_key: api_key.map(str::to_string),
+        };
+        provider
+            .chat_request(&reqwest::Client::new())
+            .build()
+            .expect("build chat request")
+    }
+
+    #[test]
+    fn chat_request_posts_to_chat_completions_with_bearer_key() {
+        let request = built_chat_request(Some("sk-test"));
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(
+            request.url().as_str(),
+            "http://localhost:11434/v1/chat/completions"
+        );
+        assert_eq!(
+            request.headers().get(reqwest::header::AUTHORIZATION),
+            Some(&reqwest::header::HeaderValue::from_static("Bearer sk-test"))
+        );
+    }
+
+    #[test]
+    fn chat_request_without_key_sends_no_authorization_header() {
+        let request = built_chat_request(None);
+        assert!(request
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .is_none());
     }
 
     #[test]

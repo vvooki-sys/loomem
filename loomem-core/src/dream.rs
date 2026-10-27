@@ -265,9 +265,9 @@ pub async fn dream_run(
         stream, chunks_processed, groups_found
     );
 
-    let api_key = llm_config
-        .get_api_key()
-        .context("OpenAI API key not configured for dream worker")?;
+    let provider = llm_config
+        .active_provider()
+        .context("LLM provider not available for dream worker")?;
 
     for (subject, chunks) in &groups {
         if chunks.len() < dream_config.min_group_size {
@@ -317,13 +317,13 @@ pub async fn dream_run(
 
         let request_body = build_dream_request(&dream_config.model, subject, chunks);
 
-        let response = match client
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", api_key))
+        let request = provider
+            .chat_request(client)
             .header("Content-Type", "application/json")
             .json(&request_body)
-            .timeout(Duration::from_secs(30))
-            .send()
+            .timeout(Duration::from_secs(30));
+        let response = match provider
+            .send_chat(request, "dream", &dream_config.model)
             .await
         {
             Ok(r) => r,

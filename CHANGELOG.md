@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Compression, reflect, dream, profile, contradiction classification and
+  rewrite, memory formatting, event-date extraction, reranking and multi-query
+  decomposition now send their chat calls to the active `llm.provider`
+  (`<base_url>/chat/completions`). A keyless provider gets no `Authorization`
+  header. Each call logs provider, model, call site, status and latency at
+  DEBUG, and a WARN on a transport error or a non-2xx status. With the default
+  `openai` provider the requests are unchanged. Knowledge extraction, the
+  evidence selector, LLM NER and the server-side calls still go to OpenAI
+  until a follow-up change.
+
 ## [0.5.4] - 2026-10-27
 
 Catch-up release for everything that landed on `main` since v0.5.3: the embedded
