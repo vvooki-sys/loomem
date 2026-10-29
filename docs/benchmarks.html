@@ -4,17 +4,17 @@
 <meta property="og:site_name" content="Loomem"/>
 <meta property="og:url" content="https://loomem.ai/benchmarks.html"/>
 <meta property="og:title" content="Loomem benchmarks — LongMemEval results"/>
-<meta property="og:description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration behind the number."/>
+<meta property="og:description" content="Loomem scored 85.4% (427/500) on LongMemEval-S in a complete diagnostic run with local embeddings and Kimi k3-256k as reader and judge. See the configuration, category results and limitations."/>
 <meta property="og:image" content="https://loomem.ai/og-image.png"/>
 <meta name="twitter:card" content="summary_large_image"/>
 <meta name="twitter:title" content="Loomem benchmarks — LongMemEval results"/>
-<meta name="twitter:description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration behind the number."/>
+<meta name="twitter:description" content="Loomem scored 85.4% (427/500) on LongMemEval-S in a complete diagnostic run with local embeddings and Kimi k3-256k as reader and judge. See the configuration, category results and limitations."/>
 <meta name="twitter:image" content="https://loomem.ai/og-image.png"/>
 
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Loomem benchmarks — LongMemEval results</title>
-<meta name="description" content="Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration behind the number."/>
+<meta name="description" content="Loomem scored 85.4% (427/500) on LongMemEval-S in a complete diagnostic run with local embeddings and Kimi k3-256k as reader and judge. See the configuration, category results and limitations."/>
 <link rel="canonical" href="https://loomem.ai/benchmarks.html"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -102,7 +102,7 @@ a:hover{text-decoration:underline}
       "@type": "TechArticle",
       "headline": "Loomem benchmarks",
       "name": "Loomem benchmarks",
-      "description": "Loomem scores 75.0% (375/500) on LongMemEval-S, a public long-term-memory QA benchmark, running fully self-hosted with local embeddings. This page documents the exact configuration behind the number.",
+      "description": "Loomem scored 85.4% (427/500) on LongMemEval-S in a complete diagnostic run with local embeddings and Kimi k3-256k as reader and judge. See the configuration, category results and limitations.",
       "url": "https://loomem.ai/benchmarks.html",
       "inLanguage": "en",
       "isPartOf": {
@@ -129,7 +129,8 @@ a:hover{text-decoration:underline}
           "url": "https://loomem.ai/logo.png"
         }
       },
-      "datePublished": "2026-06-26"
+      "datePublished": "2026-06-26",
+      "dateModified": "2026-10-29"
     },
     {
       "@type": "BreadcrumbList",
@@ -156,46 +157,91 @@ a:hover{text-decoration:underline}
 <header class="topbar"><div class="wrap inner"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Loomem</a><nav class="topnav"><a href="/">Home</a><a href="/guide/">Docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav></div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="/" style="font-weight:600;margin-bottom:6px;display:block">← Home</a><div class="grp">Reference</div><a href="/compare.html">Loomem vs alternatives</a><a href="/benchmarks.html" class="active">Benchmarks</a><div class="grp">Docs</div><a href="/guide/">All documentation</a><a href="/guide/architecture.html">Architecture</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></aside><main class="doc-main"><div class="doc-eyebrow">Reference</div><article class="doc-content">
 <h1 id="loomem-benchmarks">Loomem benchmarks</h1>
-<p><strong>Loomem scores 75.0% (375 / 500) on LongMemEval-S</strong>, a public long-term-memory question-answering benchmark — running fully self-hosted, with on-device embeddings and no external database. This page documents the exact setup behind the number; the full harness, prompts, dataset pin, and raw per-question results are being prepared for publication so the run can be independently reproduced.</p>
+<p><strong>Loomem scored 85.4% (427 / 500) on LongMemEval-S (cleaned)</strong> in a complete diagnostic run on 29 October 2026. The run used the self-hosted Loomem memory engine with local embeddings and Kimi <code>k3-256k</code> as both reader and judge. This is a modified strict-evaluator result, not an official leaderboard score or a direct comparison with other vendors.</p>
+<p>A machine-readable summary is available in <a href="benchmarks/longmemeval-2026-10-29-summary.json"><code>benchmarks/longmemeval-2026-10-29-summary.json</code></a>.</p>
 
 <h2 id="what-is-longmemeval">What LongMemEval measures</h2>
-<p>LongMemEval is a public benchmark for long-term memory in chat assistants: across long, multi-session histories it tests information extraction, multi-session reasoning, temporal reasoning, knowledge updates, and abstention. We evaluate on <strong>LongMemEval-S (cleaned)</strong> — the <code>xiaowu0162/longmemeval-cleaned</code> variant — so the questions match, one-to-one, the set used in published Mem0 and Letta write-ups.</p>
+<p>LongMemEval is a public benchmark for long-term memory in chat assistants. Across long, multi-session histories it tests information extraction, multi-session reasoning, temporal reasoning, knowledge updates and abstention. We evaluated all 500 questions from <strong>LongMemEval-S (cleaned)</strong>, using the <code>xiaowu0162/longmemeval-cleaned</code> variant.</p>
 
-<h2 id="result">The result</h2>
+<h2 id="result-by-question-type">Result by question type</h2>
 <div style="overflow-x:auto">
 <table>
-<thead><tr><th>Benchmark</th><th>Metric</th><th>Loomem</th></tr></thead>
+<thead><tr><th>Question type</th><th>Correct</th><th>Accuracy</th></tr></thead>
 <tbody>
-<tr><td>LongMemEval-S (cleaned)</td><td>QA accuracy (judge-scored)</td><td><strong>75.0% — 375 / 500</strong></td></tr>
+<tr><td>single-session-assistant</td><td>54 / 56</td><td>96.4%</td></tr>
+<tr><td>knowledge-update</td><td>74 / 78</td><td>94.9%</td></tr>
+<tr><td>single-session-user</td><td>66 / 70</td><td>94.3%</td></tr>
+<tr><td>temporal-reasoning</td><td>115 / 133</td><td>86.5%</td></tr>
+<tr><td>single-session-preference</td><td>25 / 30</td><td>83.3%</td></tr>
+<tr><td>multi-session</td><td>93 / 133</td><td>69.9%</td></tr>
+<tr><td><strong>All questions</strong></td><td><strong>427 / 500</strong></td><td><strong>85.4%</strong></td></tr>
 </tbody>
 </table>
 </div>
+<p>All 500 reader calls and all 500 judge calls completed after documented technical retries. The final aggregate has no missing answers and no technical errors. The original first 100-question run scored 77/100 with nine truncated reader calls; retrying only those failures with the larger output limit produced 80/100. A separate HTTP failure interrupted the third hundred; only its failed and unattempted questions were resumed, producing 77/100.</p>
 
-<h2 id="configuration">Configuration (for reproducibility)</h2>
+<h2 id="configuration">Configuration</h2>
 <div style="overflow-x:auto">
 <table>
 <thead><tr><th>Setting</th><th>Value</th></tr></thead>
 <tbody>
-<tr><td>Loomem engine</td><td>commit <code>caaccd1</code>, single local instance</td></tr>
-<tr><td>Embeddings</td><td>local <code>multilingual-e5-small</code> (384-dim, ONNX) — no OpenAI embeddings</td></tr>
-<tr><td>Retrieval</td><td>hybrid BM25 + vector + graph, <code>top_k = 20</code></td></tr>
-<tr><td>Reranking</td><td>off</td></tr>
-<tr><td>Reader &amp; judge model</td><td>GPT-4.1 (same reader and judge as the reference runs)</td></tr>
-<tr><td>Dataset</td><td>LongMemEval-S (cleaned), 500 questions</td></tr>
+<tr><td>Engine</td><td>Loomem E1 fragments evaluation binary</td></tr>
+<tr><td>Embeddings</td><td>Local <code>multilingual-e5-small</code>, 384 dimensions</td></tr>
+<tr><td>Reader and judge</td><td>Kimi <code>k3-256k</code></td></tr>
+<tr><td>Reader / judge output limits</td><td>8000 / 512 tokens</td></tr>
+<tr><td>Reasoning effort / temperature / seed</td><td><code>low</code> / <code>1</code> / <code>42</code></td></tr>
+<tr><td>Returned evidence</td><td>60 records per question</td></tr>
+<tr><td>Reader evidence</td><td>Contract v2, 8000-token evidence budget</td></tr>
+<tr><td>Packing</td><td>Rank-stable, full-record, first-fit</td></tr>
+<tr><td>Evaluation protocol</td><td><code>loomem-longmemeval-strict-v2-context-v2</code></td></tr>
+<tr><td>Dataset SHA-256</td><td><code>d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442</code></td></tr>
+<tr><td>Engine binary SHA-256</td><td><code>2f16b74bc4a72a659314b494e7df6fb46bbfe3048ab73cf5baf17347e568eed4</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The reader receives the current question and returned memory evidence, never reference answers, question categories or evaluation labels. Reference answers go only to the separate judge. The judge templates follow the pinned upstream LongMemEval evaluator, while parsing is stricter: only an exact <code>yes</code> or <code>no</code> is accepted.</p>
+
+<h2 id="retrieval-diagnostics">Retrieval and reader-context diagnostics</h2>
+<p>Retrieval diagnostics are measured offline from source labels and are not QA accuracy. Session or turn provenance also does not prove that a fragment preserves the required semantic content.</p>
+<div style="overflow-x:auto">
+<table>
+<thead><tr><th>Diagnostic</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>Macro answer-session recall</td><td>99.62%</td></tr>
+<tr><td>Questions with all answer sessions returned</td><td>496 / 500</td></tr>
+<tr><td>Macro labelled-turn recall before packing</td><td>92.07%</td></tr>
+<tr><td>Questions with all labelled turns returned</td><td>421 / 479</td></tr>
+<tr><td>Macro labelled-turn recall after packing</td><td>86.32%</td></tr>
+<tr><td>Questions with all labelled turns sent to the reader</td><td>380 / 479</td></tr>
+<tr><td>Questions that lost at least one retrieved labelled turn during packing</td><td>53 / 479</td></tr>
 </tbody>
 </table>
 </div>
 
-<h2 id="honesty">How to read this</h2>
-<ul>
-<li><strong>Self-run, single configuration.</strong> This is our own run, not a third-party leaderboard. The config above is the full setup; the harness, exact prompts, dataset pin, and raw per-question results are being prepared for publication so the run can be independently reproduced.</li>
-<li><strong>The reader model matters.</strong> LongMemEval scores blend retrieval quality with the reader model and its prompt. We report the reader/judge (GPT-4.1) so the comparison is apples-to-apples; a terse reader prompt in particular can penalise preference-style questions where the answer must be <em>applied</em>, not just stated.</li>
-<li><strong>Embeddings were fully local.</strong> The 75.0% is with on-device e5-small embeddings, so it reflects the default offline setup rather than a cloud-embedding best case.</li>
-<li><strong>LongMemEval is saturating.</strong> Top systems now cluster near the ceiling, so we are also evaluating on newer suites (LongMemEval-V2, MemoryArena) and will publish those as they stabilise.</li>
-</ul>
+<h2 id="multi-session-errors">Multi-session error analysis</h2>
+<p>Multi-session is the main current weakness: it accounts for 40 of the 73 incorrect answers. A manual review of those answers, combined with provenance analysis before and after context packing, gives the following exclusive diagnostic buckets:</p>
+<div style="overflow-x:auto">
+<table>
+<thead><tr><th>Finding</th><th>Cases</th></tr></thead>
+<tbody>
+<tr><td>At least one retrieved labelled turn was dropped during reader-context packing</td><td>22</td></tr>
+<tr><td>Retrieval coverage was incomplete, with no additional labelled-turn loss during packing</td><td>11</td></tr>
+<tr><td>All labelled turns reached the reader, but the answer was incorrect</td><td>4</td></tr>
+<tr><td>Abstention cases, including possible strict-judge or evidence-interpretation issues</td><td>3</td></tr>
+</tbody>
+</table>
+</div>
+<p>These buckets identify where to investigate; they do not prove a single cause for each wrong answer. The first improvement priority is reader-side evidence selection for questions that require combining facts across sessions. The next priorities are retrieval coverage for the remaining multi-session questions and temporal or arithmetic reasoning when the necessary evidence is already present.</p>
 
-<p>Loomem is <a href="https://github.com/vvooki-sys/loomem">open source (Apache-2.0)</a>; see how it compares to other memory layers on the <a href="/compare.html">comparison page</a>.</p>
-<p style="color:var(--lm-ink-500);font-size:0.9em">Benchmark run 2026-06-26. LongMemEval: Wu et al., “LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory”. Dataset: <a href="https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned">xiaowu0162/longmemeval-cleaned</a>.</p>
+<h2 id="honesty">How to read this result</h2>
+<ul>
+<li><strong>Self-run diagnostic evaluation.</strong> This is not a third-party leaderboard result. The 85.4% score belongs to the exact configuration above and should not be presented as a model-independent property of Loomem.</li>
+<li><strong>The reader and judge matter.</strong> Kimi <code>k3-256k</code> performed both roles. No independent semantic audit has closed this report, and the score is not directly comparable with the earlier GPT-4.1 configuration or with other vendors' published numbers.</li>
+<li><strong>This was not an unseen holdout.</strong> LongMemEval had been used during earlier development. The result does not by itself establish generalisation to new histories or real user conversations.</li>
+<li><strong>Local embeddings, external reader.</strong> The memory engine and embeddings ran locally; the Kimi reader and judge used their available API path. The full evaluation was therefore not an entirely offline run.</li>
+<li><strong>Previous result.</strong> The earlier 26 June 2026 configuration reported 75.0% (375 / 500) with GPT-4.1 as reader and judge. The numerical improvement is encouraging, but protocol and model differences prevent treating it as a controlled ablation.</li>
+</ul>
+<p>Loomem is open source under Apache-2.0. LongMemEval: Wu et al., “LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory”. Dataset: <a href="https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned"><code>xiaowu0162/longmemeval-cleaned</code></a>.</p>
 </article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/benchmarks.md">Edit on GitHub</a></span></div></main></div>  <script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>
