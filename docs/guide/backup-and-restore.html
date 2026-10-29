@@ -190,12 +190,17 @@ DEKs.</p>
 </blockquote>
 <ul>
 <li><strong>Record the fingerprint beside every checkpoint.</strong> Capture it at backup time so a future
-  restore knows exactly which escrowed key the data was encrypted under:</li>
+  restore knows exactly which escrowed key the data was encrypted under. Replace the example
+  path with the completed checkpoint's directory. The example uses <code>LOOMEM_AUTH_TOKEN</code> for
+  authentication; if auth is disabled, omit the header:</li>
 </ul>
-<p><code>bash
-  curl -s http://localhost:3030/v1/encryption/status \
-    -H "Authorization: Bearer &lt;admin_token&gt;" | jq -r '.master_key_fingerprint' \
-    &gt; {data_dir}/backups/checkpoint-&lt;ts&gt;/master-key-fingerprint.txt</code></p>
+<pre><code class="language-bash">LOOMEM_CHECKPOINT_DIR="/path/to/completed-checkpoint"
+set -o pipefail
+fingerprint=$(curl -fsS http://localhost:3030/v1/encryption/status \
+  -H "Authorization: Bearer ${LOOMEM_AUTH_TOKEN:?set the admin token}" \
+  | jq -er '.master_key_fingerprint | strings | select(length &gt; 0)') &amp;&amp;
+  printf '%s\n' "$fingerprint" &gt; "$LOOMEM_CHECKPOINT_DIR/master-key-fingerprint.txt"
+</code></pre>
 <p>The fingerprint is a one-way digest — safe to store in plaintext beside the
   checkpoint. The key itself is <strong>never</strong> stored here; it lives only in escrow.</p>
 <ul>

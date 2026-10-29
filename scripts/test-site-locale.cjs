@@ -30,3 +30,33 @@ test('blocked storage uses query marker',()=>{const l=new Link('https://loomem.a
 test('marker propagates to local links and external links untouched',()=>{const a=new Link('https://loomem.ai/guide/installation.html?source=a#first-run'); const b=new Link('https://example.com/guide/installation.html');const r=run({href:'https://loomem.ai/guide/?loomem_lang=en',languages:['pl'],noStorage:true,links:[a,b]}); assert.equal(r.next,null); assert.equal(a.href,'https://loomem.ai/guide/installation.html?source=a&loomem_lang=en#first-run');assert.equal(b.href,'https://example.com/guide/installation.html')});
 test('PL page rewrites English home and docs to Polish',()=>{const a=new Link('https://loomem.ai/'); const b=new Link('https://loomem.ai/guide/installation.html#first-run');const r=run({href:'https://loomem.ai/pl/guide/',lang:'pl',languages:['pl'],links:[a,b]});assert.equal(a.href,'https://loomem.ai/pl/');assert.equal(b.href,'https://loomem.ai/pl/guide/installation.html#first-run')});
 test('invalid marker ignored; valid storage chosen',()=>{const r=run({href:'https://loomem.ai/?loomem_lang=fr',saved:'pl'});assert.equal(r.next.url,'https://loomem.ai/pl/?loomem_lang=fr')});
+test('modified clicks keep query/hash and open the chosen language without changing the original preference',()=>{
+ for (const options of [{ctrlKey:true},{metaKey:true},{button:1}]) {
+  const link=new Link('https://loomem.ai/pl/guide/quick-start.html','pl');
+  const source=run({href:'https://loomem.ai/guide/quick-start.html?from=bookmarks#more',saved:'en',links:[link]});
+  assert.equal(link.href,'https://loomem.ai/pl/guide/quick-start.html?from=bookmarks&loomem_lang=pl#more');
+  const event=link.click(options);
+  assert.notEqual(event.defaultPrevented,true);
+  assert.equal(source.set,null);
+  assert.equal(source.next,null);
+  const opened=run({href:link.href,lang:'pl',saved:'en',languages:['en']});
+  assert.equal(opened.next,null);
+ }
+});
+test('opening a language link without firing click works even when storage is blocked',()=>{
+ const link=new Link('https://loomem.ai/guide/quick-start.html','en');
+ run({href:'https://loomem.ai/pl/guide/quick-start.html?from=bookmarks#more',lang:'pl',languages:['pl'],noStorage:true,links:[link]});
+ assert.equal(link.href,'https://loomem.ai/guide/quick-start.html?from=bookmarks&loomem_lang=en#more');
+ const follow=new Link('https://loomem.ai/guide/installation.html');
+ const opened=run({href:link.href,lang:'en',languages:['pl'],noStorage:true,links:[follow]});
+ assert.equal(opened.next,null);
+ assert.equal(follow.href,'https://loomem.ai/guide/installation.html?loomem_lang=en');
+});
+test('normal switch replaces a stale query marker and still stores the choice',()=>{
+ const link=new Link('https://loomem.ai/guide/quick-start.html','en');
+ const source=run({href:'https://loomem.ai/pl/guide/quick-start.html?loomem_lang=pl&from=bookmarks#more',lang:'pl',saved:'en',links:[link]});
+ assert.equal(link.href,'https://loomem.ai/guide/quick-start.html?loomem_lang=en&from=bookmarks#more');
+ link.click();
+ assert.deepEqual(source.set,['loomem.locale','en']);
+ assert.equal(source.next.url,'https://loomem.ai/guide/quick-start.html?from=bookmarks#more');
+});

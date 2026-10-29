@@ -5,7 +5,7 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>Kopie zapasowe i odtwarzanie — dokumentacja Loomem</title>
-<meta content="Back up and restore Loomem: what to snapshot in the single-binary data directory, retention guidance, and safely restoring your context layer." name="description"/>
+<meta content="Kopie zapasowe i odtwarzanie Loomem: checkpointy RocksDB, ochrona kluczy i bezpieczne przywracanie pamięci." name="description"/>
 <link rel="canonical" href="https://loomem.ai/pl/guide/backup-and-restore.html"/>
 <link href="https://fonts.googleapis.com" rel="preconnect"/>
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
@@ -125,12 +125,15 @@ a:hover{text-decoration:underline}
 <p><strong>checkpointu</strong> oraz <strong>potwierdzonej kopii klucza głównego</strong>, którego <strong>odcisk odpowiada</strong> danym.</p>
 </blockquote>
 <ul>
-<li><strong>Zapisz odcisk obok każdego checkpointu.</strong> Pobierz go podczas tworzenia kopii, aby przy przywracaniu ustalić, którym zabezpieczonym kluczem zaszyfrowano dane:</li>
+<li><strong>Zapisz odcisk obok każdego checkpointu.</strong> Pobierz go podczas tworzenia kopii, aby przy przywracaniu ustalić, którym zabezpieczonym kluczem zaszyfrowano dane. Zastąp przykładową ścieżkę katalogiem ukończonego checkpointu. Przykład używa <code>LOOMEM_AUTH_TOKEN</code> do uwierzytelnienia; jeśli jest ono wyłączone, pomiń nagłówek:</li>
 </ul>
-<p><code>bash
-  curl -s http://localhost:3030/v1/encryption/status \
-    -H "Authorization: Bearer &lt;admin_token&gt;" | jq -r '.master_key_fingerprint' \
-    &gt; {data_dir}/backups/checkpoint-&lt;ts&gt;/master-key-fingerprint.txt</code></p>
+<pre><code class="language-bash">LOOMEM_CHECKPOINT_DIR="/path/to/completed-checkpoint"
+set -o pipefail
+fingerprint=$(curl -fsS http://localhost:3030/v1/encryption/status \
+  -H "Authorization: Bearer ${LOOMEM_AUTH_TOKEN:?set the admin token}" \
+  | jq -er '.master_key_fingerprint | strings | select(length &gt; 0)') &amp;&amp;
+  printf '%s\n' "$fingerprint" &gt; "$LOOMEM_CHECKPOINT_DIR/master-key-fingerprint.txt"
+</code></pre>
 <p>Odcisk jest jednokierunkowym skrótem i można go bezpiecznie przechowywać jawnym tekstem obok checkpointu. Sam klucz <strong>nigdy</strong> nie jest tam przechowywany; znajduje się wyłącznie w bezpiecznym depozycie.</p>
 <ul>
 <li><p><strong>Dotyczy to również automatycznych checkpointów tworzonych co 12 godzin.</strong> Każdy checkpoint utworzony przy użyciu tego samego klucza głównego ma ten sam odcisk. Zapis depozytu (klucz, odcisk i data aktywacji) pozwala na podstawie czasu wskazać właściwy klucz dla <strong>dowolnego</strong> checkpointu, także takiego bez osobnego pliku z odciskiem. Powyższy krok z <code>master-key-fingerprint.txt</code> ułatwia szybkie wyszukanie, ale nie jest warunkiem odzyskania danych. Jego automatyzacja po utworzeniu kopii może być przyszłym usprawnieniem, a nie brakującym warunkiem odzyskiwania.</p></li>

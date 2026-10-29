@@ -26,12 +26,17 @@ A usable backup of an encrypted instance is therefore **joint**:
 > **checkpoint** + a **confirmed master-key escrow** whose **fingerprint matches** the data.
 
 - **Record the fingerprint beside every checkpoint.** Capture it at backup time so a future
-  restore knows exactly which escrowed key the data was encrypted under:
+  restore knows exactly which escrowed key the data was encrypted under. Replace the example
+  path with the completed checkpoint's directory. The example uses `LOOMEM_AUTH_TOKEN` for
+  authentication; if auth is disabled, omit the header:
 
   ```bash
-  curl -s http://localhost:3030/v1/encryption/status \
-    -H "Authorization: Bearer <admin_token>" | jq -r '.master_key_fingerprint' \
-    > {data_dir}/backups/checkpoint-<ts>/master-key-fingerprint.txt
+  LOOMEM_CHECKPOINT_DIR="/path/to/completed-checkpoint"
+  set -o pipefail
+  fingerprint=$(curl -fsS http://localhost:3030/v1/encryption/status \
+    -H "Authorization: Bearer ${LOOMEM_AUTH_TOKEN:?set the admin token}" \
+    | jq -er '.master_key_fingerprint | strings | select(length > 0)') &&
+    printf '%s\n' "$fingerprint" > "$LOOMEM_CHECKPOINT_DIR/master-key-fingerprint.txt"
   ```
 
   The fingerprint is a one-way digest — safe to store in plaintext beside the

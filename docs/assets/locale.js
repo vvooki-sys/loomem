@@ -37,11 +37,18 @@
       link.href = target.href;
     });
     document.querySelectorAll('[data-language]').forEach(link => {
+      const language = link.getAttribute('data-language');
+      const targetPath = counterpart(location.pathname, language);
+      if (!valid(language) || !targetPath) return;
+      // Modified clicks and the context menu follow href without our click
+      // handler. Mark that link explicitly so the new tab keeps its language
+      // even when the stored or browser preference differs.
+      const alternate = new URL(location.href);
+      alternate.pathname = targetPath;
+      alternate.searchParams.set(marker, language);
+      link.href = alternate.href;
       link.addEventListener('click', event => {
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-        const language = link.getAttribute('data-language');
-        const targetPath = counterpart(location.pathname, language);
-        if (!valid(language) || !targetPath) return;
         event.preventDefault();
         const next = new URL(location.href);
         next.pathname = targetPath;

@@ -29,9 +29,16 @@ Użyteczna kopia zapasowa zaszyfrowanej instancji wymaga więc **obu elementów*
 
 > **checkpointu** oraz **potwierdzonej kopii klucza głównego**, którego **odcisk odpowiada** danym.
 
-- **Zapisz odcisk obok każdego checkpointu.** Pobierz go podczas tworzenia kopii, aby przy przywracaniu ustalić, którym zabezpieczonym kluczem zaszyfrowano dane:
+- **Zapisz odcisk obok każdego checkpointu.** Pobierz go podczas tworzenia kopii, aby przy przywracaniu ustalić, którym zabezpieczonym kluczem zaszyfrowano dane. Zastąp przykładową ścieżkę katalogiem ukończonego checkpointu. Przykład używa `LOOMEM_AUTH_TOKEN` do uwierzytelnienia; jeśli jest ono wyłączone, pomiń nagłówek:
 
-`bash curl -s http://localhost:3030/v1/encryption/status \ -H "Authorization: Bearer <admin_token>" | jq -r '.master_key_fingerprint' \ > {data_dir}/backups/checkpoint-<ts>/master-key-fingerprint.txt`
+```bash
+LOOMEM_CHECKPOINT_DIR="/path/to/completed-checkpoint"
+set -o pipefail
+fingerprint=$(curl -fsS http://localhost:3030/v1/encryption/status \
+  -H "Authorization: Bearer ${LOOMEM_AUTH_TOKEN:?set the admin token}" \
+  | jq -er '.master_key_fingerprint | strings | select(length > 0)') &&
+  printf '%s\n' "$fingerprint" > "$LOOMEM_CHECKPOINT_DIR/master-key-fingerprint.txt"
+```
 
 Odcisk jest jednokierunkowym skrótem i można go bezpiecznie przechowywać jawnym tekstem obok checkpointu. Sam klucz **nigdy** nie jest tam przechowywany; znajduje się wyłącznie w bezpiecznym depozycie.
 
@@ -67,7 +74,7 @@ max_copies = 2           # zachowaj 2 ostatnie (1 dzień)
 
 ## Ręczne tworzenie kopii
 
-Checkpointy są spójnymi kopiami danych z danego momentu. Aby utworzyć kopię zewnętrzną, skopiuj najnowszy katalog `{data_dir}/backups/checkpoint-*` lub wykonaj migawkę wolumenu. Jest to bezpieczne podczas pracy serwera.
+Aby utworzyć kopię zewnętrzną, skopiuj ukończony katalog `{data_dir}/backups/checkpoint-*`. Checkpoint jest kopią RocksDB z danego momentu; sam w sobie nie gwarantuje spójności z osobnym dziennikiem operacji.
 
 Checkpoint RocksDB nie jest transakcyjnie sparowaną migawką osobnego dziennika operacji Loomem. Automatyczny checkpoint może powstać w trakcie niezakończonego usuwania lub czyszczenia danych. Sam checkpoint nie dowodzi więc ukończenia tych operacji. Po przywróceniu bez pasującego dziennika sprawdź, czy oczekiwane usunięcia zostały wykonane, zanim ponownie podłączysz klientów.
 

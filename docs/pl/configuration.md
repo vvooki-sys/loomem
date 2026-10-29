@@ -329,7 +329,7 @@ Nowe instalacje korzystają z **`embedding_provider = "local"`**: embeddingi są
 ./scripts/fetch-embedding-model.sh         # → ~/.loomem/models/multilingual-e5-small
 ```
 
-LLM generujący tekst (konsolidacja, ekstrakcja faktów, dream) działa niezależnie. Przy domyślnej konfiguracji (te podsystemy są włączone) i bez `OPENAI_API_KEY` serwer nie uruchomi się, o ile nie ustawisz `LOOMEM_ALLOW_KEYLESS=1`. Wtedy `memory_ingest` zwraca błąd braku klucza (nic nie zapisuje), ekstrakcja encji jest wyłączona, a dream i konsolidacja kończą się błędem; `memory_store` i wyszukiwanie semantyczne działają całkowicie lokalnie. Wyłączenie tych podsystemów w `config.toml` usuwa kontrolę przy starcie, a przy `knowledge_extraction.enabled = false` `memory_ingest` zapisuje surową transkrypcję. Aby używać lokalnego LLM do generowania tekstu, skieruj `provider` do punktu końcowego zgodnego z OpenAI (przyszły etap).
+LLM generujący tekst (konsolidacja, ekstrakcja faktów, dream) działa niezależnie. Przy domyślnej konfiguracji (te podsystemy są włączone) i bez `OPENAI_API_KEY` serwer nie uruchomi się, o ile nie ustawisz `LOOMEM_ALLOW_KEYLESS=1`. Wtedy `memory_ingest` może zapisać tekst źródłowy, ale zwraca błąd braku klucza i nie wyodrębnia faktów. Ekstrakcja encji przez LLM jest wyłączona, a dream i konsolidacja kończą się błędem; `memory_store` i wyszukiwanie semantyczne działają całkowicie lokalnie. Wyłączenie tych podsystemów w `config.toml` usuwa kontrolę przy starcie, a przy `knowledge_extraction.enabled = false` `memory_ingest` zapisuje surową transkrypcję. Aby używać lokalnego LLM do generowania tekstu, skieruj `provider` do punktu końcowego zgodnego z OpenAI (przyszły etap).
 
 <span id="embedding-dimension-re-embedding"></span>
 
