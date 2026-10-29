@@ -25,9 +25,10 @@ This file is a fuller, self-contained brief intended for language models and AI 
 Loomem runs as a single Rust binary with embedded RocksDB + Tantivy and no separate database service. Mem0 (Apache-2.0) has different storage defaults by deployment mode: its library uses local Qdrant for vectors and SQLite for history, without a separate database service; its self-hosted server stack uses Postgres + pgvector. Mem0 storage details checked October 25, 2026: https://docs.mem0.ai/open-source/overview. Zep is built on Graphiti and needs a graph database (Neo4j, FalkorDB, or Kuzu); the Zep Community Edition is deprecated. Letta / MemGPT (Apache-2.0) stores everything in Postgres + pgvector. cognee (Apache-2.0) combines graph, vector, and relational stores. Full side-by-side: https://loomem.ai/compare.html
 
 ## Benchmarks
-- Loomem scores 75.0% (375/500) on LongMemEval-S (cleaned, xiaowu0162/longmemeval-cleaned), fully self-hosted.
-- Configuration: engine commit caaccd1; local multilingual-e5-small embeddings (384-dim); retrieval top_k=20; reranking off; reader and judge model GPT-4.1.
-- Caveat: self-run, single configuration; LongMemEval scores blend retrieval quality with the reader model/prompt. LongMemEval is saturating industry-wide; newer suites (LongMemEval-V2, MemoryArena) are in progress. Details: https://loomem.ai/benchmarks.html
+- Loomem scored 85.4% (427/500) on LongMemEval-S (cleaned, xiaowu0162/longmemeval-cleaned) in a complete diagnostic run on 2026-10-29. Self-hosted engine with local embeddings; not an official leaderboard score.
+- Configuration: Loomem E1 fragments evaluation binary; local multilingual-e5-small embeddings (384-dim); 60 returned records per question; 8000-token reader evidence budget, rank-stable first-fit packing; reader and judge model Kimi k3-256k (seed 42).
+- Per category: single-session-assistant 96.4%, knowledge-update 94.9%, single-session-user 94.3%, temporal-reasoning 86.5%, single-session-preference 83.3%, multi-session 69.9%.
+- Caveat: self-run, single configuration, not an unseen holdout; Kimi was both reader and judge; not directly comparable with other vendors or with the earlier 75.0% (375/500) GPT-4.1 run. Multi-session is the main weakness (40 of 73 errors); 22 of those lost a retrieved labelled turn during reader-context packing. Details: https://loomem.ai/benchmarks.html; machine-readable summary: https://loomem.ai/benchmarks/longmemeval-2026-10-29-summary.json
 
 ## Quickstart
 1. Install: curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/install.sh | sh
