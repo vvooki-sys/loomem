@@ -57,4 +57,17 @@
   </url>
   <url><loc>https://loomem.ai/compare.html</loc><lastmod>2026-07-01</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>
   <url><loc>https://loomem.ai/benchmarks.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://loomem.ai/pl/</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/guide/</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/guide/quick-start.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/guide/installation.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/guide/configuration.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/guide/api-reference.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/guide/mcp-tools.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/guide/architecture.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/guide/deployment.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/guide/security.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/guide/backup-and-restore.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/compare.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
+  <url><loc>https://loomem.ai/pl/benchmarks.html</loc><lastmod>2026-10-29</lastmod><changefreq>monthly</changefreq></url>
 </urlset>

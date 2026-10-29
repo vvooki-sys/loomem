@@ -334,8 +334,8 @@ The scheduler orchestrates background jobs. All workers can be paused/resumed at
 | Batch size | 200 chunks |
 | Min age | 60 seconds |
 | Min chunks | 3 per stream |
-| Style | `observation` (granular facts) |
-| Similarity threshold | 0.3 (cosine, for topic grouping) |
+| Style | `structured` (typed facts and date resolution) |
+| Similarity threshold | 0.20 (cosine, for topic grouping) |
 
 **Process:**
 1. Scan unconsolidated L0 chunks
@@ -377,7 +377,7 @@ Cluster output feeds the associator (below); there is no separate storage tier f
 |---------|---------|
 | Flush interval | 3 seconds |
 | Queue capacity | 200 |
-| Confidence threshold | 0.7 |
+| Confidence threshold | 0.5 |
 | Model | gpt-4.1-mini |
 
 Async LLM NER runs in background for entities not in the dictionary.
@@ -417,7 +417,7 @@ Scans for soft-deleted chunks past their recovery window. Purge pipeline: graph 
 
 | Setting | Default |
 |---------|---------|
-| Auto-trigger | 30 min idle |
+| Auto-trigger | 50 newly persisted chunks per private stream, with a 15-minute cooldown |
 | Batch size | 50 chunks |
 | Min group size | 2 |
 | Cost cap | $0.10 / run |

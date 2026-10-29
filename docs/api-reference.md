@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost:3030` (or your deployment URL)
 
-Authentication: `Authorization: Bearer <token>` header on all endpoints except `/health`. The token is the single API key configured via the env var named by `server.auth_token_env` (default `LOOMEM_AUTH_TOKEN`); if no key is configured the server runs in local passthrough mode and accepts all requests.
+Authentication: When the environment variable named by `server.auth_token_env` (default `LOOMEM_AUTH_TOKEN`) contains a nonempty API key, send `Authorization: Bearer <token>` to protected routes, including the `/v1`, `/api`, `/admin` and `/mcp` endpoints. `/health`, OAuth discovery and `/oauth/*` routes, and the static dashboard are outside the Bearer middleware; OAuth routes apply their own protocol checks. Without a key, protected routes accept requests with admin privileges. The server refuses a non-loopback bind without a key unless `LOOMEM_ALLOW_UNAUTH=1` is explicitly set.
 
 When no `stream` is specified, data is read from and written to the default stream `__user_default__`.
 

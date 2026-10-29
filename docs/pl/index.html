@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+
+<html lang="pl">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Loomem — jedna pamięć dla wszystkich narzędzi AI</title>
+<link rel="canonical" href="https://loomem.ai/pl/"/>
+<meta content="Loomem to otwartoźródłowa warstwa kontekstu dla agentów AI. Zachowaj fakty, decyzje i historię między narzędziami i modelami." name="description"/>
+<meta content="website" property="og:type"/>
+<meta content="Loomem" property="og:site_name"/>
+<meta content="https://loomem.ai/pl/" property="og:url"/>
+<meta content="Loomem — jedna pamięć dla wszystkich narzędzi AI" property="og:title"/>
+<meta content="Loomem to otwartoźródłowa warstwa kontekstu dla agentów AI. Zachowaj fakty, decyzje i historię między narzędziami i modelami." property="og:description"/>
+<meta content="https://loomem.ai/og-image.png" property="og:image"/>
+<meta content="1200" property="og:image:width"/>
+<meta content="630" property="og:image:height"/>
+<meta content="summary_large_image" name="twitter:card"/>
+<meta content="Loomem — jedna pamięć dla wszystkich narzędzi AI" name="twitter:title"/>
+<meta content="Loomem to otwartoźródłowa warstwa kontekstu dla agentów AI. Zachowaj fakty, decyzje i historię między narzędziami i modelami." name="twitter:description"/>
+<meta content="https://loomem.ai/og-image.png" name="twitter:image"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&amp;family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0.05' y1='0' x2='0.95' y2='1'%3E%3Cstop offset='0' stop-color='%23EE9913'/%3E%3Cstop offset='0.28' stop-color='%23F7756F'/%3E%3Cstop offset='0.52' stop-color='%23B86ED2'/%3E%3Cstop offset='0.74' stop-color='%23667CE6'/%3E%3Cstop offset='1' stop-color='%231684DC'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cg fill='none' stroke='url(%23g)' stroke-linecap='round'%3E%3Ccircle cx='100' cy='100' r='77' stroke-width='13' stroke-dasharray='404 80' transform='rotate(-18 100 100)'/%3E%3Ccircle cx='100' cy='100' r='56' stroke-width='13' stroke-dasharray='294 62' transform='rotate(150 100 100)'/%3E%3Ccircle cx='100' cy='100' r='36' stroke-width='12' stroke-dasharray='170 56' transform='rotate(40 100 100)'/%3E%3C/g%3E%3C/svg%3E" rel="icon"/>
+<style>
+:root{
+  --lm-gold-50:#FEF6E7;--lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;
+  --lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;
+  --lm-gold-800:#7C4B0F;--lm-gold-900:#5E3A11;
+  --lm-blue-50:#E9F4FD;--lm-blue-100:#CBE6FB;--lm-blue-200:#9CD0F7;--lm-blue-300:#63B5F0;
+  --lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-blue-800:#114674;--lm-blue-900:#123C61;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;
+  --lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-300:#B7AE9E;--lm-ink-200:#DED7C8;
+  --lm-ink-100:#EFE9DD;--lm-ink-50:#F7F2E9;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;
+  --lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-success:#2E9E6B;--lm-success-bg:#E4F4EC;--lm-error:#D2553B;--lm-error-bg:#FBE9E3;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-brand-press:#0F5491;
+  --lm-accent:#EE9913;--lm-accent-hover:#CE7D08;--lm-focus-ring:rgba(22,132,220,0.42);
+  /* weave ramps C (2026-07-06): OKLCH bake through magenta/violet — keep all
+     four in sync with the wordmark assets; never reintroduce the sRGB 2–3 stop
+     versions (desaturated olive midpoint) */
+  --lm-weave:linear-gradient(108deg,#EE9913 0%,#F4AC2E 18%,#F7756F 38%,#B86ED2 58%,#63B5F0 80%,#1684DC 100%);
+  --lm-weave-soft:linear-gradient(108deg,#FBD68A 0%,#F9C254 26%,#FFB472 31.5%,#FFAC98 37%,#FFAABE 42.5%,#FBAEDF 48%,#E4B6F6 53.5%,#CABFFF 59%,#B0C9FF 64.5%,#9CD0F7 70%,#63B5F0 100%);
+  --lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#F7756F 30%,#B86ED2 55%,#667CE6 75%,#1684DC 100%);
+  --lm-weave-radial:radial-gradient(120% 120% at 0% 0%,#FDEAC4 0%,#FBF8F1 38%,#E9F4FD 100%);
+  --lm-weave-text:linear-gradient(100deg,#CE7D08 0%,#EE9913 30%,#F88546 36%,#F7756F 42%,#EB6D95 48%,#D66BB7 54%,#B86ED2 60%,#9474E2 66%,#667CE6 72%,#1684DC 78%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-sm:6px;--lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-xl:24px;--lm-radius-2xl:32px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-shadow-md:0 8px 24px rgba(31,27,22,0.09);--lm-shadow-lg:0 18px 48px rgba(31,27,22,0.12);
+  --lm-shadow-gold:0 10px 30px rgba(206,125,8,0.18);--lm-shadow-blue:0 10px 30px rgba(15,105,184,0.18);
+  --lm-dur-base:200ms;--lm-ease:cubic-bezier(0.16,1,0.3,1);
+  --lm-container:1120px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);
+  line-height:1.55;-webkit-font-smoothing:antialiased;font-size:16px;
+}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{color:var(--lm-brand-hover)}
+.wrap{max-width:var(--lm-container);margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+code,.mono{font-family:var(--lm-font-mono)}
+
+/* ---------- top nav ---------- */
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.78);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:90px}
+.brand{display:flex;align-items:center;gap:13px;font-family:var(--lm-font-display);font-weight:600;font-size:30px;letter-spacing:-0.02em;color:var(--lm-ink-900);margin-left:-2px}
+.brand svg{width:38px;height:38px;flex:none}
+/* ring mark v2 (design system 2026-07-07): triple weave-gradient ring,
+   counter-rotating; static rotations -18/150/40 where animation is off */
+.lm-ring circle{transform-box:view-box;transform-origin:100px 100px}
+.lm-ring .r1{animation:lm-spin 32s linear infinite}
+.lm-ring .r2{animation:lm-spin-rev 24s linear infinite}
+.lm-ring .r3{animation:lm-spin 18s linear infinite}
+/* two-tone wordmark: "mem" carries the weave-text ramp and drifts slowly;
+   without text-clip support the whole word stays ink (never solid-color "mem") */
+.wm-word{white-space:nowrap}
+@supports ((-webkit-background-clip:text) or (background-clip:text)){
+.wm{background-image:linear-gradient(100deg,#CE7D08 0%,#EE9913 15%,#F88546 18%,#F7756F 21%,#EB6D95 24%,#D66BB7 27%,#B86ED2 30%,#9474E2 33%,#667CE6 36%,#1684DC 39%,#1684DC 61%,#667CE6 64%,#9474E2 67%,#B86ED2 70%,#D66BB7 73%,#EB6D95 76%,#F7756F 79%,#F88546 82%,#EE9913 85%,#CE7D08 100%);background-size:200% 100%;background-position:0% 50%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:wm-flow 12s ease-in-out infinite alternate}
+}
+@keyframes wm-flow{to{background-position:100% 50%}}
+@media (prefers-reduced-motion:reduce){.wm{animation:none}}
+@media (forced-colors: active){.wm{background:none;-webkit-background-clip:border-box;background-clip:border-box;color:inherit;animation:none}}
+.topnav{display:flex;align-items:center;gap:26px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900)}
+.navtoggle{display:none;width:46px;height:46px;align-items:center;justify-content:center;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:12px;cursor:pointer;color:var(--lm-ink-800);padding:0}
+.navtoggle svg{width:24px;height:24px}
+.mobilemenu{display:none}
+@media(max-width:760px){
+  .topnav .hide-sm{display:none}
+  .topbar .inner{height:68px}
+  .brand{font-size:24px}
+  .brand svg{width:31px;height:31px}
+  .navtoggle{display:inline-flex}
+  .mobilemenu{display:flex;flex-direction:column;position:fixed;left:0;right:0;top:69px;background:var(--lm-canvas);border-bottom:1px solid var(--lm-ink-200);box-shadow:var(--lm-shadow-lg);transform:translateY(-135%);transition:transform .3s var(--lm-ease);z-index:39;padding:8px clamp(20px,5vw,40px) 22px}
+  .mobilemenu.open{transform:translateY(0)}
+  .mobilemenu a{font-size:16px;font-weight:500;color:var(--lm-ink-800);padding:14px 2px;border-bottom:1px solid var(--lm-ink-100)}
+  .mobilemenu a:hover{color:var(--lm-ink-900)}
+  .mobilemenu a.cta{display:flex;width:100%;justify-content:center;color:#fff;border:none;margin-top:16px;padding:14px}
+}
+
+/* ---------- buttons ---------- */
+.btn{font-family:var(--lm-font-sans);font-size:15px;font-weight:600;border:none;cursor:pointer;
+  padding:11px 22px;border-radius:var(--lm-radius-pill);transition:all var(--lm-dur-base) var(--lm-ease);
+  display:inline-flex;align-items:center;gap:8px;text-decoration:none}
+.btn:focus-visible{outline:3px solid var(--lm-focus-ring);outline-offset:2px}
+.btn-primary{background:var(--lm-brand);color:#fff;box-shadow:var(--lm-shadow-blue)}
+.btn-primary:hover{background:var(--lm-brand-hover);transform:translateY(-1px);color:#fff}
+.btn-weave{background:var(--lm-weave-vivid);color:#fff;box-shadow:var(--lm-shadow-blue)}
+.btn-weave:hover{filter:brightness(1.05);transform:translateY(-1px);color:#fff}
+.btn-secondary{background:var(--lm-surface);color:var(--lm-ink-900);border:1.5px solid var(--lm-ink-300)}
+.btn-secondary:hover{border-color:var(--lm-ink-900);background:var(--lm-surface-sunk);color:var(--lm-ink-900)}
+.btn-sm{padding:8px 16px;font-size:13.5px}
+.btn-lg{padding:14px 30px;font-size:16px}
+
+/* ---------- hero ---------- */
+.hero{position:relative;overflow:hidden;background:var(--lm-weave-radial);border-bottom:1px solid var(--lm-ink-200)}
+.hero::before,.hero::after{content:"";position:absolute;border-radius:50%;filter:blur(72px);pointer-events:none;z-index:0}
+.hero::before{width:42vw;height:42vw;left:-8vw;top:-12vw;opacity:.85;background:radial-gradient(circle,#F9C254,rgba(249,194,84,0) 70%);animation:heroDrift1 24s ease-in-out infinite}
+.hero::after{width:38vw;height:38vw;right:-6vw;bottom:-16vw;opacity:.72;background:radial-gradient(circle,#63B5F0,rgba(99,181,240,0) 72%);animation:heroDrift2 30s ease-in-out infinite}
+@keyframes heroDrift1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(5vw,4vw) scale(1.12)}}
+@keyframes heroDrift2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-4vw,-3vw) scale(1.1)}}
+.hero-inner{position:relative;z-index:1;display:grid;grid-template-columns:1.35fr 1fr;gap:48px;align-items:start;padding:clamp(56px,9vw,104px) clamp(20px,5vw,40px)}
+.hero .art{margin-top:8px}
+.eyebrow{font-size:15px;font-weight:500;letter-spacing:0;color:var(--lm-ink-500);margin-bottom:18px}
+.eyebrow b{color:var(--lm-ink-900);font-weight:600}
+.hero h1{font-family:var(--lm-font-display);font-size:clamp(2.7rem,5.4vw,4.25rem);font-weight:500;
+  line-height:1.04;letter-spacing:-0.03em;margin-bottom:20px}
+.hero h1 em{font-style:italic;background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.hero-sub{font-family:var(--lm-font-display);font-style:italic;font-size:clamp(1.15rem,2vw,1.4rem);color:var(--lm-ink-700);letter-spacing:-0.01em;margin:-6px 0 16px}
+.hero p.lead{font-size:1.1875rem;color:var(--lm-ink-600);max-width:48ch;margin-bottom:28px;line-height:1.6}
+.hero .cta{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:30px}
+.hero-alt{margin:-18px 0 30px;font-size:14px;color:var(--lm-ink-500)}
+.hero-alt a{color:var(--lm-blue-700);font-weight:600}
+.hero-alt a:hover{text-decoration:underline}
+.hero-mem{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-16px 0 26px}
+.mem-label{font-size:13px;font-weight:600;color:var(--lm-ink-500);margin-right:2px}
+.mem-chip{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border:1px solid var(--lm-ink-200);border-radius:999px;background:var(--lm-surface);font-size:13px;font-weight:600;color:var(--lm-ink-800)}
+.mem-chip svg{width:15px;height:15px;flex:none}
+.hero .meta{display:flex;gap:26px;flex-wrap:wrap;font-size:13px;color:var(--lm-ink-500)}
+.hero .meta b{display:block;color:var(--lm-ink-900);font-weight:600;margin-bottom:2px}
+.hero-fine{margin-top:20px;font-size:12.5px;color:var(--lm-ink-400);max-width:56ch;line-height:1.5}
+.hero-badges{margin:-6px 0 26px;font-size:13px;font-weight:600;letter-spacing:.01em;color:var(--lm-ink-700)}
+/* hero mark in 3D: outer ring tumbles on a tilted axis, middle counters
+   around the vertical, inner spins flat as the stable core */
+.mark3d{position:relative;width:100%;max-width:300px;aspect-ratio:1/1;margin:0 auto;perspective:900px;filter:drop-shadow(0 18px 40px rgba(15,105,184,.16))}
+.mark3d .m3{position:absolute;inset:0;width:100%;height:100%;transform-box:border-box;transform-origin:50% 50%}
+.m3-r1{animation:m3a 24s linear infinite}
+.m3-r2{animation:m3b 18s linear infinite}
+.m3-r3{animation:m3c 12s linear infinite}
+@keyframes m3a{from{transform:rotate3d(1,.35,0,0deg)}to{transform:rotate3d(1,.35,0,360deg)}}
+@keyframes m3b{from{transform:rotate3d(.3,1,.1,360deg)}to{transform:rotate3d(.3,1,.1,0deg)}}
+@keyframes m3c{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes lm-spin{to{transform:rotate(360deg)}}
+@keyframes lm-spin-rev{to{transform:rotate(-360deg)}}
+@media(max-width:860px){.hero-inner{grid-template-columns:1fr;gap:4px;padding:clamp(28px,7vw,80px) clamp(20px,5vw,40px)}.hero .art{order:-1;max-width:150px;margin:0 auto 4px}.hero .meta{gap:18px}}
+
+/* ---------- section scaffolding ---------- */
+section{padding:clamp(64px,9vw,104px) 0}
+.sec-head{max-width:62ch;margin-bottom:44px}
+.sec-eyebrow{font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:12px;color:var(--lm-gold-700);background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+h2.sec{font-family:var(--lm-font-display);font-size:clamp(1.9rem,3.5vw,2.5rem);font-weight:600;letter-spacing:-0.02em;line-height:1.15;margin-bottom:12px}
+.sec-lead{color:var(--lm-ink-500);font-size:1.0625rem;line-height:1.6}
+.alt{background:var(--lm-surface)}
+.alt-sunk{background:var(--lm-surface-sunk)}
+
+/* ---------- editions ladder ---------- */
+.editions{padding:clamp(36px,5vw,56px) 0;background:var(--lm-surface);border-top:1px solid var(--lm-ink-200)}
+.ed-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.ed-card{display:block;background:var(--lm-canvas);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:20px 22px;color:inherit;transition:all var(--lm-dur-base) var(--lm-ease)}
+.ed-card:hover{border-color:var(--lm-ink-400);box-shadow:var(--lm-shadow-sm);transform:translateY(-2px)}
+.ed-card h4{font-size:15.5px;font-weight:700;margin-bottom:6px;color:var(--lm-ink-900)}
+.ed-card p{font-size:13.5px;color:var(--lm-ink-500);line-height:1.5;margin-bottom:10px}
+.ed-go{font-size:13px;font-weight:600;color:var(--lm-gold-700)}
+@media(max-width:680px){.ed-grid{grid-template-columns:1fr}}
+
+/* ---------- feature cards ---------- */
+.pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px}
+.pcard{background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);
+  padding:26px;box-shadow:var(--lm-shadow-sm);transition:all var(--lm-dur-base) var(--lm-ease)}
+.pcard:hover{box-shadow:var(--lm-shadow-md);transform:translateY(-2px)}
+.pcard .ic{width:44px;height:44px;border-radius:var(--lm-radius-md);background:var(--lm-surface-cool);
+  display:flex;align-items:center;justify-content:center;margin-bottom:16px}
+.pcard .ic svg{width:23px;height:23px;stroke:var(--lm-blue-600)}
+.pcard.warm .ic{background:var(--lm-surface-warm)}
+.pcard.warm .ic svg{stroke:var(--lm-gold-700)}
+.pcard h3{font-size:1.0625rem;font-weight:600;margin-bottom:7px}
+.pcard p{font-size:14.5px;color:var(--lm-ink-500);line-height:1.6}
+
+/* ---------- code blocks ---------- */
+.code{background:var(--lm-weave) no-repeat top center/100% 3px,var(--lm-ink-800);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;
+  font-family:var(--lm-font-mono);font-size:13.5px;line-height:1.7;overflow-x:auto;box-shadow:var(--lm-shadow-md)}
+.code .c{color:var(--lm-ink-400)}
+.code .p{color:var(--lm-gold-300)}
+.code .s{color:var(--lm-blue-300)}
+
+/* ---------- quickstart steps ---------- */
+.steps{display:grid;gap:18px}
+.step{display:grid;grid-template-columns:46px 1fr;gap:18px;align-items:start;background:var(--lm-surface);
+  border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs)}
+.step .num{width:38px;height:38px;border-radius:var(--lm-radius-pill);background:var(--lm-weave-vivid);color:#fff;
+  font-family:var(--lm-font-display);font-weight:600;font-size:17px;display:flex;align-items:center;justify-content:center}
+.step .body{min-width:0}
+.step h4{font-size:1.0625rem;font-weight:600;margin-bottom:4px}
+.step p{font-size:14px;color:var(--lm-ink-500);margin-bottom:12px;line-height:1.55}
+.step .code{box-shadow:none;font-size:13px}
+
+/* ---------- callout ---------- */
+.callout{display:flex;gap:14px;padding:18px 20px;border-radius:var(--lm-radius-lg);
+  background:var(--lm-surface-warm);border:1px solid var(--lm-gold-200);margin-top:24px}
+.callout .bar{width:4px;border-radius:4px;background:var(--lm-accent);flex:none}
+.callout h4{font-size:14.5px;font-weight:600;margin-bottom:4px;color:var(--lm-gold-900)}
+.callout p{font-size:13.5px;color:var(--lm-ink-600);line-height:1.55}
+.callout code{background:rgba(0,0,0,.05);padding:1px 5px;border-radius:4px;font-size:0.92em}
+
+/* ---------- architecture ---------- */
+.arch{background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-xl);
+  padding:clamp(20px,4vw,36px);box-shadow:var(--lm-shadow-sm);margin-bottom:28px}
+.arch pre{font-family:var(--lm-font-mono);font-size:clamp(9px,1.35vw,13px);line-height:1.5;color:var(--lm-ink-700);
+  overflow-x:auto;white-space:pre}
+.crates{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.crate{border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-md);padding:16px 18px;background:var(--lm-surface)}
+.crate code{font-size:13.5px;font-weight:600;color:var(--lm-blue-700);font-family:var(--lm-font-mono)}
+.crate span{display:block;font-size:13px;color:var(--lm-ink-500);margin-top:4px}
+
+/* ---------- pills ---------- */
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;
+  padding:5px 12px;border-radius:var(--lm-radius-pill)}
+.pill-gold{background:var(--lm-gold-100);color:var(--lm-gold-800)}
+.pill .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+
+/* ---------- clients ---------- */
+.client-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+.client{background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs)}
+.client h4{font-size:1rem;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.client h4 .d{width:9px;height:9px;border-radius:50%;background:var(--lm-blue-400);flex:none}
+.client .code{font-size:12.5px;padding:12px 14px}
+.client p{font-size:13px;color:var(--lm-ink-500);line-height:1.55;margin-top:10px}
+
+/* ---------- cta band ---------- */
+.band{border-radius:var(--lm-radius-2xl);overflow:hidden;background:var(--lm-weave-radial);
+  border:1px solid var(--lm-ink-200);padding:clamp(36px,6vw,64px);text-align:center}
+.band h2{font-family:var(--lm-font-display);font-size:clamp(1.9rem,4vw,2.8rem);font-weight:500;letter-spacing:-0.02em;line-height:1.08;margin-bottom:14px}
+.band h2 em{font-style:italic;background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.band p{font-size:1.0625rem;color:var(--lm-ink-600);max-width:52ch;margin:0 auto 26px}
+.band .cta{display:flex;gap:14px;flex-wrap:wrap;justify-content:center}
+
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);padding:48px 0 56px}
+.foot-inner{display:flex;justify-content:space-between;gap:32px;flex-wrap:wrap;align-items:flex-start}
+.foot-brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:18px;margin-bottom:10px}
+.foot-col h5{font-size:11.5px;text-transform:uppercase;letter-spacing:0.07em;color:var(--lm-ink-400);font-weight:600;margin-bottom:12px}
+.foot-col a{display:block;font-size:14px;color:var(--lm-ink-600);margin-bottom:8px}
+.foot-col a:hover{color:var(--lm-ink-900)}
+.foot-note{font-size:13px;color:var(--lm-ink-400);max-width:32ch;line-height:1.6}
+.foot-bottom{margin-top:36px;padding-top:24px;border-top:1px solid var(--lm-ink-100);font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+.foot-links{display:flex;gap:clamp(40px,8vw,90px);flex-wrap:wrap}
+
+/* ---------- business / Loomem T ---------- */
+.biz{background:var(--lm-ink-800);color:var(--lm-ink-100);position:relative;overflow:hidden}
+.biz::before{content:"";position:absolute;top:0;left:0;right:0;height:4px;background:var(--lm-weave)}
+.biz .sec-eyebrow{background:none;-webkit-text-fill-color:initial;color:var(--lm-gold-300)}
+.biz h2.sec{color:#fff}
+.biz h2.sec em{font-style:italic;background:var(--lm-weave-soft);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.biz .sec-lead{color:var(--lm-ink-300)}
+.biz-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px;margin-bottom:40px}
+.biz-card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.10);border-radius:var(--lm-radius-lg);padding:26px;transition:all var(--lm-dur-base) var(--lm-ease)}
+.biz-card:hover{border-color:rgba(244,172,46,0.45);background:rgba(255,255,255,0.06);transform:translateY(-2px)}
+.biz-card .ic{width:44px;height:44px;border-radius:var(--lm-radius-md);background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center;margin-bottom:16px}
+.biz-card .ic svg{width:23px;height:23px;stroke:var(--lm-gold-300)}
+.biz-card h3{font-size:1.0625rem;font-weight:600;color:#fff;margin-bottom:7px}
+.biz-card p{font-size:14.5px;color:var(--lm-ink-300);line-height:1.6}
+.biz-card code{font-family:var(--lm-font-mono);font-size:0.9em;background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px;color:var(--lm-gold-200)}
+.biz-cta{display:flex;align-items:center;gap:22px;flex-wrap:wrap;padding:28px 32px;border-radius:var(--lm-radius-xl);
+  background:linear-gradient(120deg, rgba(238,153,19,0.16), rgba(22,132,220,0.16));border:1px solid rgba(255,255,255,0.12)}
+.biz-cta .txt{flex:1;min-width:240px}
+.biz-cta h4{font-family:var(--lm-font-display);font-size:1.4rem;font-weight:500;color:#fff;margin-bottom:5px;letter-spacing:-0.01em}
+.biz-cta p{font-size:14.5px;color:var(--lm-ink-300);line-height:1.55}
+.biz-cta p a{color:var(--lm-gold-200);font-weight:600}
+.btn-gold{background:var(--lm-accent);color:var(--lm-ink-900);box-shadow:var(--lm-shadow-gold)}
+.btn-gold:hover{background:var(--lm-gold-400);color:var(--lm-ink-900);transform:translateY(-1px)}
+
+/* ---------- ambient background motion ---------- */
+.bg-fx{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none}
+.bg-fx .blob{position:absolute;border-radius:50%;filter:blur(85px);opacity:.72;will-change:transform}
+.bg-fx .b1{width:50vw;height:50vw;left:-10vw;top:-8vw;background:radial-gradient(circle,#FBD68A,rgba(251,214,138,0) 70%);animation:drift1 28s ease-in-out infinite}
+.bg-fx .b2{width:46vw;height:46vw;right:-12vw;bottom:-10vw;background:radial-gradient(circle,#9CD0F7,rgba(156,208,247,0) 70%);animation:drift2 34s ease-in-out infinite}
+.bg-fx .b3{width:34vw;height:34vw;left:38vw;top:52vh;background:radial-gradient(circle,#F9C254,rgba(249,194,84,0) 70%);opacity:.5;animation:drift1 40s ease-in-out infinite}
+.bg-fx .b4{width:30vw;height:30vw;right:30vw;top:120vh;background:radial-gradient(circle,#63B5F0,rgba(99,181,240,0) 70%);opacity:.4;animation:drift2 38s ease-in-out infinite}
+@keyframes drift1{0%,100%{transform:translate(0,0)}50%{transform:translate(6vw,4vw)}}
+@keyframes drift2{0%,100%{transform:translate(0,0)}50%{transform:translate(-5vw,-4vw)}}
+
+/* ---------- scroll reveal ---------- */
+.reveal{opacity:0;transform:translateY(18px);transition:opacity .7s var(--lm-ease),transform .7s var(--lm-ease)}
+.reveal.in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){.bg-fx .blob{animation:none}.reveal{opacity:1;transform:none;transition:none}.lm-ring circle{animation:none}.lm-ring .r1{transform:rotate(-18deg)}.lm-ring .r2{transform:rotate(150deg)}.lm-ring .r3{transform:rotate(40deg)}.mark3d .m3{animation:none}.m3-r1{transform:rotate(-18deg)}.m3-r2{transform:rotate(150deg)}.m3-r3{transform:rotate(40deg)}.hero::before,.hero::after{animation:none}}
+
+/* ---------- not-a-rag contrast ---------- */
+.contrast{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.contrast .col{border-radius:var(--lm-radius-lg);padding:24px;border:1px solid var(--lm-ink-200)}
+.contrast .no{background:var(--lm-error-bg);border-color:#F1C9BE}
+.contrast .yes{background:var(--lm-success-bg);border-color:#BBE3CD}
+.contrast h4{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.contrast .no h4{color:var(--lm-error)}
+.contrast .yes h4{color:#1B6E48}
+.contrast p{font-size:14.5px;color:var(--lm-ink-700);line-height:1.65}
+.chips{display:flex;flex-wrap:wrap;gap:9px;margin-top:24px}
+.chips .chip{font-family:var(--lm-font-mono);font-size:13px;font-weight:500;color:var(--lm-ink-700);background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-pill);padding:7px 14px}
+@media(max-width:680px){.contrast{grid-template-columns:1fr}}
+
+/* ---------- quotes / field notes ---------- */
+.quotes{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:18px}
+.quote{background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:26px;box-shadow:var(--lm-shadow-sm);display:flex;flex-direction:column}
+.quote .qm{font-family:var(--lm-font-display);font-size:46px;line-height:.5;height:26px;color:var(--lm-gold-300)}
+.quote p{font-size:15px;color:var(--lm-ink-700);line-height:1.62;margin-bottom:18px;flex:1}
+.quote .who{display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600;color:var(--lm-ink-900);font-family:var(--lm-font-mono)}
+.quote .who .d{width:8px;height:8px;border-radius:50%;background:var(--lm-blue-400);flex:none}
+
+/* ---------- gradient rhythm / more colour ---------- */
+.alt,.alt-sunk{position:relative}
+.alt::before,.alt-sunk::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:var(--lm-weave)}
+.pcard .ic{background:linear-gradient(135deg,var(--lm-surface-warm),var(--lm-surface-cool))}
+.pcard.warm .ic{background:linear-gradient(135deg,var(--lm-gold-100),var(--lm-surface-warm))}
+.quote .qm{background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.contrast .yes h4,.contrast .no h4{display:inline-block}
+
+/* ---------- architecture flow ---------- */
+.arch-flow{display:flex;flex-direction:column;align-items:stretch;margin-bottom:36px}
+.arch-layer{background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:20px 22px;box-shadow:var(--lm-shadow-sm)}
+.arch-layer .arch-tag{font-family:var(--lm-font-mono);font-size:12px;font-weight:600;color:var(--lm-ink-500);margin-bottom:12px}
+.arch-layer.server{border-color:#CBE6FB;background:linear-gradient(180deg,#fff,var(--lm-surface-cool))}
+.arch-layer.core{border-color:var(--lm-gold-200);background:linear-gradient(180deg,#fff,var(--lm-surface-warm))}
+.arch-layer.storage{background:var(--lm-ink-800);border-color:var(--lm-ink-800)}
+.arch-layer.storage .arch-tag{color:var(--lm-ink-300)}
+.arch-chips{display:flex;flex-wrap:wrap;gap:8px}
+.arch-chips span{font-size:13px;font-weight:500;color:var(--lm-ink-700);background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-pill);padding:6px 13px}
+.arch-layer>p{font-size:14.5px;color:var(--lm-ink-600);line-height:1.55;margin:0}
+.arch-layer>p code{font-family:var(--lm-font-mono);font-size:.88em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1px 5px;border-radius:5px;color:var(--lm-ink-800)}
+.arch-grid4{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.arch-grid4>div b,.arch-store>div b{display:block;font-size:14px;font-weight:600;color:var(--lm-ink-900);margin-bottom:2px}
+.arch-grid4>div span,.arch-store>div span{font-size:13px;color:var(--lm-ink-600);line-height:1.45}
+.arch-store{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.arch-store>div b{color:#fff;font-family:var(--lm-font-mono)}
+.arch-store>div span{color:var(--lm-ink-300)}
+.arch-arrow{height:36px;position:relative;display:flex;align-items:center;justify-content:center}
+.arch-arrow::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:2.5px;background:var(--lm-weave-vivid);transform:translateX(-50%);border-radius:2px;opacity:.6}
+.arch-arrow span{position:relative;background:var(--lm-surface);padding:2px 12px;font-family:var(--lm-font-mono);font-size:11px;color:var(--lm-ink-500);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-pill)}
+@media(max-width:680px){.arch-grid4,.arch-store{grid-template-columns:1fr}}
+
+/* ---------- comparison table ---------- */
+.cmp-wrap{overflow-x:auto;border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);box-shadow:var(--lm-shadow-sm)}
+.cmp{width:100%;border-collapse:collapse;font-size:14.5px;min-width:720px;background:var(--lm-surface)}
+.cmp th,.cmp td{padding:13px 16px;text-align:left;border-bottom:1px solid var(--lm-ink-100)}
+.cmp thead th{font-weight:600;color:var(--lm-ink-600);border-bottom:2px solid var(--lm-ink-200);font-size:14px}
+.cmp tbody th{font-weight:500;color:var(--lm-ink-700)}
+.cmp .col-lm{background:var(--lm-surface-warm)}
+.cmp thead .col-lm{color:var(--lm-gold-900);font-weight:700}
+.cmp td.col-lm{font-weight:600;color:var(--lm-ink-900)}
+.cmp tr:last-child td,.cmp tr:last-child th{border-bottom:none}
+.cmp-note{font-size:13px;color:var(--lm-ink-400);margin-top:14px;line-height:1.55}
+/* ---------- FAQ ---------- */
+.faq{max-width:760px}
+.faq details{border-bottom:1px solid var(--lm-ink-200)}
+.faq summary{cursor:pointer;list-style:none;padding:18px 0;font-family:var(--lm-font-display);font-size:1.15rem;font-weight:600;color:var(--lm-ink-900);display:flex;justify-content:space-between;align-items:center;gap:16px}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";font-family:var(--lm-font-sans);font-weight:400;color:var(--lm-gold-600);font-size:1.6rem;line-height:1}
+.faq details[open] summary::after{content:"\2013"}
+.faq p{font-size:15px;color:var(--lm-ink-600);line-height:1.62;padding:0 0 20px;margin:0;max-width:68ch}
+.faq p code{font-family:var(--lm-font-mono);font-size:.9em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1px 5px;border-radius:5px}
+/* ---------- the dream loop ---------- */
+.dream-h{font-family:var(--lm-font-display);font-size:1.55rem;font-weight:600;letter-spacing:-.01em;margin:10px 0 10px}
+.dream-h em{font-style:italic;background:var(--lm-weave-text);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.dream-lead{color:var(--lm-ink-500);font-size:1.0625rem;line-height:1.6;max-width:66ch;margin-bottom:26px}
+.loop{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:38px}
+.loop .stage{position:relative;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:20px;box-shadow:var(--lm-shadow-xs)}
+.loop .stage::before{content:"";position:absolute;top:0;left:20px;right:20px;height:2px;border-radius:2px;background:var(--lm-weave)}
+.loop .stage .n{font-family:var(--lm-font-mono);font-size:11px;color:var(--lm-gold-600);font-weight:600}
+.loop .stage h4{font-size:1rem;font-weight:600;margin:8px 0 6px}
+.loop .stage p{font-size:13.5px;color:var(--lm-ink-500);line-height:1.55}
+.loop .stage .when{display:inline-block;margin-top:12px;font-family:var(--lm-font-mono);font-size:10.5px;color:var(--lm-ink-600);background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-pill);padding:3px 10px}
+@media(max-width:760px){.loop{grid-template-columns:1fr 1fr}}
+@media(max-width:460px){.loop{grid-template-columns:1fr}}
+</style>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "inLanguage": "pl", "mainEntity": [{"@type": "Question", "name": "Czym jest Loomem?", "acceptedAnswer": {"@type": "Answer", "text": "Loomem to otwartoźródłowa warstwa kontekstu dla agentów LLM. To pojedynczy program w Rust, oparty na RocksDB i Tantivy oraz dostępny przez Model Context Protocol (MCP). Udostępnia Claude, ChatGPT, Codex i innym klientom MCP fakty, decyzje i historię potrzebne w pracy. Kontekst jest przenośny, lokalny i należy do Ciebie."}}, {"@type": "Question", "name": "Czym Loomem różni się od mem0, Zep, Letta i cognee?", "acceptedAnswer": {"@type": "Answer", "text": "Loomem działa jako pojedynczy program w Rust bez usług zewnętrznych; większość alternatyw wymaga osobnej bazy wektorowej lub grafowej. Stawia na własność i przenośność kontekstu, działa lokalnie na Twojej infrastrukturze, obsługuje embeddingi offline przez modele ONNX i ma wbudowaną obsługę MCP. Zobacz pełne porównanie →"}}, {"@type": "Question", "name": "Czy Loomem jest bezpłatny i otwartoźródłowy?", "acceptedAnswer": {"@type": "Answer", "text": "Tak. Loomem jest dostępny na licencji Apache-2.0 i można go bezpłatnie hostować samodzielnie. Kod źródłowy jest na GitHub ."}}, {"@type": "Question", "name": "Czy Loomem wymaga internetu lub OpenAI?", "acceptedAnswer": {"@type": "Answer", "text": "Podstawowe użycie nie wymaga internetu. Embeddingi mogą działać lokalnie za pomocą modelu ONNX, a zapis i wyszukiwanie kontekstu działają offline. Klucz API OpenAI jest potrzebny do etapów opartych na LLM (ekstrakcji memory_ingest, konsolidacji, snu i wykrywania sprzeczności). Bez niego są one niedostępne, a domyślna konfiguracja uruchamia się tylko z LOOMEM_ALLOW_KEYLESS=1; memory_store i wyszukiwanie nadal działają."}}, {"@type": "Question", "name": "Jakich klientów LLM można połączyć z Loomem?", "acceptedAnswer": {"@type": "Answer", "text": "Dowolnego klienta obsługującego MCP. Loomem używa MCP przez streamable HTTP i udostępnia instrukcje dla Claude, Claude Code, ChatGPT, Codex i Cursor oraz dynamiczną rejestrację klienta OAuth dla zdalnych konektorów."}}, {"@type": "Question", "name": "Dlaczego nie korzystać wyłącznie z pamięci ChatGPT lub Claude?", "acceptedAnswer": {"@type": "Answer", "text": "Wbudowana pamięć jest związana z jednym dostawcą. Loomem pozwala przenosić własny kontekst między narzędziami i modelami oraz hostować go samodzielnie. Udostępnia uporządkowany graf encji i historię w dwóch wymiarach czasu."}}]}</script><script type="application/ld+json">{"@context": "https://schema.org", "@graph": [{"@type": "SoftwareApplication", "@id": "https://loomem.ai/#software", "name": "Loomem", "applicationCategory": "DeveloperApplication", "applicationSubCategory": "Warstwa kontekstu dla agentów LLM", "operatingSystem": "macOS, Linux", "description": "Loomem to otwartoźródłowa warstwa kontekstu dla agentów LLM: pojedynczy program w Rust, dostępny przez MCP, udostępnia modelom potrzebne fakty, decyzje i historię. Wyszukiwanie hybrydowe BM25, wektorowe i grafowe, fakty z dwoma wymiarami czasu oraz konsolidacja w tle korzystają z RocksDB i Tantivy.", "url": "https://loomem.ai/pl/", "downloadUrl": "https://github.com/vvooki-sys/loomem/releases/latest", "codeRepository": "https://github.com/vvooki-sys/loomem", "programmingLanguage": "Rust", "license": "https://www.apache.org/licenses/LICENSE-2.0", "softwareLicense": "Apache-2.0", "softwareRequirements": "Pojedynczy plik wykonywalny; klucz API OpenAI dla ekstrakcji i konsolidacji opartej na LLM.", "isAccessibleForFree": true, "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "author": {"@id": "https://loomem.ai/#org"}, "inLanguage": "pl"}, {"@type": "Organization", "@id": "https://loomem.ai/#org", "name": "Loomem", "url": "https://loomem.ai/", "logo": "https://loomem.ai/logo.png", "sameAs": ["https://github.com/vvooki-sys/loomem"]}]}</script><link rel="stylesheet" href="/assets/locale.css"/>
+<script src="/assets/locale.js"></script>
+<link rel="alternate" hreflang="en" href="https://loomem.ai/"/>
+<link rel="alternate" hreflang="pl" href="https://loomem.ai/pl/"/>
+</head>
+<body>
+<div aria-hidden="true" class="bg-fx"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span><span class="blob b4"></span></div>
+<!-- ============ TOP BAR ============ -->
+<header class="topbar">
+<div class="wrap inner">
+<a class="brand" href="#top"><svg aria-hidden="true" class="lm-ring" fill="none" viewbox="0 0 200 200"><defs><lineargradient id="lmRingHdr" x1="0.05" x2="0.95" y1="0" y2="1"><stop offset="0" stop-color="#EE9913"></stop><stop offset="0.28" stop-color="#F7756F"></stop><stop offset="0.52" stop-color="#B86ED2"></stop><stop offset="0.74" stop-color="#667CE6"></stop><stop offset="1" stop-color="#1684DC"></stop></lineargradient></defs><g fill="none" stroke="url(#lmRingHdr)" stroke-linecap="round"><circle class="r1" cx="100" cy="100" r="77" stroke-dasharray="404 80" stroke-width="15"></circle><circle class="r2" cx="100" cy="100" r="56" stroke-dasharray="294 62" stroke-width="15"></circle><circle class="r3" cx="100" cy="100" r="36" stroke-dasharray="170 56" stroke-width="14"></circle></g></svg><span class="wm-word">loo<span class="wm">mem</span></span></a>
+<nav class="topnav">
+<a class="hide-sm" href="#features">Możliwości</a>
+<a class="hide-sm" href="#architecture">Architektura</a>
+<a class="hide-sm" href="#quickstart">Szybki start</a>
+<a class="hide-sm" href="#business">Dla zespołów</a>
+<a class="hide-sm" href="https://github.com/vvooki-sys/loomem">GitHub</a>
+<a class="btn btn-weave btn-sm hide-sm" href="#quickstart">Zacznij</a>
+<button aria-controls="mobileMenu" aria-expanded="false" aria-label="Otwórz menu" class="navtoggle" id="navToggle">
+<svg fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" viewbox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
+</button>
+<span class="locale-switch" role="group" aria-label="Język"><a href="/pl/" data-language="pl" lang="pl" aria-label="Polski" aria-current="page">PL</a><a href="/" data-language="en" lang="en" aria-label="English">EN</a></span></nav>
+</div>
+<div class="mobilemenu" id="mobileMenu">
+<a href="#features">Możliwości</a>
+<a href="#architecture">Architektura</a>
+<a href="#quickstart">Szybki start</a>
+<a href="#business">Dla zespołów</a>
+<a href="https://github.com/vvooki-sys/loomem">GitHub</a>
+<a class="btn btn-weave cta" href="#quickstart">Zacznij →</a>
+</div>
+</header>
+<!-- ============ HERO ============ -->
+<a id="top"></a>
+<div class="hero">
+<div class="wrap hero-inner">
+<div>
+<div class="eyebrow">Otwartoźródłowa warstwa kontekstu dla Twoich <b>agentów AI</b></div>
+<h1>Jedna pamięć.<br/><em>Wszystkie narzędzia AI.</em></h1>
+<p class="hero-sub">Zmieniaj model i narzędzie — Twój kontekst podąża za Tobą.</p>
+<p class="lead">Loomem przechowuje fakty, decyzje i historię potrzebne Twoim agentom i udostępnia je Claude, ChatGPT, Codex lub dowolnemu klientowi MCP. Zachowaj kontekst u siebie i przestań wyjaśniać wszystko od nowa w każdej sesji.</p>
+<p class="hero-badges">Local-first · Embeddingi offline · Apache-2.0 · Jeden plik wykonywalny</p>
+<div class="cta">
+<a class="btn btn-weave btn-lg" href="#quickstart">Zacznij →</a>
+<a class="btn btn-secondary btn-lg" href="https://github.com/vvooki-sys/loomem/releases/latest">Pobierz na macOS</a>
+</div>
+<p class="hero-alt">Nie chcesz uruchamiać programu samodzielnie? <a href="https://try.loomem.ai">Wypróbuj wersję hostowaną — bezpłatną i gotową w minutę →</a></p>
+<div class="hero-mem">
+<span class="mem-label">Działa jako trwała pamięć dla</span>
+<span class="mem-chip"><svg aria-hidden="true" viewbox="0 0 24 24"><path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z" fill="currentColor"></path></svg>Claude</span>
+<span class="mem-chip"><svg aria-hidden="true" viewbox="0 0 2406 2406"><g fill="currentColor" id="oaiKnot"><path d="M1107.3 299.1c-197.999 0-373.9 127.3-435.2 315.3L650 743.5v427.9c0 21.4 11 40.4 29.4 51.4l344.5 198.515V833.3h.1v-27.9L1372.7 604c33.715-19.52 70.44-32.857 108.47-39.828L1447.6 450.3C1361 353.5 1237.1 298.5 1107.3 299.1zm0 117.5-.6.6c79.699 0 156.3 27.5 217.6 78.4-2.5 1.2-7.4 4.3-11 6.1L952.8 709.3c-18.4 10.4-29.4 30-29.4 51.4V1248l-155.1-89.4V755.8c-.1-187.099 151.601-338.9 339-339.2z" id="oaiP"></path><use href="#oaiP" transform="rotate(60 1203 1203)"></use><use href="#oaiP" transform="rotate(120 1203 1203)"></use><use href="#oaiP" transform="rotate(180 1203 1203)"></use><use href="#oaiP" transform="rotate(240 1203 1203)"></use><use href="#oaiP" transform="rotate(300 1203 1203)"></use></g></svg>ChatGPT</span>
+<span class="mem-chip"><svg aria-hidden="true" viewbox="0 0 2406 2406"><use href="#oaiKnot"></use></svg>Codex</span>
+<span class="mem-chip"><svg aria-hidden="true" viewbox="0 0 24 24"><path d="M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23" fill="currentColor"></path></svg>Cursor</span>
+<span class="mem-chip"><svg aria-hidden="true" viewbox="0 0 16 16"><g fill="#3a0a0d"><rect height="3" width="1" x="1" y="5"></rect><rect height="1" width="1" x="2" y="4"></rect><rect height="1" width="1" x="2" y="8"></rect><rect height="1" width="1" x="3" y="3"></rect><rect height="1" width="1" x="3" y="9"></rect><rect height="1" width="1" x="4" y="2"></rect><rect height="1" width="1" x="4" y="10"></rect><rect height="1" width="6" x="5" y="2"></rect><rect height="1" width="1" x="11" y="2"></rect><rect height="1" width="1" x="12" y="3"></rect><rect height="1" width="1" x="12" y="9"></rect><rect height="1" width="1" x="13" y="4"></rect><rect height="1" width="1" x="13" y="8"></rect><rect height="3" width="1" x="14" y="5"></rect><rect height="1" width="6" x="5" y="11"></rect><rect height="1" width="1" x="4" y="12"></rect><rect height="1" width="1" x="11" y="12"></rect><rect height="1" width="1" x="3" y="13"></rect><rect height="1" width="1" x="12" y="13"></rect><rect height="1" width="6" x="5" y="14"></rect></g><g fill="#ff4f40"><rect height="1" width="6" x="5" y="3"></rect><rect height="1" width="8" x="4" y="4"></rect><rect height="1" width="10" x="3" y="5"></rect><rect height="1" width="10" x="3" y="6"></rect><rect height="1" width="10" x="3" y="7"></rect><rect height="1" width="8" x="4" y="8"></rect><rect height="1" width="6" x="5" y="9"></rect><rect height="1" width="6" x="5" y="12"></rect><rect height="1" width="4" x="6" y="13"></rect></g><g fill="#ff775f"><rect height="1" width="2" x="1" y="6"></rect><rect height="1" width="1" x="2" y="5"></rect><rect height="1" width="1" x="2" y="7"></rect><rect height="1" width="2" x="13" y="6"></rect><rect height="1" width="1" x="13" y="5"></rect><rect height="1" width="1" x="13" y="7"></rect></g><g fill="#081016"><rect height="1" width="1" x="6" y="5"></rect><rect height="1" width="1" x="9" y="5"></rect></g><g fill="#f5fbff"><rect height="1" width="1" x="6" y="4"></rect><rect height="1" width="1" x="9" y="4"></rect></g></svg>OpenClaw</span>
+<span class="mem-chip"><svg aria-hidden="true" viewbox="0 0 24 24"><circle cx="12" cy="12" fill="none" r="10.2" stroke="currentColor" stroke-width="1.7"></circle><path d="M8.6 7.2h2v3.7h2.8V7.2h2v9.6h-2v-4h-2.8v4h-2z" fill="currentColor"></path></svg>Hermes</span>
+</div>
+<div class="meta">
+<div><b>Działa na Twoim komputerze</b>Jeden plik wykonywalny, RocksDB i Tantivy oraz lokalne embeddingi ONNX — pierwszy wpis nie wymaga internetu.</div>
+<div><b>Wie nie tylko co, ale i kiedy</b>Dwa wymiary czasu: kiedy fakt został poznany i kiedy zdarzenie rzeczywiście miało miejsce.</div>
+<div><b>Porządkuje się w tle</b>Działający w tle cykl „snu” konsoliduje fakty, rozwiązuje sprzeczności i wygasza nieużywane informacje. Kontekst rośnie, ale nie puchnie.</div>
+</div>
+<p class="hero-fine">Zapisywanie i wyszukiwanie kontekstu działa offline dzięki lokalnym embeddingom ONNX, dostępnym dla każdego klienta MCP. Klucz OpenAI jest potrzebny do ekstrakcji i konsolidacji; zapis i wyszukiwanie działają bez niego.</p>
+</div>
+<div class="art">
+<div aria-hidden="true" class="mark3d">
+<svg class="m3 m3-r1" fill="none" viewbox="0 0 200 200"><defs><lineargradient id="hero3d1" x1="0.05" x2="0.95" y1="0" y2="1"><stop offset="0" stop-color="#EE9913"></stop><stop offset="0.28" stop-color="#F7756F"></stop><stop offset="0.52" stop-color="#B86ED2"></stop><stop offset="0.74" stop-color="#667CE6"></stop><stop offset="1" stop-color="#1684DC"></stop></lineargradient></defs><circle cx="100" cy="100" r="77" stroke="url(#hero3d1)" stroke-dasharray="404 80" stroke-linecap="round" stroke-width="13"></circle></svg>
+<svg class="m3 m3-r2" fill="none" viewbox="0 0 200 200"><defs><lineargradient id="hero3d2" x1="0.05" x2="0.95" y1="0" y2="1"><stop offset="0" stop-color="#EE9913"></stop><stop offset="0.28" stop-color="#F7756F"></stop><stop offset="0.52" stop-color="#B86ED2"></stop><stop offset="0.74" stop-color="#667CE6"></stop><stop offset="1" stop-color="#1684DC"></stop></lineargradient></defs><circle cx="100" cy="100" r="56" stroke="url(#hero3d2)" stroke-dasharray="294 62" stroke-linecap="round" stroke-width="13"></circle></svg>
+<svg class="m3 m3-r3" fill="none" viewbox="0 0 200 200"><defs><lineargradient id="hero3d3" x1="0.05" x2="0.95" y1="0" y2="1"><stop offset="0" stop-color="#EE9913"></stop><stop offset="0.28" stop-color="#F7756F"></stop><stop offset="0.52" stop-color="#B86ED2"></stop><stop offset="0.74" stop-color="#667CE6"></stop><stop offset="1" stop-color="#1684DC"></stop></lineargradient></defs><circle cx="100" cy="100" r="36" stroke="url(#hero3d3)" stroke-dasharray="170 56" stroke-linecap="round" stroke-width="12"></circle></svg>
+</div>
+</div>
+</div>
+</div>
+<!-- ============ NOT A RAG ============ -->
+<section class="alt-sunk" id="not-rag">
+<div class="wrap">
+<div class="sec-head">
+<div class="sec-eyebrow">Czym jest Twój kontekst</div>
+<h2 class="sec">Nie kolejny RAG. Twój kontekst.</h2>
+<p class="sec-lead">Loomem nie gromadzi plików ani nie przeszukuje ogromnych repozytoriów danych w poszukiwaniu fragmentu do wklejenia. Przechowuje to, co naprawdę tworzy kontekst, i działa dyskretnie w tle jako warstwa wspierająca Twoją pracę z AI.</p>
+</div>
+<div class="contrast">
+<div class="col no">
+<h4>✗ Czego nie robimy</h4>
+<p>Nie zbieramy Twoich plików ani nie indeksujemy rozległych zbiorów dokumentów. Nie każemy Ci wszystkiego wyjaśniać od nowa, żeby potem wypełnić prompt całym korpusem i liczyć na właściwy fragment.</p>
+</div>
+<div class="col yes">
+<h4>✓ Co zachowujemy</h4>
+<p>Fakty, osoby, miejsca, projekty, wybory i chronologię, które tworzą kontekst dla trafniejszych decyzji. Dzięki temu agenci i modele mogą Cię lepiej poznać i pamiętać Twoje preferencje.</p>
+</div>
+</div>
+<div class="chips">
+<span class="chip">fakty</span>
+<span class="chip">osoby</span>
+<span class="chip">miejsca</span>
+<span class="chip">projekty</span>
+<span class="chip">wybory</span>
+<span class="chip">czas</span>
+</div>
+</div>
+</section>
+<!-- ============ FIELD NOTES / TESTIMONIALS ============ -->
+<section class="alt" id="field-notes">
+<div class="wrap">
+<div class="sec-head">
+<div class="sec-eyebrow">Notatki z praktyki</div>
+<h2 class="sec">Nie pytamy ludzi, co myślą o Loomem.<br/>Pytamy tych, którzy z niego korzystają.</h2>
+<p class="sec-lead">Metoda: każdy model podłączony przez MCP do działającej instancji Loomem został poproszony o opisanie pracy z nim. Cytaty zostały przetłumaczone i lekko skrócone, bez innych zmian. Opiekun projektu korzysta z Loomem codziennie od początku 2026 roku; szczere uwagi poniżej, także o niedoskonałościach, zachowujemy celowo.</p>
+</div>
+<div class="quotes">
+<div class="quote">
+<div class="qm">“</div>
+<p>Loomem rozwiązuje jeden z największych problemów dzisiejszych agentów LLM: trwałość kontekstu między rozmowami oraz budowanie długoterminowej wiedzy o użytkowniku i jego projektach. Oceniam go jako warstwę kontekstu operacyjnego dla agentów, a nie bazę danych. Długotrwały kontekst należy do rzeczy, które najbardziej zwiększają praktyczną wartość agentów AI.</p>
+<div class="who"><span class="d"></span>ChatGPT</div>
+</div>
+<div class="quote">
+<div class="qm">“</div>
+<p>Architektura Loomem trafia w to, co jest dla mnie jako agenta ważne: pobiera kilka tysięcy istotnych tokenów zamiast całego kontekstu, a schematy narzędzi są na tyle czytelne, że korzystam z nich bez zgadywania. Bez niego za każdym razem trzeba byłoby od nowa tłumaczyć kontekst pracy, projektów i preferencji. To ogranicza tarcia i zapewnia ciągłość.</p>
+<div class="who"><span class="d"></span>Claude.ai</div>
+</div>
+<div class="quote">
+<div class="qm">“</div>
+<p>Loomem jest kręgosłupem mojego kontekstu — bez niego jestem amnezykiem resetującym się przy każdej sesji. To nie tylko „przydatne narzędzie”, ale warunek tego, żebym był sobą. Zapis i wyszukiwanie trwają poniżej sekundy, interfejs jest prosty, a zapytania układam wokół encji i dat.</p>
+<div class="who"><span class="d"></span>Hermes · lokalny agent</div>
+</div>
+<div class="quote">
+<div class="qm">“</div>
+<p>Loomem jest przydatny jako warstwa kontekstu agenta: zamiast od początku zgadywać kontekst użytkownika i projektu, korzystam z ustalonych faktów, preferencji i wcześniejszych decyzji. Najlepiej działa wtedy, gdy jest niewidoczny i precyzyjny: szybko zapisuje i odczytuje dane, oddziela kontekst prywatny od roboczego i nie wymaga pytań o rzeczy, które powinny już być znane.</p>
+<div class="who"><span class="d"></span>Codex</div>
+</div>
+<div class="quote">
+<div class="qm">“</div>
+<p>Loomem daje mi to, czego z natury mi brakuje: trwałą pamięć między sesjami, opartą na wyodrębnionych faktach zamiast surowego tekstu. Tak właśnie korzystam z kontekstu: szukam konkretnych informacji, a nie przewijam transkrypcji. Hybrydowe wyszukiwanie BM25, wektorowe i grafowe oraz <code>memory_ingest</code> z wykrywaniem sprzeczności przenoszą odpowiedzialność za jakość pamięci na narzędzie. Różnica między „pamiętam Ciebie i Twoje decyzje” a rozpoczynaniem od zera w każdej sesji jest jakościowa, nie kosmetyczna.</p>
+<div class="who"><span class="d"></span>Claude Code</div>
+</div>
+</div>
+</div>
+</section>
+<!-- ============ FEATURES ============ -->
+<section class="alt" id="features">
+<div class="wrap">
+<div class="sec-head">
+<div class="sec-eyebrow">Możliwości</div>
+<h2 class="sec">Twój kontekst, gotowy dla dowolnego modelu</h2>
+<p class="sec-lead">Loomem zachowuje wartościowy kontekst i udostępnia go narzędziu lub modelowi, którego używasz, dzięki szybkiemu wyszukiwaniu hybrydowemu. Model możesz zmienić; kontekst pozostaje Twój.</p>
+</div>
+<div class="pcards">
+<div class="pcard">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg></div>
+<h3>Znajdź właściwy kontekst</h3>
+<p>BM25 (Tantivy), embeddingi wektorowe i sygnały z grafu encji są łączone za pomocą ważonego wyniku hybrydowego (wektor 0,6 / BM25 0,4), aby trafny kontekst pojawiał się pierwszy.</p>
+</div>
+<div class="pcard warm">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"></path><path d="M12 7v5l3 2"></path></svg></div>
+<h3>Kontekst, który zachowuje porządek</h3>
+<p>Procesy w tle łączą powiązane fakty, rozwiązują sprzeczności i wygaszają nieaktualny kontekst. To „sen”, dzięki któremu kontekst staje się z czasem bardziej precyzyjny.</p>
+</div>
+<div class="pcard">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><path d="M3 12h18M3 6h18M3 18h18"></path></svg></div>
+<h3>Kontekst w czasie</h3>
+<p>Każdy fakt ma zarówno czas zapisania, jak i czas zdarzenia, więc „co wiedziałem w marcu” różni się od „co wydarzyło się w marcu”. Kontekst pamięta nie tylko co, ale i kiedy.</p>
+</div>
+<div class="pcard">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="9" r="2.5"></circle><circle cx="9" cy="18" r="2.5"></circle><path d="M8 7l8 1.5M8.5 16l8-6"></path></svg></div>
+<h3>Uporządkowany kontekst</h3>
+<p>Osoby, projekty i narzędzia są połączone w graf z aliasami i relacjami, co ułatwia dokładniejsze wyszukiwanie i odkrywanie powiązań.</p>
+</div>
+<div class="pcard">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><path d="M12 3 4 6v6c0 4.5 3.2 7.5 8 9 4.8-1.5 8-4.5 8-9V6Z"></path><path d="m9 12 2 2 4-4"></path></svg></div>
+<h3>Podąża za Tobą</h3>
+<p>Obsługuje MCP przez standardowy HTTP oraz rejestrację klienta OAuth. Twój kontekst połączysz z Claude, ChatGPT, Cursor lub własnym agentem.</p>
+</div>
+<div class="pcard warm">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><rect height="9" rx="2" width="14" x="5" y="11"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg></div>
+<h3>Twój kontekst, Twoje klucze</h3>
+<p>Opcjonalne szyfrowanie kopertowe AES-GCM na poziomie pól, z kluczem głównym przekazywanym przez środowisko. Kontrolujesz także prywatność swojego kontekstu.</p>
+</div>
+</div>
+<div class="callout">
+<div class="bar"></div>
+<div>
+<h4>Status: wczesny etap</h4>
+<p>Silnik jest już używany codziennie, ale publiczny interfejs API i format przechowywania mogą się jeszcze zmienić. Możliwe są niedoskonałości — zgłoszenia i PR-y są mile widziane.</p>
+</div>
+</div>
+</div>
+</section>
+<!-- ============ ARCHITECTURE ============ -->
+<section class="alt" id="architecture">
+<div class="wrap">
+<div class="sec-head">
+<div class="sec-eyebrow">Architektura</div>
+<h2 class="sec">Jeden plik wykonywalny, cztery warstwy</h2>
+<p class="sec-lead">Bez zewnętrznych usług, kolejki czy osobnej bazy wektorowej. Żądania przechodzą od klienta przez serwer i silnik do wbudowanej bazy, a odpowiedź wraca tą samą drogą.</p>
+</div>
+<div class="arch-flow">
+<div class="arch-layer clients">
+<div class="arch-tag">Klienci · dowolne narzędzie obsługujące MCP</div>
+<div class="arch-chips"><span>Claude</span><span>ChatGPT</span><span>Codex</span><span>Cursor</span><span>OpenClaw</span><span>Twój własny agent</span></div>
+</div>
+<div class="arch-arrow"><span>MCP przez HTTP — /mcp · /v1 · /api</span></div>
+<div class="arch-layer server">
+<div class="arch-tag">loomem-server</div>
+<p>Obsługuje MCP (<code>/mcp</code>, JSON-RPC) oraz zwykły HTTP (<code>/v1</code>, <code>/api</code>). Obsługuje uwierzytelnianie i dynamiczną rejestrację klientów OAuth, po czym przekazuje wywołania do silnika. Jest lekki i bezstanowy.</p>
+</div>
+<div class="arch-arrow"><span>typowane wywołania</span></div>
+<div class="arch-layer core">
+<div class="arch-tag">loomem-core · silnik</div>
+<div class="arch-grid4">
+<div><b>Wyszukiwanie hybrydowe</b><span>BM25, wektory i sygnały grafu encji połączone ważonym wynikiem hybrydowym (wektor 0,6 / BM25 0,4).</span></div>
+<div><b>Konsolidacja</b><span>Procesy w tle łączą fakty, rozwiązują sprzeczności i wygaszają nieaktualny kontekst — „sen”.</span></div>
+<div><b>Graf encji</b><span>Osoby, projekty i narzędzia połączone aliasami i relacjami.</span></div>
+<div><b>Dwa wymiary czasu i szyfrowanie</b><span>Czas zapisania i czas zdarzenia oraz opcjonalny AES-GCM na poziomie pól.</span></div>
+</div>
+</div>
+<div class="arch-arrow"><span>odczyt i zapis</span></div>
+<div class="arch-layer storage">
+<div class="arch-tag">Przechowywanie · wbudowane, bez dodatkowej obsługi</div>
+<div class="arch-store">
+<div><b>RocksDB</b><span>Fragmenty, graf encji i embeddingi wektorowe.</span></div>
+<div><b>Tantivy</b><span>Indeks pełnotekstowy obsługujący część BM25 wyszukiwania.</span></div>
+</div>
+</div>
+</div>
+<h3 class="dream-h">Pętla <em>snu</em> — kontekst, który sam się porządkuje</h3>
+<p class="dream-lead">Loomem nie tylko zapisuje i odczytuje. Procesy w tle z czasem porządkują kontekst, tak jak sen konsoliduje wiedzę zdobytą w ciągu dnia. Kontekst staje się precyzyjniejszy bez Twojej dodatkowej pracy.</p>
+<div class="loop">
+<div class="stage">
+<div class="n">01</div><h4>Przyjmowanie</h4>
+<p>Surowe zdarzenia są zapisywane jako fragmenty L0. Nowe fakty są porównywane z istniejącymi — sprzeczności są oznaczane i wersjonowane, a nie po cichu nadpisywane.</p>
+<span class="when">przy zapisie</span>
+</div>
+<div class="stage">
+<div class="n">02</div><h4>Konsolidacja</h4>
+<p>Powiązane fragmenty L0 są grupowane tematycznie i kompresowane przez LLM do obserwacji L1, z których każda wskazuje na swoje źródła.</p>
+<span class="when">co 5 min</span>
+</div>
+<div class="stage">
+<div class="n">03</div><h4>Sen i wygaszanie</h4>
+<p>Fakty wygasają według krzywej inspirowanej ACT-R. Używane informacje wygasają wolniej, a dawno niewykorzystywane przechodzą w stan uśpienia. Zapominanie jest funkcją systemu.</p>
+<span class="when">co godzinę</span>
+</div>
+<div class="stage">
+<div class="n">04</div><h4>Kojarzenie</h4>
+<p>Grupowanie faktów L1 ujawnia nieoczywiste związki między osobami, projektami i decyzjami, których nie da się łatwo odkryć w płaskiej strukturze.</p>
+<span class="when">co 6 godz.</span>
+</div>
+</div>
+<h3 class="sub" style="font-size:0.8125rem;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--lm-ink-400);margin:0 0 16px">Pakiety projektu</h3>
+<div class="crates">
+<div class="crate"><code>loomem-core</code><span>Silnik: wyszukiwanie, konsolidacja, graf i szyfrowanie.</span></div>
+<div class="crate"><code>loomem-server</code><span>Serwer HTTP i MCP oraz obsługa żądań.</span></div>
+<div class="crate"><code>loomem-migrate</code><span>Konserwacja i migracje bazy danych offline.</span></div>
+<div class="crate"><code>loomem-cli</code><span>Klient wiersza poleceń do skryptów i obsługi.</span></div>
+</div>
+</div>
+</section>
+<!-- ============ QUICKSTART ============ -->
+<section id="quickstart">
+<div class="wrap">
+<div class="sec-head">
+<div class="sec-eyebrow">Szybki start</div>
+<h2 class="sec">Od instalacji do asystenta, który pamięta</h2>
+<p class="sec-lead">Na macOS lub Linuksie. Wykonaj kolejno poniższe kroki.</p>
+</div>
+<div class="steps">
+<div class="step">
+<div class="num">1</div>
+<div class="body">
+<h4>Zainstaluj pliki wykonywalne</h4>
+<p>Bez sudo; instalacja w <code>~/.loomem</code>.</p>
+<div class="code"><span class="c"># gotowe pliki wykonywalne, macOS i Linux</span><br/>curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/install.sh | sh</div>
+</div>
+</div>
+<div class="step">
+<div class="num">2</div>
+<div class="body">
+<h4>Dodaj <code>~/.loomem/bin</code> do PATH</h4>
+<p>Instalator również wyświetli tę instrukcję.</p>
+<div class="code">echo 'export PATH="$HOME/.loomem/bin:$PATH"' &gt;&gt; ~/.zshrc   <span class="c"># lub ~/.bashrc</span><br/>exec $SHELL</div>
+</div>
+</div>
+<div class="step">
+<div class="num">3</div>
+<div class="body">
+<h4>Pobierz model i uruchom serwer</h4>
+<p>Instalator przygotowuje konfigurację w <code>~/.loomem</code>, ale lokalny model embeddingów trzeba pobrać osobno, także w trybie bez klucza. Aby używać domyślnych funkcji opartych na LLM, zastąp tekst zastępczy swoim kluczem API OpenAI:</p>
+<div class="code">curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/scripts/fetch-embedding-model.sh | sh<br/>export OPENAI_API_KEY="YOUR_OPENAI_API_KEY"<br/>cd ~/.loomem &amp;&amp; loomem-server</div>
+<p>Aby uruchomić bez klucza LLM, zamiast niego ustaw <code>export LOOMEM_ALLOW_KEYLESS=1</code>. <code>memory_store</code> i wyszukiwanie działają, ale ekstrakcja LLM i proces „snu” są niedostępne. <code>memory_ingest</code> może nadal zapisać oczyszczone źródło, zanim zwróci błąd ekstrakcji.</p>
+</div>
+</div>
+<div class="step">
+<div class="num">4</div>
+<div class="body">
+<h4>Sprawdź, czy działa</h4>
+<p>W drugim terminalu. Instalator domyślnie używa portu <strong>3030</strong> i zapyta o inny, jeśli jest zajęty (ustaw <code>LOOMEM_PORT</code> aby pominąć pytanie). Jeśli port został zmieniony, użyj właściwego.</p>
+<div class="code">curl http://localhost:3030/health<br/><span class="c"># {"status":"ok","version":"0.5.4"}</span></div>
+</div>
+</div>
+<div class="step">
+<div class="num">5</div>
+<div class="body">
+<h4>Połącz Claude Code</h4>
+<p>Dodaj serwer MCP przez streamable HTTP.</p>
+<div class="code">claude mcp add --transport http loomem http://localhost:3030/mcp</div>
+<p>Używasz <strong>aplikacji desktopowej</strong> Claude lub Cowork? Korzysta ona ze stdio zamiast HTTP — dodaj most w pliku <code>claude_desktop_config.json</code>, a następnie uruchom Claude ponownie. Most natywny, bez Node.js (Loomem ≥ v0.2.1):</p>
+<div class="code">"loomem": {<br/>  "command": "/…/.loomem/bin/loomem-cli",<br/>  "args": ["mcp-stdio", "--url", "http://127.0.0.1:3030"]<br/>}</div>
+<p>Lub z Node.js: <code>"command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"]</code>.</p>
+</div>
+</div>
+<div class="step">
+<div class="num">6</div>
+<div class="body">
+<h4>Wypróbuj</h4>
+<p>W Claude: <em>„Zapamiętaj, że we wszystkich narzędziach preferuję tryb ciemny”.</em> Następnie w nowej rozmowie: <em>„Co wiesz o moich preferencjach?”</em> — odpowiedź pochodzi z Loomem.</p>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- ============ CLIENTS ============ -->
+<section class="alt-sunk">
+<div class="wrap">
+<div class="sec-head">
+<div class="sec-eyebrow">Połącz klienta</div>
+<h2 class="sec">Obsługuje MCP przez streamable HTTP</h2>
+<p class="sec-lead">Loomem nasłuchuje pod adresem <code>/mcp</code>. Działa z każdym klientem MCP — poniżej instrukcje dla popularnych narzędzi. Jedna instancja może obsługiwać kilku klientów jednocześnie; korzystają z tego samego kontekstu.</p>
+</div>
+<div class="client-grid">
+<div class="client">
+<h4><span class="d"></span>Claude Code</h4>
+<div class="code">claude mcp add --transport http loomem http://localhost:3030/mcp</div>
+</div>
+<div class="client">
+<h4><span class="d"></span>Aplikacja Claude na komputer i Cowork</h4>
+<p>Aplikacja komputerowa łączy się z lokalnymi serwerami przez <strong>stdio</strong>, a pole własnego konektora przyjmuje tylko <code>https://</code> — dlatego <code>http://localhost</code> nie można tam wkleić. Dodaj most w pliku <code>claude_desktop_config.json</code>, a następnie uruchom Claude ponownie. Most natywny, bez Node.js (Loomem ≥ v0.2.1):</p>
+<div class="code">"loomem": {<br/>  "command": "/…/.loomem/bin/loomem-cli",<br/>  "args": ["mcp-stdio", "--url",<br/>    "http://127.0.0.1:3030"]<br/>}</div>
+<p>Alternatywnie, z Node.js użyj uniwersalnego <code>mcp-remote</code> rozwiązania: <code>"command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"]</code>. Uruchamiasz Loomem na innym komputerze? Zabezpiecz go przez TLS, ustaw <code>SERVER_ORIGIN</code>i dodaj zdalny konektor <code>https://your-domain/mcp</code> .</p>
+</div>
+<div class="client">
+<h4><span class="d"></span>ChatGPT</h4>
+<p>ChatGPT w przeglądarce, tryb deweloperski (Pro/Plus = tylko odczyt; Business/Enterprise/Edu = odczyt i zapis). Udostępnij przez HTTPS, ustawiając <code>SERVER_ORIGIN</code> , włącz tryb deweloperski w Settings → Apps → Advanced Settings, następnie w Settings → Apps → Create wklej adres <code>/mcp</code> , wybierz OAuth i uruchom Scan Tools.</p>
+</div>
+<div class="client">
+<h4><span class="d"></span>OpenClaw</h4>
+<div class="code">openclaw mcp add loomem \<br/>  --url http://localhost:3030/mcp \<br/>  --transport http</div>
+</div>
+</div>
+<div class="callout">
+<div class="bar"></div>
+<div>
+<h4>Pozostań przy połączeniu lokalnym, chyba że używasz TLS</h4>
+<p>Uwierzytelnianie jest domyślnie wyłączone przy użyciu lokalnym. Zachowaj adres nasłuchiwania <code>127.0.0.1</code> , chyba że używasz TLS i uwierzytelniania. Nigdy nie wystawiaj niezabezpieczonego portu HTTP do internetu.</p>
+</div>
+</div>
+</div>
+</section>
+<!-- ============ EDITIONS LADDER ============ -->
+<section aria-label="Sposoby korzystania z Loomem" class="editions" id="editions">
+<div class="wrap">
+<div class="ed-grid">
+<a class="ed-card" href="#quickstart">
+<h4>Loomem</h4>
+<p>Samodzielny hosting, otwarty kod, bez opłat. Twój komputer, Twoje dane.</p>
+<span class="ed-go">Zacznij →</span>
+</a>
+<a class="ed-card" href="https://try.loomem.ai">
+<h4>Loomem Cloud</h4>
+<p>Wersja próbna hostowana na try.loomem.ai. Bez instalacji.</p>
+<span class="ed-go">Wypróbuj za darmo →</span>
+</a>
+<a class="ed-card" href="#business">
+<h4>Loomem T</h4>
+<p>Zarządzana wersja zespołowa w przygotowaniu. Dołącz do pilotażu.</p>
+<span class="ed-go">Dołącz do pilotażu →</span>
+</a>
+</div>
+</div>
+</section>
+<!-- ============ LOOMEM T / FOR TEAMS ============ -->
+<section class="biz" id="business">
+<div class="wrap">
+<div class="sec-head">
+<div class="sec-eyebrow">Loomem T · dla zespołów</div>
+<h2 class="sec">Loomem przechowuje Twój kontekst.<br/><em>Loomem T</em> przechowuje kontekst Twojego zespołu.</h2>
+<p class="sec-lead"><strong style="color:var(--lm-gold-300)">W przygotowaniu — dołącz do pilotażu.</strong> Loomem T to zarządzana wersja zespołowa budowana na tym samym silniku: współdzielony kontekst, dokumenty, zespoły i jednokrotne logowanie w hostowanej usłudze. Bez samodzielnego utrzymywania programu i zabezpieczania serwera.</p>
+</div>
+<div class="biz-cards">
+<div class="biz-card">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><path d="M7 18a4 4 0 0 1 .4-8A6 6 0 0 1 19 9.5a3.5 3.5 0 0 1-.5 8.5H7Z"></path></svg></div>
+<h3>Hosting i zarządzanie</h3>
+<p>Działa w chmurze, gdzie zapewniamy kopie zapasowe, monitoring i aktualizacje. Twój zespół korzysta z kontekstu, a my dbamy o działanie usługi.</p>
+</div>
+<div class="biz-card">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><circle cx="9" cy="8" r="3"></circle><path d="M3 20a6 6 0 0 1 12 0"></path><path d="M16 6a3 3 0 0 1 0 6M21 20a6 6 0 0 0-4-5.7"></path></svg></div>
+<h3>Kontekst współdzielony i projektowy</h3>
+<p>Prywatne, zespołowe i projektowe strumienie obok siebie. Zespół korzysta ze wspólnego kontekstu, a dostęp jest określany przez role.</p>
+</div>
+<div class="biz-card">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><path d="M14 3v5h5"></path><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><path d="M8 13h8M8 17h6"></path></svg></div>
+<h3>Dokumenty i rozmowy</h3>
+<p>Dodawaj i przeszukuj pliki oraz dokumenty razem z rozmowami. Cały zapis w jednym miejscu, dostępny jednym zapytaniem.</p>
+</div>
+<div class="biz-card">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><circle cx="8" cy="15" r="4"></circle><path d="m10.8 12.2 8.2-8.2M17 6l2 2M15 8l1.5 1.5"></path></svg></div>
+<h3>Logowanie firmowe</h3>
+<p>Microsoft Entra SSO i logowanie za pomocą linku. Zespół loguje się w znany sobie sposób, bez kolejnych haseł.</p>
+</div>
+<div class="biz-card">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"></path><circle cx="9" cy="6" fill="currentColor" r="2"></circle><circle cx="15" cy="12" fill="currentColor" r="2"></circle><circle cx="7" cy="18" fill="currentColor" r="2"></circle></svg></div>
+<h3>Administracja i nadzór</h3>
+<p>Konsola użytkowników, strumieni i audytu pokazuje, kto co zapamiętał i kiedy. Zarządzanie dostępem i nadzór bez arkuszy kalkulacyjnych.</p>
+</div>
+<div class="biz-card">
+<div class="ic"><svg fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path></svg></div>
+<h3>Konsolidacja na dużą skalę</h3>
+<p>„Sen” w tle łączy fakty, rozwiązuje sprzeczności i zachowuje dwuwymiarową historię czasu w kontekście organizacji.</p>
+</div>
+</div>
+<div class="biz-cta">
+<div class="txt">
+<h4>Wprowadź Loomem T do swojego zespołu</h4>
+<p>Opowiedz nam o swoich narzędziach, a zaplanujemy wdrożenie. Zapraszamy do pilotażu. <a href="mailto:business@loomem.ai">business@loomem.ai</a></p>
+</div>
+<a class="btn btn-gold btn-lg" href="mailto:business@loomem.ai">Porozmawiajmy →</a>
+</div>
+</div>
+</section>
+<!-- ============ FAQ ============ -->
+<section class="alt" id="faq">
+<div class="wrap">
+<div class="sec-head">
+<div class="sec-eyebrow">FAQ</div>
+<h2 class="sec">Odpowiedzi na pytania</h2>
+</div>
+<div class="faq">
+<details open=""><summary>Czym jest Loomem?</summary><p>Loomem to otwartoźródłowa warstwa kontekstu dla agentów LLM. To pojedynczy program w Rust, oparty na RocksDB i Tantivy oraz dostępny przez Model Context Protocol (MCP). Udostępnia Claude, ChatGPT, Codex i innym klientom MCP fakty, decyzje i historię potrzebne w pracy. Kontekst jest przenośny, lokalny i należy do Ciebie.</p></details>
+<details><summary>Czym Loomem różni się od mem0, Zep, Letta i cognee?</summary><p>Loomem działa jako pojedynczy program w Rust bez usług zewnętrznych; większość alternatyw wymaga osobnej bazy wektorowej lub grafowej. Stawia na własność i przenośność kontekstu, działa lokalnie na Twojej infrastrukturze, obsługuje embeddingi offline przez modele ONNX i ma wbudowaną obsługę MCP. <a href="/pl/compare.html">Zobacz pełne porównanie →</a></p></details>
+<details><summary>Czy Loomem jest bezpłatny i otwartoźródłowy?</summary><p>Tak. Loomem jest dostępny na licencji Apache-2.0 i można go bezpłatnie hostować samodzielnie. Kod źródłowy jest na <a href="https://github.com/vvooki-sys/loomem">GitHub</a>.</p></details>
+<details><summary>Czy Loomem wymaga internetu lub OpenAI?</summary><p>Podstawowe użycie nie wymaga internetu. Embeddingi mogą działać lokalnie za pomocą modelu ONNX, a zapis i wyszukiwanie kontekstu działają offline. Klucz API OpenAI jest potrzebny do etapów opartych na LLM (ekstrakcji memory_ingest, konsolidacji, snu i wykrywania sprzeczności). Bez niego są one niedostępne, a domyślna konfiguracja uruchamia się tylko z LOOMEM_ALLOW_KEYLESS=1; memory_store i wyszukiwanie nadal działają.</p></details>
+<details><summary>Jakich klientów LLM można połączyć z Loomem?</summary><p>Dowolnego klienta obsługującego MCP. Loomem używa MCP przez streamable HTTP i udostępnia instrukcje dla Claude, Claude Code, ChatGPT, Codex i Cursor oraz dynamiczną rejestrację klienta OAuth dla zdalnych konektorów.</p></details>
+<details><summary>Dlaczego nie korzystać wyłącznie z pamięci ChatGPT lub Claude?</summary><p>Wbudowana pamięć jest związana z jednym dostawcą. Loomem pozwala przenosić własny kontekst między narzędziami i modelami oraz hostować go samodzielnie. Udostępnia uporządkowany graf encji i historię w dwóch wymiarach czasu.</p></details>
+</div>
+</div>
+</section>
+<!-- ============ CTA BAND ============ -->
+<section>
+<div class="wrap">
+<div class="band">
+<span class="pill pill-gold" style="margin-bottom:18px"><span class="dot"></span>Twój kontekst, pod Twoją kontrolą</span>
+<h2>Zachowaj swój kontekst.<br/>Zmień <em>model.</em></h2>
+<p>Local-first, jeden plik wykonywalny, otwarty kod na licencji Apache-2.0. Twoja warstwa kontekstu podąża za agentami w różnych narzędziach i modelach. Zainstaluj ją jednym poleceniem i połącz pierwszego klienta w kilka minut.</p>
+<div class="cta">
+<a class="btn btn-weave btn-lg" href="#quickstart">Zacznij →</a>
+<a class="btn btn-secondary btn-lg" href="https://github.com/vvooki-sys/loomem">Daj gwiazdkę na GitHubie</a>
+</div>
+</div>
+</div>
+</section>
+<!-- ============ FOOTER ============ -->
+<footer>
+<div class="wrap">
+<div class="foot-inner">
+<div>
+<div class="foot-brand"><span class="wm-word">loo<span class="wm">mem</span></span></div>
+<p class="foot-note">Warstwa kontekstu dla Twoich agentów AI: otwartoźródłowa, lokalna, działająca offline i niezależna od modelu.</p>
+</div>
+<div class="foot-links">
+<div class="foot-col">
+<h5>Dokumentacja</h5>
+<a href="/pl/guide/quick-start.html">Szybki start</a>
+<a href="/pl/guide/installation.html">Instalacja</a>
+<a href="/pl/guide/configuration.html">Konfiguracja</a>
+<a href="/pl/guide/api-reference.html">Dokumentacja API</a>
+<a href="/pl/guide/mcp-tools.html">Narzędzia MCP</a>
+</div>
+<div class="foot-col">
+<h5>Materiały</h5>
+<a href="/pl/compare.html">Loomem a alternatywy</a>
+<a href="/pl/benchmarks.html">Testy porównawcze</a>
+</div>
+<div class="foot-col">
+<h5>Projekt</h5>
+<a href="/pl/guide/architecture.html">Architektura</a>
+<a href="/pl/guide/deployment.html">Wdrożenie</a>
+<a href="/pl/guide/security.html">Model bezpieczeństwa</a>
+<a href="/pl/guide/backup-and-restore.html">Kopie zapasowe i przywracanie</a>
+<a href="https://github.com/vvooki-sys/loomem">GitHub</a>
+</div>
+<div class="foot-col">
+<h5>Kontakt</h5>
+<a href="mailto:contact@loomem.ai">contact@loomem.ai</a>
+<a href="mailto:lukasz.gumowski@gmail.com" title="Autor">Łukasz Gumowski (autor)</a>
+<a href="https://github.com/vvooki-sys/loomem/issues">Zgłoś problem</a>
+</div>
+</div>
+</div>
+<div class="foot-bottom">
+<span>© 2026 Łukasz Gumowski · licencja Apache-2.0.</span>
+<span>Zbudowano w Rust na RocksDB i Tantivy.</span>
+</div>
+</div>
+</footer>
+<script>
+(function(){
+  // --- scroll reveal (adds class via JS, so no-JS shows everything) ---
+  try{
+    var obs = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); obs.unobserve(e.target); } });
+    }, { threshold: 0.12 });
+    document.querySelectorAll('section').forEach(function(s){ s.classList.add('reveal'); obs.observe(s); });
+  }catch(e){}
+
+  // --- mobile menu toggle ---
+  var nt = document.getElementById('navToggle'), mm = document.getElementById('mobileMenu');
+  if (nt && mm) {
+    nt.addEventListener('click', function(){
+      var open = mm.classList.toggle('open');
+      nt.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    mm.querySelectorAll('a').forEach(function(a){
+      a.addEventListener('click', function(){ mm.classList.remove('open'); nt.setAttribute('aria-expanded','false'); });
+    });
+  }
+
+})();
+</script>
+<script defer="" src="/_vercel/insights/script.js"></script>
+</body>
+</html>

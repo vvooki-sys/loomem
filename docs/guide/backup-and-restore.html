@@ -158,11 +158,15 @@ a:hover{text-decoration:underline}
   ]
 }
 </script>
+<link rel="stylesheet" href="/assets/locale.css"/>
+<script src="/assets/locale.js"></script>
+<link rel="alternate" hreflang="en" href="https://loomem.ai/guide/backup-and-restore.html"/>
+<link rel="alternate" hreflang="pl" href="https://loomem.ai/pl/guide/backup-and-restore.html"/>
 </head>
 <body>
 <header class="topbar"><div class="wrap inner">
 <a class="brand" href="../"><svg class="lm-ring" viewBox="0 0 200 200" fill="none" aria-hidden="true"><defs><linearGradient id="lmRingHdr" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs><g fill="none" stroke="url(#lmRingHdr)" stroke-linecap="round"><circle class="r1" cx="100" cy="100" r="77" stroke-width="15" stroke-dasharray="404 80"/><circle class="r2" cx="100" cy="100" r="56" stroke-width="15" stroke-dasharray="294 62"/><circle class="r3" cx="100" cy="100" r="36" stroke-width="14" stroke-dasharray="170 56"/></g></svg><span class="wm-word">loo<span class="wm">mem</span></span><span class="tag">Docs</span></a>
-<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
+<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a><span class="locale-switch" role="group" aria-label="Language"><a href="/pl/guide/backup-and-restore.html" data-language="pl" lang="pl" aria-label="Polski">PL</a><a href="/guide/backup-and-restore.html" data-language="en" lang="en" aria-label="English" aria-current="page">EN</a></span></nav>
 </div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html" class="active">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Project</div><article class="doc-content"><h1 id="backup-and-restore">Backup and Restore</h1>
 <h2 id="what-is-backed-up">What is backed up</h2>
@@ -172,9 +176,8 @@ a:hover{text-decoration:underline}
 - Knowledge graph (entities, edges)
 - Cost tracking data
 - Wrapped per-stream encryption keys (when at-rest encryption is enabled)</p>
-<p><strong>Not in the checkpoint</strong> (auto-rebuilt on startup):
-- Tantivy full-text index — rebuilt from RocksDB if schema version mismatches
-- WAL/intent log — replayed on startup for crash recovery</p>
+<p><strong>Not in the RocksDB checkpoint:</strong></p>
+<ul><li>The Tantivy full-text index. A schema mismatch or count drift may trigger a rebuild, but neither proves that an existing index matches this checkpoint. Rebuild explicitly after a restore.</li><li>Loomem's separate intent log, normally <code>{data_dir}/wal</code>. This is not the RocksDB WAL inside a checkpoint. Replaying an intent log from a different point in time can change the restored data; follow the restore procedure below.</li></ul>
 <h2 id="encrypted-instance-backup-is-joint-master-key-required">Encrypted-instance backup is JOINT (master key required)</h2>
 <p>When at-rest encryption is enabled (<code>LOOMEM_AT_REST_MASTER_KEY</code> set), the checkpoint
 contains only <strong>wrapped</strong> per-scope DEKs (in the <code>keys</code> column family) and <strong>ciphertext</strong> for
@@ -197,9 +200,8 @@ DEKs.</p>
   checkpoint. The key itself is <strong>never</strong> stored here; it lives only in escrow.</p>
 <ul>
 <li>
-<p><strong>Automated (12h-worker) checkpoints are still covered.</strong> The fingerprint changes <em>only</em> when
-  the key changes (rotation), so every checkpoint taken during a key's lifetime
-  shares that key's single fingerprint. The escrow record (key + fingerprint + activation date)
+<p><strong>Automated (12h-worker) checkpoints are still covered.</strong> Every checkpoint taken with the
+  same master key shares its fingerprint. The escrow record (key + fingerprint + activation date)
   therefore identifies the correct key for <strong>any</strong> checkpoint by its timestamp, even one the
   worker wrote without a per-checkpoint fingerprint file. The <code>master-key-fingerprint.txt</code> step
   above is a convenience for fast lookup, not a recovery prerequisite; automating it as a
@@ -212,8 +214,10 @@ DEKs.</p>
 </ul>
 <p>Keep at least one copy of the master key (with its fingerprint and activation date) in a
 secret store that is <strong>separate from the data volume and the backups</strong> — a password manager,
-cloud secret manager, or printed escrow. Verify after every rotation that the escrowed value
-matches the running instance's fingerprint (<code>GET /v1/encryption/status</code>).</p>
+cloud secret manager, or printed escrow. Verify that the escrowed value matches the running
+instance's fingerprint (<code>GET /v1/encryption/status</code>). Master-key rotation is not currently
+supported: changing the key does not re-wrap existing DEKs and makes the encrypted data
+unreadable. See <a href="security.html">Security overview</a>.</p>
 <h2 id="where-backups-are-stored">Where backups are stored</h2>
 <pre><code>{data_dir}/backups/checkpoint-{YYYY-MM-DD-HHMMSS}/
 </code></pre>
@@ -228,11 +232,13 @@ interval_secs = 43200    # every 12 hours
 max_copies = 2           # keep last 2 (1 day coverage)
 </code></pre>
 <h2 id="manual-backup">Manual backup</h2>
-<p>Checkpoints are consistent point-in-time copies; for an out-of-band backup simply copy the
-latest <code>{data_dir}/backups/checkpoint-*</code> directory (or snapshot the volume) — this is safe
-while the server is running.</p>
+<p>For an out-of-band backup, copy a completed <code>{data_dir}/backups/checkpoint-*</code> directory.
+The checkpoint is a point-in-time copy of RocksDB; it does not establish cross-component
+consistency with the separate intent log.</p>
+<p>The RocksDB checkpoint is not a transactionally paired snapshot of Loomem's separate intent log. An automatic checkpoint can be taken while a delete or purge is still in progress. A checkpoint alone therefore does not prove that those operations finished. After restoring it without a matched intent log, explicitly verify that expected deletions have taken effect before reconnecting clients.</p>
 <h2 id="restore-procedure">Restore procedure</h2>
 <h3 id="1-stop-loomem">1. Stop Loomem</h3>
+<p>Disconnect clients and stop the server completely. For the restore, keep the server isolated from clients and temporarily set <code>enabled = false</code> in the <code>[scheduler]</code> section of its configuration. Resume normal access and scheduler settings only after verification.</p>
 <pre><code class="language-bash">pkill -f loomem-server
 </code></pre>
 <h3 id="2-replace-rocksdb-data">2. Replace RocksDB data</h3>
@@ -242,6 +248,8 @@ mv {data_dir}/rocksdb {data_dir}/rocksdb.old
 # Copy checkpoint
 cp -r {data_dir}/backups/checkpoint-2026-04-04-120000 {data_dir}/rocksdb
 </code></pre>
+<h3 id="2b-set-aside-the-separate-intent-log">2b. Set aside the separate intent log</h3>
+<p>With the server stopped, move the existing intent-log directory to a safe, uniquely named location outside the active data directory. The default is <code>{data_dir}/wal</code>, but check <code>[storage.intent_log].dir</code> in the actual configuration. Do not reuse the old intent log with this checkpoint: pending delete or purge intents can change the restored RocksDB on startup. Preserve the old log for investigation; the server creates an empty intent log when enabled. Do <strong>not</strong> remove RocksDB's own WAL files inside the checkpoint.</p>
 <h3 id="3-encrypted-instances-confirm-the-master-key-is-set">3. (Encrypted instances) Confirm the master key is set</h3>
 <p>If the checkpoint is from an encrypted instance, the matching master key must be present
 <strong>before</strong> start, or every encrypted row fails closed. Restore <code>LOOMEM_AT_REST_MASTER_KEY</code>
@@ -251,15 +259,18 @@ plaintext instances (no key), skip this step.</p>
 <h3 id="4-start-loomem">4. Start Loomem</h3>
 <pre><code class="language-bash">./target/release/loomem-server
 </code></pre>
-<p>On startup:
-- RocksDB opens from the checkpoint
-- Tantivy detects schema mismatch → auto-rebuilds index from RocksDB
-- WAL replays any pending operations
-- All data is restored</p>
-<h3 id="5-verify">5. Verify</h3>
-<pre><code class="language-bash">curl http://localhost:3030/v1/status
+<p>RocksDB opens from the checkpoint. Startup may rebuild Tantivy for a schema mismatch, rebuild flag, or configured count drift, but none of these guarantees that an existing index matches the restored data.</p>
+<h3 id="5-rebuild-the-full-text-index">5. Rebuild the full-text index</h3>
+<p>Keep clients disconnected and the scheduler disabled. After startup, call the rebuild endpoint using an admin token if authentication is enabled (omit the header if it is disabled):</p>
+<pre><code class="language-bash">curl -fsS -X POST http://localhost:3030/v1/rebuild-tantivy \
+  -H "Authorization: Bearer &lt;admin_token&gt;"
 </code></pre>
-<p>Check that <code>rocksdb_keys</code>, <code>tantivy_docs</code>, and <code>embeddings_count</code> match expected values.</p>
+<p>HTTP 202 means the rebuild started in the background, not that it succeeded. Check the server log for <code>Tantivy rebuild: starting</code> followed by <code>Tantivy rebuild complete</code>; if the log reports <code>Tantivy rebuild failed</code>, stop and resolve the failure before restoring service. The rebuild replaces the index from the restored RocksDB and can take time.</p>
+<h3 id="5-verify">6. Verify</h3>
+<pre><code class="language-bash">curl -fsS http://localhost:3030/v1/status \
+  -H "Authorization: Bearer &lt;admin_token&gt;"
+</code></pre>
+<p>Omit the header if authentication is disabled. Check the checkpoint's expected data and representative searches, including records expected to be present or absent. Check <code>undecodable_chunks</code> is zero and investigate errors in the logs; a missing key or corrupt rows can make a rebuild incomplete. The counts in <code>config_summary</code> are diagnostic only: <code>rocksdb_keys</code> is an estimate, and matching counts do not prove that the index contains the right documents. Once verification succeeds, stop the server, restore the previous <code>scheduler.enabled</code> setting, restart the server, and then reconnect clients.</p>
 <h2 id="data-retention-and-hard-purge">Data retention and hard purge</h2>
 <p>Deleted memories are soft-deleted (marked with <code>deleted_at</code> timestamp) and remain in storage for a recovery window. After the window expires, the hard-purge worker permanently removes them.</p>
 <pre><code class="language-toml">[retention]
@@ -283,7 +294,7 @@ hard_purge_interval_secs = 86400  # purge worker runs daily
 </tr>
 <tr>
 <td>RTO (Recovery Time Objective)</td>
-<td>~5 minutes (copy + restart + Tantivy rebuild)</td>
+<td>Depends on data size, storage speed, rebuild and verification; measure for your deployment.</td>
 </tr>
 </tbody>
 </table>

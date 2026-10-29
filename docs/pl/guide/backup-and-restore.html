@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+
+<html lang="pl">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Kopie zapasowe i odtwarzanie — dokumentacja Loomem</title>
+<meta content="Back up and restore Loomem: what to snapshot in the single-binary data directory, retention guidance, and safely restoring your context layer." name="description"/>
+<link rel="canonical" href="https://loomem.ai/pl/guide/backup-and-restore.html"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&amp;family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0.05' y1='0' x2='0.95' y2='1'%3E%3Cstop offset='0' stop-color='%23EE9913'/%3E%3Cstop offset='0.28' stop-color='%23F7756F'/%3E%3Cstop offset='0.52' stop-color='%23B86ED2'/%3E%3Cstop offset='0.74' stop-color='%23667CE6'/%3E%3Cstop offset='1' stop-color='%231684DC'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cg fill='none' stroke='url(%23g)' stroke-linecap='round'%3E%3Ccircle cx='100' cy='100' r='77' stroke-width='13' stroke-dasharray='404 80' transform='rotate(-18 100 100)'/%3E%3Ccircle cx='100' cy='100' r='56' stroke-width='13' stroke-dasharray='294 62' transform='rotate(150 100 100)'/%3E%3Ccircle cx='100' cy='100' r='36' stroke-width='12' stroke-dasharray='170 56' transform='rotate(40 100 100)'/%3E%3C/g%3E%3C/svg%3E" rel="icon"/>
+<style>
+:root{
+  --lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;--lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;--lm-gold-900:#5E3A11;
+  --lm-blue-300:#63B5F0;--lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;--lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-200:#DED7C8;--lm-ink-100:#EFE9DD;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;--lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave:linear-gradient(108deg,#EE9913 0%,#F4AC2E 18%,#F7756F 38%,#B86ED2 58%,#63B5F0 80%,#1684DC 100%);--lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#F7756F 30%,#B86ED2 55%,#667CE6 75%,#1684DC 100%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);line-height:1.62;-webkit-font-smoothing:antialiased;font-size:16px}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.82);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
+.brand:hover{text-decoration:none}
+.brand svg{width:26px;height:26px;flex:none}
+.lm-ring circle{transform-box:view-box;transform-origin:100px 100px}
+.lm-ring .r1{animation:lm-spin 32s linear infinite}
+.lm-ring .r2{animation:lm-spin-rev 24s linear infinite}
+.lm-ring .r3{animation:lm-spin 18s linear infinite}
+@keyframes lm-spin{to{transform:rotate(360deg)}}
+@keyframes lm-spin-rev{to{transform:rotate(-360deg)}}
+@media (prefers-reduced-motion:reduce){.lm-ring circle{animation:none}.lm-ring .r1{transform:rotate(-18deg)}.lm-ring .r2{transform:rotate(150deg)}.lm-ring .r3{transform:rotate(40deg)}}
+.wm-word{white-space:nowrap}
+@supports ((-webkit-background-clip:text) or (background-clip:text)){.wm{background-image:linear-gradient(100deg,#CE7D08 0%,#EE9913 15%,#F88546 18%,#F7756F 21%,#EB6D95 24%,#D66BB7 27%,#B86ED2 30%,#9474E2 33%,#667CE6 36%,#1684DC 39%,#1684DC 61%,#667CE6 64%,#9474E2 67%,#B86ED2 70%,#D66BB7 73%,#EB6D95 76%,#F7756F 79%,#F88546 82%,#EE9913 85%,#CE7D08 100%);background-size:200% 100%;background-position:0% 50%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:wm-flow 12s ease-in-out infinite alternate}}
+@keyframes wm-flow{to{background-position:100% 50%}}
+@media (prefers-reduced-motion:reduce){.wm{animation:none}}
+@media (forced-colors: active){.wm{background:none;-webkit-background-clip:border-box;background-clip:border-box;color:inherit;animation:none}}
+.brand .tag{font-family:var(--lm-font-sans);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--lm-ink-400);border:1px solid var(--lm-ink-200);border-radius:999px;padding:2px 9px;margin-left:2px}
+.topnav{display:flex;align-items:center;gap:22px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900);text-decoration:none}
+.doc-wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px);display:grid;grid-template-columns:248px 1fr;gap:52px;align-items:start}
+.doc-side{position:sticky;top:88px;align-self:start;max-height:calc(100vh - 110px);overflow-y:auto;padding:26px 0}
+.doc-side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--lm-ink-400);font-weight:600;margin:20px 12px 8px}
+.doc-side .grp:first-child{margin-top:0}
+.doc-side a{display:block;font-size:14px;color:var(--lm-ink-600);padding:7px 12px;border-radius:8px;font-weight:500}
+.doc-side a:hover{background:var(--lm-surface-sunk);color:var(--lm-ink-900);text-decoration:none}
+.doc-side a.active{background:var(--lm-surface-cool);color:var(--lm-blue-700);font-weight:600}
+.doc-main{min-width:0;max-width:760px;padding:48px 0 96px}
+.doc-eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-gold-700);margin-bottom:10px}
+.doc-content h1{font-family:var(--lm-font-display);font-size:2.5rem;font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 22px}
+.doc-content h2{font-family:var(--lm-font-display);font-size:1.6rem;font-weight:600;letter-spacing:-.01em;line-height:1.25;margin:44px 0 14px}
+.doc-content h3{font-size:1.22rem;font-weight:600;margin:30px 0 10px;letter-spacing:-.01em}
+.doc-content h4{font-size:1.02rem;font-weight:600;margin:22px 0 8px}
+.doc-content p{margin:0 0 16px;color:var(--lm-ink-700)}
+.doc-content ul,.doc-content ol{margin:0 0 18px;padding-left:24px;color:var(--lm-ink-700)}
+.doc-content li{margin:7px 0}
+.doc-content li>ul,.doc-content li>ol{margin:7px 0}
+.doc-content code{font-family:var(--lm-font-mono);font-size:.87em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1.5px 6px;border-radius:5px;color:var(--lm-ink-800)}
+.doc-content pre{background:var(--lm-weave) no-repeat top center/100% 3px,var(--lm-ink-800);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;overflow-x:auto;margin:0 0 18px;box-shadow:var(--lm-shadow-sm)}
+.doc-content pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;line-height:1.65}
+.doc-content blockquote{border-left:3px solid var(--lm-gold-400);background:var(--lm-surface-warm);padding:12px 18px;border-radius:0 var(--lm-radius-md) var(--lm-radius-md) 0;margin:0 0 18px;color:var(--lm-ink-700)}
+.doc-content blockquote p:last-child{margin:0}
+.doc-content table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;display:block;overflow-x:auto}
+.doc-content thead{background:var(--lm-surface-sunk)}
+.doc-content th{text-align:left;padding:9px 12px;border-bottom:2px solid var(--lm-ink-200);color:var(--lm-ink-700);font-weight:600;white-space:nowrap}
+.doc-content td{padding:9px 12px;border-bottom:1px solid var(--lm-ink-100);color:var(--lm-ink-700);vertical-align:top}
+.doc-content hr{border:none;border-top:1px solid var(--lm-ink-200);margin:34px 0}
+.doc-content a{font-weight:500}
+.doc-content h2 code,.doc-content h3 code,.doc-content h4 code{font-size:.86em;background:var(--lm-surface-sunk)}
+.doc-content img{max-width:100%}
+.doc-foot{border-top:1px solid var(--lm-ink-200);margin-top:40px;padding-top:22px;font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+/* hub */
+.hub-head{padding:56px 0 8px;max-width:720px}
+.hub-head h1{font-family:var(--lm-font-display);font-size:clamp(2.2rem,4vw,3rem);font-weight:600;letter-spacing:-.02em;line-height:1.1;margin-bottom:14px}
+.hub-head p{font-size:1.0625rem;color:var(--lm-ink-500);line-height:1.6}
+.hub-grp{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-ink-400);font-weight:600;margin:40px 0 16px}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.hub-card{display:block;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs);transition:all 180ms var(--lm-ease)}
+.hub-card:hover{box-shadow:var(--lm-shadow-sm);transform:translateY(-2px);text-decoration:none;border-color:var(--lm-blue-300)}
+.hub-card h3{font-size:1.05rem;font-weight:600;color:var(--lm-ink-900);margin-bottom:5px}
+.hub-card span{font-size:13.5px;color:var(--lm-ink-500)}
+@media(max-width:820px){.doc-wrap{grid-template-columns:1fr;gap:0}.doc-side{position:static;max-height:none;border-bottom:1px solid var(--lm-ink-200);padding:16px 0}.doc-main{padding-top:28px}}
+</style>
+
+<link rel="stylesheet" href="/assets/locale.css"/>
+<script src="/assets/locale.js"></script>
+<link rel="alternate" hreflang="en" href="https://loomem.ai/guide/backup-and-restore.html"/>
+<link rel="alternate" hreflang="pl" href="https://loomem.ai/pl/guide/backup-and-restore.html"/>
+</head>
+<body>
+<header class="topbar"><div class="wrap inner">
+<a class="brand" href="/pl/"><svg aria-hidden="true" class="lm-ring" fill="none" viewbox="0 0 200 200"><defs><lineargradient id="lmRingHdr" x1="0.05" x2="0.95" y1="0" y2="1"><stop offset="0" stop-color="#EE9913"></stop><stop offset="0.28" stop-color="#F7756F"></stop><stop offset="0.52" stop-color="#B86ED2"></stop><stop offset="0.74" stop-color="#667CE6"></stop><stop offset="1" stop-color="#1684DC"></stop></lineargradient></defs><g fill="none" stroke="url(#lmRingHdr)" stroke-linecap="round"><circle class="r1" cx="100" cy="100" r="77" stroke-dasharray="404 80" stroke-width="15"></circle><circle class="r2" cx="100" cy="100" r="56" stroke-dasharray="294 62" stroke-width="15"></circle><circle class="r3" cx="100" cy="100" r="36" stroke-dasharray="170 56" stroke-width="14"></circle></g></svg><span class="wm-word">loo<span class="wm">mem</span></span><span class="tag">Dokumentacja</span></a>
+<nav class="topnav"><a href="/pl/">Strona główna</a><a href="/pl/guide/">Dokumentacja</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a><span class="locale-switch" role="group" aria-label="Język"><a href="/pl/guide/backup-and-restore.html" data-language="pl" lang="pl" aria-label="Polski" aria-current="page">PL</a><a href="/guide/backup-and-restore.html" data-language="en" lang="en" aria-label="English">EN</a></span></nav>
+</div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="/pl/guide/" style="font-weight:600;margin-bottom:6px;display:block">← Dokumentacja</a><div class="grp">Dokumentacja</div><a href="/pl/guide/quick-start.html">Szybki start</a><a href="/pl/guide/installation.html">Instalacja</a><a href="/pl/guide/configuration.html">Konfiguracja</a><a href="/pl/guide/api-reference.html">Dokumentacja API</a><a href="/pl/guide/mcp-tools.html">Narzędzia MCP</a><div class="grp">Projekt</div><a href="/pl/guide/architecture.html">Architektura</a><a href="/pl/guide/deployment.html">Wdrożenie</a><a href="/pl/guide/security.html">Bezpieczeństwo</a><a class="active" href="/pl/guide/backup-and-restore.html">Backup &amp; restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Projekt</div><article class="doc-content"><h1 id="backup-and-restore">Kopia zapasowa i przywracanie</h1>
+<h2 id="what-is-backed-up">Co obejmuje kopia zapasowa</h2>
+<p>Checkpoint RocksDB to migawka wszystkich danych z danego momentu:
+- Wszystkie fragmenty (L0, L1)
+- Embeddingi (przechowywane w rodzinie kolumn RocksDB)
+- Graf wiedzy (encje, krawędzie)
+- Dane o kosztach
+- Zabezpieczone klucze szyfrowania poszczególnych strumieni (gdy szyfrowanie danych w spoczynku jest włączone)</p>
+<p><strong>Poza checkpointem RocksDB:</strong></p>
+<ul><li>Indeks pełnotekstowy Tantivy. Niezgodność schematu lub liczby rekordów może uruchomić odbudowę, ale nie dowodzi zgodności istniejącego indeksu z tym checkpointem. Po przywróceniu uruchom odbudowę ręcznie.</li><li>Osobny dziennik operacji Loomem (intent log), zwykle <code>{data_dir}/wal</code>. To inny dziennik niż WAL RocksDB wewnątrz checkpointu. Odtworzenie dziennika z innego momentu może zmienić przywrócone dane; zastosuj procedurę poniżej.</li></ul>
+<h2 id="encrypted-instance-backup-is-joint-master-key-required">Kopia zaszyfrowanej instancji wymaga obu elementów (w tym klucza głównego)</h2>
+<p>Gdy szyfrowanie danych w spoczynku jest włączone (ustawione <code>LOOMEM_AT_REST_MASTER_KEY</code>), checkpoint zawiera tylko <strong>zabezpieczone</strong> klucze DEK dla poszczególnych zakresów (w rodzinie kolumn <code>keys</code>) oraz <strong>szyfrogram</strong> dla szyfrowanych klas rekordów (treść fragmentów, encje, relacje, encje grafu i audyt). <strong>Sam checkpoint</strong> RocksDB nie wystarczy do ich odszyfrowania — nie zawiera klucza głównego odblokowującego DEK.</p>
+<p>Użyteczna kopia zapasowa zaszyfrowanej instancji wymaga więc <strong>obu elementów</strong>:</p>
+<blockquote>
+<p><strong>checkpointu</strong> oraz <strong>potwierdzonej kopii klucza głównego</strong>, którego <strong>odcisk odpowiada</strong> danym.</p>
+</blockquote>
+<ul>
+<li><strong>Zapisz odcisk obok każdego checkpointu.</strong> Pobierz go podczas tworzenia kopii, aby przy przywracaniu ustalić, którym zabezpieczonym kluczem zaszyfrowano dane:</li>
+</ul>
+<p><code>bash
+  curl -s http://localhost:3030/v1/encryption/status \
+    -H "Authorization: Bearer &lt;admin_token&gt;" | jq -r '.master_key_fingerprint' \
+    &gt; {data_dir}/backups/checkpoint-&lt;ts&gt;/master-key-fingerprint.txt</code></p>
+<p>Odcisk jest jednokierunkowym skrótem i można go bezpiecznie przechowywać jawnym tekstem obok checkpointu. Sam klucz <strong>nigdy</strong> nie jest tam przechowywany; znajduje się wyłącznie w bezpiecznym depozycie.</p>
+<ul>
+<li><p><strong>Dotyczy to również automatycznych checkpointów tworzonych co 12 godzin.</strong> Każdy checkpoint utworzony przy użyciu tego samego klucza głównego ma ten sam odcisk. Zapis depozytu (klucz, odcisk i data aktywacji) pozwala na podstawie czasu wskazać właściwy klucz dla <strong>dowolnego</strong> checkpointu, także takiego bez osobnego pliku z odciskiem. Powyższy krok z <code>master-key-fingerprint.txt</code> ułatwia szybkie wyszukanie, ale nie jest warunkiem odzyskania danych. Jego automatyzacja po utworzeniu kopii może być przyszłym usprawnieniem, a nie brakującym warunkiem odzyskiwania.</p></li>
+<li><p><strong>Bez odpowiedniego klucza głównego zaszyfrowanego checkpointu nie można odzyskać.</strong> Metadane routingu, embeddingi i Tantivy pozostają czytelne, ale wszystkie szyfrowane klasy rekordów pozostają niedostępne.</p></li>
+</ul>
+<p>Przechowuj przynajmniej jedną kopię klucza głównego wraz z odciskiem i datą aktywacji w bezpiecznym miejscu <strong>oddzielonym od wolumenu danych i kopii zapasowych</strong>, np. w menedżerze haseł, menedżerze sekretów w chmurze lub w drukowanym depozycie. Sprawdź, czy odcisk klucza w depozycie odpowiada odciskowi działającej instancji (<code>GET /v1/encryption/status</code>). Rotacja klucza głównego nie jest obecnie obsługiwana: zmiana klucza nie zabezpiecza ponownie istniejących DEK i uniemożliwia odczyt zaszyfrowanych danych. Zobacz <a href="/pl/guide/security.html">przegląd bezpieczeństwa</a>.</p>
+<h2 id="where-backups-are-stored">Gdzie są przechowywane kopie zapasowe</h2>
+<pre><code>{data_dir}/backups/checkpoint-{YYYY-MM-DD-HHMMSS}/
+</code></pre>
+<ul>
+<li><strong>Lokalnie:</strong> <code>./data/backups/</code></li>
+<li><strong>Wdrożenia kontenerowe:</strong> <code>/data/backups/</code> (na wolumenie trwałym)</li>
+</ul>
+<h2 id="configuration">Konfiguracja</h2>
+<pre><code class="language-toml">[worker.backup]
+enabled = true
+interval_secs = 43200    # co 12 godzin
+max_copies = 2           # zachowaj 2 ostatnie (1 dzień)
+</code></pre>
+<h2 id="manual-backup">Ręczne tworzenie kopii</h2>
+<p>Aby utworzyć kopię zewnętrzną, skopiuj ukończony katalog <code>{data_dir}/backups/checkpoint-*</code>. Checkpoint jest kopią RocksDB z danego momentu; sam w sobie nie gwarantuje spójności z osobnym dziennikiem operacji.</p>
+<p>Checkpoint RocksDB nie jest transakcyjnie sparowaną migawką osobnego dziennika operacji Loomem. Automatyczny checkpoint może powstać w trakcie niezakończonego usuwania lub czyszczenia danych. Sam checkpoint nie dowodzi więc ukończenia tych operacji. Po przywróceniu bez pasującego dziennika sprawdź, czy oczekiwane usunięcia zostały wykonane, zanim ponownie podłączysz klientów.</p>
+<h2 id="restore-procedure">Procedura przywracania</h2>
+<h3 id="1-stop-loomem">1. Zatrzymaj Loomem</h3>
+<p>Odłącz klientów i całkowicie zatrzymaj serwer. Na czas przywracania nie podłączaj klientów i ustaw tymczasowo <code>enabled = false</code> w sekcji <code>[scheduler]</code> konfiguracji. Przywróć zwykły dostęp i ustawienia schedulera dopiero po weryfikacji.</p>
+<pre><code class="language-bash">pkill -f loomem-server
+</code></pre>
+<h3 id="2-replace-rocksdb-data">2. Zastąp dane RocksDB</h3>
+<pre><code class="language-bash"># Odłóż obecne dane na bok
+mv {data_dir}/rocksdb {data_dir}/rocksdb.old
+
+# Skopiuj checkpoint
+cp -r {data_dir}/backups/checkpoint-2026-04-04-120000 {data_dir}/rocksdb
+</code></pre>
+<h3 id="2b-set-aside-the-separate-intent-log">2b. Odłóż osobny dziennik operacji</h3>
+<p>Przy zatrzymanym serwerze przenieś istniejący katalog dziennika operacji w bezpieczne miejsce poza aktywnym katalogiem danych, pod unikalną nazwą. Domyślna ścieżka to <code>{data_dir}/wal</code>, ale sprawdź <code>[storage.intent_log].dir</code> w używanej konfiguracji. Nie używaj starego dziennika z tym checkpointem: oczekujące operacje usuwania mogą przy starcie zmienić przywrócone dane RocksDB. Zachowaj stary dziennik do analizy; włączony serwer utworzy pusty. <strong>Nie</strong> usuwaj plików WAL samego RocksDB wewnątrz checkpointu.</p>
+<h3 id="3-encrypted-instances-confirm-the-master-key-is-set">3. (Instancje szyfrowane) Sprawdź, czy ustawiono klucz główny</h3>
+<p>Jeśli checkpoint pochodzi z zaszyfrowanej instancji, odpowiedni klucz główny musi być dostępny <strong>przed</strong> uruchomieniem; w przeciwnym razie zaszyfrowane rekordy pozostaną niedostępne. Przywróć <code>LOOMEM_AT_REST_MASTER_KEY</code> z depozytu i sprawdź, czy jego odcisk odpowiada odciskowi z pliku <code>master-key-fingerprint.txt</code> zapisanego obok checkpointu (po uruchomieniu <code>GET /v1/encryption/status</code> zwraca aktywny odcisk). W przypadku instancji bez szyfrowania pomiń ten krok.</p>
+<h3 id="4-start-loomem">4. Uruchom Loomem</h3>
+<pre><code class="language-bash">./target/release/loomem-server
+</code></pre>
+<p>RocksDB otworzy dane z checkpointu. Uruchomienie może spowodować odbudowę Tantivy przy niezgodności schematu, ustawionej fladze odbudowy lub wykrytej różnicy liczby rekordów, ale żaden z tych warunków nie gwarantuje zgodności indeksu z przywróconymi danymi.</p>
+<h3 id="5-rebuild-the-full-text-index">5. Odbuduj indeks pełnotekstowy</h3>
+<p>Klienci powinni pozostać odłączeni, a scheduler wyłączony. Po uruchomieniu wywołaj endpoint odbudowy, podając token administratora, jeśli uwierzytelnianie jest włączone (jeśli jest wyłączone, pomiń nagłówek):</p>
+<pre><code class="language-bash">curl -fsS -X POST http://localhost:3030/v1/rebuild-tantivy \
+  -H "Authorization: Bearer &lt;admin_token&gt;"
+</code></pre>
+<p>HTTP 202 oznacza rozpoczęcie pracy w tle, a nie jej powodzenie. Sprawdź w logu serwera komunikat <code>Tantivy rebuild: starting</code>, a następnie <code>Tantivy rebuild complete</code>. Jeśli pojawi się <code>Tantivy rebuild failed</code>, rozwiąż problem przed przywróceniem usługi. Odbudowa zastępuje indeks danymi z przywróconego RocksDB i może potrwać.</p>
+<h3 id="5-verify">6. Sprawdź</h3>
+<pre><code class="language-bash">curl -fsS http://localhost:3030/v1/status \
+  -H "Authorization: Bearer &lt;admin_token&gt;"
+</code></pre>
+<p>Jeśli uwierzytelnianie jest wyłączone, pomiń nagłówek. Sprawdź oczekiwane dane checkpointu oraz przykładowe wyszukiwania, w tym rekordy, które powinny być obecne lub nieobecne. Sprawdź, czy <code>undecodable_chunks</code> ma wartość zero, i przeanalizuj błędy w logach; brak klucza lub uszkodzone rekordy mogą sprawić, że odbudowa będzie niepełna. Liczniki w <code>config_summary</code> są tylko wskazówką: <code>rocksdb_keys</code> jest wartością szacunkową, a zgodne liczby nie dowodzą, że indeks zawiera właściwe dokumenty. Po pomyślnej weryfikacji zatrzymaj serwer, przywróć poprzednią wartość <code>scheduler.enabled</code>, uruchom serwer ponownie, a następnie podłącz klientów.</p>
+<h2 id="data-retention-and-hard-purge">Retencja danych i trwałe usuwanie</h2>
+<p>Usunięte wspomnienia są najpierw usuwane logicznie (oznaczane czasem <code>deleted_at</code>) i pozostają w magazynie przez okres umożliwiający odzyskanie. Po jego upływie proces trwałego usuwania usuwa je nieodwracalnie.</p>
+<pre><code class="language-toml">[retention]
+soft_delete_days = 30           # 30 dni na odzyskanie
+hard_purge_interval_secs = 86400  # proces trwałego usuwania działa codziennie
+</code></pre>
+<p><strong>Trwałe usunięcie obejmuje:</strong> dane fragmentów, embeddingi, metadane encji i relacji oraz odwołania grafu. Danych nie da się odzyskać z kopii utworzonych po trwałym usunięciu.</p>
+<p><strong>Aby odzyskać logicznie usunięte wspomnienie przed trwałym usunięciem:</strong> przywróć kopię wykonaną przed usunięciem.</p>
+<h2 id="recovery-metrics">Parametry odzyskiwania</h2>
+<table>
+<thead>
+<tr>
+<th>Parametr</th>
+<th>Wartość</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RPO (docelowy punkt odzyskiwania)</td>
+<td>12 godzin (odstęp między kopiami)</td>
+</tr>
+<tr>
+<td>RTO (docelowy czas odzyskiwania)</td>
+<td>Zależy od ilości danych, szybkości dysku, odbudowy i weryfikacji; zmierz dla swojego wdrożenia.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="notes-for-container-platforms-eg-railway">Uwagi dla platform kontenerowych (np. Railway)</h2>
+<ul>
+<li>Trwały wolumen zamontowany w <code>/data</code> przetrwa ponowne wdrożenia</li>
+<li>Kopie znajdują się na tym samym wolumenie — jest to pojedynczy punkt awarii</li>
+<li>Aby przechowywać kopię poza serwerem, korzystaj z migawek wolumenu dostępnych na platformie lub okresowo pobieraj checkpoint</li>
+<li>Przed każdą destrukcyjną migracją sprawdź, czy istnieje aktualna kopia zapasowa</li>
+</ul></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/pl/backup-and-restore.md">Edytuj na GitHubie</a></span></div></main></div> <script defer="" src="/_vercel/insights/script.js"></script>
+</body></html>

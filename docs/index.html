@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Loomem — one memory for every AI tool</title>
-<link rel="canonical" href="https://loomem.ai/" />
+<link rel="canonical" href="https://loomem.ai/"/>
 <meta name="description" content="One memory. Every AI tool. Loomem is the open-source context layer for your AI agents — it keeps the facts, decisions, and history they need and serves them to Claude, ChatGPT, Codex, or any MCP client. Local-first, Apache-2.0." />
 
 <meta property="og:type" content="website" />
@@ -465,6 +465,10 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
 @media(max-width:760px){.loop{grid-template-columns:1fr 1fr}}
 @media(max-width:460px){.loop{grid-template-columns:1fr}}
 </style>
+<link rel="stylesheet" href="/assets/locale.css"/>
+<script src="/assets/locale.js"></script>
+<link rel="alternate" hreflang="en" href="https://loomem.ai/"/>
+<link rel="alternate" hreflang="pl" href="https://loomem.ai/pl/"/>
 </head>
 <body>
 
@@ -484,7 +488,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <button class="navtoggle" id="navToggle" aria-label="Open menu" aria-expanded="false" aria-controls="mobileMenu">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       </button>
-    </nav>
+    <span class="locale-switch" role="group" aria-label="Language"><a href="/pl/" data-language="pl" lang="pl" aria-label="Polski">PL</a><a href="/" data-language="en" lang="en" aria-label="English" aria-current="page">EN</a></span></nav>
   </div>
   <div class="mobilemenu" id="mobileMenu">
     <a href="#features">What it does</a>
@@ -734,7 +738,7 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
     <div class="sec-head">
       <div class="sec-eyebrow">Quickstart</div>
       <h2 class="sec">From nothing to your assistant remembering things</h2>
-      <p class="sec-lead">On macOS or Linux. Each step is independent — run them in order.</p>
+      <p class="sec-lead">On macOS or Linux. Follow these steps in order.</p>
     </div>
     <div class="steps">
       <div class="step">
@@ -756,9 +760,10 @@ footer{border-top:1px solid var(--lm-ink-200);background:var(--lm-surface);paddi
       <div class="step">
         <div class="num">3</div>
         <div class="body">
-          <h4>Start the server</h4>
-          <p>Config is already seeded in <code>~/.loomem</code>.</p>
-          <div class="code">cd ~/.loomem && loomem-server</div>
+          <h4>Download the model and start the server</h4>
+          <p>The installer prepares the configuration in <code>~/.loomem</code>, but the local embedding model must be downloaded separately, even in keyless mode. Replace the placeholder with your OpenAI API key for the default LLM-backed features:</p>
+          <div class="code">curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/scripts/fetch-embedding-model.sh | sh<br>export OPENAI_API_KEY="YOUR_OPENAI_API_KEY"<br>cd ~/.loomem &amp;&amp; loomem-server</div>
+          <p>To start without an LLM key, use <code>export LOOMEM_ALLOW_KEYLESS=1</code> instead of the key. <code>memory_store</code> and search work, but LLM extraction and dreaming are unavailable. <code>memory_ingest</code> can still save a sanitized source before returning an extraction error.</p>
         </div>
       </div>
       <div class="step">

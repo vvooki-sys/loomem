@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+
+<html lang="pl">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Narzędzia MCP — dokumentacja Loomem</title>
+<meta content="The Loomem MCP tool set: memory_search, memory_store, memory_ingest and the rest of the memory_* tools any MCP client uses to read and write your context." name="description"/>
+<link rel="canonical" href="https://loomem.ai/pl/guide/mcp-tools.html"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&amp;family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0.05' y1='0' x2='0.95' y2='1'%3E%3Cstop offset='0' stop-color='%23EE9913'/%3E%3Cstop offset='0.28' stop-color='%23F7756F'/%3E%3Cstop offset='0.52' stop-color='%23B86ED2'/%3E%3Cstop offset='0.74' stop-color='%23667CE6'/%3E%3Cstop offset='1' stop-color='%231684DC'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cg fill='none' stroke='url(%23g)' stroke-linecap='round'%3E%3Ccircle cx='100' cy='100' r='77' stroke-width='13' stroke-dasharray='404 80' transform='rotate(-18 100 100)'/%3E%3Ccircle cx='100' cy='100' r='56' stroke-width='13' stroke-dasharray='294 62' transform='rotate(150 100 100)'/%3E%3Ccircle cx='100' cy='100' r='36' stroke-width='12' stroke-dasharray='170 56' transform='rotate(40 100 100)'/%3E%3C/g%3E%3C/svg%3E" rel="icon"/>
+<style>
+:root{
+  --lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;--lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;--lm-gold-900:#5E3A11;
+  --lm-blue-300:#63B5F0;--lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;--lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-200:#DED7C8;--lm-ink-100:#EFE9DD;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;--lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave:linear-gradient(108deg,#EE9913 0%,#F4AC2E 18%,#F7756F 38%,#B86ED2 58%,#63B5F0 80%,#1684DC 100%);--lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#F7756F 30%,#B86ED2 55%,#667CE6 75%,#1684DC 100%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);line-height:1.62;-webkit-font-smoothing:antialiased;font-size:16px}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.82);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
+.brand:hover{text-decoration:none}
+.brand svg{width:26px;height:26px;flex:none}
+.lm-ring circle{transform-box:view-box;transform-origin:100px 100px}
+.lm-ring .r1{animation:lm-spin 32s linear infinite}
+.lm-ring .r2{animation:lm-spin-rev 24s linear infinite}
+.lm-ring .r3{animation:lm-spin 18s linear infinite}
+@keyframes lm-spin{to{transform:rotate(360deg)}}
+@keyframes lm-spin-rev{to{transform:rotate(-360deg)}}
+@media (prefers-reduced-motion:reduce){.lm-ring circle{animation:none}.lm-ring .r1{transform:rotate(-18deg)}.lm-ring .r2{transform:rotate(150deg)}.lm-ring .r3{transform:rotate(40deg)}}
+.wm-word{white-space:nowrap}
+@supports ((-webkit-background-clip:text) or (background-clip:text)){.wm{background-image:linear-gradient(100deg,#CE7D08 0%,#EE9913 15%,#F88546 18%,#F7756F 21%,#EB6D95 24%,#D66BB7 27%,#B86ED2 30%,#9474E2 33%,#667CE6 36%,#1684DC 39%,#1684DC 61%,#667CE6 64%,#9474E2 67%,#B86ED2 70%,#D66BB7 73%,#EB6D95 76%,#F7756F 79%,#F88546 82%,#EE9913 85%,#CE7D08 100%);background-size:200% 100%;background-position:0% 50%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:wm-flow 12s ease-in-out infinite alternate}}
+@keyframes wm-flow{to{background-position:100% 50%}}
+@media (prefers-reduced-motion:reduce){.wm{animation:none}}
+@media (forced-colors: active){.wm{background:none;-webkit-background-clip:border-box;background-clip:border-box;color:inherit;animation:none}}
+.brand .tag{font-family:var(--lm-font-sans);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--lm-ink-400);border:1px solid var(--lm-ink-200);border-radius:999px;padding:2px 9px;margin-left:2px}
+.topnav{display:flex;align-items:center;gap:22px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900);text-decoration:none}
+.doc-wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px);display:grid;grid-template-columns:248px 1fr;gap:52px;align-items:start}
+.doc-side{position:sticky;top:88px;align-self:start;max-height:calc(100vh - 110px);overflow-y:auto;padding:26px 0}
+.doc-side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--lm-ink-400);font-weight:600;margin:20px 12px 8px}
+.doc-side .grp:first-child{margin-top:0}
+.doc-side a{display:block;font-size:14px;color:var(--lm-ink-600);padding:7px 12px;border-radius:8px;font-weight:500}
+.doc-side a:hover{background:var(--lm-surface-sunk);color:var(--lm-ink-900);text-decoration:none}
+.doc-side a.active{background:var(--lm-surface-cool);color:var(--lm-blue-700);font-weight:600}
+.doc-main{min-width:0;max-width:760px;padding:48px 0 96px}
+.doc-eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-gold-700);margin-bottom:10px}
+.doc-content h1{font-family:var(--lm-font-display);font-size:2.5rem;font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 22px}
+.doc-content h2{font-family:var(--lm-font-display);font-size:1.6rem;font-weight:600;letter-spacing:-.01em;line-height:1.25;margin:44px 0 14px}
+.doc-content h3{font-size:1.22rem;font-weight:600;margin:30px 0 10px;letter-spacing:-.01em}
+.doc-content h4{font-size:1.02rem;font-weight:600;margin:22px 0 8px}
+.doc-content p{margin:0 0 16px;color:var(--lm-ink-700)}
+.doc-content ul,.doc-content ol{margin:0 0 18px;padding-left:24px;color:var(--lm-ink-700)}
+.doc-content li{margin:7px 0}
+.doc-content li>ul,.doc-content li>ol{margin:7px 0}
+.doc-content code{font-family:var(--lm-font-mono);font-size:.87em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1.5px 6px;border-radius:5px;color:var(--lm-ink-800)}
+.doc-content pre{background:var(--lm-weave) no-repeat top center/100% 3px,var(--lm-ink-800);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;overflow-x:auto;margin:0 0 18px;box-shadow:var(--lm-shadow-sm)}
+.doc-content pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;line-height:1.65}
+.doc-content blockquote{border-left:3px solid var(--lm-gold-400);background:var(--lm-surface-warm);padding:12px 18px;border-radius:0 var(--lm-radius-md) var(--lm-radius-md) 0;margin:0 0 18px;color:var(--lm-ink-700)}
+.doc-content blockquote p:last-child{margin:0}
+.doc-content table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;display:block;overflow-x:auto}
+.doc-content thead{background:var(--lm-surface-sunk)}
+.doc-content th{text-align:left;padding:9px 12px;border-bottom:2px solid var(--lm-ink-200);color:var(--lm-ink-700);font-weight:600;white-space:nowrap}
+.doc-content td{padding:9px 12px;border-bottom:1px solid var(--lm-ink-100);color:var(--lm-ink-700);vertical-align:top}
+.doc-content hr{border:none;border-top:1px solid var(--lm-ink-200);margin:34px 0}
+.doc-content a{font-weight:500}
+.doc-content h2 code,.doc-content h3 code,.doc-content h4 code{font-size:.86em;background:var(--lm-surface-sunk)}
+.doc-content img{max-width:100%}
+.doc-foot{border-top:1px solid var(--lm-ink-200);margin-top:40px;padding-top:22px;font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+/* hub */
+.hub-head{padding:56px 0 8px;max-width:720px}
+.hub-head h1{font-family:var(--lm-font-display);font-size:clamp(2.2rem,4vw,3rem);font-weight:600;letter-spacing:-.02em;line-height:1.1;margin-bottom:14px}
+.hub-head p{font-size:1.0625rem;color:var(--lm-ink-500);line-height:1.6}
+.hub-grp{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-ink-400);font-weight:600;margin:40px 0 16px}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.hub-card{display:block;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs);transition:all 180ms var(--lm-ease)}
+.hub-card:hover{box-shadow:var(--lm-shadow-sm);transform:translateY(-2px);text-decoration:none;border-color:var(--lm-blue-300)}
+.hub-card h3{font-size:1.05rem;font-weight:600;color:var(--lm-ink-900);margin-bottom:5px}
+.hub-card span{font-size:13.5px;color:var(--lm-ink-500)}
+@media(max-width:820px){.doc-wrap{grid-template-columns:1fr;gap:0}.doc-side{position:static;max-height:none;border-bottom:1px solid var(--lm-ink-200);padding:16px 0}.doc-main{padding-top:28px}}
+</style>
+
+<link rel="stylesheet" href="/assets/locale.css"/>
+<script src="/assets/locale.js"></script>
+<link rel="alternate" hreflang="en" href="https://loomem.ai/guide/mcp-tools.html"/>
+<link rel="alternate" hreflang="pl" href="https://loomem.ai/pl/guide/mcp-tools.html"/>
+</head>
+<body>
+<header class="topbar"><div class="wrap inner">
+<a class="brand" href="/pl/"><svg aria-hidden="true" class="lm-ring" fill="none" viewbox="0 0 200 200"><defs><lineargradient id="lmRingHdr" x1="0.05" x2="0.95" y1="0" y2="1"><stop offset="0" stop-color="#EE9913"></stop><stop offset="0.28" stop-color="#F7756F"></stop><stop offset="0.52" stop-color="#B86ED2"></stop><stop offset="0.74" stop-color="#667CE6"></stop><stop offset="1" stop-color="#1684DC"></stop></lineargradient></defs><g fill="none" stroke="url(#lmRingHdr)" stroke-linecap="round"><circle class="r1" cx="100" cy="100" r="77" stroke-dasharray="404 80" stroke-width="15"></circle><circle class="r2" cx="100" cy="100" r="56" stroke-dasharray="294 62" stroke-width="15"></circle><circle class="r3" cx="100" cy="100" r="36" stroke-dasharray="170 56" stroke-width="14"></circle></g></svg><span class="wm-word">loo<span class="wm">mem</span></span><span class="tag">Dokumentacja</span></a>
+<nav class="topnav"><a href="/pl/">Strona główna</a><a href="/pl/guide/">Dokumentacja</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a><span class="locale-switch" role="group" aria-label="Język"><a href="/pl/guide/mcp-tools.html" data-language="pl" lang="pl" aria-label="Polski" aria-current="page">PL</a><a href="/guide/mcp-tools.html" data-language="en" lang="en" aria-label="English">EN</a></span></nav>
+</div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="/pl/guide/" style="font-weight:600;margin-bottom:6px;display:block">← Dokumentacja</a><div class="grp">Dokumentacja</div><a href="/pl/guide/quick-start.html">Szybki start</a><a href="/pl/guide/installation.html">Instalacja</a><a href="/pl/guide/configuration.html">Konfiguracja</a><a href="/pl/guide/api-reference.html">Dokumentacja API</a><a class="active" href="/pl/guide/mcp-tools.html">Narzędzia MCP</a><div class="grp">Projekt</div><a href="/pl/guide/architecture.html">Architektura</a><a href="/pl/guide/deployment.html">Wdrożenie</a><a href="/pl/guide/security.html">Bezpieczeństwo</a><a href="/pl/guide/backup-and-restore.html">Backup &amp; restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Dokumentacja</div><article class="doc-content"><h1 id="mcp-tools-reference">Narzędzia MCP — dokumentacja</h1>
+<p>Loomem udostępnia narzędzia <code>memory_*</code> za pośrednictwem protokołu Model Context Protocol. Claude i inne klienty MCP używają ich do pracy z pamięcią. Serwer MCP przedstawia się jako <code>loomem-memory</code>.</p>
+<blockquote>
+<p><strong>Synchronizacja z klientami:</strong> Skrócona wersja wysyłana do klientów MCP znajduje się w <code>loomem-server/mcp_instructions.md</code> (jest wbudowywana podczas kompilacji). Aby zmienić treść widoczną dla klientów, edytuj ten plik.</p>
+</blockquote>
+<hr/>
+<h2 id="scope-model">Model zakresów</h2>
+<p>Dane znajdują się w <strong>strumieniach</strong>. Różne narzędzia działają w różnych zakresach:</p>
+<table>
+<thead>
+<tr>
+<th>Zakres</th>
+<th>Narzędzia</th>
+<th>Znaczenie</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>W obrębie strumienia</strong> (izolowany)</td>
+<td><code>memory_store</code>, <code>memory_search</code>, <code>memory_ingest</code>, <code>memory_context</code>, <code>memory_profile</code>, <code>memory_dream</code>, <code>memory_reflect</code>, <code>memory_associate</code>, <code>memory_stats</code></td>
+<td>Odczytuje i zapisuje dane wyłącznie w aktywnym strumieniu</td>
+</tr>
+<tr>
+<td><strong>Globalny</strong> (cały silnik)</td>
+<td><code>memory_status</code>, <code>memory_namespaces</code></td>
+<td>Zwraca informacje o systemie</td>
+</tr>
+<tr>
+<td><strong>W obrębie strumienia</strong> (izolowany graf)</td>
+<td><code>memory_graph</code></td>
+<td>Graf wiedzy jest izolowany dla każdego strumienia</td>
+</tr>
+<tr>
+<td><strong>Według ID fragmentu</strong></td>
+<td><code>memory_history</code>, <code>memory_delete</code>, <code>memory_feedback</code></td>
+<td>Działa na konkretnym fragmencie</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Najważniejsze pojęcia:</strong>
+- <strong>Strumień</strong> — granica izolacji danych. Wbudowany strumień domyślny to <code>__user_default__</code>.
+- <strong>Przestrzeń nazw</strong> — czytelna nazwa przypisana do identyfikatora strumienia (np. <code>personal</code> → <code>100</code>). Konfiguruje się ją w <code>config.toml</code>, a wyświetla za pomocą <code>memory_namespaces</code>.</p>
+<hr/>
+<h2 id="storing-memories">Zapisywanie wspomnień</h2>
+<h3 id="memory_store">memory_store</h3>
+<p>Zapisz pojedynczy, potwierdzony fakt.</p>
+<p><strong>Używaj do:</strong> jawnych deklaracji użytkownika, potwierdzonych decyzji i faktów biograficznych.
+<strong>Nie używaj do:</strong> surowego tekstu rozmowy — zamiast tego użyj <code>memory_ingest</code> .</p>
+<table>
+<thead>
+<tr>
+<th>Parametr</th>
+<th>Typ</th>
+<th>Wymagany</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>content</code></td>
+<td>string</td>
+<td>tak</td>
+<td>Fakt do zapisania</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>string</td>
+<td>nie</td>
+<td>Pochodzenie (np. „user-stated”)</td>
+</tr>
+<tr>
+<td><code>subject</code></td>
+<td>string</td>
+<td>nie</td>
+<td>Nazwa encji (osoba, projekt)</td>
+</tr>
+<tr>
+<td><code>metadata</code></td>
+<td>object</td>
+<td>nie</td>
+<td>Niestandardowe metadane JSON</td>
+</tr>
+<tr>
+<td><code>supersedes</code></td>
+<td>string</td>
+<td>nie</td>
+<td>Identyfikator fragmentu zastępowanego przez ten fakt. Łączy wersje: stary fragment staje się wersją zastąpioną (ukrytą w <code>memory_search</code> chyba że użyto <code>include_superseded</code>), a nowy jest aktualny. Wskazany fragment musi być aktualną wersją swojego łańcucha; w przeciwnym razie wywołanie zwraca błąd i wskazuje nowszą wersję.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Przykład:</strong></p>
+<pre><code>memory_store(
+  content: "Prefers Cursor over VSCode for AI features",
+  subject: "Alice",
+  source: "user-stated"
+)
+</code></pre>
+<p><strong>Działanie:</strong>
+- Preferencje automatycznie otrzymują <code>importance: 2.0</code>
+- Uruchamiana jest ekstrakcja encji (słownik i kolejka LLM)
+- Wykrywanie sprzeczności sprawdza istniejące wspomnienia
+- Przy użyciu <code>supersedes</code>, potwierdzenie ma postać <code>Stored: "..." (id: &lt;uuid&gt;, supersedes: &lt;old uuid&gt;)</code> a <code>memory_history</code> pokazuje obie wersje
+- Embedding jest generowany asynchronicznie</p>
+<hr/>
+<h3 id="memory_ingest">memory_ingest</h3>
+<p>Wyodrębnij z rozmowy uporządkowaną wiedzę przy użyciu LLM. <strong>Preferowana metoda</strong> zapisywania treści zawierających wiele faktów.</p>
+<table>
+<thead>
+<tr>
+<th>Parametr</th>
+<th>Typ</th>
+<th>Wymagany</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>content</code></td>
+<td>string</td>
+<td>tak</td>
+<td>Transkrypcja rozmowy</td>
+</tr>
+<tr>
+<td><code>conversation_date</code></td>
+<td>string</td>
+<td>nie</td>
+<td>Znana data rozmowy w formacie <code>YYYY-MM-DD</code> ; jest to czas obserwacji, a nie zamiennik nieznanej daty zdarzenia.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Przykład:</strong></p>
+<pre><code>memory_ingest(
+  content: "User: I switched from VSCode to Cursor last week. Also, the dashboard deadline is April 15th.",
+  conversation_date: "2026-04-02"
+)
+</code></pre>
+<p><strong>Co się dzieje:</strong></p>
+<ol>
+<li>Najpierw oczyszczona transkrypcja jest zapisywana jako trwałe źródło pomocnicze, które można przeszukiwać. Treść jest oczyszczana do osiągnięcia punktu stałego przed zapisem: dane, które nadal zmieniają się po czterech przebiegach (np. głęboko zagnieżdżone kodowanie encji HTML), są odrzucane jako nieprawidłowe parametry i nic nie zostaje zapisane. Dzięki temu ekstrakcja zawsze widzi dokładnie zapisany tekst.</li>
+<li><strong>Opcjonalnie</strong> (<code>[fragments] enabled = true</code>, domyślnie wyłączone — zobacz <a href="/pl/guide/configuration.html#fragments">Konfiguracja</a>): bezpośrednio po źródle, a przed ekstrakcją, zapisywany jest jeden fragment na każdą wypowiedź w rozmowie. Każdy zawiera rolę autora, datę rozmowy i dokładny zakres bajtów w źródle. Tekst odpowiedzi kończy się wtedy komunikatem <code> Stored N fragments.</code> — albo <code> Stored N fragments, M fragment writes failed.</code>, <code> Stored N fragments, M fragments skipped (sanitizer would rewrite the slice).</code>, albo <code> Stored 0 fragments (segmentation failed: …).</code> / <code> Stored 0 fragments (segmentation skipped: …).</code> gdy wystąpił problem. Zapis fragmentów nigdy nie blokuje ekstrakcji faktów; przy wyłączonych fragmentach odpowiedź pozostaje bez zmian.</li>
+<li>Gdy ekstrakcja jest włączona, LLM wyodrębnia fakty określonych typów powiązane ze źródłem, wraz z podmiotem, poziomem pewności, opcjonalnym przypisaniem wypowiedzi i ustalonymi datami zdarzeń.</li>
+<li>Odpowiedź zawiera identyfikator źródła także wtedy, gdy ekstrakcja się nie powiedzie, brakuje danych uwierzytelniających lub nie znaleziono faktów. Częściowe zapisy faktów są zgłaszane; źródło zostaje zachowane.</li>
+</ol>
+<p>Ta ścieżka przetwarzania nie usuwa automatycznie duplikatów ani nie zastępuje istniejących faktów. Ponowne przetworzenie tworzy kolejne źródło. Treść i pochodzenie powiązane ze źródłem są niezmienne: aby poprawić rozmowę, usuń jej identyfikator źródła i przetwórz poprawioną transkrypcję.</p>
+<p>Data rozmowy stanowi punkt odniesienia dla wyrażeń względnych tylko wtedy, gdy jest znana; nieznana data zdarzenia pozostaje nieznana. Brak daty rozmowy nie upoważnia do używania czasu zapisu do ustalania dat względnych. Nowe rekordy przedstawiają znane zdarzenia jako <code>[event:YYYY-MM-DD]</code>, obserwacje jako <code>[observed:YYYY-MM-DD]</code>, a czas zapisu jako <code>[recorded:YYYY-MM-DD]</code>. Dawne oznaczenia <code>[YYYY-MM-DD]</code> pozostają bez zmian i nie ustalają daty zdarzenia. W rekordach z rozpoznanym wersjonowanym kontraktem przetwarzania wyszukiwanie w przedziale dat wymaga znanej daty zdarzenia; nieznana data nie pasuje do przedziału. Daty rozmowy i zapisu nie zastępują czasu zdarzenia. Dawne rekordy bez tego kontraktu zachowują istniejące daty zdarzeń oraz zapasowe użycie czasu zapisu, gdy nie mają daty. Przy uruchomieniu starsze wersjonowane wpisy indeksu są naprawiane w miejscu bez resetowania indeksu, a w razie błędu naprawy uruchomienie zostaje przerwane. Oddzielny filtr valid_at zachowuje swoją semantykę ważności i historii. Jeśli wyszukiwanie filtrowane datą pomija źródło o nieznanej dacie zdarzenia, ponów je bez filtra czasu albo pobierz zwrócony identyfikator źródła.</p>
+<p><strong>Przykładowy wynik (ilustracyjny — dokładna ekstrakcja zależy od oceny LLM):</strong>
+- <code>PreferenceOrDecision</code>: „Użytkownik woli Cursor od VSCode” (podmiot: użytkownik, pewność: 0.95)
+- <code>ProjectState</code>: „Termin dashboardu to 2026-04-15” (podmiot: dashboard, pewność: 0.90)</p>
+<p>Liczba wyodrębnionych faktów, ich sformułowanie i poziomy pewności zależą od danych wejściowych. Traktuj przykłady jako orientacyjne, a nie gwarantowany wynik.</p>
+<hr/>
+<h2 id="searching-memories">Wyszukiwanie wspomnień</h2>
+<h3 id="memory_search">memory_search</h3>
+<p>Wyszukiwanie hybrydowe we wszystkich poziomach pamięci.</p>
+<table>
+<thead>
+<tr>
+<th>Parametr</th>
+<th>Typ</th>
+<th>Wymagany</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>query</code></td>
+<td>string</td>
+<td>tak</td>
+<td>Zapytanie wyszukiwania</td>
+</tr>
+<tr>
+<td><code>top_k</code></td>
+<td>int</td>
+<td>nie</td>
+<td>Maksymalna liczba wyników (domyślnie: 10)</td>
+</tr>
+<tr>
+<td><code>time_filter</code></td>
+<td>string</td>
+<td>nie</td>
+<td>"today", "this_week", "this_month"</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Przykład:</strong></p>
+<pre><code>memory_search(query: "What IDE does the user prefer?")
+</code></pre>
+<p><strong>Działanie:</strong>
+- Równolegle przeszukuje BM25, wektory i graf
+- Uwzględnia spadek w czasie (nowsze wspomnienia uzyskują wyższy wynik)
+- Usuwa niemal identyczne wyniki
+- Oznacza zastąpione fakty jako <code>[UPDATED]</code>
+- Dla zapytań agregujących („ile...”) zwiększa <code>top_k</code> do 30
+- Każdy wiersz wyniku kończy się wartością <code>chunk_id</code> — można jej bezpośrednio użyć w <code>memory_history</code>, <code>memory_delete</code>, lub <code>memory_feedback</code>
+- <strong>Opcjonalnie</strong> (<code>[search] evidence_fields = true</code>, domyślnie wyłączone — zobacz <a href="/pl/guide/configuration.html#search">Konfiguracja</a>): każdy wiersz zawiera przed wynikiem ujęty w nawiasy znacznik dowodowy — <code>[author: user; conversation: YYYY-MM-DD; event: YYYY-MM-DD (resolved|unknown); source: &lt;id&gt;]</code> — wymieniający tylko elementy znane dla danego wspomnienia (wiersz bez żadnego z nich pozostaje bez zmian). Zakres bajtów źródła (<code>byte_start</code>/<code>byte_end</code>) jest udostępniany tylko przez interfejs REST.</p>
+<hr/>
+<h3 id="memory_context">memory_context</h3>
+<p>Wczytaj istotny kontekst na początku zadania. Obowiązuje budżet tokenów, więc nie zapełni on okna kontekstowego.</p>
+<table>
+<thead>
+<tr>
+<th>Parametr</th>
+<th>Typ</th>
+<th>Wymagany</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>query</code></td>
+<td>string</td>
+<td>nie</td>
+<td>Temat (np. „projekt dashboardu”)</td>
+</tr>
+<tr>
+<td><code>budget_tokens</code></td>
+<td>int</td>
+<td>nie</td>
+<td>Maksymalna liczba tokenów (domyślnie: 4000)</td>
+</tr>
+<tr>
+<td><code>sections</code></td>
+<td>string[]</td>
+<td>nie</td>
+<td>Które sekcje: <code>profile</code>, <code>relevant</code>, <code>recent</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Przykład:</strong></p>
+<pre><code>memory_context(query: "Loomem project", budget_tokens: 2000)
+</code></pre>
+<p><strong>Podział sekcji:</strong>
+- <code>profile</code> (20%) — kim jest użytkownik, trwałe fakty
+- <code>relevant</code> (50%) — wspomnienia pasujące do zapytania
+- <code>recent</code> (30%) — aktywność z ostatnich 7 dni</p>
+<p><strong>Kiedy wywołać:</strong> Raz na początku rozmowy, gdy temat wymaga wiedzy kontekstowej.</p>
+<hr/>
+<h3 id="memory_profile">memory_profile</h3>
+<p>Pobierz syntetyczny profil użytkownika.</p>
+<table>
+<thead>
+<tr>
+<th>Parametr</th>
+<th>Typ</th>
+<th>Wymagany</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>format</code></td>
+<td>string</td>
+<td>nie</td>
+<td><code>"markdown"</code> lub <code>"json"</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Zwraca:</strong>
+- <code>stable_facts</code> — trwałe fakty (maks. 30)
+- <code>recent_context</code> — ostatnie 7 dni (maks. 15)
+- <code>summary</code> — podsumowanie w 2–3 zdaniach</p>
+<p>Profil jest generowany przez LLM i buforowany przez godzinę.</p>
+<hr/>
+<h3 id="memory_associate">memory_associate</h3>
+<p>Odkryj nieoczywiste skojarzenia — wspomnienia zaskakująco istotne, choć na pierwszy rzut oka niepowiązane — przez przechodzenie grafu, współwystępowanie w czasie i bliskość semantyczną.</p>
+<p><strong>Używaj do:</strong> nieoczekiwanych powiązań i kreatywnych połączeń między tematami (np. „jakie wcześniejsze projekty wiążą się z tym nowym pomysłem?”). Użyj <code>memory_search</code> do bezpośredniego wyszukiwania faktów.</p>
+<p><strong>Zwraca:</strong> numerowaną listę skojarzeń z mechanizmem i wynikiem. Jeśli lista jest pusta, grupowanie mogło się jeszcze nie odbyć — najpierw wywołaj <code>memory_dream</code> .</p>
+<hr/>
+<h2 id="memory-maintenance">Utrzymanie pamięci</h2>
+<h3 id="memory_dream">memory_dream</h3>
+<p>Uruchom konsolidację pamięci. Podobnie jak sen dla mózgu, łączy, usuwa duplikaty i porządkuje wspomnienia.</p>
+<p><strong>Brak parametrów.</strong></p>
+<p><strong>Co się dzieje:</strong>
+1. Grupuje wspomnienia według podmiotu
+2. Łączy powiązane obserwacje w zwięzłe podsumowania
+3. Rozstrzyga sprzeczności (wygrywają nowsze fakty)
+4. Tworzy skompresowane fragmenty L1 z surowych zdarzeń L0
+5. Przestrzega limitu kosztów (domyślnie 0,10 USD na uruchomienie)</p>
+<p><strong>Zwraca:</strong></p>
+<pre><code>{
+  "chunks_processed": 50,
+  "groups_found": 12,
+  "facts_merged": 8,
+  "contradictions_resolved": 2,
+  "cost_usd": 0.04,
+  "duration_ms": 3200
+}
+</code></pre>
+<p><strong>Kiedy wywołać:</strong>
+- Po długiej, produktywnej sesji
+- Gdy użytkownik prosi o „uporządkowanie” lub „konsolidację” pamięci
+- Automatycznie po 30 minutach bezczynności</p>
+<hr/>
+<h3 id="memory_reflect">memory_reflect</h3>
+<p>Przeanalizuj jakość pamięci i uzyskaj sugestie ulepszeń.</p>
+<table>
+<thead>
+<tr>
+<th>Parametr</th>
+<th>Typ</th>
+<th>Wymagany</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max_chunks</code></td>
+<td>int</td>
+<td>nie</td>
+<td>Liczba fragmentów do analizy</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Zwraca:</strong></p>
+<pre><code>{
+  "quality_score": 78,
+  "breakdown": {
+    "by_level": { "L0": 45, "L1": 62 },
+    "with_extraction_meta": "87%",
+    "with_subject": "72%"
+  },
+  "suggestions": [
+    "28 chunks lack subject metadata — run memory_dream",
+    "5 potential contradictions detected"
+  ]
+}
+</code></pre>
+<p><strong>Wzór oceny jakości:</strong> <code>has_meta*0.4 + has_subject*0.3 + structured*0.3</code></p>
+<p><strong>Kiedy wywołać:</strong> Okresowo (raz w tygodniu) lub gdy jakość pamięci wydaje się niska.</p>
+<hr/>
+<h3 id="memory_graph">memory_graph</h3>
+<p>Przeglądaj powiązania encji w grafie wiedzy. <strong>Izolacja według strumienia</strong> — każdy użytkownik widzi tylko własne encje i powiązania.</p>
+<table>
+<thead>
+<tr>
+<th>Parametr</th>
+<th>Typ</th>
+<th>Wymagany</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>entity</code></td>
+<td>string</td>
+<td>tak</td>
+<td>Nazwa encji do zbadania</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Przykład:</strong></p>
+<pre><code>memory_graph(entity: "Cursor")
+</code></pre>
+<p><strong>Zwraca:</strong> szczegóły encji (nazwa, typ, aliasy), połączenia z innymi encjami i liczbę powiązanych fragmentów. Widoczne są tylko encje i krawędzie w aktywnym strumieniu.</p>
+<p>Nowe nazwy grafu, aliasy i relacje są powiązane z tworzącym je wspomnieniem, strumieniem, encją lub krawędzią oraz bieżącą generacją treści przy użyciu skonfigurowanego szyfrowania danych w spoczynku. Wyszukiwanie i wyświetlanie każdego wkładu wymagają aktywnego potwierdzającego wspomnienia w bieżącym strumieniu; alias usuniętej rozmowy nie może korzystać z potwierdzenia innego wspomnienia tej samej encji. Starsze dane grafu wnoszą jedynie jawnie zapisane nazwy encji dla wspomnień i krotki relacji. Niepotwierdzone aliasy i połączenia pozostają ukryte do ponownej ekstrakcji, a dawne typy encji mogą pojawić się jako Unknown; podobieństwo tekstu źródłowego nie służy do odtwarzania brakującego pochodzenia.</p>
+<p>Przydatne do sprawdzenia, „kto nad czym pracuje”, „jakie technologie są powiązane” itp.</p>
+<hr/>
+<h3 id="memory_history">memory_history</h3>
+<p>Prześledź, jak fakt zmieniał się w czasie (łańcuch wersji).</p>
+<table>
+<thead>
+<tr>
+<th>Parametr</th>
+<th>Typ</th>
+<th>Wymagany</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chunk_id</code></td>
+<td>string</td>
+<td>tak</td>
+<td>Fragment do prześledzenia</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>int</td>
+<td>nie</td>
+<td>Maksymalna liczba zwracanych wersji</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Przykład:</strong></p>
+<pre><code>memory_history(chunk_id: "abc-123")
+</code></pre>
+<p><strong>Zwraca:</strong> łańcuch wersji pokazujący zmiany faktu:</p>
+<pre><code>v1 (2026-03-15): "User uses VSCode"        ← superseded
+v2 (2026-04-01): "User uses Cursor"         ← current
+</code></pre>
+<p><strong>Kiedy wywołać:</strong> gdy użytkownik pyta „czego używałem przed X?” albo podczas badania sprzecznych informacji.</p>
+<hr/>
+<h3 id="memory_delete">memory_delete</h3>
+<p>Oznacz konkretne wspomnienie jako usunięte według ID (soft delete). Usunięcie rozpoznanego źródła przetwarzania oznacza również powiązane z nim rekordy potomne w tym samym strumieniu jako usunięte przed oczyszczeniem indeksu. Usunięcie pojedynczego faktu pochodnego zachowuje jego źródło i inne fakty; odpowiedź podaje ID zachowanego źródła. Usuń to ID, aby usunąć rozmowę i powiązane wspomnienia z wyników wyszukiwania.</p>
+<p>Odpowiedź wskazująca częściowe oczyszczenie wymaga ponowienia. Treści oznaczone jako usunięte podlegają istniejącym zasadom odzyskiwania i usuwania; nie oznacza to natychmiastowego fizycznego wymazania ani wyszukania każdej semantycznej kopii. Niepowiązane kopie mogą pozostać. Nazwy, aliasy i połączenia grafu pozostają widoczne tylko wtedy, gdy mają własne aktywne wspomnienia potwierdzające.</p>
+<table>
+<thead>
+<tr>
+<th>Parametr</th>
+<th>Typ</th>
+<th>Wymagany</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chunk_id</code></td>
+<td>string</td>
+<td>tak</td>
+<td>Wspomnienie do usunięcia</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Ważne:</strong> Nigdy nie usuwaj bez potwierdzenia użytkownika.</p>
+<hr/>
+<h3 id="memory_feedback">memory_feedback</h3>
+<p>Oceń przydatność fragmentu pamięci po zadaniu, przekazując sygnał wzmacniający do systemu rankingowego.</p>
+<table>
+<thead>
+<tr>
+<th>Parametr</th>
+<th>Typ</th>
+<th>Wymagany</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chunk_id</code></td>
+<td>string</td>
+<td>tak</td>
+<td>Fragment do oceny (z wiersza wyniku <code>memory_search</code> lub ID zwrócone przez <code>memory_store</code> / <code>memory_ingest</code>)</td>
+</tr>
+<tr>
+<td><code>usefulness</code></td>
+<td>int</td>
+<td>tak</td>
+<td>0 (nieprzydatny) – 4 (kluczowy)</td>
+</tr>
+<tr>
+<td><code>harmful</code></td>
+<td>bool</td>
+<td>nie</td>
+<td>Ustaw tylko wtedy, gdy fragment zawierał nieprawidłowe lub mylące informacje.</td>
+</tr>
+</tbody>
+</table>
+<p>Oceniaj tylko fragmenty o wyraźnej przydatności; nie jest to narzędzie do ogólnego zapisu.</p>
+<hr/>
+<h2 id="informational">Informacje</h2>
+<h3 id="memory_status">memory_status</h3>
+<p>Stan i statystyki silnika. Użyj, aby sprawdzić, czy silnik działa, ocenić pojemność lub zdiagnozować problemy, gdy inne narzędzia nie odpowiadają.</p>
+<p><strong>Brak parametrów.</strong></p>
+<p><strong>Kiedy wywołać:</strong>
+- Narzędzia zwracają nieoczekiwane błędy lub puste wyniki
+- Użytkownik pyta o stan albo pojemność pamięci
+- Przed złożoną operacją (zbiorowe przetwarzanie, dream), aby sprawdzić gotowość</p>
+<p><strong>Zwraca</strong> tekstowy blok stanu dla Twojego strumienia, np.:</p>
+<pre><code>Loomem Status: ok
+Your stream: __user_default__
+Your memories: 142
+Embeddings (this stream): warming up (118/142 indexed, 24 pending, 83%)
+Associator: active (7 clusters)
+Event log drops: 0
+Audit write failures: 0
+Undecodable chunks (last full scan): 0
+LLM failures (last 60m): extraction=0, ner=0, embedding=0, consolidation=0
+</code></pre>
+<p>Najważniejsze wskaźniki:
+- <code>Embeddings (this stream)</code> pokazuje <code>ready</code> gdy wszystkie fragmenty zostały zindeksowane; <code>warming up (... pending ...)</code> oznacza, że indeks wektorowy jest jeszcze uzupełniany, a wyszukiwanie korzysta z BM25, dopóki liczba oczekujących nie spadnie do 0.
+- <code>Associator: enabled, awaiting clustering</code> oznacza, że <code>memory_associate</code> nie ma nic do zwrócenia, dopóki nie zostanie uruchomione <code>memory_dream</code> .
+- Niezerowe wartości <code>Event log drops</code>, <code>Audit write failures</code>, lub <code>Undecodable chunks</code> sygnalizują problemy z integralnością danych, które warto zbadać.</p>
+<p>(Obiekt JSON z <code>uptime_secs</code> / <code>rocksdb_keys</code> / <code>vector</code> / <code>scheduler</code> jest zwracany przez administracyjny punkt statystyk HTTP — zobacz dokumentację API — a nie przez to narzędzie MCP.)</p>
+<hr/>
+<h3 id="memory_stats">memory_stats</h3>
+<p>Pełniejszy wykaz i rozkład użycia Twojego strumienia — uzupełnienie <code>memory_status</code> (które pokazuje tylko stan). Użyj, gdy potrzebujesz liczników i rozkładów, a nie samej kontroli stanu.</p>
+<p><strong>Brak parametrów.</strong></p>
+<p><strong>Kiedy wywołać:</strong>
+- Gdy potrzebujesz zestawienia zawartości aktywnego strumienia (sumy, typy, rozkład wieku)
+- Do audytu lub raportowania zawartości strumienia bez odczytywania pojedynczych wspomnień</p>
+<p><strong>Prywatność:</strong> zwraca wyłącznie zagregowane liczniki, znaczniki czasu i rozkłady — nigdy treść fragmentów.</p>
+<hr/>
+<h3 id="memory_namespaces">memory_namespaces</h3>
+<p>Wyświetl dostępne przestrzenie pamięci.</p>
+<p><strong>Brak parametrów.</strong></p>
+<p><strong>Zwraca:</strong></p>
+<pre><code>{
+  "namespaces": {
+    "personal": "100",
+    "work": "110"
+  }
+}
+</code></pre>
+<hr/>
+<h2 id="best-practices">Dobre praktyki</h2>
+<h3 id="do">Zalecenia</h3>
+<ul>
+<li>Używaj <code>memory_ingest</code> do rozmów (nie <code>memory_store</code>)</li>
+<li>Wywołuj <code>memory_context</code> na początku rozmowy przy odpowiednich zadaniach</li>
+<li>Uruchamiaj <code>memory_dream</code> po produktywnych sesjach</li>
+<li>Sprawdzaj <code>memory_reflect</code> okresowo</li>
+<li>Używaj <code>memory_search</code> przed udzieleniem odpowiedzi na podstawie danych treningowych</li>
+</ul>
+<h3 id="dont">Czego unikać</h3>
+<ul>
+<li>Nie zapisuj surowego tekstu rozmowy przez <code>memory_store</code></li>
+<li>Nie wywołuj <code>memory_search</code> przy każdej odpowiedzi — tylko gdy przywołanie informacji ma znaczenie</li>
+<li>Nie zapisuj tymczasowych statusów, pogawędek ani pytań bez odpowiedzi</li>
+<li>Nie zapisuj haseł, kluczy API ani innych sekretów</li>
+<li>Nie usuwaj bez potwierdzenia użytkownika</li>
+</ul></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/pl/mcp-tools.md">Edytuj na GitHubie</a></span></div></main></div> <script defer="" src="/_vercel/insights/script.js"></script>
+</body></html>

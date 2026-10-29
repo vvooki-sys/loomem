@@ -158,11 +158,15 @@ a:hover{text-decoration:underline}
   ]
 }
 </script>
+<link rel="stylesheet" href="/assets/locale.css"/>
+<script src="/assets/locale.js"></script>
+<link rel="alternate" hreflang="en" href="https://loomem.ai/guide/installation.html"/>
+<link rel="alternate" hreflang="pl" href="https://loomem.ai/pl/guide/installation.html"/>
 </head>
 <body>
 <header class="topbar"><div class="wrap inner">
 <a class="brand" href="../"><svg class="lm-ring" viewBox="0 0 200 200" fill="none" aria-hidden="true"><defs><linearGradient id="lmRingHdr" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs><g fill="none" stroke="url(#lmRingHdr)" stroke-linecap="round"><circle class="r1" cx="100" cy="100" r="77" stroke-width="15" stroke-dasharray="404 80"/><circle class="r2" cx="100" cy="100" r="56" stroke-width="15" stroke-dasharray="294 62"/><circle class="r3" cx="100" cy="100" r="36" stroke-width="14" stroke-dasharray="170 56"/></g></svg><span class="wm-word">loo<span class="wm">mem</span></span><span class="tag">Docs</span></a>
-<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
+<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a><span class="locale-switch" role="group" aria-label="Language"><a href="/pl/guide/installation.html" data-language="pl" lang="pl" aria-label="Polski">PL</a><a href="/guide/installation.html" data-language="en" lang="en" aria-label="English" aria-current="page">EN</a></span></nav>
 </div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html">Quick start</a><a href="installation.html" class="active">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Docs</div><article class="doc-content"><h1 id="installation-guide">Installation Guide</h1>
 <p>Loomem ships as three self-contained binaries — <code>loomem-server</code>, <code>loomem-cli</code>, <code>loomem-migrate</code> — with RocksDB and Tantivy compiled in; they need only the system C and C++ runtime libraries. The local embedding model is a separate download. This guide covers every supported install path, verification, upgrades, and troubleshooting.</p>
@@ -288,7 +292,7 @@ loomem-server
 <p>The server listens on <code>http://127.0.0.1:3030</code> and stores data in <code>./data</code> (relative to the working directory — running from <code>~/.loomem</code> keeps data in <code>~/.loomem/data</code>). Verify:</p>
 <pre><code class="language-bash">curl http://localhost:3030/health
 </code></pre>
-<p>Then connect an MCP client — recipes for Claude Code, claude.ai, ChatGPT, and OpenClaw are in the <a href="https://github.com/vvooki-sys/loomem/blob/main/docs/README.md#connect-an-mcp-client">README</a>.</p>
+<p>Then connect an MCP client — recipes for Claude Code, claude.ai, ChatGPT, and OpenClaw are in the <a href="https://github.com/vvooki-sys/loomem#connect-an-mcp-client">README</a>.</p>
 <p><strong>Security:</strong> authentication is off by default, fine for localhost. If the server is reachable by anyone but you, set <code>LOOMEM_AUTH_TOKEN</code> (see <a href="security.html">SECURITY.md</a> and <a href="deployment.html">deployment.md</a>).</p>
 <h2 id="verifying-checksums-manually">Verifying checksums manually</h2>
 <p>The installer verifies automatically, but to audit by hand:</p>
@@ -301,7 +305,7 @@ sha256sum -c --ignore-missing SHA256SUMS        # Linux
 <p>Re-run the installer — binaries are replaced, your config files are left untouched:</p>
 <pre><code class="language-bash">gh api repos/vvooki-sys/loomem/contents/install.sh -H &quot;Accept: application/vnd.github.raw&quot; | sh
 </code></pre>
-<p>Check the <a href="https://github.com/vvooki-sys/loomem/blob/main/docs/CHANGELOG.md">CHANGELOG</a> for breaking changes first. If a release notes a storage-format migration, stop the server and run <code>loomem-migrate</code> before starting the new version.</p>
+<p>Check the <a href="https://github.com/vvooki-sys/loomem/blob/main/CHANGELOG.md">CHANGELOG</a> for breaking changes first. If a release notes a storage-format migration, stop the server and run <code>loomem-migrate</code> before starting the new version.</p>
 <h2 id="uninstalling">Uninstalling</h2>
 <p>Loomem touches nothing outside its two directories:</p>
 <pre><code class="language-bash">rm -rf ~/.loomem          # binaries + config + data (if run from ~/.loomem)
@@ -317,7 +321,7 @@ cargo build --release -p loomem-server -p loomem-cli -p loomem-migrate
 # binaries in target/release/
 </code></pre>
 <p>Requires Rust (stable), Node.js (for the dashboard) and libclang for the RocksDB build: <code>apt install libclang-dev</code> on Debian/Ubuntu; on macOS it ships with the Xcode Command Line Tools. On Windows, see <a href="https://github.com/vvooki-sys/loomem/blob/main/INSTALL_WINDOWS.md">INSTALL_WINDOWS.md</a>.</p>
-<p>Skipping the dashboard build leaves the dashboard returning 404. The local embedding model is <strong>required</strong>: with the default <code>embedding_provider = "local"</code>, the server refuses to start without it (<code>refusing cloud fallback</code>), with or without an API key. The default config also enables LLM-backed extraction and dreaming, so the server <strong>refuses to start</strong> unless an LLM key is set (<code>export OPENAI_API_KEY=...</code>) or <code>LOOMEM_ALLOW_KEYLESS=1</code> is set. In keyless mode, <code>memory_ingest</code> returns a missing-key error and stores nothing, entity extraction is off, and dreaming fails; <code>memory_store</code> and search keep working.</p>
+<p>Skipping the dashboard build leaves the dashboard returning 404. The local embedding model is <strong>required</strong>: with the default <code>embedding_provider = "local"</code>, the server refuses to start without it (<code>refusing cloud fallback</code>), with or without an API key. The default config also enables LLM-backed extraction and dreaming, so the server <strong>refuses to start</strong> unless an LLM key is set (<code>export OPENAI_API_KEY=...</code>) or <code>LOOMEM_ALLOW_KEYLESS=1</code> is set. In keyless mode, <code>memory_ingest</code> may store the source text but returns a missing-key error and extracts no facts; entity extraction is off and dreaming fails. <code>memory_store</code> and search keep working.</p>
 <h2 id="docker">Docker</h2>
 <pre><code class="language-bash">docker build -t loomem .
 export LOOMEM_AUTH_TOKEN=$(openssl rand -hex 32)
@@ -351,8 +355,8 @@ docker run -p 3030:3030 -v loomem-data:/data \
 <td>Corrupted or tampered download. Re-run; if it persists, <strong>don't install</strong> — compare against <code>SHA256SUMS</code> on the releases page and open an issue.</td>
 </tr>
 <tr>
-<td><code>WARNING: SHA256SUMS not available</code></td>
-<td>The release has no checksum file (shouldn't happen for official releases). Install proceeds unverified — treat with suspicion.</td>
+<td><code>SHA256SUMS could not be downloaded — refusing to install an unverified archive</code></td>
+<td>The installer stops without installing. Check that the checksum file is available in the selected release or mirror.</td>
 </tr>
 <tr>
 <td><code>unsupported OS/architecture</code></td>
