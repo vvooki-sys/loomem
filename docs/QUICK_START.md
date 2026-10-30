@@ -1,13 +1,12 @@
 # Loomem — Quick start
 
-Loomem gives your LLM agents memory that persists across conversations.
-Every fact, decision, or preference you share gets remembered.
+Loomem gives your LLM agents memory that persists across conversations. It can store facts, decisions, and preferences you choose to share.
 
-## Setup (about 2 minutes, local)
+## Local setup
 
 ### 1. Install and start the server
 
-Install the prebuilt binaries (no sudo; they land in `~/.loomem`) and put `~/.loomem/bin` on your `PATH` — full steps in the [Installation guide](installation.md). Then start it:
+Install the prebuilt binaries (no sudo; they land in `~/.loomem`) and put `~/.loomem/bin` on your `PATH` — full steps in the [Installation guide](installation.md). Before starting, download the local embedding model as described there. The default configuration also requires an LLM key in `OPENAI_API_KEY`; alternatively, set `LOOMEM_ALLOW_KEYLESS=1` for reduced functionality. Then start it:
 
 ```bash
 cd ~/.loomem && loomem-server
@@ -52,26 +51,27 @@ Or, with Node, the universal `mcp-remote` fallback:
 
 ### 3. Try it
 
+Without an LLM key, `memory_ingest` returns an error and extracts no facts. It may still store the source text before extraction. Configure an LLM key to try extraction in the following example.
+
 In Claude, say:
 > "Remember that I prefer dark mode in all my tools."
 
 Then start a new conversation and ask:
 > "What do you know about my preferences?"
 
-The answer comes back from Loomem.
+Claude can retrieve the answer from Loomem.
 
 ## Connecting claude.ai or ChatGPT (remote)
 
 These connect to **remote** MCP servers over HTTPS, so this is a separate, longer step: expose your instance behind TLS, set `SERVER_ORIGIN`, then add the connector pointing at `https://your-domain/mcp` (OAuth dynamic client registration works out of the box). Full walkthrough — TLS, reverse proxy, auth — in the [Deployment guide](deployment.md).
 
 ## How it works
-- Claude automatically stores facts you share
-- Claude searches memory before answering questions about you
-- Memory persists across conversations, devices, and sessions
+- Claude can store facts you share in memory
+- Claude can search memory before answering questions about you
+- Memory persists across conversations and sessions, and is available to devices that can access the server
 
 ## Privacy
-Your memory is stored on your own server. Loomem is self-hosted —
-no third party holds your data. See the [Security overview](SECURITY.md).
+Your memory is stored on your own server. Depending on your configuration, LLM-backed features can use an external provider. See the [Security overview](SECURITY.md).
 
 ## More
 - [User Guide](user-guide.md) — day-to-day usage

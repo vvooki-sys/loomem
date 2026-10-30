@@ -150,9 +150,13 @@ a:hover{text-decoration:underline}
   ]
 }
 </script>
+<link rel="stylesheet" href="/assets/locale.css"/>
+<script src="/assets/locale.js"></script>
+<link rel="alternate" hreflang="en" href="https://loomem.ai/compare.html"/>
+<link rel="alternate" hreflang="pl" href="https://loomem.ai/pl/compare.html"/>
 </head>
 <body>
-<header class="topbar"><div class="wrap inner"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Loomem</a><nav class="topnav"><a href="/">Home</a><a href="/guide/">Docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav></div></header>
+<header class="topbar"><div class="wrap inner"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Loomem</a><nav class="topnav"><a href="/">Home</a><a href="/guide/">Docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a><span class="locale-switch" role="group" aria-label="Language"><a href="/pl/compare.html" data-language="pl" lang="pl" aria-label="Polski">PL</a><a href="/compare.html" data-language="en" lang="en" aria-label="English" aria-current="page">EN</a></span></nav></div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="/" style="font-weight:600;margin-bottom:6px;display:block">← Home</a><div class="grp">Reference</div><a href="/compare.html" class="active">Loomem vs alternatives</a><a href="/benchmarks.html">Benchmarks</a><div class="grp">Docs</div><a href="/guide/">All documentation</a><a href="/guide/architecture.html">Architecture</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></aside><main class="doc-main"><div class="doc-eyebrow">Reference</div><article class="doc-content">
 <h1 id="loomem-vs-alternatives">Loomem vs Mem0, Zep, Letta, and cognee</h1>
 <p><strong>Loomem is the open-source context layer for AI agents that runs as a single Rust binary with no external services.</strong> Storage requirements vary by project and deployment mode: Mem0's library defaults to local Qdrant and SQLite history without a separate database service, while its self-hosted server stack uses Postgres + pgvector. This page lays them side by side on the axes that matter when you self-host: runtime dependencies, interface, licensing, and portability. Facts are current as of July 2026, with Mem0 storage details checked October 25, 2026 — verify against each project's own docs before quoting.</p>
