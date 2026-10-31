@@ -18,10 +18,10 @@ pub async fn rerank(
     chunks: &[String], // content of each result
     top_k: usize,
 ) -> Result<Vec<usize>> {
-    let api_key = match config.get_api_key() {
-        Some(k) => k,
-        None => {
-            debug!("Reranker: no API key, returning original order");
+    let provider = match config.active_provider() {
+        Ok(p) => p,
+        Err(e) => {
+            debug!("Reranker: {e}, returning original order");
             return Ok((0..chunks.len().min(top_k)).collect());
         }
     };
@@ -61,12 +61,12 @@ pub async fn rerank(
         "max_tokens": 100,
     });
 
-    let resp = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
+    let request = provider
+        .chat_request(client)
         .json(&body)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
+        .timeout(std::time::Duration::from_secs(10));
+    let resp = provider
+        .send_chat(request, "reranker", &config.compression_model)
         .await;
 
     match resp {

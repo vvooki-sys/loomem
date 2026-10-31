@@ -242,9 +242,9 @@ pub async fn generate_profile(
     );
 
     // Call LLM
-    let api_key = llm_config
-        .get_api_key()
-        .context("OpenAI API key not configured for profile generation")?;
+    let provider = llm_config
+        .active_provider()
+        .context("LLM provider not available for profile generation")?;
 
     let request_body = serde_json::json!({
         "model": &profile_config.model,
@@ -256,13 +256,13 @@ pub async fn generate_profile(
         "temperature": 0.0
     });
 
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
+    let request = provider
+        .chat_request(client)
         .header("Content-Type", "application/json")
         .json(&request_body)
-        .timeout(Duration::from_secs(30))
-        .send()
+        .timeout(Duration::from_secs(30));
+    let response = provider
+        .send_chat(request, "profile", &profile_config.model)
         .await
         .context("Failed to send profile generation request")?;
 
