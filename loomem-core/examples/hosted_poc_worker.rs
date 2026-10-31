@@ -53,6 +53,32 @@ impl ScopeContext {
     }
 }
 
+const READER_CONTEXT_FILE: &str = ".loomem-hosted-scope.json";
+
+fn canonical_reader_root(root: &Path, context: &ScopeContext) -> Result<PathBuf> {
+    let marker: ScopeContext = serde_json::from_slice(&fs::read(root.join(READER_CONTEXT_FILE))?)?;
+    if &marker != context {
+        bail!("reader context mismatch")
+    }
+    Ok(root.canonicalize()?)
+}
+
+fn canonical_scope_root(
+    root: &Path,
+    shared_root: &Path,
+    reader: bool,
+    context: &ScopeContext,
+) -> Result<PathBuf> {
+    if reader {
+        return canonical_reader_root(root, context);
+    }
+    let canonical = root.canonicalize()?;
+    if canonical.parent() != Some(shared_root) {
+        bail!("scope root escapes shared engine")
+    }
+    Ok(canonical)
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -78,6 +104,7 @@ struct SharedEngine {
     config: Config,
     model: Arc<LocalEmbedder>,
     contexts: HashMap<ScopeContext, ScopeState>,
+    scope_epochs: HashMap<String, i64>,
 }
 
 fn safe_name(value: &str) -> bool {
@@ -86,6 +113,34 @@ fn safe_name(value: &str) -> bool {
         && value
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+}
+
+fn advance_scope_epoch(
+    scope_epochs: &mut HashMap<String, i64>,
+    contexts: &HashMap<ScopeContext, ScopeState>,
+    context: &ScopeContext,
+) -> Result<()> {
+    let current = scope_epochs.get(&context.scope).copied();
+    if current.is_some_and(|epoch| context.epoch < epoch) {
+        bail!("stale scope epoch")
+    }
+    if current.is_none_or(|epoch| context.epoch > epoch) {
+        if contexts
+            .iter()
+            .any(|(existing, state)| existing.scope == context.scope && !state.jobs.is_empty())
+        {
+            bail!("cannot advance scope epoch with active jobs")
+        }
+        scope_epochs.insert(context.scope.clone(), context.epoch);
+    }
+    Ok(())
+}
+
+fn ensure_scope_epoch(scope_epochs: &HashMap<String, i64>, context: &ScopeContext) -> Result<()> {
+    if scope_epochs.get(&context.scope) != Some(&context.epoch) {
+        bail!("stale scope epoch")
+    }
+    Ok(())
 }
 
 fn string_field<'a>(request: &'a Value, key: &str) -> Result<&'a str> {
@@ -382,10 +437,9 @@ impl SharedEngine {
         if !fs::symlink_metadata(&root)?.file_type().is_dir() {
             bail!("scope root must be a directory")
         }
-        let context_root = root.canonicalize()?;
-        if request.get("root").is_none() && context_root.parent() != Some(self.root.as_path()) {
-            bail!("scope root escapes shared engine")
-        }
+        let context_root =
+            canonical_scope_root(&root, &self.root, request.get("root").is_some(), &context)?;
+        advance_scope_epoch(&mut self.scope_epochs, &self.contexts, &context)?;
         let state = self
             .contexts
             .entry(context.clone())
@@ -467,6 +521,7 @@ impl SharedEngine {
         if command == "open_scope" {
             return self.open_scope(context, &request);
         }
+        ensure_scope_epoch(&self.scope_epochs, &context)?;
         let root = self.scope_root(&context)?;
         let result = match command {
             "prepare" => prepare_embedding(&self.model, &request)?,
@@ -537,6 +592,7 @@ fn load_engine(args: &[String]) -> Result<SharedEngine> {
         config: Config::load(&args[2])?,
         model: Arc::new(LocalEmbedder::load(Path::new(&args[3]), 384)?),
         contexts: HashMap::new(),
+        scope_epochs: HashMap::new(),
     })
 }
 
@@ -566,6 +622,20 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
 
+    fn context(epoch: i64) -> ScopeContext {
+        serde_json::from_value(json!({"actor":"actor-a","scope":"scope-a","epoch":epoch}))
+            .expect("test context")
+    }
+
+    fn record(content: &str) -> Record {
+        Record {
+            op_id: "op1".into(),
+            id: "memory1".into(),
+            content: content.into(),
+            embedding: vec![1.0; 384],
+        }
+    }
+
     #[test]
     fn rejects_generation_paths() {
         assert!(safe_name("generation_12-ok"));
@@ -579,11 +649,7 @@ mod tests {
         let valid = json!({"actor":"actor-a","scope":"scope-a","epoch":3});
         assert_eq!(
             ScopeContext::from_request(&json!({"context":valid})).expect("valid context"),
-            ScopeContext {
-                actor: "actor-a".into(),
-                scope: "scope-a".into(),
-                epoch: 3,
-            }
+            context(3)
         );
         for invalid in [
             json!({}),
@@ -596,13 +662,54 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_record_becomes_real_loomem_chunk() {
-        let record = Record {
-            op_id: "op1".into(),
-            id: "memory1".into(),
-            content: "synthetic fact".into(),
-            embedding: vec![1.0; 384],
+    fn reader_root_requires_exact_context_marker() {
+        let tmp = tempfile::tempdir().expect("temporary reader");
+        let context = context(3);
+        fs::write(
+            tmp.path().join(READER_CONTEXT_FILE),
+            serde_json::to_vec(&context).expect("context marker"),
+        )
+        .expect("write context marker");
+        assert!(canonical_reader_root(tmp.path(), &context).is_ok());
+        let stale = ScopeContext {
+            epoch: 2,
+            ..context
         };
+        assert!(canonical_reader_root(tmp.path(), &stale).is_err());
+        let missing = tempfile::tempdir().expect("reader without marker");
+        assert!(canonical_reader_root(missing.path(), &stale).is_err());
+    }
+
+    #[test]
+    fn epoch_advance_fences_active_jobs_and_stale_contexts() {
+        let old = context(1);
+        let new = context(2);
+        let mut scope_epochs = HashMap::from([(old.scope.clone(), 1)]);
+        let mut jobs = HashMap::new();
+        jobs.insert("job".to_owned(), std::thread::spawn(|| Ok(json!({}))));
+        let mut contexts = HashMap::from([(
+            old.clone(),
+            ScopeState {
+                root: PathBuf::new(),
+                jobs,
+            },
+        )]);
+        assert!(advance_scope_epoch(&mut scope_epochs, &contexts, &new).is_err());
+        let handle = contexts
+            .get_mut(&old)
+            .expect("old context")
+            .jobs
+            .remove("job")
+            .expect("active job");
+        handle.join().expect("join job").expect("job result");
+        assert!(advance_scope_epoch(&mut scope_epochs, &contexts, &new).is_ok());
+        assert!(ensure_scope_epoch(&scope_epochs, &old).is_err());
+        assert!(ensure_scope_epoch(&scope_epochs, &new).is_ok());
+    }
+
+    #[test]
+    fn synthetic_record_becomes_real_loomem_chunk() {
+        let record = record("synthetic fact");
         let actual = chunk(&record).expect("synthetic chunk must deserialize");
         assert_eq!(actual.id, "memory1");
         assert_eq!(actual.content, "synthetic fact");
@@ -615,12 +722,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("temporary generation");
         let config = Config::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../config.toml"))
             .expect("load config");
-        let record = Record {
-            op_id: "op1".into(),
-            id: "memory1".into(),
-            content: "synthetic fact".into(),
-            embedding: vec![1.0; 384],
-        };
+        let record = record("synthetic fact");
         let stored = chunk(&record).expect("chunk");
         {
             let store = RocksDbStore::open(tmp.path().join("rocks"), &config.storage.rocksdb)
