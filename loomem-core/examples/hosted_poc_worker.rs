@@ -497,8 +497,8 @@ fn is_shutdown(request: &Result<Value>) -> bool {
         == Some("shutdown")
 }
 
-fn failed_response(context: Option<ScopeContext>) -> Value {
-    let mut response = json!({"ok":false,"error":"operation failed"});
+fn failed_response(context: Option<ScopeContext>, error: &anyhow::Error) -> Value {
+    let mut response = json!({"ok":false,"error":format!("{error:#}")});
     if let Some(context) = context {
         if let (Some(object), Ok(context)) = (response.as_object_mut(), context.json()) {
             object.insert("context".into(), context);
@@ -521,7 +521,7 @@ fn execute_request(engine: &mut SharedEngine, request: Result<Value>) -> Value {
             }
             value
         })
-        .unwrap_or_else(|_| failed_response(context))
+        .unwrap_or_else(|error| failed_response(context, &error))
 }
 
 fn load_engine(args: &[String]) -> Result<SharedEngine> {
