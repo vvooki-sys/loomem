@@ -82,6 +82,22 @@ describe("server-side search", () => {
     expect(screen.getByText("Page 2 of 3")).toBeInTheDocument();
   });
 
+  it.each([
+    ["search", async () => userEvent.type(screen.getByPlaceholderText(/Filter memories/i), "needle"), { page: 1, q: "needle" }],
+    ["mode", async () => userEvent.click(screen.getByRole("tab", { name: /Semantic/i })), { page: 1 }],
+    ["agent", async () => userEvent.selectOptions(screen.getByRole("combobox", { name: /Agent/i }), "cc"), { page: 1, source_agent: "cc" }],
+    ["page size", async () => userEvent.click(screen.getByRole("button", { name: "25" })), { page: 1, per_page: 25 }],
+  ])("returns to page one when %s changes", async (_label, change, params) => {
+    api.getMemory.mockResolvedValue({ ...ONE, total: 120 });
+    renderPage();
+    await screen.findByText("Page 1 of 3");
+    await userEvent.click(screen.getByRole("button", { name: /Next/i }));
+    await screen.findByText("Page 2 of 3");
+    api.getMemory.mockClear();
+    await change();
+    await waitFor(() => expect(api.getMemory).toHaveBeenCalledWith(expect.objectContaining(params)));
+  });
+
   it("substring: typing calls /api/dashboard/memory with q=", async () => {
     renderPage();
     await waitFor(() => expect(screen.getAllByText("original memory text").length).toBeGreaterThan(0));
