@@ -1,6 +1,6 @@
 # Stage 0: Build dashboard SPA (embedded into loomem-server via rust-embed,
 # so it must exist before cargo runs)
-FROM node:22-trixie-slim AS dashboard
+FROM node:26-trixie-slim AS dashboard
 WORKDIR /app/loomem-dashboard
 COPY loomem-dashboard/package.json loomem-dashboard/package-lock.json ./
 RUN npm ci
