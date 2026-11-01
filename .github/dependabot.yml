@@ -1,0 +1,50 @@
+# Dependabot: weekly version updates + security-update PRs.
+# `cargo audit` in CI stays the source of truth for RustSec advisories
+# (Dependabot does not see unmaintained/yanked crates or .cargo/audit.toml).
+version: 2
+updates:
+  # Rust workspace (root Cargo.toml + Cargo.lock).
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+
+  # Actions are pinned by commit SHA; Dependabot updates the SHA and the comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Dashboard (Vite/React).
+  - package-ecosystem: npm
+    directory: /loomem-dashboard
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  # Dockerfile base images (node, rust, debian).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(deps)"

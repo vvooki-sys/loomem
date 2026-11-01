@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Szybki start — dokumentacja Loomem</title>
+<meta name="description" content="Szybki start — dokumentacja Loomem w języku polskim."/>
+<link rel="canonical" href="https://loomem.ai/pl/guide/quick-start.html"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0.05' y1='0' x2='0.95' y2='1'%3E%3Cstop offset='0' stop-color='%23EE9913'/%3E%3Cstop offset='0.28' stop-color='%23F7756F'/%3E%3Cstop offset='0.52' stop-color='%23B86ED2'/%3E%3Cstop offset='0.74' stop-color='%23667CE6'/%3E%3Cstop offset='1' stop-color='%231684DC'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cg fill='none' stroke='url(%23g)' stroke-linecap='round'%3E%3Ccircle cx='100' cy='100' r='77' stroke-width='13' stroke-dasharray='404 80' transform='rotate(-18 100 100)'/%3E%3Ccircle cx='100' cy='100' r='56' stroke-width='13' stroke-dasharray='294 62' transform='rotate(150 100 100)'/%3E%3Ccircle cx='100' cy='100' r='36' stroke-width='12' stroke-dasharray='170 56' transform='rotate(40 100 100)'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root{
+  --lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;--lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;--lm-gold-900:#5E3A11;
+  --lm-blue-300:#63B5F0;--lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;--lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-200:#DED7C8;--lm-ink-100:#EFE9DD;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;--lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave:linear-gradient(108deg,#EE9913 0%,#F4AC2E 18%,#F7756F 38%,#B86ED2 58%,#63B5F0 80%,#1684DC 100%);--lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#F7756F 30%,#B86ED2 55%,#667CE6 75%,#1684DC 100%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);line-height:1.62;-webkit-font-smoothing:antialiased;font-size:16px}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.82);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
+.brand:hover{text-decoration:none}
+.brand svg{width:26px;height:26px;flex:none}
+.lm-ring circle{transform-box:view-box;transform-origin:100px 100px}
+.lm-ring .r1{animation:lm-spin 32s linear infinite}
+.lm-ring .r2{animation:lm-spin-rev 24s linear infinite}
+.lm-ring .r3{animation:lm-spin 18s linear infinite}
+@keyframes lm-spin{to{transform:rotate(360deg)}}
+@keyframes lm-spin-rev{to{transform:rotate(-360deg)}}
+@media (prefers-reduced-motion:reduce){.lm-ring circle{animation:none}.lm-ring .r1{transform:rotate(-18deg)}.lm-ring .r2{transform:rotate(150deg)}.lm-ring .r3{transform:rotate(40deg)}}
+.wm-word{white-space:nowrap}
+@supports ((-webkit-background-clip:text) or (background-clip:text)){.wm{background-image:linear-gradient(100deg,#CE7D08 0%,#EE9913 15%,#F88546 18%,#F7756F 21%,#EB6D95 24%,#D66BB7 27%,#B86ED2 30%,#9474E2 33%,#667CE6 36%,#1684DC 39%,#1684DC 61%,#667CE6 64%,#9474E2 67%,#B86ED2 70%,#D66BB7 73%,#EB6D95 76%,#F7756F 79%,#F88546 82%,#EE9913 85%,#CE7D08 100%);background-size:200% 100%;background-position:0% 50%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:wm-flow 12s ease-in-out infinite alternate}}
+@keyframes wm-flow{to{background-position:100% 50%}}
+@media (prefers-reduced-motion:reduce){.wm{animation:none}}
+@media (forced-colors: active){.wm{background:none;-webkit-background-clip:border-box;background-clip:border-box;color:inherit;animation:none}}
+.brand .tag{font-family:var(--lm-font-sans);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--lm-ink-400);border:1px solid var(--lm-ink-200);border-radius:999px;padding:2px 9px;margin-left:2px}
+.topnav{display:flex;align-items:center;gap:22px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900);text-decoration:none}
+.doc-wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px);display:grid;grid-template-columns:248px 1fr;gap:52px;align-items:start}
+.doc-side{position:sticky;top:88px;align-self:start;max-height:calc(100vh - 110px);overflow-y:auto;padding:26px 0}
+.doc-side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--lm-ink-400);font-weight:600;margin:20px 12px 8px}
+.doc-side .grp:first-child{margin-top:0}
+.doc-side a{display:block;font-size:14px;color:var(--lm-ink-600);padding:7px 12px;border-radius:8px;font-weight:500}
+.doc-side a:hover{background:var(--lm-surface-sunk);color:var(--lm-ink-900);text-decoration:none}
+.doc-side a.active{background:var(--lm-surface-cool);color:var(--lm-blue-700);font-weight:600}
+.doc-main{min-width:0;max-width:760px;padding:48px 0 96px}
+.doc-eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-gold-700);margin-bottom:10px}
+.doc-content h1{font-family:var(--lm-font-display);font-size:2.5rem;font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 22px}
+.doc-content h2{font-family:var(--lm-font-display);font-size:1.6rem;font-weight:600;letter-spacing:-.01em;line-height:1.25;margin:44px 0 14px}
+.doc-content h3{font-size:1.22rem;font-weight:600;margin:30px 0 10px;letter-spacing:-.01em}
+.doc-content h4{font-size:1.02rem;font-weight:600;margin:22px 0 8px}
+.doc-content p{margin:0 0 16px;color:var(--lm-ink-700)}
+.doc-content ul,.doc-content ol{margin:0 0 18px;padding-left:24px;color:var(--lm-ink-700)}
+.doc-content li{margin:7px 0}
+.doc-content li>ul,.doc-content li>ol{margin:7px 0}
+.doc-content code{font-family:var(--lm-font-mono);font-size:.87em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1.5px 6px;border-radius:5px;color:var(--lm-ink-800)}
+.doc-content pre{background:var(--lm-weave) no-repeat top center/100% 3px,var(--lm-ink-800);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;overflow-x:auto;margin:0 0 18px;box-shadow:var(--lm-shadow-sm)}
+.doc-content pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;line-height:1.65}
+.doc-content blockquote{border-left:3px solid var(--lm-gold-400);background:var(--lm-surface-warm);padding:12px 18px;border-radius:0 var(--lm-radius-md) var(--lm-radius-md) 0;margin:0 0 18px;color:var(--lm-ink-700)}
+.doc-content blockquote p:last-child{margin:0}
+.doc-content table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;display:block;overflow-x:auto}
+.doc-content thead{background:var(--lm-surface-sunk)}
+.doc-content th{text-align:left;padding:9px 12px;border-bottom:2px solid var(--lm-ink-200);color:var(--lm-ink-700);font-weight:600;white-space:nowrap}
+.doc-content td{padding:9px 12px;border-bottom:1px solid var(--lm-ink-100);color:var(--lm-ink-700);vertical-align:top}
+.doc-content hr{border:none;border-top:1px solid var(--lm-ink-200);margin:34px 0}
+.doc-content a{font-weight:500}
+.doc-content h2 code,.doc-content h3 code,.doc-content h4 code{font-size:.86em;background:var(--lm-surface-sunk)}
+.doc-content img{max-width:100%}
+.doc-foot{border-top:1px solid var(--lm-ink-200);margin-top:40px;padding-top:22px;font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+/* hub */
+.hub-head{padding:56px 0 8px;max-width:720px}
+.hub-head h1{font-family:var(--lm-font-display);font-size:clamp(2.2rem,4vw,3rem);font-weight:600;letter-spacing:-.02em;line-height:1.1;margin-bottom:14px}
+.hub-head p{font-size:1.0625rem;color:var(--lm-ink-500);line-height:1.6}
+.hub-grp{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-ink-400);font-weight:600;margin:40px 0 16px}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.hub-card{display:block;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs);transition:all 180ms var(--lm-ease)}
+.hub-card:hover{box-shadow:var(--lm-shadow-sm);transform:translateY(-2px);text-decoration:none;border-color:var(--lm-blue-300)}
+.hub-card h3{font-size:1.05rem;font-weight:600;color:var(--lm-ink-900);margin-bottom:5px}
+.hub-card span{font-size:13.5px;color:var(--lm-ink-500)}
+@media(max-width:820px){.doc-wrap{grid-template-columns:1fr;gap:0}.doc-side{position:static;max-height:none;border-bottom:1px solid var(--lm-ink-200);padding:16px 0}.doc-main{padding-top:28px}}
+</style>
+
+<link rel="stylesheet" href="/assets/locale.css"/>
+<script src="/assets/locale.js"></script>
+<link rel="alternate" hreflang="en" href="https://loomem.ai/guide/quick-start.html"/>
+<link rel="alternate" hreflang="pl" href="https://loomem.ai/pl/guide/quick-start.html"/>
+</head>
+<body>
+<header class="topbar"><div class="wrap inner">
+<a class="brand" href="/pl/"><svg class="lm-ring" viewBox="0 0 200 200" fill="none" aria-hidden="true"><defs><linearGradient id="lmRingHdr" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs><g fill="none" stroke="url(#lmRingHdr)" stroke-linecap="round"><circle class="r1" cx="100" cy="100" r="77" stroke-width="15" stroke-dasharray="404 80"/><circle class="r2" cx="100" cy="100" r="56" stroke-width="15" stroke-dasharray="294 62"/><circle class="r3" cx="100" cy="100" r="36" stroke-width="14" stroke-dasharray="170 56"/></g></svg><span class="wm-word">loo<span class="wm">mem</span></span><span class="tag">Dokumentacja</span></a>
+<nav class="topnav"><a href="/pl/">Strona główna</a><a href="/pl/guide/">Dokumentacja</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a><span class="locale-switch" role="group" aria-label="Język"><a href="/pl/guide/quick-start.html" data-language="pl" lang="pl" aria-label="Polski" aria-current="page">PL</a><a href="/guide/quick-start.html" data-language="en" lang="en" aria-label="English">EN</a></span></nav>
+</div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="/pl/guide/" style="font-weight:600;margin-bottom:6px;display:block">← Dokumentacja</a><div class="grp">Dokumentacja</div><a href="/pl/guide/quick-start.html" class="active">Szybki start</a><a href="/pl/guide/installation.html">Instalacja</a><a href="/pl/guide/configuration.html">Konfiguracja</a><a href="/pl/guide/api-reference.html">Dokumentacja API</a><a href="/pl/guide/mcp-tools.html">Narzędzia MCP</a><div class="grp">Projekt</div><a href="/pl/guide/architecture.html">Architektura</a><a href="/pl/guide/deployment.html">Wdrożenie</a><a href="/pl/guide/security.html">Bezpieczeństwo</a><a href="/pl/guide/backup-and-restore.html">Kopie zapasowe i odtwarzanie</a></aside><main class="doc-main"><div class="doc-eyebrow">Dokumentacja</div><article class="doc-content"><h1 id="loomem-quick-start">Loomem — szybki start</h1>
+<p>Loomem daje Twoim agentom AI pamięć dostępną w kolejnych rozmowach. Może zapamiętywać fakty, decyzje i preferencje, które im przekażesz.</p>
+<h2 id="setup-about-2-minutes-local">Konfiguracja lokalna</h2>
+<h3 id="1-install-and-start-the-server">1. Zainstaluj i uruchom serwer</h3>
+<p>Zainstaluj gotowe pliki wykonywalne (bez <code>sudo</code>, w katalogu <code>~/.loomem</code>) i dodaj <code>~/.loomem/bin</code> do zmiennej <code>PATH</code>. Szczegółowe kroki znajdziesz w <a href="/pl/guide/installation.html">instrukcji instalacji</a>. Przed pierwszym uruchomieniem pobierz lokalny model embeddingów zgodnie z tą instrukcją. Domyślna konfiguracja wymaga również klucza LLM <code>OPENAI_API_KEY</code>; alternatywą jest tryb o ograniczonej funkcjonalności <code>LOOMEM_ALLOW_KEYLESS=1</code>. Następnie uruchom serwer:</p>
+<pre><code class="language-bash">cd ~/.loomem &amp;&amp; loomem-server
+# nasłuchuje na http://localhost:3030 — uwierzytelnianie jest domyślnie wyłączone lokalnie
+</code></pre>
+<h3 id="2-connect-claude-code">2. Połącz Claude Code</h3>
+<pre><code class="language-bash">claude mcp add --transport http loomem http://localhost:3030/mcp
+</code></pre>
+<h3 id="2b-connect-claude-desktop">2b. Możesz też połączyć aplikację Claude na komputerze (oraz Cowork)</h3>
+<p><strong>Aplikacja Claude na komputerze</strong> łączy się z lokalnymi serwerami przez <strong>stdio</strong>, a nie HTTP. Pole własnego konektora przyjmuje tylko adresy <code>https://</code>, więc nie można tam wpisać <code>http://localhost</code>. Dodaj most w pliku <code>claude_desktop_config.json</code> (na macOS: <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>), a następnie całkowicie uruchom Claude ponownie. Most natywny nie wymaga Node.js (Loomem ≥ v0.2.1 — użyj bezwzględnej ścieżki do <code>loomem-cli</code>):</p>
+<pre><code class="language-json">{
+  "mcpServers": {
+    "loomem": {
+      "command": "/Users/you/.loomem/bin/loomem-cli",
+      "args": ["mcp-stdio", "--url", "http://127.0.0.1:3030"]
+    }
+  }
+}
+</code></pre>
+<p>Alternatywnie, z Node.js możesz użyć uniwersalnego rozwiązania <a href="https://www.npmjs.com/package/mcp-remote"><code>mcp-remote</code></a>:</p>
+<pre><code class="language-json">{
+  "mcpServers": {
+    "loomem": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:3030/mcp", "--allow-http"]
+    }
+  }
+}
+</code></pre>
+<h3 id="3-try-it">3. Wypróbuj</h3>
+<p>W trybie <code>LOOMEM_ALLOW_KEYLESS=1</code> narzędzie <code>memory_ingest</code> bez klucza nie wyodrębnia faktów i zwraca błąd. Może jednak zapisać tekst źródłowy przed próbą ekstrakcji. Aby przetestować ekstrakcję w poniższym przykładzie, skonfiguruj klucz LLM.</p>
+<p>Powiedz Claude:</p>
+<blockquote>
+<p>„Zapamiętaj, że we wszystkich narzędziach preferuję tryb ciemny.”</p>
+</blockquote>
+<p>Następnie rozpocznij nową rozmowę i zapytaj:</p>
+<blockquote>
+<p>„Co wiesz o moich preferencjach?”</p>
+</blockquote>
+<p>Claude może odnaleźć odpowiedź w pamięci Loomem.</p>
+<h2 id="connecting-claudeai-or-chatgpt-remote">Połączenie z claude.ai lub ChatGPT przez internet</h2>
+<p>Te usługi łączą się ze <strong>zdalnymi</strong> serwerami MCP przez HTTPS. To osobny, dłuższy etap: udostępnij instancję za TLS, ustaw <code>SERVER_ORIGIN</code>, a następnie dodaj konektor wskazujący na <code>https://your-domain/mcp</code>. Dynamiczna rejestracja klienta OAuth jest obsługiwana. Pełny opis TLS, reverse proxy i uwierzytelniania znajdziesz w <a href="/pl/guide/deployment.html">instrukcji wdrożenia</a>.</p>
+<h2 id="how-it-works">Jak to działa</h2>
+<ul>
+<li>Claude może zapisywać udostępniane fakty w pamięci</li>
+<li>Claude może przeszukiwać pamięć przed odpowiedzią na pytania o Ciebie</li>
+<li>Pamięć pozostaje dostępna między rozmowami i sesjami oraz na urządzeniach mających dostęp do serwera</li>
+</ul>
+<h2 id="privacy">Prywatność</h2>
+<p>Pamięć jest przechowywana na Twoim serwerze. Zależnie od konfiguracji funkcje oparte na LLM mogą korzystać z zewnętrznego dostawcy. Więcej w <a href="/pl/guide/security.html">opisie bezpieczeństwa</a>.</p>
+<h2 id="more">Więcej informacji</h2>
+<ul>
+<li><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/pl/user-guide.md">Podręcznik użytkownika</a> — codzienna obsługa</li>
+<li><a href="/pl/guide/mcp-tools.html">Opis narzędzi MCP</a> — operacje na pamięci</li>
+</ul></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/pl/QUICK_START.md">Edytuj na GitHubie</a></span></div></main></div>  <script defer src="/_vercel/insights/script.js"></script>
+</body></html>

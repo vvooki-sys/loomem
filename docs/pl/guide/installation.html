@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Instalacja — dokumentacja Loomem</title>
+<meta name="description" content="Instalacja — dokumentacja Loomem w języku polskim."/>
+<link rel="canonical" href="https://loomem.ai/pl/guide/installation.html"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0.05' y1='0' x2='0.95' y2='1'%3E%3Cstop offset='0' stop-color='%23EE9913'/%3E%3Cstop offset='0.28' stop-color='%23F7756F'/%3E%3Cstop offset='0.52' stop-color='%23B86ED2'/%3E%3Cstop offset='0.74' stop-color='%23667CE6'/%3E%3Cstop offset='1' stop-color='%231684DC'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cg fill='none' stroke='url(%23g)' stroke-linecap='round'%3E%3Ccircle cx='100' cy='100' r='77' stroke-width='13' stroke-dasharray='404 80' transform='rotate(-18 100 100)'/%3E%3Ccircle cx='100' cy='100' r='56' stroke-width='13' stroke-dasharray='294 62' transform='rotate(150 100 100)'/%3E%3Ccircle cx='100' cy='100' r='36' stroke-width='12' stroke-dasharray='170 56' transform='rotate(40 100 100)'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root{
+  --lm-gold-100:#FDEAC4;--lm-gold-200:#FBD68A;--lm-gold-300:#F9C254;--lm-gold-400:#F4AC2E;--lm-gold-500:#EE9913;--lm-gold-600:#CE7D08;--lm-gold-700:#A2610B;--lm-gold-900:#5E3A11;
+  --lm-blue-300:#63B5F0;--lm-blue-400:#339BE8;--lm-blue-500:#1684DC;--lm-blue-600:#0F69B8;--lm-blue-700:#0F5491;
+  --lm-ink-900:#1F1B16;--lm-ink-800:#2E2820;--lm-ink-700:#423B31;--lm-ink-600:#564D40;--lm-ink-500:#6B6256;--lm-ink-400:#8E8474;--lm-ink-200:#DED7C8;--lm-ink-100:#EFE9DD;
+  --lm-canvas:#FBF8F1;--lm-surface:#FFFFFF;--lm-surface-sunk:#F4EFE4;--lm-surface-warm:#FDF1DA;--lm-surface-cool:#EEF6FD;
+  --lm-brand:#1684DC;--lm-brand-hover:#0F69B8;--lm-focus-ring:rgba(22,132,220,0.42);
+  --lm-weave:linear-gradient(108deg,#EE9913 0%,#F4AC2E 18%,#F7756F 38%,#B86ED2 58%,#63B5F0 80%,#1684DC 100%);--lm-weave-vivid:linear-gradient(120deg,#EE9913 0%,#F7756F 30%,#B86ED2 55%,#667CE6 75%,#1684DC 100%);
+  --lm-font-display:"Fraunces","Iowan Old Style",Georgia,serif;
+  --lm-font-sans:"Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --lm-font-mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  --lm-radius-md:10px;--lm-radius-lg:16px;--lm-radius-pill:999px;
+  --lm-shadow-xs:0 1px 2px rgba(31,27,22,0.06);--lm-shadow-sm:0 2px 6px rgba(31,27,22,0.07);
+  --lm-ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--lm-font-sans);background:var(--lm-canvas);color:var(--lm-ink-900);line-height:1.62;-webkit-font-smoothing:antialiased;font-size:16px}
+::selection{background:var(--lm-gold-200);color:var(--lm-ink-900)}
+a{color:var(--lm-brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+.topbar{position:sticky;top:0;z-index:40;backdrop-filter:blur(12px);background:rgba(251,248,241,0.82);border-bottom:1px solid var(--lm-ink-200)}
+.topbar .inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--lm-font-display);font-weight:600;font-size:19px;letter-spacing:-0.02em;color:var(--lm-ink-900)}
+.brand:hover{text-decoration:none}
+.brand svg{width:26px;height:26px;flex:none}
+.lm-ring circle{transform-box:view-box;transform-origin:100px 100px}
+.lm-ring .r1{animation:lm-spin 32s linear infinite}
+.lm-ring .r2{animation:lm-spin-rev 24s linear infinite}
+.lm-ring .r3{animation:lm-spin 18s linear infinite}
+@keyframes lm-spin{to{transform:rotate(360deg)}}
+@keyframes lm-spin-rev{to{transform:rotate(-360deg)}}
+@media (prefers-reduced-motion:reduce){.lm-ring circle{animation:none}.lm-ring .r1{transform:rotate(-18deg)}.lm-ring .r2{transform:rotate(150deg)}.lm-ring .r3{transform:rotate(40deg)}}
+.wm-word{white-space:nowrap}
+@supports ((-webkit-background-clip:text) or (background-clip:text)){.wm{background-image:linear-gradient(100deg,#CE7D08 0%,#EE9913 15%,#F88546 18%,#F7756F 21%,#EB6D95 24%,#D66BB7 27%,#B86ED2 30%,#9474E2 33%,#667CE6 36%,#1684DC 39%,#1684DC 61%,#667CE6 64%,#9474E2 67%,#B86ED2 70%,#D66BB7 73%,#EB6D95 76%,#F7756F 79%,#F88546 82%,#EE9913 85%,#CE7D08 100%);background-size:200% 100%;background-position:0% 50%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:wm-flow 12s ease-in-out infinite alternate}}
+@keyframes wm-flow{to{background-position:100% 50%}}
+@media (prefers-reduced-motion:reduce){.wm{animation:none}}
+@media (forced-colors: active){.wm{background:none;-webkit-background-clip:border-box;background-clip:border-box;color:inherit;animation:none}}
+.brand .tag{font-family:var(--lm-font-sans);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--lm-ink-400);border:1px solid var(--lm-ink-200);border-radius:999px;padding:2px 9px;margin-left:2px}
+.topnav{display:flex;align-items:center;gap:22px}
+.topnav a{font-size:14px;font-weight:500;color:var(--lm-ink-600)}
+.topnav a:hover{color:var(--lm-ink-900);text-decoration:none}
+.doc-wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,40px);display:grid;grid-template-columns:248px 1fr;gap:52px;align-items:start}
+.doc-side{position:sticky;top:88px;align-self:start;max-height:calc(100vh - 110px);overflow-y:auto;padding:26px 0}
+.doc-side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--lm-ink-400);font-weight:600;margin:20px 12px 8px}
+.doc-side .grp:first-child{margin-top:0}
+.doc-side a{display:block;font-size:14px;color:var(--lm-ink-600);padding:7px 12px;border-radius:8px;font-weight:500}
+.doc-side a:hover{background:var(--lm-surface-sunk);color:var(--lm-ink-900);text-decoration:none}
+.doc-side a.active{background:var(--lm-surface-cool);color:var(--lm-blue-700);font-weight:600}
+.doc-main{min-width:0;max-width:760px;padding:48px 0 96px}
+.doc-eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-gold-700);margin-bottom:10px}
+.doc-content h1{font-family:var(--lm-font-display);font-size:2.5rem;font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 22px}
+.doc-content h2{font-family:var(--lm-font-display);font-size:1.6rem;font-weight:600;letter-spacing:-.01em;line-height:1.25;margin:44px 0 14px}
+.doc-content h3{font-size:1.22rem;font-weight:600;margin:30px 0 10px;letter-spacing:-.01em}
+.doc-content h4{font-size:1.02rem;font-weight:600;margin:22px 0 8px}
+.doc-content p{margin:0 0 16px;color:var(--lm-ink-700)}
+.doc-content ul,.doc-content ol{margin:0 0 18px;padding-left:24px;color:var(--lm-ink-700)}
+.doc-content li{margin:7px 0}
+.doc-content li>ul,.doc-content li>ol{margin:7px 0}
+.doc-content code{font-family:var(--lm-font-mono);font-size:.87em;background:var(--lm-surface-sunk);border:1px solid var(--lm-ink-200);padding:1.5px 6px;border-radius:5px;color:var(--lm-ink-800)}
+.doc-content pre{background:var(--lm-weave) no-repeat top center/100% 3px,var(--lm-ink-800);color:#EFE9DD;border-radius:var(--lm-radius-lg);padding:18px 20px;overflow-x:auto;margin:0 0 18px;box-shadow:var(--lm-shadow-sm)}
+.doc-content pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;line-height:1.65}
+.doc-content blockquote{border-left:3px solid var(--lm-gold-400);background:var(--lm-surface-warm);padding:12px 18px;border-radius:0 var(--lm-radius-md) var(--lm-radius-md) 0;margin:0 0 18px;color:var(--lm-ink-700)}
+.doc-content blockquote p:last-child{margin:0}
+.doc-content table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;display:block;overflow-x:auto}
+.doc-content thead{background:var(--lm-surface-sunk)}
+.doc-content th{text-align:left;padding:9px 12px;border-bottom:2px solid var(--lm-ink-200);color:var(--lm-ink-700);font-weight:600;white-space:nowrap}
+.doc-content td{padding:9px 12px;border-bottom:1px solid var(--lm-ink-100);color:var(--lm-ink-700);vertical-align:top}
+.doc-content hr{border:none;border-top:1px solid var(--lm-ink-200);margin:34px 0}
+.doc-content a{font-weight:500}
+.doc-content h2 code,.doc-content h3 code,.doc-content h4 code{font-size:.86em;background:var(--lm-surface-sunk)}
+.doc-content img{max-width:100%}
+.doc-foot{border-top:1px solid var(--lm-ink-200);margin-top:40px;padding-top:22px;font-size:13px;color:var(--lm-ink-400);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+/* hub */
+.hub-head{padding:56px 0 8px;max-width:720px}
+.hub-head h1{font-family:var(--lm-font-display);font-size:clamp(2.2rem,4vw,3rem);font-weight:600;letter-spacing:-.02em;line-height:1.1;margin-bottom:14px}
+.hub-head p{font-size:1.0625rem;color:var(--lm-ink-500);line-height:1.6}
+.hub-grp{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--lm-ink-400);font-weight:600;margin:40px 0 16px}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.hub-card{display:block;background:var(--lm-surface);border:1px solid var(--lm-ink-200);border-radius:var(--lm-radius-lg);padding:22px;box-shadow:var(--lm-shadow-xs);transition:all 180ms var(--lm-ease)}
+.hub-card:hover{box-shadow:var(--lm-shadow-sm);transform:translateY(-2px);text-decoration:none;border-color:var(--lm-blue-300)}
+.hub-card h3{font-size:1.05rem;font-weight:600;color:var(--lm-ink-900);margin-bottom:5px}
+.hub-card span{font-size:13.5px;color:var(--lm-ink-500)}
+@media(max-width:820px){.doc-wrap{grid-template-columns:1fr;gap:0}.doc-side{position:static;max-height:none;border-bottom:1px solid var(--lm-ink-200);padding:16px 0}.doc-main{padding-top:28px}}
+</style>
+
+<link rel="stylesheet" href="/assets/locale.css"/>
+<script src="/assets/locale.js"></script>
+<link rel="alternate" hreflang="en" href="https://loomem.ai/guide/installation.html"/>
+<link rel="alternate" hreflang="pl" href="https://loomem.ai/pl/guide/installation.html"/>
+</head>
+<body>
+<header class="topbar"><div class="wrap inner">
+<a class="brand" href="/pl/"><svg class="lm-ring" viewBox="0 0 200 200" fill="none" aria-hidden="true"><defs><linearGradient id="lmRingHdr" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs><g fill="none" stroke="url(#lmRingHdr)" stroke-linecap="round"><circle class="r1" cx="100" cy="100" r="77" stroke-width="15" stroke-dasharray="404 80"/><circle class="r2" cx="100" cy="100" r="56" stroke-width="15" stroke-dasharray="294 62"/><circle class="r3" cx="100" cy="100" r="36" stroke-width="14" stroke-dasharray="170 56"/></g></svg><span class="wm-word">loo<span class="wm">mem</span></span><span class="tag">Dokumentacja</span></a>
+<nav class="topnav"><a href="/pl/">Strona główna</a><a href="/pl/guide/">Dokumentacja</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a><span class="locale-switch" role="group" aria-label="Język"><a href="/pl/guide/installation.html" data-language="pl" lang="pl" aria-label="Polski" aria-current="page">PL</a><a href="/guide/installation.html" data-language="en" lang="en" aria-label="English">EN</a></span></nav>
+</div></header>
+<div class="doc-wrap"><aside class="doc-side"><a href="/pl/guide/" style="font-weight:600;margin-bottom:6px;display:block">← Dokumentacja</a><div class="grp">Dokumentacja</div><a href="/pl/guide/quick-start.html">Szybki start</a><a href="/pl/guide/installation.html" class="active">Instalacja</a><a href="/pl/guide/configuration.html">Konfiguracja</a><a href="/pl/guide/api-reference.html">Dokumentacja API</a><a href="/pl/guide/mcp-tools.html">Narzędzia MCP</a><div class="grp">Projekt</div><a href="/pl/guide/architecture.html">Architektura</a><a href="/pl/guide/deployment.html">Wdrożenie</a><a href="/pl/guide/security.html">Bezpieczeństwo</a><a href="/pl/guide/backup-and-restore.html">Kopie zapasowe i odtwarzanie</a></aside><main class="doc-main"><div class="doc-eyebrow">Dokumentacja</div><article class="doc-content"><h1 id="installation-guide">Instrukcja instalacji</h1>
+<p>Loomem jest dostarczany jako trzy samodzielne pliki wykonywalne — <code>loomem-server</code>, <code>loomem-cli</code> i <code>loomem-migrate</code> — z wbudowanymi RocksDB i Tantivy. Wymagają one jedynie systemowych bibliotek uruchomieniowych C i C++. Lokalny model embeddingów pobiera się osobno. Ta instrukcja obejmuje obsługiwane sposoby instalacji, weryfikację, aktualizację i rozwiązywanie problemów.</p>
+<h2 id="supported-platforms">Obsługiwane platformy</h2>
+<table>
+<thead>
+<tr>
+<th>Platforma</th>
+<th>Cel kompilacji</th>
+<th>Gotowy plik</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>macOS Apple Silicon</td>
+<td><code>aarch64-apple-darwin</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>macOS Intel</td>
+<td><code>x86_64-apple-darwin</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Linux x86_64 (glibc ≥ 2.35: Ubuntu 22.04+, Debian 12+, Fedora 36+)</td>
+<td><code>x86_64-unknown-linux-gnu</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Linux ARM64 (glibc ≥ 2.35)</td>
+<td><code>aarch64-unknown-linux-gnu</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Pozostałe (musl, BSD, Windows/WSL2…)</td>
+<td>—</td>
+<td>kompilacja <a href="#from-source">ze źródeł</a></td>
+</tr>
+</tbody>
+</table>
+<p>Instalator wymaga <code>sh</code>, <code>tar</code> oraz <code>curl</code> lub <code>wget</code>. Nie wymaga sudo — wszystko trafia do katalogu domowego.</p>
+<h2 id="quick-install">Szybka instalacja</h2>
+<p>Repozytorium jest publiczne, więc poniższe polecenie nie wymaga uwierzytelnienia:</p>
+<pre><code class="language-bash">curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/install.sh | sh
+</code></pre>
+<p>Instalator domyślnie wybiera port <strong>3030</strong>, a jeśli jest zajęty, pyta o wolny port. Ustaw <code>LOOMEM_PORT=NNNN</code>, aby wybrać port bez pytania.</p>
+<details>
+<summary>Instalacja z <strong>prywatnego forka</strong> (z uwierzytelnieniem)</summary>
+<p>Jeśli Twoja kopia repozytorium jest prywatna, uwierzytelnij się przy użyciu <a href="https://cli.github.com">GitHub CLI</a>:</p>
+<pre><code class="language-bash">gh auth login            # jednorazowo
+gh api repos/&lt;owner&gt;/loomem/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
+</code></pre>
+<p>Nie masz <code>gh</code>? Możesz też użyć osobistego tokenu dostępu z zakresem <code>repo</code>:</p>
+<pre><code class="language-bash">export GH_TOKEN=ghp_xxx
+curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
+  https://api.github.com/repos/&lt;owner&gt;/loomem/contents/install.sh | sh
+</code></pre>
+</details>
+<h3 id="what-the-installer-does">Co robi instalator</h3>
+<ol>
+<li>Wykrywa system operacyjny i architekturę (<code>uname</code>).</li>
+<li>Wybiera pierwsze dostępne źródło pobierania: serwer lustrzany <code>LOOMEM_BASE_URL</code> → <code>GH_TOKEN</code>/<code>GITHUB_TOKEN</code> (GitHub API) → zalogowany klient <code>gh</code> → publiczne adresy wydań.</li>
+<li>Ustala najnowsze wydanie (lub wersję wskazaną przez <code>LOOMEM_VERSION</code>).</li>
+<li>Pobiera archiwum dla platformy i <code>SHA256SUMS</code>, a następnie <strong>sprawdza sumę kontrolną</strong> (niezgodność przerywa instalację).</li>
+<li>Instaluje trzy pliki wykonywalne w <code>~/.loomem/bin</code>.</li>
+<li>Kopiuje szablony konfiguracji (<code>config.toml</code>, <code>entities.toml.example</code>, <code>synonyms.toml.example</code>) do <code>~/.loomem</code> i tworzy <code>entities.toml</code> na podstawie przykładu (serwer wymaga go przy starcie). <strong>Nie nadpisuje istniejących plików</strong>, więc ponowne uruchomienie jest bezpieczne.</li>
+<li>Wyświetla instrukcję konfiguracji PATH, jeśli <code>~/.loomem/bin</code> jeszcze w nim nie ma.</li>
+</ol>
+<p>Instalator <strong>nie</strong> pobiera lokalnego modelu embeddingów. Pobierz go przed <a href="#first-run">pierwszym uruchomieniem</a>.</p>
+<h3 id="installer-environment-variables">Zmienne środowiskowe instalatora</h3>
+<table>
+<thead>
+<tr>
+<th>Zmienna</th>
+<th>Domyślnie</th>
+<th>Przeznaczenie</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LOOMEM_VERSION</code></td>
+<td>najnowsze wydanie</td>
+<td>Wskazuje wersję, np. <code>v0.2.0</code>. Wymagane dla wersji wstępnych (<code>v0.2.0-rc1</code>), które nie są uwzględniane jako najnowsze.</td>
+</tr>
+<tr>
+<td><code>LOOMEM_INSTALL_DIR</code></td>
+<td><code>~/.loomem/bin</code></td>
+<td>Katalog plików wykonywalnych.</td>
+</tr>
+<tr>
+<td><code>LOOMEM_CONFIG_DIR</code></td>
+<td><code>~/.loomem</code></td>
+<td>Katalog szablonów konfiguracji.</td>
+</tr>
+<tr>
+<td><code>GH_TOKEN</code> / <code>GITHUB_TOKEN</code></td>
+<td>—</td>
+<td>Token GitHub do pobierania z prywatnego repozytorium.</td>
+</tr>
+<tr>
+<td><code>LOOMEM_BASE_URL</code></td>
+<td>—</td>
+<td>Pobiera archiwa ze zwykłego serwera lustrzanego HTTP(S) zamiast GitHuba (wymaga <code>LOOMEM_VERSION</code>).</td>
+</tr>
+</tbody>
+</table>
+<p>Przykład: wskazanie wersji i własnego katalogu instalacji:</p>
+<pre><code class="language-bash">LOOMEM_VERSION=v0.2.0 LOOMEM_INSTALL_DIR=/opt/loomem/bin sh install.sh
+</code></pre>
+<h2 id="path-setup">Konfiguracja PATH</h2>
+<p>Instalator nie zmienia konfiguracji powłoki. Dodaj raz:</p>
+<pre><code class="language-bash">echo 'export PATH="$HOME/.loomem/bin:$PATH"' &gt;&gt; ~/.zshrc   # lub ~/.bashrc
+exec $SHELL
+</code></pre>
+<h2 id="first-run">Pierwsze uruchomienie</h2>
+<pre><code class="language-bash">curl -fsSL https://raw.githubusercontent.com/vvooki-sys/loomem/main/scripts/fetch-embedding-model.sh | sh   # lokalny model embeddingów, wymagany
+export OPENAI_API_KEY="sk-..."     # lub: export LOOMEM_ALLOW_KEYLESS=1
+cd ~/.loomem
+loomem-server
+</code></pre>
+<p>Serwer nie uruchomi się bez lokalnego modelu embeddingów (około 113 MB, jednorazowo pobieranego do <code>~/.loomem/models</code>). Domyślna konfiguracja wymaga też klucza LLM albo ustawienia <code>LOOMEM_ALLOW_KEYLESS=1</code> dla trybu bez klucza. Funkcje wyłączane w tym trybie opisano w sekcji <a href="#from-source">Kompilacja ze źródeł</a>.</p>
+<p>Serwer <strong>wymaga</strong> plików <code>config.toml</code> i <code>entities.toml</code> w katalogu roboczym. Instalator tworzy oba, więc uruchomienie z <code>~/.loomem</code> spełnia ten warunek. Edytuj <code>entities.toml</code>, aby podać Loomem osoby, projekty i aliasy (patrz komentarze w pliku).</p>
+<p>Serwer nasłuchuje na <code>http://127.0.0.1:3030</code> i zapisuje dane w <code>./data</code> względem katalogu roboczego. Uruchomienie z <code>~/.loomem</code> umieszcza dane w <code>~/.loomem/data</code>. Sprawdź:</p>
+<pre><code class="language-bash">curl http://localhost:3030/health
+</code></pre>
+<p>Następnie połącz klienta MCP. Instrukcje dla Claude Code, claude.ai, ChatGPT i OpenClaw znajdują się w <a href="https://github.com/vvooki-sys/loomem#connect-an-mcp-client">README</a>.</p>
+<p><strong>Bezpieczeństwo:</strong> uwierzytelnianie jest domyślnie wyłączone na potrzeby localhost. Jeśli serwer jest dostępny dla innych osób, ustaw <code>LOOMEM_AUTH_TOKEN</code> (patrz <a href="/pl/guide/security.html">model bezpieczeństwa</a> i <a href="/pl/guide/deployment.html">wdrożenie</a>).</p>
+<h2 id="verifying-checksums-manually">Ręczna weryfikacja sum kontrolnych</h2>
+<p>Instalator weryfikuje je automatycznie. Aby sprawdzić je ręcznie:</p>
+<pre><code class="language-bash">gh release download v0.2.0 --repo vvooki-sys/loomem \
+  --pattern 'loomem-0.2.0-aarch64-apple-darwin.tar.gz' --pattern 'SHA256SUMS'
+shasum -a 256 -c --ignore-missing SHA256SUMS    # macOS
+sha256sum -c --ignore-missing SHA256SUMS        # Linux
+</code></pre>
+<h2 id="upgrading">Aktualizacja</h2>
+<p>Uruchom instalator ponownie — pliki wykonywalne zostaną zastąpione, a konfiguracja pozostanie bez zmian:</p>
+<pre><code class="language-bash">gh api repos/vvooki-sys/loomem/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
+</code></pre>
+<p>Najpierw sprawdź <a href="https://github.com/vvooki-sys/loomem/blob/main/CHANGELOG.md">CHANGELOG</a> pod kątem zmian niekompatybilnych. Jeżeli wydanie wymaga migracji formatu danych, zatrzymaj serwer i uruchom <code>loomem-migrate</code> przed uruchomieniem nowej wersji.</p>
+<h2 id="uninstalling">Odinstalowanie</h2>
+<p>Loomem przechowuje swoje pliki w katalogach instalacji i danych:</p>
+<pre><code class="language-bash">rm -rf ~/.loomem          # pliki wykonywalne, konfiguracja i dane (przy uruchomieniu z ~/.loomem)
+</code></pre>
+<p>Jeśli dodano wpis PATH do konfiguracji powłoki, usuń go. Jeśli serwer był uruchamiany z innego katalogu roboczego, dane <code>./data</code> znajdują się tam.</p>
+<h2 id="from-source">Kompilacja ze źródeł</h2>
+<pre><code class="language-bash">git clone https://github.com/vvooki-sys/loomem.git
+cd loomem
+cp entities.toml.example entities.toml
+(cd loomem-dashboard &amp;&amp; npm ci &amp;&amp; npm run build)   # dashboard osadzany podczas kompilacji
+./scripts/fetch-embedding-model.sh                 # lokalny model embeddingów → ~/.loomem/models
+cargo build --release -p loomem-server -p loomem-cli -p loomem-migrate
+# pliki wykonywalne w target/release/
+</code></pre>
+<p>Wymagane są Rust (stable), Node.js (dla panelu) oraz libclang do kompilacji RocksDB: <code>apt install libclang-dev</code> w Debianie/Ubuntu; na macOS biblioteka jest dostępna w Xcode Command Line Tools. W systemie Windows zobacz <a href="https://github.com/vvooki-sys/loomem/blob/main/INSTALL_WINDOWS.md">INSTALL_WINDOWS.md</a>.</p>
+<p>Pominięcie budowy panelu spowoduje, że panel zwróci błąd 404. Lokalny model embeddingów jest <strong>wymagany</strong>: przy domyślnym <code>embedding_provider = "local"</code> serwer nie uruchomi się bez niego (<code>refusing cloud fallback</code>), niezależnie od obecności klucza API. Domyślna konfiguracja włącza także ekstrakcję i dreaming oparte na LLM, więc serwer <strong>nie uruchomi się</strong> bez klucza LLM (<code>export OPENAI_API_KEY=...</code>) albo ustawienia <code>LOOMEM_ALLOW_KEYLESS=1</code>. W trybie bez klucza <code>memory_ingest</code> może zapisać tekst źródłowy, lecz zwraca błąd i nie wyodrębnia faktów. Ekstrakcja encji jest wyłączona, a dreaming kończy się błędem. <code>memory_store</code> i wyszukiwanie nadal działają.</p>
+<h2 id="docker">Docker</h2>
+<pre><code class="language-bash">docker build -t loomem .
+export LOOMEM_AUTH_TOKEN=$(openssl rand -hex 32)
+export LOOMEM_AT_REST_MASTER_KEY=$(openssl rand -base64 32)
+export OPENAI_API_KEY="sk-..."
+docker run -p 3030:3030 -v loomem-data:/data \
+  -e LOOMEM_AUTH_TOKEN -e LOOMEM_AT_REST_MASTER_KEY -e OPENAI_API_KEY \
+  -e LOOMEM_EMBEDDING_PROVIDER=openai -e LOOMEM_EMBEDDING_DIM=1536 loomem
+</code></pre>
+<p>Obraz nasłuchuje na <code>0.0.0.0</code>, więc wymaga tokenu uwierzytelniającego oraz domyślnie klucza głównego szyfrowania danych w spoczynku — bez nich serwer nie wystartuje. Świadome wyłączenie zabezpieczeń: <code>LOOMEM_ALLOW_UNAUTH=1</code>, <code>LOOMEM_AT_REST_EXPECT_ENABLED=0</code>. Opcje reverse proxy, TLS i chmury opisano w <a href="/pl/guide/deployment.html">instrukcji wdrożenia</a>, a model bezpieczeństwa w <a href="/pl/guide/security.html">opisie bezpieczeństwa</a>.</p>
+<p>Obraz nie zawiera lokalnego modelu embeddingów, dlatego polecenie przełącza embeddingi na OpenAI (<code>LOOMEM_EMBEDDING_PROVIDER=openai</code>, <code>LOOMEM_EMBEDDING_DIM=1536</code>) i przekazuje <code>OPENAI_API_KEY</code>. Zapisywany tekst jest wtedy wysyłany do API OpenAI. Bez tych zmiennych serwer nie uruchomi się (<code>refusing cloud fallback</code>).</p>
+<h2 id="troubleshooting">Rozwiązywanie problemów</h2>
+<table>
+<thead>
+<tr>
+<th>Objaw</th>
+<th>Przyczyna i rozwiązanie</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>could not determine the latest release</code></td>
+<td>Repozytorium jest prywatne, a Ty nie masz uwierzytelnienia → <code>gh auth login</code> lub ustaw <code>GH_TOKEN</code>. Jeśli jedyne wydanie jest wersją wstępną, wskaż <code>LOOMEM_VERSION=v0.2.0-rc1</code>.</td>
+</tr>
+<tr>
+<td><code>download failed: … If this repo is private…</code></td>
+<td>Podobnie jak wyżej — instalator nie ma dostępu do plików wydania bez uwierzytelnienia.</td>
+</tr>
+<tr>
+<td><code>checksum mismatch</code></td>
+<td>Pobrany plik jest uszkodzony lub zmieniony. Spróbuj ponownie. Jeśli błąd się powtarza, <strong>nie instaluj</strong> — porównaj z <code>SHA256SUMS</code> na stronie wydania i zgłoś problem.</td>
+</tr>
+<tr>
+<td><code>SHA256SUMS could not be downloaded — refusing to install an unverified archive</code></td>
+<td>Nie można pobrać pliku sum kontrolnych. Instalator przerywa instalację; sprawdź dostępność pliku w wybranym wydaniu lub serwerze lustrzanym.</td>
+</tr>
+<tr>
+<td><code>unsupported OS/architecture</code></td>
+<td>Brak gotowego pliku dla Twojej platformy — <a href="#from-source">skompiluj ze źródeł</a>.</td>
+</tr>
+<tr>
+<td><code>version 'GLIBC_2.35' not found</code> (lub podobny)</td>
+<td>Wersja glibc w Twojej dystrybucji jest starsza od wymaganej — <a href="#from-source">skompiluj ze źródeł</a> albo użyj <a href="#docker">Dockera</a>.</td>
+</tr>
+<tr>
+<td><code>loomem-server: command not found</code> po instalacji</td>
+<td><code>~/.loomem/bin</code> nie znajduje się w PATH — zobacz <a href="#path-setup">konfigurację PATH</a>.</td>
+</tr>
+<tr>
+<td><code>gh: Not Found (HTTP 404)</code> przy poleceniu <code>gh api</code></td>
+<td>Twoje konto GitHub nie ma dostępu do prywatnego repozytorium albo jesteś zalogowany na inne konto (<code>gh auth status</code>).</td>
+</tr>
+<tr>
+<td><code>Local embedding provider could not load its model; refusing cloud fallback</code></td>
+<td>Lokalnego modelu embeddingów brakuje lub nie można go odczytać. Pobierz go zgodnie z sekcją <a href="#first-run">Pierwsze uruchomienie</a> albo ustaw <code>embedding_model_path</code> w <code>config.toml</code> na katalog modelu.</td>
+</tr>
+<tr>
+<td><code>… enabled but no LLM API key found</code></td>
+<td>Domyślna konfiguracja wymaga klucza LLM. Ustaw <code>OPENAI_API_KEY</code> lub uruchom serwer z <code>LOOMEM_ALLOW_KEYLESS=1</code>, aby użyć trybu bez klucza.</td>
+</tr>
+<tr>
+<td><code>Error: Failed to load entities file (entities.toml)</code></td>
+<td>Serwer wymaga <code>entities.toml</code> w katalogu roboczym — wykonaj <code>cp ~/.loomem/entities.toml.example ~/.loomem/entities.toml</code> i uruchom go z <code>~/.loomem</code>.</td>
+</tr>
+<tr>
+<td>Serwer startuje, ale <code>curl /health</code> nie działa</td>
+<td>Podczas pierwszego uruchomienia tworzone są indeksy, co może potrwać kilka sekund. Port 3030 jest zajęty? Sprawdź log serwera. Adres i port nasłuchu znajdują się w <code>config.toml</code>.</td>
+</tr>
+</tbody>
+</table></article><div class="doc-foot"><span>Loomem · Apache-2.0</span><span><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/pl/installation.md">Edytuj na GitHubie</a></span></div></main></div>  <script defer src="/_vercel/insights/script.js"></script>
+</body></html>

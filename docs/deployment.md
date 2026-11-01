@@ -122,6 +122,7 @@ volumes:
    - `OPENAI_API_KEY` — your OpenAI API key
    - `LOOMEM_EMBEDDING_PROVIDER=openai` and `LOOMEM_EMBEDDING_DIM=1536` — the image has no local embedding model
    - `LOOMEM_AUTH_TOKEN` — admin token (generate a random string)
+   - `LOOMEM_AT_REST_MASTER_KEY` — a base64-encoded 32-byte master key, required by the Docker image; keep a separate secure copy for recovery
 5. Add a volume mounted at `/data` for persistent storage
 6. Deploy
 
@@ -175,7 +176,7 @@ Other `loomem-migrate` subcommands (run manually, not via the entrypoint): `--va
 - [ ] Set up HTTPS (managed platforms provide this; Docker needs a reverse proxy)
 - [ ] Behind a reverse proxy, set `LOOMEM_TRUST_FORWARDED_FOR=1` so the `/oauth/register` rate limit keys on the client address your proxy appends to `X-Forwarded-For`, instead of lumping every client into the proxy's own bucket — leave it unset when Loomem is exposed directly (the header is caller-controlled there)
 
-If a secret leaks, rotate it: replace the env var value, restart the service, and verify with a request using the old key (must be rejected).
+If the authentication token leaks, replace the env var value, restart the service, and verify that a request using the old token is rejected. Master-key rotation is not currently supported: changing the at-rest master key does not re-wrap existing data keys and makes encrypted data unreadable. See [Security overview](SECURITY.md).
 
 ### Performance
 
@@ -287,9 +288,7 @@ Checkpoints are written to `{data_dir}/backups/checkpoint-<timestamp>/`. For an 
 
 ### Restore
 
-1. Stop Loomem
-2. Replace `data/` directory with backup
-3. Start Loomem — Tantivy index rebuilds automatically if schema mismatches
+Before taking any restore actions, read and follow the full [restore procedure](backup-and-restore.md#restore-procedure), including the separate intent log, the master key for encrypted backups, index rebuilding, and verification.
 
 ---
 
