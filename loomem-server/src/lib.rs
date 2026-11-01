@@ -1,3 +1,7 @@
+//! Library surface for the feature-gated Hosted engine binary.
+//! The original server and its unit-test fixture remain in `main.rs`.
+#![cfg(feature = "hosted-engine")]
+
 pub mod access_hook;
 pub mod auth;
 pub mod content_type;
