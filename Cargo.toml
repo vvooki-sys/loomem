@@ -46,7 +46,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # HTTP server
 axum = "0.8"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.7", features = ["trace"] }
 # Embedded dashboard SPA (loomem-dashboard/dist compiled into the binary —
 # ships one self-contained file to every instance). Chosen over ServeDir
 # (would require deploying a directory next to the binary) and include_str!
