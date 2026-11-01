@@ -29,14 +29,22 @@ export default function MemoryPage({ userCtx }) {
 
   // Debounce the search box (300ms) before it hits the server.
   useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedQuery(query), 300);
+    const t = window.setTimeout(() => {
+      if (query !== debouncedQuery) { setDebouncedQuery(query); setPage(1); }
+    }, 300);
     return () => window.clearTimeout(t);
-  }, [query]);
+  }, [query, debouncedQuery]);
 
-  // Reset to page 1 whenever the result set can change out from under us.
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedQuery, mode, layer, sourceAgent, perPage]);
+  // Keep the options seen across responses, including filtered responses.
+  const [agentOptions, setAgentOptions] = useState([]);
+  const recordAgents = useCallback((result) => {
+    const found = (result?.items || []).map((item) => item.source_agent).filter(Boolean);
+    if (!found.length) return;
+    setAgentOptions((prev) => {
+      const merged = new Set([...prev, ...found]);
+      return merged.size === prev.length ? prev : [...merged].sort();
+    });
+  }, []);
 
   const { data, loading, error, refresh, patchItem } = useMemoryList({
     query: debouncedQuery,
@@ -45,24 +53,11 @@ export default function MemoryPage({ userCtx }) {
     sourceAgent,
     page,
     perPage,
+    onResult: recordAgents,
   });
 
   const items = useMemo(() => data?.items || [], [data]);
   const total = data?.total ?? 0;
-
-  // Accumulate the distinct source_agent values seen across list responses so
-  // the toolbar dropdown does not collapse to one option once a filter is
-  // active (server-filtered responses only carry the selected agent).
-  const [agentOptions, setAgentOptions] = useState([]);
-  useEffect(() => {
-    const found = items.map((i) => i.source_agent).filter(Boolean);
-    if (found.length === 0) return;
-    setAgentOptions((prev) => {
-      const merged = new Set(prev);
-      found.forEach((a) => merged.add(a));
-      return merged.size === prev.length ? prev : [...merged].sort();
-    });
-  }, [items]);
 
   // ── Mutations: pessimistic, server is the source of truth (no overrides) ──
   const handleEdit = useCallback(
@@ -121,22 +116,24 @@ export default function MemoryPage({ userCtx }) {
       onQuery={setQuery}
       mode={mode}
       onMode={(m) => {
+        if (m === mode) return;
         setMode(m);
+        setPage(1);
         // Layer filtering is substring-only; drop any stale layer when entering
         // semantic so the (hidden) filter never lies about the shown results.
         if (m === "semantic") setLayer("all");
       }}
       layer={layer}
-      onLayer={setLayer}
+      onLayer={(value) => { if (value !== layer) { setLayer(value); setPage(1); } }}
       agents={agentOptions}
       sourceAgent={sourceAgent}
-      onSourceAgent={setSourceAgent}
+      onSourceAgent={(value) => { if (value !== sourceAgent) { setSourceAgent(value); setPage(1); } }}
       selectedId={selectedId}
       onSelect={setSelectedId}
       page={page}
       perPage={perPage}
       onPage={setPage}
-      onPerPage={setPerPage}
+      onPerPage={(value) => { if (value !== perPage) { setPerPage(value); setPage(1); } }}
     />
   );
 

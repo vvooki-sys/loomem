@@ -60,6 +60,28 @@ describe("stream banner", () => {
 });
 
 describe("server-side search", () => {
+  it("returns to page one when a filter changes", async () => {
+    api.getMemory.mockResolvedValue({ ...ONE, total: 120 });
+    renderPage();
+    await screen.findByText("Page 1 of 3");
+    await userEvent.click(screen.getByRole("button", { name: /Next/i }));
+    await screen.findByText("Page 2 of 3");
+    await userEvent.click(screen.getByRole("button", { name: "L1" }));
+    await screen.findByText("Page 1 of 3");
+    await waitFor(() => expect(api.getMemory).toHaveBeenCalledWith(expect.objectContaining({ page: 1, layer: "L1" })));
+  });
+
+  it("keeps the current page when the active filter is clicked again", async () => {
+    api.getMemory.mockResolvedValue({ ...ONE, total: 120 });
+    renderPage();
+    await screen.findByText("Page 1 of 3");
+    await userEvent.click(screen.getByRole("button", { name: "L1" }));
+    await userEvent.click(screen.getByRole("button", { name: /Next/i }));
+    await screen.findByText("Page 2 of 3");
+    await userEvent.click(screen.getByRole("button", { name: "L1" }));
+    expect(screen.getByText("Page 2 of 3")).toBeInTheDocument();
+  });
+
   it("substring: typing calls /api/dashboard/memory with q=", async () => {
     renderPage();
     await waitFor(() => expect(screen.getAllByText("original memory text").length).toBeGreaterThan(0));
