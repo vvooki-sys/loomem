@@ -1,6 +1,9 @@
 # Dependabot: weekly version updates + security-update PRs.
 # `cargo audit` in CI stays the source of truth for RustSec advisories
 # (Dependabot does not see unmaintained/yanked crates or .cargo/audit.toml).
+# cooldown: wait N days after a release before a version-update PR, so that
+# broken or malicious releases can be found and yanked first.
+# Security updates ignore cooldown.
 version: 2
 updates:
   # Rust workspace (root Cargo.toml + Cargo.lock).
@@ -12,6 +15,11 @@ updates:
     open-pull-requests-limit: 10
     commit-message:
       prefix: "chore(deps)"
+    cooldown:
+      default-days: 3
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     groups:
       cargo-minor-patch:
         update-types: [minor, patch]
@@ -24,6 +32,11 @@ updates:
       day: monday
     commit-message:
       prefix: "ci(deps)"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 7
     groups:
       actions:
         patterns: ["*"]
@@ -36,6 +49,11 @@ updates:
       day: monday
     commit-message:
       prefix: "chore(deps)"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 7
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
@@ -48,3 +66,5 @@ updates:
       day: monday
     commit-message:
       prefix: "chore(deps)"
+    cooldown:
+      default-days: 3
