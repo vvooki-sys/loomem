@@ -318,7 +318,9 @@ pub async fn dream_run(
         let request_body = build_dream_request(&dream_config.model, subject, chunks);
 
         let response = match client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(crate::evaluation_url::chat_completions(
+                "LOOMEM_EVALUATION_DREAM_URL",
+            )?)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(&request_body)

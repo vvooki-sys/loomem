@@ -417,6 +417,27 @@ async fn tool_store(
     stream_id: &str,
     user_id: Option<String>,
 ) -> Result<ToolResult, JsonRpcError> {
+    tool_store_inner(state, args, stream_id, user_id, None).await
+}
+
+#[cfg(feature = "hosted-engine")]
+pub(crate) async fn hosted_store(
+    state: &Arc<AppState>,
+    args: Value,
+    stream_id: &str,
+    user_id: Option<String>,
+    record_id: String,
+) -> Result<ToolResult, JsonRpcError> {
+    tool_store_inner(state, args, stream_id, user_id, Some(record_id)).await
+}
+
+async fn tool_store_inner(
+    state: &Arc<AppState>,
+    args: Value,
+    stream_id: &str,
+    user_id: Option<String>,
+    record_id: Option<String>,
+) -> Result<ToolResult, JsonRpcError> {
     let args: StoreArgs =
         serde_json::from_value(args).map_err(|e| JsonRpcError::invalid_params(&e.to_string()))?;
 
@@ -455,9 +476,10 @@ async fn tool_store(
         .as_ref()
         .map(|m| state.pii_filter.sanitize_json(m));
 
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = record_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let timestamp = Utc::now().timestamp() as u64;
     let stream = stream_id.to_string();
+    let audit_actor = user_id.clone().unwrap_or_else(|| "default".to_string());
     let subject = args.subject.unwrap_or_else(|| "user".into());
     let source = args.source.unwrap_or_else(|| "mcp".into());
     let fact_type = classify_fact_type(&content);
@@ -549,7 +571,7 @@ async fn tool_store(
         state,
         chunk,
         &content,
-        "default",
+        &audit_actor,
         "default",
         &stream,
         0,
@@ -1142,15 +1164,29 @@ async fn tool_status(
 
     // /150b Gap 6: surface process-wide log-loss counters (0 in healthy
     // operation; non-zero signals the event log / audit trail is incomplete).
-    let event_log_drops = loomem_core::event_log::emit_drop_count();
-    let audit_write_failures = loomem_core::audit::append_failure_count();
+    // Hosted scopes never expose process-wide diagnostics from another scope.
+    let (event_log_drops, audit_write_failures, llm_fail) = if state.process_diagnostics {
+        (
+            loomem_core::event_log::emit_drop_count(),
+            loomem_core::audit::append_failure_count(),
+            loomem_core::llm_failures::global().recent(),
+        )
+    } else {
+        (
+            0,
+            0,
+            loomem_core::llm_failures::LlmFailureCounts {
+                window_secs: loomem_core::llm_failures::WINDOW.as_secs(),
+                ..Default::default()
+            },
+        )
+    };
 
     // /157 S3: backlog + LLM failure visibility (incidents A/B, 2026-06-11).
     let undecodable = state.store.last_scan_decode_summary().map_or_else(
         || "n/a (no full scan yet)".to_string(),
         |s| s.undecodable.to_string(),
     );
-    let llm_fail = loomem_core::llm_failures::global().recent();
 
     let text = format!(
         "Loomem Status: ok\nYour stream: {stream_id}\nYour memories: {chunk_count}\nEmbeddings (this stream): {embedding_status}\nAssociator: {assoc_status}\nEvent log drops: {event_log_drops}\nAudit write failures: {audit_write_failures}\nUndecodable chunks (last full scan): {undecodable}\nLLM failures (last {}m): extraction={}, ner={}, embedding={}, consolidation={}\nEmpty extractions (last {}m): {}",
@@ -1215,6 +1251,13 @@ async fn tool_stats(
     };
     // Per-stream BM25 index count (async index handle).
     stats.retrieval.tantivy_indexed_count = state.tantivy.lock().await.count_stream(stream_id).ok();
+    if !state.process_diagnostics {
+        let failures = &mut stats.extraction.llm_failures_recent_global;
+        *failures = loomem_core::llm_failures::LlmFailureCounts {
+            window_secs: failures.window_secs,
+            ..Default::default()
+        };
+    }
 
     Ok(ToolResult::text(loomem_core::stream_stats::render_text(
         &stats,

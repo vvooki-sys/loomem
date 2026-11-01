@@ -22,8 +22,22 @@ struct ExtractRequest {
 pub struct EntityExtractionQueue {
     tx: mpsc::Sender<ExtractRequest>,
     graph: Arc<GraphStore>,
+    shutdown: tokio::sync::broadcast::Sender<()>,
+    worker: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 impl EntityExtractionQueue {
+    /// Flush accepted work and join the worker before Hosted seals a generation.
+    pub async fn shutdown(&self) -> Result<()> {
+        let _ = self.shutdown.send(());
+        let handle = self.worker.lock().await.take();
+        if let Some(handle) = handle {
+            handle
+                .await
+                .map_err(|e| anyhow::anyhow!("Entity worker join: {e}"))?;
+        }
+        Ok(())
+    }
+
     pub fn enqueue(
         &self,
         chunk_id: String,
@@ -68,23 +82,30 @@ pub fn spawn_worker(
     context: EntityExtractionWorkerContext,
 ) -> EntityExtractionQueue {
     let (tx, rx) = mpsc::channel(context.config.queue_capacity);
-    let queue = EntityExtractionQueue {
-        tx,
-        graph: graph.clone(),
-    };
-    tokio::spawn(worker_loop(
+    let (shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let worker = tokio::spawn(worker_loop(
         rx,
         Worker {
             store,
-            graph,
+            graph: graph.clone(),
             tantivy,
             http_client,
             context,
         },
+        shutdown_rx,
     ));
-    queue
+    EntityExtractionQueue {
+        tx,
+        graph,
+        shutdown,
+        worker: Arc::new(tokio::sync::Mutex::new(Some(worker))),
+    }
 }
-async fn worker_loop(mut rx: mpsc::Receiver<ExtractRequest>, worker: Worker) {
+async fn worker_loop(
+    mut rx: mpsc::Receiver<ExtractRequest>,
+    worker: Worker,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
+) {
     let config = &worker.context.config;
     info!(
         "Entity extraction queue started (batch_size={}, flush={}s, confidence={})",
@@ -123,6 +144,11 @@ async fn worker_loop(mut rx: mpsc::Receiver<ExtractRequest>, worker: Worker) {
                         }
                     }
                 }
+                _ = shutdown.recv() => {
+                    drain_queue(&mut rx, &mut batch, &mut batch_tokens, &worker).await;
+                    info!("Entity extraction queue shutting down");
+                    return;
+                }
                 _ = tokio::time::sleep(remaining) => {
                     break;
                 }
@@ -132,6 +158,27 @@ async fn worker_loop(mut rx: mpsc::Receiver<ExtractRequest>, worker: Worker) {
         if !batch.is_empty() {
             flush_batch(&mut batch, &mut batch_tokens, &worker).await;
         }
+    }
+}
+
+async fn drain_queue(
+    rx: &mut mpsc::Receiver<ExtractRequest>,
+    batch: &mut Vec<ExtractRequest>,
+    tokens: &mut usize,
+    worker: &Worker,
+) {
+    rx.close();
+    while let Some(request) = rx.recv().await {
+        *tokens += llm_ner::estimate_tokens(&request.content);
+        batch.push(request);
+        if batch.len() >= worker.context.config.batch_size
+            || *tokens >= worker.context.config.max_tokens_per_batch
+        {
+            flush_batch(batch, tokens, worker).await;
+        }
+    }
+    if !batch.is_empty() {
+        flush_batch(batch, tokens, worker).await;
     }
 }
 

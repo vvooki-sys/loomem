@@ -60,19 +60,10 @@ pub struct AppState {
     pub event_tx: Option<loomem_core::event_log::EventSender>,
     pub mcp_sessions: mcp::SessionStore,
     pub workers: WorkerRegistry,
-    /// Cycle/103a: in-memory LRU cache for `/v1/ambient` Layer 1 responses.
-    /// 60s TTL, 10k entry cap (configurable via `LOOMEM_AMBIENT_CACHE_TTL_SECS`
-    /// — see `loomem_core::ambient::cache_ttl`). Distributed cache deferred
-    /// to /103a-full per `cycles/cycle-103a-layer1-endpoint-brief.md` AC-9.
+    pub deferred: Arc<loomem_server::deferred::DeferredTasks>,
+    pub process_diagnostics: bool,
     pub ambient_cache: Arc<loomem_core::ambient::AmbientCache>,
-    /// Count-based auto-trigger for background dream consolidation. Records every
-    /// newly-persisted chunk per stream and signals when a dream run should fire
-    /// (private streams only; see `handlers::ingest::persist_chunk`). Disabled
-    /// when `[dream].enabled = false` or `auto_trigger_threshold = 0`.
     pub dream_auto: Arc<loomem_core::dream_auto::DreamAutoTrigger>,
-    /// Per-stream token-bucket rate limiter for hot paths (audit 2026-07-01
-    /// item 3). Enforced in the `/v1` middleware and the MCP dispatcher;
-    /// no-op unless `[rate_limit].enabled`.
     pub rate_limiter: Arc<rate_limiter::RateLimiter>,
 }
 
@@ -634,6 +625,8 @@ async fn main() -> Result<()> {
         event_tx,
         mcp_sessions: mcp::session::new_session_store(),
         workers: workers_registry,
+        deferred: Arc::new(loomem_server::deferred::DeferredTasks::default()),
+        process_diagnostics: true,
         ambient_cache: Arc::new(loomem_core::ambient::AmbientCache::new()),
     });
 
@@ -1361,6 +1354,8 @@ mod tests {
             event_tx: None,
             mcp_sessions: mcp::session::new_session_store(),
             workers,
+            deferred: Arc::new(loomem_server::deferred::DeferredTasks::default()),
+            process_diagnostics: true,
             ambient_cache: Arc::new(loomem_core::ambient::AmbientCache::with_config(
                 std::time::Duration::from_secs(60),
                 64,

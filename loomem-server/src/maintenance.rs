@@ -7,7 +7,7 @@ use std::future::Future;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-pub(crate) fn check_index_drift(
+pub fn check_index_drift(
     config: &TantivyConfig,
     store: &RocksDbStore,
     tantivy: &mut TantivyIndex,
@@ -163,7 +163,7 @@ fn record_reembedded_dimension(store: &RocksDbStore, target_dim: usize) -> Resul
 }
 
 /// Offline re-embedding with the server stopped; starts no listener or workers.
-pub(crate) async fn run_reembed(config: &Config, store: &RocksDbStore) -> Result<()> {
+pub async fn run_reembed(config: &Config, store: &RocksDbStore) -> Result<()> {
     let dim = config.llm.embedding_dim;
     let backend = reembed_backend(config)?;
     let existing = store.get_all_embeddings().context("list embeddings")?;

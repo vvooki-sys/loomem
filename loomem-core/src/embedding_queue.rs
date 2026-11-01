@@ -21,6 +21,23 @@ struct EmbedRequest {
 pub struct EmbeddingQueue {
     tx: mpsc::Sender<EmbedRequest>,
     store: Arc<RocksDbStore>,
+    shutdown: tokio::sync::broadcast::Sender<()>,
+    worker: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl EmbeddingQueue {
+    /// Stop accepting worker progress, flush the current batch and join the task.
+    /// Existing single-user servers do not call this during ordinary operation.
+    pub async fn shutdown(&self) -> Result<()> {
+        let _ = self.shutdown.send(());
+        let handle = self.worker.lock().await.take();
+        if let Some(handle) = handle {
+            handle
+                .await
+                .map_err(|e| anyhow::anyhow!("Embedding worker join: {e}"))?;
+        }
+        Ok(())
+    }
 }
 
 impl EmbeddingQueue {
@@ -57,6 +74,14 @@ impl Default for EmbeddingQueueConfig {
     }
 }
 
+struct Worker {
+    store: Arc<RocksDbStore>,
+    http_client: reqwest::Client,
+    llm_config: LlmConfig,
+    config: EmbeddingQueueConfig,
+    local_embedder: Option<Arc<LocalEmbedder>>,
+}
+
 /// Spawn the embedding queue background worker. Returns a handle for submitting requests.
 pub fn spawn_worker(
     store: Arc<RocksDbStore>,
@@ -66,34 +91,40 @@ pub fn spawn_worker(
     local_embedder: Option<Arc<LocalEmbedder>>,
 ) -> EmbeddingQueue {
     let (tx, rx) = mpsc::channel(config.queue_capacity);
+    let (shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
 
-    tokio::spawn(worker_loop(
+    let worker = tokio::spawn(worker_loop(
         rx,
-        Arc::clone(&store),
-        http_client,
-        llm_config,
-        config,
-        local_embedder,
+        Worker {
+            store: Arc::clone(&store),
+            http_client,
+            llm_config,
+            config,
+            local_embedder,
+        },
+        shutdown_rx,
     ));
 
-    EmbeddingQueue { tx, store }
+    EmbeddingQueue {
+        tx,
+        store,
+        shutdown,
+        worker: Arc::new(tokio::sync::Mutex::new(Some(worker))),
+    }
 }
 
 async fn worker_loop(
     mut rx: mpsc::Receiver<EmbedRequest>,
-    store: Arc<RocksDbStore>,
-    http_client: reqwest::Client,
-    llm_config: LlmConfig,
-    config: EmbeddingQueueConfig,
-    local_embedder: Option<Arc<LocalEmbedder>>,
+    worker: Worker,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) {
     info!(
         "Embedding queue worker started (batch_size={}, flush_interval={}s)",
-        config.batch_size, config.flush_interval_secs
+        worker.config.batch_size, worker.config.flush_interval_secs
     );
 
-    let mut batch: Vec<EmbedRequest> = Vec::with_capacity(config.batch_size);
-    let flush_interval = tokio::time::Duration::from_secs(config.flush_interval_secs);
+    let mut batch: Vec<EmbedRequest> = Vec::with_capacity(worker.config.batch_size);
+    let flush_interval = tokio::time::Duration::from_secs(worker.config.flush_interval_secs);
 
     loop {
         // Collect items until batch is full or timeout
@@ -101,7 +132,7 @@ async fn worker_loop(
 
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() || batch.len() >= config.batch_size {
+            if remaining.is_zero() || batch.len() >= worker.config.batch_size {
                 break;
             }
 
@@ -112,12 +143,26 @@ async fn worker_loop(
                         None => {
                             // Channel closed — flush remaining and exit
                             if !batch.is_empty() {
-                                flush_batch(&mut batch, &store, &http_client, &llm_config, &local_embedder).await;
+                                flush_batch(&mut batch, &worker.store, &worker.http_client, &worker.llm_config, &worker.local_embedder).await;
                             }
                             info!("Embedding queue worker shutting down");
                             return;
                         }
                     }
+                }
+                _ = shutdown.recv() => {
+                    rx.close();
+                    while let Some(req) = rx.recv().await {
+                        batch.push(req);
+                        if batch.len() >= worker.config.batch_size {
+                            flush_batch(&mut batch, &worker.store, &worker.http_client, &worker.llm_config, &worker.local_embedder).await;
+                        }
+                    }
+                    if !batch.is_empty() {
+                        flush_batch(&mut batch, &worker.store, &worker.http_client, &worker.llm_config, &worker.local_embedder).await;
+                    }
+                    info!("Embedding queue worker shutting down");
+                    return;
                 }
                 _ = tokio::time::sleep(remaining) => {
                     break;
@@ -128,10 +173,10 @@ async fn worker_loop(
         if !batch.is_empty() {
             flush_batch(
                 &mut batch,
-                &store,
-                &http_client,
-                &llm_config,
-                &local_embedder,
+                &worker.store,
+                &worker.http_client,
+                &worker.llm_config,
+                &worker.local_embedder,
             )
             .await;
         }

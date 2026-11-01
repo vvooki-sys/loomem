@@ -178,7 +178,8 @@ impl Scheduler {
     }
 
     /// Run scheduler with tokio::select!
-    pub async fn run(mut self) {
+    pub async fn run(&self) {
+        let mut shutdown_rx = self.shutdown_rx.resubscribe();
         info!("🚀 Scheduler started");
 
         // Recover orphaned chunks first
@@ -235,7 +236,7 @@ impl Scheduler {
                 _ = clustering_ticker.tick(), if clustering_enabled => self.tick_clustering(),
                 _ = purge_ticker.tick() => self.tick_purge(),
                 _ = stats_ticker.tick() => self.tick_stats(),
-                _ = self.shutdown_rx.recv() => {
+                _ = shutdown_rx.recv() => {
                     info!("Scheduler received shutdown signal");
                     break;
                 }
@@ -244,6 +245,26 @@ impl Scheduler {
 
         self.wait_for_running_tasks_to_complete().await;
         info!("Scheduler shutdown complete");
+    }
+
+    /// Trigger one of the original workers and return its per-scope job name.
+    pub fn trigger_worker(&self, name: &str) -> Result<()> {
+        match name {
+            "consolidation" => self.tick_consolidation(),
+            "decay" => self.tick_decay(),
+            "compaction" => self.tick_compaction(),
+            "backup" => self.tick_backup(),
+            "clustering" => self.tick_clustering(),
+            "purge" => self.tick_purge(),
+            "stats" => self.tick_stats(),
+            _ => anyhow::bail!("Unknown scheduler worker: {name}"),
+        }
+        Ok(())
+    }
+
+    /// Wait until no original scheduler task is still publishing to this scope.
+    pub async fn wait_for_idle(&self) {
+        self.wait_for_running_tasks_to_complete().await;
     }
 
     fn tick_consolidation(&self) {
@@ -332,6 +353,7 @@ impl Scheduler {
             let all_stopped = !self.consolidation_running.load(Ordering::SeqCst)
                 && !self.decay_running.load(Ordering::SeqCst)
                 && !self.compaction_running.load(Ordering::SeqCst)
+                && !self.backup_running.load(Ordering::SeqCst)
                 && !self.clustering_running.load(Ordering::SeqCst)
                 && !self.purge_running.load(Ordering::SeqCst)
                 && !self.stats_running.load(Ordering::SeqCst);

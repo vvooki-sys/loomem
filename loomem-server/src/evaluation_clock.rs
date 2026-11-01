@@ -13,7 +13,7 @@ pub(crate) fn now() -> DateTime<Utc> {
     Utc::now()
 }
 
-pub(crate) fn engine(config: Config) -> anyhow::Result<HybridSearchEngine> {
+pub fn engine(config: Config) -> anyhow::Result<HybridSearchEngine> {
     #[cfg(feature = "evaluation")]
     if let Some(time) = configured_time(std::env::var("LOOMEM_EVALUATION_TIME_UNIX"))? {
         FIXED_TIME

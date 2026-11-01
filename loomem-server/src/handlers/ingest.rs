@@ -195,8 +195,12 @@ pub async fn persist_chunk(
             .find(|(_, v)| v.as_str() == stream)
             .map(|(k, _)| k.as_str())
             .unwrap_or("unknown");
-        let audit_dir = std::path::Path::new("memory/audit");
-        let _ = std::fs::create_dir_all(audit_dir);
+        let audit_dir = if state.process_diagnostics {
+            std::path::Path::new("memory/audit").to_path_buf()
+        } else {
+            state.config.storage.data_dir.join("audit")
+        };
+        let _ = std::fs::create_dir_all(&audit_dir);
         let date_str = Utc::now().format("%Y-%m-%d").to_string();
         let audit_path = audit_dir.join(format!("{}.jsonl", date_str));
         let audit_line = json!({
@@ -270,9 +274,10 @@ fn maybe_trigger_auto_dream(state: &Arc<AppState>, stream: &str) {
         return;
     }
 
+    let deferred = state.deferred.clone();
     let state = state.clone();
     let stream = stream.to_string();
-    tokio::spawn(async move {
+    deferred.track(async move {
         let cost_tracker = loomem_core::CostTracker::new(
             state.store.clone(),
             state.config.cost.clone(),

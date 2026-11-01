@@ -3,7 +3,7 @@ use loomem_core::{config::LlmConfig, local_embeddings::LocalEmbedder};
 use std::sync::Arc;
 
 /// A configured local provider must never silently become a cloud provider.
-pub(crate) fn load(config: &LlmConfig) -> Result<Option<Arc<LocalEmbedder>>> {
+pub fn load(config: &LlmConfig) -> Result<Option<Arc<LocalEmbedder>>> {
     if config.embedding_provider != "local" {
         return Ok(None);
     }

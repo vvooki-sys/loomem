@@ -242,21 +242,49 @@ impl EventLog {
     }
 }
 
+/// Owned event-log worker for callers that must flush before publishing storage.
+pub struct EventLogWorker {
+    shutdown: tokio::sync::broadcast::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl EventLogWorker {
+    pub async fn shutdown(self) -> Result<()> {
+        let _ = self.shutdown.send(());
+        self.task
+            .await
+            .map_err(|e| anyhow::anyhow!("Event log worker join: {e}"))
+    }
+}
+
 /// Spawn the background event log writer task.
 /// Returns the EventSender to use on hot paths.
 pub fn spawn_writer(data_dir: &Path, config: &EventLogConfig) -> Result<EventSender> {
+    Ok(spawn_writer_managed(data_dir, config)?.0)
+}
+
+pub fn spawn_writer_managed(
+    data_dir: &Path,
+    config: &EventLogConfig,
+) -> Result<(EventSender, EventLogWorker)> {
     let mut log = EventLog::open(data_dir, config)?;
     let (tx, mut rx) = event_channel();
-
-    tokio::spawn(async move {
+    let (shutdown, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let task = tokio::spawn(async move {
         let mut flush_interval = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             tokio::select! {
-                Some(entry) = rx.recv() => {
-                    if let Err(e) = log.append(&entry) {
-                        warn!("Failed to write event: {}", e);
+                entry = rx.recv() => {
+                    match entry {
+                        Some(entry) => {
+                            if let Err(e) = log.append(&entry) {
+                                warn!("Failed to write event: {}", e);
+                            }
+                        }
+                        None => break,
                     }
                 }
+                _ = shutdown_rx.recv() => break,
                 _ = flush_interval.tick() => {
                     if let Err(e) = log.flush() {
                         warn!("Failed to flush event log: {}", e);
@@ -264,9 +292,16 @@ pub fn spawn_writer(data_dir: &Path, config: &EventLogConfig) -> Result<EventSen
                 }
             }
         }
+        while let Ok(entry) = rx.try_recv() {
+            if let Err(e) = log.append(&entry) {
+                warn!("Failed to write event during shutdown: {}", e);
+            }
+        }
+        if let Err(e) = log.flush() {
+            warn!("Failed to flush event log during shutdown: {}", e);
+        }
     });
-
-    Ok(tx)
+    Ok((tx, EventLogWorker { shutdown, task }))
 }
 
 #[cfg(test)]
