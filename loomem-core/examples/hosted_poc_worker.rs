@@ -596,15 +596,38 @@ fn load_engine(args: &[String]) -> Result<SharedEngine> {
     })
 }
 
+fn ensure_no_active_jobs(contexts: &HashMap<ScopeContext, ScopeState>) -> Result<()> {
+    if contexts.values().any(|state| !state.jobs.is_empty()) {
+        bail!("cannot shut down with active jobs")
+    }
+    Ok(())
+}
+
+fn try_shutdown(engine: &SharedEngine, out: &mut impl Write) -> Result<bool> {
+    if let Err(error) = ensure_no_active_jobs(&engine.contexts) {
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string(&failed_response(None, &error))?
+        )?;
+        out.flush()?;
+        return Ok(false);
+    }
+    writeln!(out, "{{\"ok\":true}}")?;
+    out.flush()?;
+    Ok(true)
+}
+
 fn serve(mut engine: SharedEngine) -> Result<()> {
     let stdin = io::stdin();
     let mut out = io::stdout().lock();
     for line in stdin.lock().lines() {
         let request: Result<Value> = serde_json::from_str(&line?).context("invalid JSON request");
         if is_shutdown(&request) {
-            writeln!(out, "{{\"ok\":true}}")?;
-            out.flush()?;
-            break;
+            if try_shutdown(&engine, &mut out)? {
+                break;
+            }
+            continue;
         }
         let response = execute_request(&mut engine, request);
         writeln!(out, "{}", serde_json::to_string(&response)?)?;
@@ -705,6 +728,29 @@ mod tests {
         assert!(advance_scope_epoch(&mut scope_epochs, &contexts, &new).is_ok());
         assert!(ensure_scope_epoch(&scope_epochs, &old).is_err());
         assert!(ensure_scope_epoch(&scope_epochs, &new).is_ok());
+    }
+
+    #[test]
+    fn shutdown_rejects_active_jobs() {
+        let context = context(1);
+        let mut jobs = HashMap::new();
+        jobs.insert("job".to_owned(), std::thread::spawn(|| Ok(json!({}))));
+        let mut contexts = HashMap::from([(
+            context.clone(),
+            ScopeState {
+                root: PathBuf::new(),
+                jobs,
+            },
+        )]);
+        assert!(ensure_no_active_jobs(&contexts).is_err());
+        let handle = contexts
+            .get_mut(&context)
+            .expect("open context")
+            .jobs
+            .remove("job")
+            .expect("active job");
+        handle.join().expect("join job").expect("job result");
+        assert!(ensure_no_active_jobs(&contexts).is_ok());
     }
 
     #[test]

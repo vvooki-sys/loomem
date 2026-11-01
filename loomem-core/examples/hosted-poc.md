@@ -49,13 +49,14 @@ Requests:
 * `{"cmd":"read","context":{...},"generation":"g1","id":"m1"}` returns `chunk`
   or null from that scope only.
 * `{"cmd":"status","context":{...}}` returns the number of open contexts.
-* `{"cmd":"shutdown"}` exits the shared process cleanly.
+* `{"cmd":"shutdown"}` exits the shared process cleanly when no jobs remain.
+  It returns an error and keeps serving while any scope has an active job.
 
 Search and read open Loomem's original mutable storage adapters. Hosted uses
 them only on disposable physical copies of a previously accepted generation,
 never on the authoritative immutable generation. A `READY` marker is only a
 completeness check, not authorization or fencing. Failures return
-`{"ok":false,"error":"operation failed"}` with the context when it was valid.
+`{"ok":false,"error":"<detailed error>"}` with the context when it was valid.
 A terminated or timed-out process has an uncertain outcome: Hosted must
 reconcile its canonical journal and may not blindly retry a generation name.
 All context, generation and record identifiers are bounded ASCII letters,
