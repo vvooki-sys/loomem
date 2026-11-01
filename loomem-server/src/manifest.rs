@@ -2,8 +2,8 @@
 //!
 //! The domain (`loomem_core::manifest`) is HTTP-agnostic: it talks to the LLM
 //! through the [`ManifestCompleter`] trait. This module supplies the production
-//! implementation ([`HttpManifestCompleter`], wrapping `reqwest` + the OpenAI
-//! chat endpoint) and the [`build_profile_or_manifest`] routing helper so the
+//! implementation ([`HttpManifestCompleter`], wrapping `reqwest` + the active
+//! provider's chat endpoint) and the [`build_profile_or_manifest`] routing helper so the
 //! MCP dispatcher and the context-pack handler stay thin orchestrators
 //! (CLAUDE.md §4, ADR-014).
 
@@ -14,16 +14,17 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use loomem_core::config::LlmConfig;
+use loomem_core::llm_provider::{ProviderError, ResolvedProvider};
 use loomem_core::manifest::{classify_stream, ManifestCompleter, ProfileOrManifest, StreamKind};
 
 use crate::AppState;
 
-/// Production [`ManifestCompleter`] — one OpenAI chat completion. Mirrors the
+/// Production [`ManifestCompleter`] — one chat completion on the active provider. Mirrors the
 /// reqwest call in `loomem_core::profile::generate_profile`, but lives in the
 /// server layer so the domain stays free of `reqwest` (the trait is the seam).
 pub(crate) struct HttpManifestCompleter {
     client: reqwest::Client,
-    api_key: Option<String>,
+    provider: Result<ResolvedProvider, ProviderError>,
     model: String,
     timeout_secs: u64,
 }
@@ -32,7 +33,7 @@ impl HttpManifestCompleter {
     pub(crate) fn new(client: reqwest::Client, llm: &LlmConfig, model: String) -> Self {
         Self {
             client,
-            api_key: llm.get_api_key(),
+            provider: llm.active_provider(),
             model,
             timeout_secs: llm.timeout_secs,
         }
@@ -57,14 +58,14 @@ impl ManifestCompleter for HttpManifestCompleter {
         // Clone everything the future needs so it owns its captures (Send + no
         // borrow held across the await).
         let client = self.client.clone();
-        let api_key = self.api_key.clone();
+        let provider = self.provider.clone();
         let model = self.model.clone();
         let timeout = self.timeout_secs;
         let prompt = prompt.to_string();
 
         async move {
-            let api_key =
-                api_key.context("OpenAI API key not configured for manifest generation")?;
+            let provider =
+                provider.context("LLM provider not available for manifest generation")?;
             let request_body = serde_json::json!({
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
@@ -72,19 +73,17 @@ impl ManifestCompleter for HttpManifestCompleter {
                 "temperature": 0.0
             });
 
-            let response = client
-                .post(loomem_core::evaluation_url::chat_completions(
-                    "LOOMEM_EVALUATION_MANIFEST_URL",
-                    &format!(
-                        "{}/chat/completions",
-                        loomem_core::llm_provider::OPENAI_BASE_URL
-                    ),
-                )?)
-                .header("Authorization", format!("Bearer {}", api_key))
+            let url = loomem_core::evaluation_url::chat_completions(
+                "LOOMEM_EVALUATION_MANIFEST_URL",
+                &provider.chat_completions_url(),
+            )?;
+            let request = provider
+                .authorize(client.post(url))
                 .header("Content-Type", "application/json")
                 .json(&request_body)
-                .timeout(Duration::from_secs(timeout))
-                .send()
+                .timeout(Duration::from_secs(timeout));
+            let response = provider
+                .send_chat(request, "manifest", &model)
                 .await
                 .context("Failed to send manifest generation request")?;
 

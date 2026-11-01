@@ -118,13 +118,17 @@ async fn extract_with_configured_chat(
             context.source_id
         )));
     }
-    let Some(key) = state.config.llm.get_api_key() else {
-        return Ok(ToolResult::error(with_source(
-            context,
-            "Extraction failed: API key unavailable. No facts stored.",
-        )));
+    let provider = match state.config.llm.active_provider() {
+        Ok(provider) => provider,
+        Err(error) => {
+            tracing::warn!("memory_ingest extraction skipped: {error}");
+            return Ok(ToolResult::error(with_source(
+                context,
+                "Extraction failed: LLM provider unavailable. No facts stored.",
+            )));
+        }
     };
-    let chat = loomem_core::memory_extractor::HttpExtractionChat::new(&state.http_client, key);
+    let chat = loomem_core::memory_extractor::HttpExtractionChat::new(&state.http_client, provider);
     extract(&chat, &RealPersistence, context).await
 }
 

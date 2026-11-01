@@ -212,7 +212,7 @@ async fn flush_batch(batch: &mut Vec<ExtractRequest>, tokens: &mut usize, worker
 
 async fn extract_batch(batch: &[ExtractRequest], worker: &Worker) -> Result<()> {
     worker.context.cost_tracker.check_budget()?;
-    let Some(key) = worker.context.llm_config.get_api_key() else {
+    let Ok(provider) = worker.context.llm_config.active_provider() else {
         return Ok(());
     };
     let chunks: Vec<_> = batch
@@ -231,20 +231,16 @@ async fn extract_batch(batch: &[ExtractRequest], worker: &Worker) -> Result<()> 
         return Ok(());
     }
     let config = &worker.context.config;
-    let (extractions, input, output) = match llm_ner::extract_entities_llm(
-        &worker.http_client,
-        &config.model,
-        &key,
-        &chunks,
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(error) => {
-            crate::llm_failures::global().record(crate::llm_failures::LlmFailureKind::Ner);
-            return Err(error);
-        }
-    };
+    let (extractions, input, output) =
+        match llm_ner::extract_entities_llm(&worker.http_client, &provider, &config.model, &chunks)
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                crate::llm_failures::global().record(crate::llm_failures::LlmFailureKind::Ner);
+                return Err(error);
+            }
+        };
     if let Err(error) = worker
         .context
         .cost_tracker
