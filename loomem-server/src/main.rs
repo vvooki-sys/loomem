@@ -1,6 +1,7 @@
 mod access_hook;
 mod auth;
 mod content_type;
+mod deferred;
 mod entity_worker;
 mod evaluation_clock;
 mod evidence;
@@ -60,7 +61,7 @@ pub struct AppState {
     pub event_tx: Option<loomem_core::event_log::EventSender>,
     pub mcp_sessions: mcp::SessionStore,
     pub workers: WorkerRegistry,
-    pub deferred: Arc<loomem_server::deferred::DeferredTasks>,
+    pub deferred: Arc<deferred::DeferredTasks>,
     pub process_diagnostics: bool,
     pub ambient_cache: Arc<loomem_core::ambient::AmbientCache>,
     pub dream_auto: Arc<loomem_core::dream_auto::DreamAutoTrigger>,
@@ -625,7 +626,7 @@ async fn main() -> Result<()> {
         event_tx,
         mcp_sessions: mcp::session::new_session_store(),
         workers: workers_registry,
-        deferred: Arc::new(loomem_server::deferred::DeferredTasks::default()),
+        deferred: Arc::new(deferred::DeferredTasks::default()),
         process_diagnostics: true,
         ambient_cache: Arc::new(loomem_core::ambient::AmbientCache::new()),
     });
@@ -1354,7 +1355,7 @@ mod tests {
             event_tx: None,
             mcp_sessions: mcp::session::new_session_store(),
             workers,
-            deferred: Arc::new(loomem_server::deferred::DeferredTasks::default()),
+            deferred: Arc::new(deferred::DeferredTasks::default()),
             process_diagnostics: true,
             ambient_cache: Arc::new(loomem_core::ambient::AmbientCache::with_config(
                 std::time::Duration::from_secs(60),
