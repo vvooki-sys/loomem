@@ -4,7 +4,7 @@ use sha2::Sha256;
 
 /// Authenticate a framed evaluation message with a 256-bit run key.
 pub fn authenticate(key: &[u8; 32], message: &[u8]) -> Result<String, hmac::digest::InvalidLength> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key)?;
+    let mut mac = <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(key)?;
     mac.update(message);
     Ok(mac
         .finalize()
@@ -20,6 +20,10 @@ mod tests {
     #[test]
     fn standard_hmac_vector_and_key_rotation() {
         let first = authenticate(&[0; 32], b"evaluation").unwrap();
+        assert_eq!(
+            first,
+            "2955ce856de14ed466198ed7cbe8b2fb2f790dce20885e4a8532c5e0d214ecf1"
+        );
         assert_eq!(first.len(), 64);
         assert_ne!(first, authenticate(&[1; 32], b"evaluation").unwrap());
         assert_ne!(first, authenticate(&[0; 32], b"evaluation2").unwrap());

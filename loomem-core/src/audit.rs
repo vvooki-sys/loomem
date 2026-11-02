@@ -265,6 +265,13 @@ fn now_unix() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stored_audit_blob_hash_matches_sha256_vector() {
+        assert_eq!(
+            super::blob_hash(b"loomem audit fixture"),
+            "872a154ef4d2ab05c2a50ccbdfcb14e935f38a665f0d22b567289704642e7c5e"
+        );
+    }
     use super::*;
     use crate::config::RocksDbConfig;
     use tempfile::TempDir;

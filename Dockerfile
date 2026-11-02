@@ -1,6 +1,6 @@
 # Stage 0: Build dashboard SPA (embedded into loomem-server via rust-embed,
 # so it must exist before cargo runs)
-FROM node:22-trixie-slim AS dashboard
+FROM node:26-trixie-slim AS dashboard
 WORKDIR /app/loomem-dashboard
 COPY loomem-dashboard/package.json loomem-dashboard/package-lock.json ./
 RUN npm ci
@@ -11,7 +11,7 @@ RUN npm run build
 # Pinned builder (trivy DS-0001): 1.93 tracks `rust-version` in Cargo.toml;
 # -trixie matches the runtime base below, so the binaries link against the
 # same glibc generation.
-FROM rust:1.93-trixie AS builder
+FROM rust:1.99-trixie AS builder
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends clang libclang-dev pkg-config && rm -rf /var/lib/apt/lists/*
 COPY . .

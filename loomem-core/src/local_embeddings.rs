@@ -13,7 +13,7 @@ mod inner {
     use tracing::{debug, info};
     use tract_onnx::prelude::*;
 
-    type Model = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+    type Model = std::sync::Arc<TypedRunnableModel>;
 
     /// Sentence transformers in the BERT / XLM-R family — including the default
     /// multilingual-e5-small — bake 512 learned position embeddings into the
@@ -152,7 +152,7 @@ mod inner {
 
             // Output: [1, seq_len, dim] — need mean pooling
             let output = outputs[0]
-                .to_array_view::<f32>()
+                .to_plain_array_view::<f32>()
                 .context("Failed to extract output tensor")?;
 
             // Mean pooling with attention mask
