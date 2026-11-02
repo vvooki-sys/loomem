@@ -14,6 +14,12 @@ mod oauth;
 pub mod rate_limiter;
 mod resource_guards;
 mod spa;
+// The Hosted adapter is compiled into the library for `hosted_shared_engine`.
+// Its unit tests run through this binary because the shared handler tests
+// need this file's router fixture, which the library target cannot provide.
+#[cfg(all(test, feature = "hosted-engine"))]
+#[allow(dead_code, unused_imports)]
+mod hosted;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -66,6 +72,8 @@ pub struct AppState {
     pub ambient_cache: Arc<loomem_core::ambient::AmbientCache>,
     pub dream_auto: Arc<loomem_core::dream_auto::DreamAutoTrigger>,
     pub rate_limiter: Arc<rate_limiter::RateLimiter>,
+    /// Retrieval path and reranker counters; diagnostics only.
+    pub retrieval_counters: Arc<handlers::search::RetrievalCounters>,
 }
 
 /// Build the auto-dream trigger from `[dream]` config. Auto-firing is gated on
@@ -629,6 +637,7 @@ async fn main() -> Result<()> {
         workers: workers_registry,
         deferred: Arc::new(deferred::DeferredTasks::default()),
         process_diagnostics: true,
+        retrieval_counters: Arc::new(handlers::search::RetrievalCounters::default()),
         ambient_cache: Arc::new(loomem_core::ambient::AmbientCache::new()),
     });
 
@@ -1358,6 +1367,7 @@ mod tests {
             workers,
             deferred: Arc::new(deferred::DeferredTasks::default()),
             process_diagnostics: true,
+            retrieval_counters: Arc::new(handlers::search::RetrievalCounters::default()),
             ambient_cache: Arc::new(loomem_core::ambient::AmbientCache::with_config(
                 std::time::Duration::from_secs(60),
                 64,

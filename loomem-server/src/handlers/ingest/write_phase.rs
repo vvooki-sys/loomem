@@ -3,6 +3,9 @@
 //! Public Loomem never installs this task-local phase. Hosted aborts work only
 //! before persistence begins; an accepted durable section finishes its version
 //! links before revocation is acknowledged.
+// The public binary compiles this module with the feature enabled, but only
+// the Hosted library target (and its tests in the binary) drive the phases.
+#![allow(dead_code)]
 use anyhow::{bail, Result};
 use std::sync::{Arc, Mutex};
 

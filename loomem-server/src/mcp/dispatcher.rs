@@ -421,6 +421,7 @@ async fn tool_store(
 }
 
 #[cfg(feature = "hosted-engine")]
+#[allow(dead_code)] // only the Hosted library target calls this
 pub(crate) async fn hosted_store(
     state: &Arc<AppState>,
     args: Value,
@@ -1772,6 +1773,90 @@ async fn tool_associate(
     }
 }
 
+// ── Cycle /113: memory_feedback ───────────────────────────────────
+
+async fn tool_feedback(
+    state: &Arc<AppState>,
+    args: Value,
+    stream_id: &str,
+    auth: &AuthContext,
+) -> Result<ToolResult, JsonRpcError> {
+    #[derive(Deserialize)]
+    struct FeedbackArgs {
+        chunk_id: String,
+        usefulness: u8,
+        harmful: bool,
+        justification: String,
+        model_version: String,
+        #[serde(default = "default_prompt_version")]
+        prompt_version: String,
+        #[serde(default)]
+        trajectory_id: Option<String>,
+    }
+    fn default_prompt_version() -> String {
+        "loomem-feedback-v1".to_string()
+    }
+
+    let args: FeedbackArgs =
+        serde_json::from_value(args).map_err(|e| JsonRpcError::invalid_params(&e.to_string()))?;
+
+    let cfg = &state.config.feedback;
+    if !cfg.enabled {
+        return Ok(ToolResult::error(
+            "feedback endpoint disabled in config".to_string(),
+        ));
+    }
+
+    let svc = FeedbackService::new(&state.store, cfg);
+
+    if let Err(e) = svc.validate_rating(args.usefulness, args.harmful, &args.justification) {
+        return Ok(ToolResult::error(format!("validation failed: {e}")));
+    }
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let event_id = uuid::Uuid::new_v4().to_string();
+    let agent_id = auth
+        .user_id
+        .clone()
+        .unwrap_or_else(|| stream_id.to_string());
+
+    let outcome = svc
+        .apply_rating(ApplyRatingArgs {
+            chunk_id: &args.chunk_id,
+            usefulness: args.usefulness,
+            harmful: args.harmful,
+            justification: &args.justification,
+            caller_stream: stream_id,
+            caller_is_admin: auth.is_admin,
+            agent_id: &agent_id,
+            model_version: &args.model_version,
+            prompt_version: &args.prompt_version,
+            trajectory_id: args.trajectory_id.as_deref(),
+            now_unix_ms: now_ms,
+            event_id: &event_id,
+        })
+        .map_err(|e| JsonRpcError::internal(&format!("apply_rating: {e}")))?;
+
+    let payload = match outcome {
+        RatingOutcome::Accepted => serde_json::json!({
+            "ok": true,
+            "accepted": 1,
+            "rejected": []
+        }),
+        RatingOutcome::Rejected { chunk_id, reason } => serde_json::json!({
+            "ok": true,
+            "accepted": 0,
+            "rejected": [{
+                "chunk_id": chunk_id,
+                "reason": reason
+            }]
+        }),
+    };
+    Ok(ToolResult::text(
+        serde_json::to_string_pretty(&payload).unwrap_or_default(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2785,88 +2870,4 @@ mod tests {
         let untouched = state.store.get_chunk(&foreign).unwrap().expect("exists");
         assert!(untouched.is_latest && untouched.superseded_by.is_none());
     }
-}
-
-// ── Cycle /113: memory_feedback ───────────────────────────────────
-
-async fn tool_feedback(
-    state: &Arc<AppState>,
-    args: Value,
-    stream_id: &str,
-    auth: &AuthContext,
-) -> Result<ToolResult, JsonRpcError> {
-    #[derive(Deserialize)]
-    struct FeedbackArgs {
-        chunk_id: String,
-        usefulness: u8,
-        harmful: bool,
-        justification: String,
-        model_version: String,
-        #[serde(default = "default_prompt_version")]
-        prompt_version: String,
-        #[serde(default)]
-        trajectory_id: Option<String>,
-    }
-    fn default_prompt_version() -> String {
-        "loomem-feedback-v1".to_string()
-    }
-
-    let args: FeedbackArgs =
-        serde_json::from_value(args).map_err(|e| JsonRpcError::invalid_params(&e.to_string()))?;
-
-    let cfg = &state.config.feedback;
-    if !cfg.enabled {
-        return Ok(ToolResult::error(
-            "feedback endpoint disabled in config".to_string(),
-        ));
-    }
-
-    let svc = FeedbackService::new(&state.store, cfg);
-
-    if let Err(e) = svc.validate_rating(args.usefulness, args.harmful, &args.justification) {
-        return Ok(ToolResult::error(format!("validation failed: {e}")));
-    }
-
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let event_id = uuid::Uuid::new_v4().to_string();
-    let agent_id = auth
-        .user_id
-        .clone()
-        .unwrap_or_else(|| stream_id.to_string());
-
-    let outcome = svc
-        .apply_rating(ApplyRatingArgs {
-            chunk_id: &args.chunk_id,
-            usefulness: args.usefulness,
-            harmful: args.harmful,
-            justification: &args.justification,
-            caller_stream: stream_id,
-            caller_is_admin: auth.is_admin,
-            agent_id: &agent_id,
-            model_version: &args.model_version,
-            prompt_version: &args.prompt_version,
-            trajectory_id: args.trajectory_id.as_deref(),
-            now_unix_ms: now_ms,
-            event_id: &event_id,
-        })
-        .map_err(|e| JsonRpcError::internal(&format!("apply_rating: {e}")))?;
-
-    let payload = match outcome {
-        RatingOutcome::Accepted => serde_json::json!({
-            "ok": true,
-            "accepted": 1,
-            "rejected": []
-        }),
-        RatingOutcome::Rejected { chunk_id, reason } => serde_json::json!({
-            "ok": true,
-            "accepted": 0,
-            "rejected": [{
-                "chunk_id": chunk_id,
-                "reason": reason
-            }]
-        }),
-    };
-    Ok(ToolResult::text(
-        serde_json::to_string_pretty(&payload).unwrap_or_default(),
-    ))
 }

@@ -3,6 +3,7 @@ use crate::cost_tracker::CostTracker;
 use crate::graph::{GraphContributionTarget, GraphStore};
 use crate::{llm_ner, pii_filter::PiiFilter, storage::RocksDbStore, tantivy_index::TantivyIndex};
 use anyhow::Result;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -24,8 +25,15 @@ pub struct EntityExtractionQueue {
     graph: Arc<GraphStore>,
     shutdown: tokio::sync::broadcast::Sender<()>,
     worker: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Accepted requests that no flush has settled yet (queued or in a batch).
+    pending: Arc<AtomicUsize>,
 }
 impl EntityExtractionQueue {
+    /// Accepted requests the worker has not settled yet. Zero after `shutdown`.
+    pub fn pending(&self) -> usize {
+        self.pending.load(Ordering::Acquire)
+    }
+
     /// Flush accepted work and join the worker before Hosted seals a generation.
     pub async fn shutdown(&self) -> Result<()> {
         let _ = self.shutdown.send(());
@@ -56,7 +64,9 @@ impl EntityExtractionQueue {
                 dict_entities,
                 target,
             })
-            .map_err(|e| anyhow::anyhow!("Entity extraction queue full or closed: {}", e))
+            .map_err(|e| anyhow::anyhow!("Entity extraction queue full or closed: {}", e))?;
+        self.pending.fetch_add(1, Ordering::AcqRel);
+        Ok(())
     }
 }
 
@@ -73,6 +83,7 @@ struct Worker {
     tantivy: Arc<tokio::sync::Mutex<TantivyIndex>>,
     http_client: reqwest::Client,
     context: EntityExtractionWorkerContext,
+    pending: Arc<AtomicUsize>,
 }
 pub fn spawn_worker(
     store: Arc<RocksDbStore>,
@@ -83,6 +94,7 @@ pub fn spawn_worker(
 ) -> EntityExtractionQueue {
     let (tx, rx) = mpsc::channel(context.config.queue_capacity);
     let (shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let pending = Arc::new(AtomicUsize::new(0));
     let worker = tokio::spawn(worker_loop(
         rx,
         Worker {
@@ -91,6 +103,7 @@ pub fn spawn_worker(
             tantivy,
             http_client,
             context,
+            pending: Arc::clone(&pending),
         },
         shutdown_rx,
     ));
@@ -99,6 +112,7 @@ pub fn spawn_worker(
         graph,
         shutdown,
         worker: Arc::new(tokio::sync::Mutex::new(Some(worker))),
+        pending,
     }
 }
 async fn worker_loop(
@@ -186,6 +200,7 @@ async fn flush_batch(batch: &mut Vec<ExtractRequest>, tokens: &mut usize, worker
     if let Err(error) = extract_batch(batch, worker).await {
         warn!(%error, "Entity extraction batch failed");
     }
+    worker.pending.fetch_sub(batch.len(), Ordering::AcqRel);
     batch.clear();
     *tokens = 0;
 }

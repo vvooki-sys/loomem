@@ -1,6 +1,10 @@
 //! Library surface for the feature-gated Hosted engine binary.
 //! The original server and its unit-test fixture remain in `main.rs`.
-#![cfg(feature = "hosted-engine")]
+//!
+//! The library builds no test target: the shared handler tests depend on the
+//! router fixture in `main.rs` (`crate::tests`), so `main.rs` includes the
+//! Hosted module under `cfg(test)` and runs its unit tests there.
+#![cfg(all(feature = "hosted-engine", not(test)))]
 
 pub mod access_hook;
 pub mod auth;
@@ -66,4 +70,6 @@ pub struct AppState {
     pub ambient_cache: Arc<loomem_core::ambient::AmbientCache>,
     pub dream_auto: Arc<loomem_core::dream_auto::DreamAutoTrigger>,
     pub rate_limiter: Arc<rate_limiter::RateLimiter>,
+    /// Retrieval path and reranker counters; diagnostics only.
+    pub retrieval_counters: Arc<handlers::search::RetrievalCounters>,
 }

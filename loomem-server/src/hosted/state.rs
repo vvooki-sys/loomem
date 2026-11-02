@@ -18,6 +18,14 @@ use tokio::task::JoinHandle;
 
 const CURRENT_SCHEMA_VERSION: u32 = 13;
 
+/// Point-in-time depth of the scope's asynchronous queues.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct QueueDepths {
+    pub embedding_pending: usize,
+    pub entity_pending: usize,
+    pub event_pending: usize,
+}
+
 pub struct ScopeRuntime {
     pub state: Arc<AppState>,
     pub scheduler: Arc<Scheduler>,
@@ -151,6 +159,7 @@ impl ScopeServices {
             workers,
             deferred: Arc::new(DeferredTasks::default()),
             process_diagnostics: false,
+            retrieval_counters: Arc::new(crate::handlers::search::RetrievalCounters::default()),
             ambient_cache: Arc::new(loomem_core::ambient::AmbientCache::new()),
             store: self.store,
             tantivy: self.tantivy,
@@ -216,6 +225,26 @@ impl ScopeRuntime {
 
     pub fn accepts_writes(&self) -> bool {
         self.accepting_writes && !self.quiesced
+    }
+
+    /// Accepted background work that is not yet durable, per queue.
+    pub fn queue_depths(&self) -> QueueDepths {
+        QueueDepths {
+            embedding_pending: self
+                .state
+                .embedding_queue
+                .as_ref()
+                .map_or(0, |queue| queue.pending()),
+            entity_pending: self
+                .state
+                .entity_extraction_queue
+                .as_ref()
+                .map_or(0, |queue| queue.pending()),
+            event_pending: self
+                .event_worker
+                .as_ref()
+                .map_or(0, |worker| worker.queued()),
+        }
     }
 
     /// Stop every writer owned by this generation before Hosted accepts it.

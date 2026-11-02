@@ -97,12 +97,14 @@ pub(super) async fn retrieve_primary(
         None
     };
     let Some(inputs) = vectors else {
+        state.retrieval_counters.record_lexical_only_search();
         return Ok(state.hybrid_search.bm25_only_with_budget(
             bm25_results,
             request.guaranteed,
             budget,
         )?);
     };
+    state.retrieval_counters.record_vector_search();
     if let Some(diag) = request.channel_diag {
         diag.vector_top = vector_channel_hits(&inputs.embeddings, &inputs.query_embedding);
     }

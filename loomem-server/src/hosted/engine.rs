@@ -1,4 +1,14 @@
 //! One process, independently addressed original engine states.
+//!
+//! Known limitation (brief 048 critique, finding 1; kept deliberately in
+//! brief 053 stage A): `revoke` cancels only jobs that have not entered the
+//! sticky durable write phase. `memory_ingest` persists its source through
+//! `persist_chunk`, which enters that phase before the LLM extraction call, so
+//! an in-flight extraction cannot be aborted and `revoke` waits for it until
+//! the engine's LLM timeout before acknowledging the new epoch. The stale
+//! epoch can never publish into the next generation; only the revocation
+//! acknowledgement is delayed. Revocation latency is therefore bounded by the
+//! extraction timeout for every in-flight ingest.
 mod compat;
 
 use super::protocol::{Request, ScopeContext};
@@ -295,6 +305,8 @@ impl SharedEngine {
                 "vector_enabled": self.config.storage.vector_enabled,
                 "embedding_provider": self.config.llm.embedding_provider,
                 "embedding_dim": self.config.llm.embedding_dim,
+                "retrieval": entry.runtime.state.retrieval_counters.snapshot(),
+                "queues": entry.runtime.queue_depths(),
             }),
         ))
     }

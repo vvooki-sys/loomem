@@ -17,6 +17,7 @@ mod cache_policy;
 #[path = "search_candidate_limit_tests.rs"]
 mod candidate_limit_tests;
 mod candidates;
+pub mod counters;
 #[cfg(feature = "evaluation")]
 mod evaluation_evidence;
 mod event_date;
@@ -31,6 +32,7 @@ mod request_scope;
 mod telemetry;
 use request_scope::validated_search_streams;
 
+pub use counters::RetrievalCounters;
 use telemetry::{stage_timer, Bm25Runner, RequestTelemetry, ResponseMetrics, TraceCounters};
 
 use super::types::{
@@ -748,6 +750,8 @@ pub async fn search_handler(
 
             #[cfg(feature = "onnx-rerank")]
             let onnx_reranker = state.onnx_reranker.as_ref().map(Arc::clone);
+            let counters = Arc::clone(&state.retrieval_counters);
+            counters.record_rerank_invocation();
 
             tokio::spawn(async move {
                 #[cfg(feature = "onnx-rerank")]
@@ -782,6 +786,7 @@ pub async fn search_handler(
 
                 match rerank_result {
                     Ok(indices) => {
+                        counters.record_rerank_completion();
                         cache_policy::publish_reranked(
                             &cache,
                             (key, cache_generation),

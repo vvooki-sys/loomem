@@ -246,9 +246,17 @@ impl EventLog {
 pub struct EventLogWorker {
     shutdown: tokio::sync::broadcast::Sender<()>,
     task: tokio::task::JoinHandle<()>,
+    queued: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl EventLogWorker {
+    /// Entries still queued behind the writer, as the writer last observed them.
+    /// The writer refreshes the gauge after every append, so an idle writer
+    /// reports zero and a backlog shows up as soon as it is being consumed.
+    pub fn queued(&self) -> usize {
+        self.queued.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     pub async fn shutdown(self) -> Result<()> {
         let _ = self.shutdown.send(());
         self.task
@@ -274,6 +282,8 @@ pub fn spawn_writer_managed(
     let mut log = EventLog::open(data_dir, config)?;
     let (tx, mut rx) = event_channel();
     let (shutdown, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let queued = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let gauge = std::sync::Arc::clone(&queued);
     let task = tokio::spawn(async move {
         let mut flush_interval = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
@@ -284,6 +294,7 @@ pub fn spawn_writer_managed(
                             if let Err(e) = log.append(&entry) {
                                 warn!("Failed to write event: {}", e);
                             }
+                            gauge.store(rx.len(), std::sync::atomic::Ordering::Release);
                         }
                         None => break,
                     }
@@ -304,8 +315,16 @@ pub fn spawn_writer_managed(
         if let Err(e) = log.flush() {
             warn!("Failed to flush event log during shutdown: {}", e);
         }
+        gauge.store(0, std::sync::atomic::Ordering::Release);
     });
-    Ok((tx, EventLogWorker { shutdown, task }))
+    Ok((
+        tx,
+        EventLogWorker {
+            shutdown,
+            task,
+            queued,
+        },
+    ))
 }
 
 #[cfg(test)]
