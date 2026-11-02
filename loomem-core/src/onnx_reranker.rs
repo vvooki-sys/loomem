@@ -13,7 +13,7 @@ mod inner {
     use tracing::{debug, info};
     use tract_onnx::prelude::*;
 
-    type Model = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+    type Model = std::sync::Arc<TypedRunnableModel>;
 
     pub struct OnnxReranker {
         model: Model,
@@ -119,7 +119,7 @@ mod inner {
 
             // Output shape: [1, 1] for cross-encoder relevance score
             let output = outputs[0]
-                .to_array_view::<f32>()
+                .to_plain_array_view::<f32>()
                 .context("Failed to extract output tensor")?;
 
             let score = output.iter().next().copied().unwrap_or(0.0);
@@ -175,6 +175,27 @@ pub fn try_load(model_dir: Option<&str>) -> Option<OnnxReranker> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    #[ignore = "requires LOOMEM_TEST_RERANK_MODEL pointing to the ms-marco cross-encoder"]
+    fn real_model_ranks_relevant_document_first() {
+        let model_dir = std::env::var("LOOMEM_TEST_RERANK_MODEL")
+            .expect("set LOOMEM_TEST_RERANK_MODEL to the cross-encoder model directory");
+        let reranker = OnnxReranker::load(Path::new(&model_dir)).expect("load reranker");
+        let documents = vec![
+            "Berlin is the capital of Germany.".to_string(),
+            "Paris is the capital of France.".to_string(),
+            "Chocolate cake is a dessert.".to_string(),
+        ];
+        let ranking = reranker
+            .rerank(
+                "What is the capital of France?",
+                &documents,
+                documents.len(),
+            )
+            .expect("rerank documents");
+        assert_eq!(ranking, vec![1, 0, 2]);
+    }
 
     #[test]
     #[ignore] // requires model files in models/reranker/
