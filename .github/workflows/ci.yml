@@ -11,7 +11,27 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  scope:
+    name: CI scope
+    runs-on: ubuntu-latest
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Test scope rules
+        run: node scripts/test-ci-scope.cjs
+      - name: Classify changes
+        id: scope
+        env:
+          CI_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD_SHA: ${{ github.sha }}
+        run: node scripts/ci-scope.cjs
+
   check:
+    needs: scope
+    if: needs.scope.outputs.scope == 'full'
     name: Check + Test
     runs-on: ubuntu-latest
     steps:
@@ -37,6 +57,8 @@ jobs:
         run: cargo test --workspace --lib
 
   clippy:
+    needs: scope
+    if: needs.scope.outputs.scope == 'full'
     name: Clippy
     runs-on: ubuntu-latest
     steps:
@@ -60,6 +82,8 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
 
   fmt:
+    needs: scope
+    if: needs.scope.outputs.scope == 'full'
     name: Format
     runs-on: ubuntu-latest
     steps:
@@ -99,8 +123,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test language selection
         run: node scripts/test-site-locale.cjs
+      - name: Browser smoke (English and Polish)
+        run: bash scripts/test-site-browser.sh
 
   audit:
+    needs: scope
+    if: needs.scope.outputs.scope == 'full'
     name: Audit
     runs-on: ubuntu-latest
     steps:
@@ -116,3 +144,33 @@ jobs:
 
       - name: cargo audit
         run: cargo audit --deny warnings
+
+  gate:
+    name: CI gate
+    if: always()
+    needs: [scope, check, clippy, fmt, dashboard, website, audit]
+    runs-on: ubuntu-latest
+    env:
+      SCOPE_RESULT: ${{ needs.scope.result }}
+      SCOPE: ${{ needs.scope.outputs.scope }}
+      CHECK: ${{ needs.check.result }}
+      CLIPPY: ${{ needs.clippy.result }}
+      FMT: ${{ needs.fmt.result }}
+      DASHBOARD: ${{ needs.dashboard.result }}
+      WEBSITE: ${{ needs.website.result }}
+      AUDIT: ${{ needs.audit.result }}
+    steps:
+      - name: Verify expected jobs and report scope
+        shell: bash
+        run: |
+          echo "CI scope: $SCOPE" >> "$GITHUB_STEP_SUMMARY"
+          printf '| Job | Result |\n| --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
+          for job in CHECK CLIPPY FMT DASHBOARD WEBSITE AUDIT; do
+            printf '| %s | %s |\n' "$job" "${!job}" >> "$GITHUB_STEP_SUMMARY"
+          done
+          [[ "$SCOPE_RESULT" == success && "$DASHBOARD" == success && "$WEBSITE" == success ]] || exit 1
+          case "$SCOPE" in
+            full) [[ "$CHECK" == success && "$CLIPPY" == success && "$FMT" == success && "$AUDIT" == success ]] ;;
+            presentation) [[ "$CHECK" == skipped && "$CLIPPY" == skipped && "$FMT" == skipped && "$AUDIT" == skipped ]] ;;
+            *) exit 1 ;;
+          esac
