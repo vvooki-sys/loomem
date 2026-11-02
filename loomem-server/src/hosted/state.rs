@@ -25,6 +25,7 @@ pub struct ScopeRuntime {
     scheduler_shutdown: tokio::sync::broadcast::Sender<()>,
     scheduler_task: Option<JoinHandle<()>>,
     event_worker: Option<EventLogWorker>,
+    accepting_writes: bool,
     quiesced: bool,
 }
 
@@ -204,6 +205,7 @@ impl ScopeRuntime {
             scheduler_shutdown,
             scheduler_task,
             event_worker,
+            accepting_writes: true,
             quiesced: false,
         })
     }
@@ -212,11 +214,16 @@ impl ScopeRuntime {
         self.quiesced
     }
 
+    pub fn accepts_writes(&self) -> bool {
+        self.accepting_writes && !self.quiesced
+    }
+
     /// Stop every writer owned by this generation before Hosted accepts it.
     pub async fn quiesce(&mut self) -> Result<()> {
         if self.quiesced {
             return Ok(());
         }
+        self.accepting_writes = false;
         self.stop_scheduler().await?;
         self.state
             .deferred
@@ -254,6 +261,10 @@ impl ScopeRuntime {
         }
         if let Some(log) = &self.state.intent_log {
             log.lock().await.flush()?;
+        }
+        #[cfg(feature = "evaluation")]
+        if std::env::var("LOOMEM_EVALUATION_QUIESCE_FAIL").as_deref() == Ok("1") {
+            anyhow::bail!("synthetic final Tantivy commit failure");
         }
         self.state.tantivy.lock().await.commit()?;
         self.state.store.db_arc().flush().context("flush RocksDB")?;

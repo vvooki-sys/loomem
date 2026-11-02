@@ -32,6 +32,7 @@ tokio::task_local! {
 pub enum EvaluationFailpoint {
     AfterRocksdbWait,
     AfterRocksdbAbort,
+    AfterRocksdbPause,
 }
 
 #[cfg(feature = "evaluation")]
@@ -40,6 +41,7 @@ impl EvaluationFailpoint {
         match value {
             "after_rocksdb_wait" => Some(Self::AfterRocksdbWait),
             "after_rocksdb_abort" => Some(Self::AfterRocksdbAbort),
+            "after_rocksdb_pause" => Some(Self::AfterRocksdbPause),
             _ => None,
         }
     }
@@ -65,7 +67,7 @@ pub fn evaluation_failpoint_allowed(value: Option<&str>) -> bool {
 }
 
 #[cfg(feature = "evaluation")]
-fn inject_evaluation_failpoint(failpoint: EvaluationFailpoint) -> ! {
+fn inject_evaluation_failpoint(failpoint: EvaluationFailpoint) {
     match failpoint {
         EvaluationFailpoint::AfterRocksdbWait => {
             eprintln!("LOOMEM_POC_BARRIER_AFTER_ROCKSDB");
@@ -74,6 +76,10 @@ fn inject_evaluation_failpoint(failpoint: EvaluationFailpoint) -> ! {
             }
         }
         EvaluationFailpoint::AfterRocksdbAbort => std::process::abort(),
+        EvaluationFailpoint::AfterRocksdbPause => {
+            eprintln!("LOOMEM_POC_PAUSE_AFTER_ROCKSDB");
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
     }
 }
 
@@ -124,6 +130,9 @@ pub async fn persist_chunk_with_index(
     #[cfg(feature = "evaluation")]
     if let Ok(Some(failpoint)) = EVALUATION_FAILPOINT.try_with(|failpoint| *failpoint) {
         inject_evaluation_failpoint(failpoint);
+        if failpoint == EvaluationFailpoint::AfterRocksdbPause {
+            tokio::task::yield_now().await;
+        }
     }
 
     // Step 3: Tantivy write (upsert + commit)

@@ -1,5 +1,7 @@
 pub(crate) mod graph;
 pub(crate) mod sanitize;
+#[cfg(feature = "hosted-engine")]
+pub(crate) mod write_phase;
 use axum::{extract::State, http::StatusCode, Json};
 use chrono::Utc;
 use loomem_core::intent_log::OpType;
@@ -48,6 +50,8 @@ pub async fn persist_chunk(
     _stream_id: Option<&str>,
     _metadata: Option<&serde_json::Value>,
 ) -> Result<String, AppError> {
+    #[cfg(feature = "hosted-engine")]
+    write_phase::enter_durable().map_err(AppError::Internal)?;
     // Pre-ingestion sanitization (HTML strip + injection detection, then PII
     // redaction before any storage) — see `sanitize::persist_content`.
     let prepared = sanitize::persist_content(&state.pii_filter, content);

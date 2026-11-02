@@ -22,6 +22,7 @@ struct ScopeEntry {
 struct Job {
     context: ScopeContext,
     task: JoinHandle<Result<Value>>,
+    write_phase: Arc<crate::handlers::ingest::write_phase::WritePhase>,
 }
 
 pub struct SharedEngine {
@@ -115,8 +116,8 @@ impl SharedEngine {
         if self.scopes.get(&context.scope).is_some_and(|entry| {
             entry.context == context && entry.runtime.root.ends_with(&generation)
         }) {
-            if self.scopes[&context.scope].runtime.is_quiesced() {
-                bail!("quiesced generation cannot be reopened")
+            if !self.scopes[&context.scope].runtime.accepts_writes() {
+                bail!("scope generation is closing or quiesced")
             }
             return Ok(self.reply(context, json!({"opened": true, "generation": generation})));
         }
@@ -183,6 +184,11 @@ impl SharedEngine {
         self.ensure_job_available(&operation, &context)?;
         let name = request.name()?.to_owned();
         let args = request.args.unwrap_or_else(|| json!({}));
+        if !loomem_core::storage::persist::evaluation_failpoint_allowed(
+            request.failpoint.as_deref(),
+        ) {
+            bail!("invalid synthetic failpoint")
+        }
         let state = self.live_state(&context)?;
         let auth = AuthContext::single_stream(
             context.scope.clone(),
@@ -192,13 +198,30 @@ impl SharedEngine {
             true,
         );
         let stream = context.scope.clone();
+        let write_phase = Arc::new(crate::handlers::ingest::write_phase::WritePhase::new());
+        let task_phase = write_phase.clone();
         let task = tokio::spawn(async move {
-            let result = crate::mcp::dispatcher::dispatch_tool(&state, &name, args, &stream, &auth)
-                .await
-                .map_err(|error| anyhow::anyhow!("tool dispatch failed: {error:?}"))?;
-            serde_json::to_value(result).context("serialize original tool result")
+            crate::handlers::ingest::write_phase::track(task_phase, async move {
+                let dispatch =
+                    crate::mcp::dispatcher::dispatch_tool(&state, &name, args, &stream, &auth);
+                #[cfg(feature = "evaluation")]
+                let failpoint = request
+                    .failpoint
+                    .as_deref()
+                    .and_then(loomem_core::storage::persist::EvaluationFailpoint::parse);
+                #[cfg(feature = "evaluation")]
+                let result =
+                    loomem_core::storage::persist::with_evaluation_failpoint(failpoint, dispatch)
+                        .await;
+                #[cfg(not(feature = "evaluation"))]
+                let result = dispatch.await;
+                let result =
+                    result.map_err(|error| anyhow::anyhow!("tool dispatch failed: {error:?}"))?;
+                serde_json::to_value(result).context("serialize original tool result")
+            })
+            .await
         });
-        self.insert_job(operation.clone(), context.clone(), task);
+        self.insert_job(operation.clone(), context.clone(), task, write_phase);
         Ok(self.reply(context, json!({"accepted": true, "op_id": operation})))
     }
 
@@ -213,7 +236,8 @@ impl SharedEngine {
             scheduler.wait_for_idle().await;
             Ok(json!({"worker": name, "completed": true}))
         });
-        self.insert_job(operation.clone(), context.clone(), task);
+        let write_phase = Arc::new(crate::handlers::ingest::write_phase::WritePhase::new());
+        self.insert_job(operation.clone(), context.clone(), task, write_phase);
         Ok(self.reply(context, json!({"accepted": true, "op_id": operation})))
     }
 
@@ -331,7 +355,9 @@ impl SharedEngine {
             .collect();
         for key in keys {
             if let Some(job) = self.jobs.remove(&key) {
-                job.task.abort();
+                if job.write_phase.revoke() {
+                    job.task.abort();
+                }
                 let _ = job.task.await;
             }
         }
@@ -350,9 +376,16 @@ impl SharedEngine {
         operation: String,
         context: ScopeContext,
         task: JoinHandle<Result<Value>>,
+        write_phase: Arc<crate::handlers::ingest::write_phase::WritePhase>,
     ) {
-        self.jobs
-            .insert(job_key(&context, &operation), Job { context, task });
+        self.jobs.insert(
+            job_key(&context, &operation),
+            Job {
+                context,
+                task,
+                write_phase,
+            },
+        );
     }
 
     fn live_state(&self, context: &ScopeContext) -> Result<Arc<crate::AppState>> {
@@ -374,8 +407,8 @@ impl SharedEngine {
         if entry.context != *context {
             bail!("scope context does not match the open runtime")
         }
-        if entry.runtime.is_quiesced() {
-            bail!("scope generation is quiesced")
+        if !entry.runtime.accepts_writes() {
+            bail!("scope generation is closing or quiesced")
         }
         Ok(())
     }

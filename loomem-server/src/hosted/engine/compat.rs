@@ -60,15 +60,20 @@ pub(super) async fn build_async(engine: &mut SharedEngine, request: Request) -> 
     validate_records(engine, &records)?;
     validate_failpoint(request.failpoint.as_deref())?;
     let state = engine.live_state(&context)?;
-    let task = tokio::spawn(store_records(
-        state,
-        records,
-        context.scope.clone(),
-        context.actor.clone(),
-        request.failpoint,
-        generation.clone(),
+    let write_phase = Arc::new(crate::handlers::ingest::write_phase::WritePhase::new());
+    let task_phase = write_phase.clone();
+    let task = tokio::spawn(crate::handlers::ingest::write_phase::track(
+        task_phase,
+        store_records(
+            state,
+            records,
+            context.scope.clone(),
+            context.actor.clone(),
+            request.failpoint,
+            generation.clone(),
+        ),
     ));
-    engine.insert_job(generation.clone(), context.clone(), task);
+    engine.insert_job(generation.clone(), context.clone(), task, write_phase);
     Ok(engine.reply(context, json!({"pending": true, "job": generation})))
 }
 
