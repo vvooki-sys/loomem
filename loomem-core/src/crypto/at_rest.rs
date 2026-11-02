@@ -170,7 +170,7 @@ pub fn wrap_dek(
 /// ADR-013 §4 Decision 1: HMAC-SHA256 (not BLAKE3). Primitive kept here for
 /// unit-testability in isolation from the provider layer.
 pub fn index_token(mac_key: &[u8; DEK_SIZE], lowercased: &[u8]) -> String {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(mac_key)
+    let mut mac = <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(mac_key)
         .expect("HMAC-SHA256 accepts any key length; 32-byte key is always valid");
     mac.update(lowercased);
     let result = mac.finalize().into_bytes();
@@ -379,6 +379,10 @@ mod tests {
         let mac_key = [0u8; DEK_SIZE];
         let t1 = index_token(&mac_key, b"alice");
         let t2 = index_token(&mac_key, b"alice");
+        assert_eq!(
+            t1,
+            "ce3837f76a54a635191b1704ac7672264fc17c3397ff52e7dacfc1ef3603a493"
+        );
         assert_eq!(t1, t2, "index_token must be deterministic");
         assert_eq!(t1.len(), 64, "HMAC-SHA256 produces 32 bytes = 64 hex chars");
         assert!(
