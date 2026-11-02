@@ -257,7 +257,7 @@ impl SharedEngine {
 
     async fn quiesce_scope(&mut self, request: Request) -> Result<Value> {
         let context = request.context()?;
-        self.ensure_live(&context)?;
+        self.ensure_scope_context(&context)?;
         if self
             .jobs
             .values()
@@ -402,13 +402,19 @@ impl SharedEngine {
     }
 
     fn ensure_live(&self, context: &ScopeContext) -> Result<()> {
+        self.ensure_scope_context(context)?;
+        let entry = self.scopes.get(&context.scope).context("scope not open")?;
+        if !entry.runtime.accepts_writes() {
+            bail!("scope generation is closing or quiesced")
+        }
+        Ok(())
+    }
+
+    fn ensure_scope_context(&self, context: &ScopeContext) -> Result<()> {
         self.ensure_epoch(context)?;
         let entry = self.scopes.get(&context.scope).context("scope not open")?;
         if entry.context != *context {
             bail!("scope context does not match the open runtime")
-        }
-        if !entry.runtime.accepts_writes() {
-            bail!("scope generation is closing or quiesced")
         }
         Ok(())
     }

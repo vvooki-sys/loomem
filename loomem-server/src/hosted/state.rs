@@ -263,13 +263,20 @@ impl ScopeRuntime {
             log.lock().await.flush()?;
         }
         #[cfg(feature = "evaluation")]
-        if std::env::var("LOOMEM_EVALUATION_QUIESCE_FAIL").as_deref() == Ok("1") {
+        if evaluation_quiesce_failure() {
             anyhow::bail!("synthetic final Tantivy commit failure");
         }
         self.state.tantivy.lock().await.commit()?;
         self.state.store.db_arc().flush().context("flush RocksDB")?;
         Ok(())
     }
+}
+
+#[cfg(feature = "evaluation")]
+fn evaluation_quiesce_failure() -> bool {
+    static FIRST_FAILURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    std::env::var("LOOMEM_EVALUATION_QUIESCE_FAIL").as_deref() == Ok("1")
+        && FIRST_FAILURE.swap(false, std::sync::atomic::Ordering::Relaxed)
 }
 
 fn build_scheduler(
