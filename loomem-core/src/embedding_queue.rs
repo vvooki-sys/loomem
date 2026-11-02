@@ -56,14 +56,19 @@ impl EmbeddingQueue {
         let Some(target) = self.store.embedding_target(&chunk_id, &content)? else {
             return Ok(());
         };
+        // Count before publishing: the worker may settle the request before
+        // `try_send` returns, and the gauge must never wrap below zero.
+        self.pending.fetch_add(1, Ordering::AcqRel);
         self.tx
             .try_send(EmbedRequest {
                 target,
                 chunk_id,
                 content,
             })
-            .map_err(|e| anyhow::anyhow!("Embedding queue full or closed: {}", e))?;
-        self.pending.fetch_add(1, Ordering::AcqRel);
+            .map_err(|e| {
+                self.pending.fetch_sub(1, Ordering::AcqRel);
+                anyhow::anyhow!("Embedding queue full or closed: {}", e)
+            })?;
         Ok(())
     }
 }

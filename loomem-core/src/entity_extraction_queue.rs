@@ -56,6 +56,9 @@ impl EntityExtractionQueue {
         let target = self
             .graph
             .capture_contribution_target(&chunk_id, &stream, &content)?;
+        // Count before publishing so a fast worker cannot settle the request
+        // ahead of the increment and wrap the gauge.
+        self.pending.fetch_add(1, Ordering::AcqRel);
         self.tx
             .try_send(ExtractRequest {
                 chunk_id,
@@ -64,8 +67,10 @@ impl EntityExtractionQueue {
                 dict_entities,
                 target,
             })
-            .map_err(|e| anyhow::anyhow!("Entity extraction queue full or closed: {}", e))?;
-        self.pending.fetch_add(1, Ordering::AcqRel);
+            .map_err(|e| {
+                self.pending.fetch_sub(1, Ordering::AcqRel);
+                anyhow::anyhow!("Entity extraction queue full or closed: {}", e)
+            })?;
         Ok(())
     }
 }
