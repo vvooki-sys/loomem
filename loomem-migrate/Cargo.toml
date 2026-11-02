@@ -31,5 +31,5 @@ path = "src/bin/db_probe.rs"
 [dependencies]
 serde_json.workspace = true
 anyhow.workspace = true
-rocksdb = { version = "0.24", features = ["snappy"] }
+rocksdb = { version = "0.25", features = ["snappy"] }
 tantivy.workspace = true
