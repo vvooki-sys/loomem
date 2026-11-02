@@ -6,8 +6,18 @@ use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::Path;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // The Hosted worker sandbox denies IPC socket creation. Tokio's signal
+    // driver creates a socket pair, so build only the runtime drivers we use.
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .context("build Hosted shared-engine runtime")?
+        .block_on(run())
+}
+
+async fn run() -> Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let _ = tracing_subscriber::fmt()
