@@ -88,7 +88,7 @@ function CopyButton({ text, label = "Copy" }) {
     <button
       type="button"
       onClick={copy}
-      className="font-mono text-[12px] font-semibold text-[#0F5491] bg-[var(--surface-cool)] border border-[#9CD0F7] rounded-lg px-2.5 py-1.5 shrink-0 hover:-translate-y-[1px] transition-transform"
+      className="font-mono text-[12px] font-semibold text-[#0F5491] bg-(--surface-cool) border border-[#9CD0F7] rounded-lg px-2.5 py-1.5 shrink-0 hover:-translate-y-px transition-transform"
     >
       {copied ? "Copied ✓" : label}
     </button>
@@ -98,9 +98,9 @@ function CopyButton({ text, label = "Copy" }) {
 function Field({ label, value, masked, children }) {
   return (
     <div>
-      <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--text-subtle)]">{label}</div>
-      <div className="flex items-center justify-between gap-3 bg-[var(--row-hover)] border border-[var(--border)] rounded-xl px-3.5 py-3 mt-2">
-        <code className="font-mono text-[13px] text-[var(--ink-800,#2E2820)] overflow-hidden text-ellipsis whitespace-nowrap">
+      <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.06em] text-(--text-subtle)">{label}</div>
+      <div className="flex items-center justify-between gap-3 bg-(--row-hover) border border-(--border) rounded-xl px-3.5 py-3 mt-2">
+        <code className="font-mono text-[13px] text-(--ink-800,#2E2820) overflow-hidden text-ellipsis whitespace-nowrap">
           {masked ?? value}
         </code>
         <span className="flex items-center gap-1.5">{children}</span>
@@ -136,6 +136,8 @@ function LiveStatus() {
   }, []);
 
   useEffect(() => {
+    // The initial network probe must immediately disable repeated requests.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     probe();
     const t = window.setInterval(probe, 20000);
     return () => window.clearInterval(t);
@@ -147,29 +149,29 @@ function LiveStatus() {
     <div
       className={`flex items-center gap-3 mt-6 border rounded-2xl px-4 py-3.5 ${
         up
-          ? "bg-[var(--success-bg)] border-[#BBE3CD]"
+          ? "bg-(--success-bg) border-[#BBE3CD]"
           : down
-            ? "bg-[var(--danger-bg)] border-[var(--danger)]/40"
-            : "bg-[var(--surface-warm)] border-[#FBD68A]"
+            ? "bg-(--danger-bg) border-(--danger)/40"
+            : "bg-(--surface-warm) border-[#FBD68A]"
       }`}
       role="status"
     >
       <span
         className={`w-[11px] h-[11px] rounded-full shrink-0 ${
-          up ? "bg-[var(--success)]" : down ? "bg-[var(--danger)]" : "bg-[#EE9913] animate-pulse-slow"
+          up ? "bg-(--success)" : down ? "bg-(--danger)" : "bg-[#EE9913] animate-pulse-slow"
         }`}
       />
       <div className="min-w-0">
         <div className="font-semibold text-[14px]">
           {up ? "Connected — this instance is live" : down ? "Unreachable" : "Checking the engine…"}
         </div>
-        <div className="text-[13px] text-[var(--text-muted)] truncate">{detail}</div>
+        <div className="text-[13px] text-(--text-muted) truncate">{detail}</div>
       </div>
       <button
         type="button"
         onClick={probe}
         disabled={checking}
-        className="ml-auto shrink-0 rounded-full text-[13px] font-semibold text-white px-4 py-2 hover:-translate-y-[1px] transition-transform disabled:opacity-60"
+        className="ml-auto shrink-0 rounded-full text-[13px] font-semibold text-white px-4 py-2 hover:-translate-y-px transition-transform disabled:opacity-60"
         style={{ backgroundImage: "var(--weave-vivid)" }}
       >
         {checking ? "Checking…" : "Check now"}
@@ -196,9 +198,9 @@ export default function ConnectPage() {
   const recipeShown = token && !revealed ? recipe.replaceAll(token, maskToken(token)) : recipe;
 
   return (
-    <div className="h-full w-full overflow-y-auto bg-[var(--bg)]">
+    <div className="h-full w-full overflow-y-auto bg-(--bg)">
       <div className="max-w-[1080px] mx-auto px-8 py-9 pb-16">
-        <div className="text-[12px] font-bold uppercase tracking-[0.1em] text-weave inline-block mb-2.5">
+        <div className="text-[12px] font-bold uppercase tracking-widest text-weave inline-block mb-2.5">
           Get connected
         </div>
         <h1 className="font-display text-[38px] font-medium leading-[1.08] tracking-[-0.02em] mb-2">
@@ -207,13 +209,13 @@ export default function ConnectPage() {
             first tool
           </em>
         </h1>
-        <p className="text-[16px] text-[var(--text-muted)] max-w-[64ch] leading-[1.55]">
+        <p className="text-[16px] text-(--text-muted) max-w-[64ch] leading-[1.55]">
           Point any MCP client at your Loomem. One endpoint, one token — and your memory is shared
           by every tool you connect. Swap the model, switch the tool; your context follows.
         </p>
 
         <div className="grid gap-5 mt-6" style={{ gridTemplateColumns: "1.15fr 0.85fr" }}>
-          <div className="bg-[var(--panel)] border border-[var(--border)] rounded-2xl p-6 shadow-[var(--shadow-sm)] space-y-5">
+          <div className="bg-(--panel) border border-(--border) rounded-2xl p-6 shadow-(--shadow-sm) space-y-5">
             <Field label="Your MCP endpoint" value={endpoint}>
               <CopyButton text={endpoint} />
             </Field>
@@ -222,26 +224,26 @@ export default function ConnectPage() {
                 <button
                   type="button"
                   onClick={() => setRevealed((r) => !r)}
-                  className="font-mono text-[12px] font-semibold text-[#0F5491] bg-[var(--surface-cool)] border border-[#9CD0F7] rounded-lg px-2.5 py-1.5 shrink-0 hover:-translate-y-[1px] transition-transform"
+                  className="font-mono text-[12px] font-semibold text-[#0F5491] bg-(--surface-cool) border border-[#9CD0F7] rounded-lg px-2.5 py-1.5 shrink-0 hover:-translate-y-px transition-transform"
                 >
                   {revealed ? "Hide" : "Reveal"}
                 </button>
                 <CopyButton text={token} />
               </Field>
             ) : (
-              <div className="text-[13px] text-[var(--text-muted)] bg-[var(--surface-warm)] border border-[#FBD68A] rounded-xl px-3.5 py-3">
+              <div className="text-[13px] text-(--text-muted) bg-(--surface-warm) border border-[#FBD68A] rounded-xl px-3.5 py-3">
                 This instance runs without a token (local mode) — clients connect with no
                 Authorization header.
               </div>
             )}
-            <div className="text-[12.5px] text-[var(--text-subtle)] leading-[1.5]">
+            <div className="text-[12.5px] text-(--text-subtle) leading-normal">
               Keep the token secret — it is the one key to this instance. Rotating it logs every
               client out until they re-auth.
             </div>
           </div>
 
-          <div className="bg-[var(--panel)] border border-[var(--border)] rounded-2xl p-6 shadow-[var(--shadow-sm)]">
-            <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--text-subtle)] mb-2.5">
+          <div className="bg-(--panel) border border-(--border) rounded-2xl p-6 shadow-(--shadow-sm)">
+            <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.06em] text-(--text-subtle) mb-2.5">
               Add to your client
             </div>
             <div className="flex gap-1.5 flex-wrap mb-3" role="tablist" aria-label="MCP client">
@@ -254,8 +256,8 @@ export default function ConnectPage() {
                   onClick={() => setClient(c)}
                   className={`text-[13px] font-semibold rounded-full px-3.5 py-1.5 border transition-colors ${
                     client === c
-                      ? "bg-[var(--ink-800,#2E2820)] text-[#F7F2E9] border-[var(--ink-800,#2E2820)]"
-                      : "bg-[var(--panel)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text)]"
+                      ? "bg-(--ink-800,#2E2820) text-[#F7F2E9] border-(--ink-800,#2E2820)"
+                      : "bg-(--panel) text-(--text-muted) border-(--border) hover:text-(--text)"
                   }`}
                 >
                   {c}
@@ -279,7 +281,7 @@ export default function ConnectPage() {
           {STEPS.map(([title, desc], i) => (
             <div
               key={title}
-              className="bg-[var(--panel)] border border-[var(--border)] rounded-2xl p-4 shadow-[var(--shadow-sm)]"
+              className="bg-(--panel) border border-(--border) rounded-2xl p-4 shadow-(--shadow-sm)"
             >
               <div
                 className="w-[30px] h-[30px] rounded-full text-white font-display font-semibold text-[15px] flex items-center justify-center mb-2.5"
@@ -288,7 +290,7 @@ export default function ConnectPage() {
                 {i + 1}
               </div>
               <div className="font-semibold text-[14.5px] mb-0.5">{title}</div>
-              <div className="text-[13px] text-[var(--text-subtle)] leading-[1.45]">{desc}</div>
+              <div className="text-[13px] text-(--text-subtle) leading-[1.45]">{desc}</div>
             </div>
           ))}
         </div>

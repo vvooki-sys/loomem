@@ -17,8 +17,6 @@ export default function MemoryEntitiesTab({ entityIds }) {
   useEffect(() => {
     if (!entityId) return undefined;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     getMemory({ entity_id: entityId, per_page: 50 })
       .then((data) => {
         if (!cancelled) {
@@ -38,7 +36,7 @@ export default function MemoryEntitiesTab({ entityIds }) {
   }, [entityId]);
 
   if (!entityIds || entityIds.length === 0) {
-    return <div className="p-6 text-center text-xs text-[var(--text-subtle)]">No entities linked to this memory</div>;
+    return <div className="p-6 text-center text-xs text-(--text-subtle)">No entities linked to this memory</div>;
   }
 
   if (!entityId) {
@@ -48,8 +46,12 @@ export default function MemoryEntitiesTab({ entityIds }) {
           <button
             key={eid}
             type="button"
-            onClick={() => setEntityId(eid)}
-            className="text-xs px-2.5 py-1 rounded-full border border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text)] font-mono transition-colors"
+            onClick={() => {
+              setLoading(true);
+              setError(null);
+              setEntityId(eid);
+            }}
+            className="text-xs px-2.5 py-1 rounded-full border border-(--border) text-(--text-muted) hover:border-(--border-strong) hover:text-(--text) font-mono transition-colors"
           >
             {eid.slice(0, 8)}…
           </button>
@@ -63,25 +65,25 @@ export default function MemoryEntitiesTab({ entityIds }) {
       <button
         type="button"
         onClick={() => setEntityId(null)}
-        className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
+        className="flex items-center gap-1 text-xs text-(--text-muted) hover:text-(--text)"
       >
         <ChevronLeft size={13} /> Back to memory
       </button>
-      <div className="text-[10px] font-mono text-[var(--text-subtle)]">entity {entityId.slice(0, 8)}…</div>
+      <div className="text-[10px] font-mono text-(--text-subtle)">entity {entityId.slice(0, 8)}…</div>
       {loading ? (
-        <div className="p-4 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
+        <div className="p-4 text-center text-xs text-(--text-muted) flex items-center justify-center gap-2">
           <RefreshCw size={13} className="animate-spin" /> Loading…
         </div>
       ) : error ? (
         <ErrorState error={error} compact />
       ) : memories.length === 0 ? (
-        <div className="p-4 text-center text-xs text-[var(--text-subtle)]">No memories for this entity</div>
+        <div className="p-4 text-center text-xs text-(--text-subtle)">No memories for this entity</div>
       ) : (
         memories.map((m) => (
-          <div key={m.id} className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-2.5">
+          <div key={m.id} className="bg-(--bg) border border-(--border) rounded-lg p-2.5">
             <div className="flex items-center gap-2 mb-1">
               <span
-                className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold"
+                className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono font-semibold"
                 style={{
                   backgroundColor: (MEMORY_LAYERS[m.layer]?.color || "#8E8474") + "20",
                   color: MEMORY_LAYERS[m.layer]?.color || "#8E8474",
@@ -89,9 +91,9 @@ export default function MemoryEntitiesTab({ entityIds }) {
               >
                 {m.layer}
               </span>
-              {m.event_date && <span className="text-[10px] text-[var(--text-subtle)] font-mono">{m.event_date}</span>}
+              {m.event_date && <span className="text-[10px] text-(--text-subtle) font-mono">{m.event_date}</span>}
             </div>
-            <p className="text-xs text-[var(--text)] leading-snug">{m.content}</p>
+            <p className="text-xs text-(--text) leading-snug">{m.content}</p>
           </div>
         ))
       )}

@@ -23,26 +23,26 @@ function fmtTs(sec) {
 function DiffView({ prev, current }) {
   const segments = wordDiff(prev, current);
   return (
-    <div className="mt-2 pt-2 border-t border-[var(--border)] text-xs leading-relaxed whitespace-pre-wrap">
-      <div className="text-[9px] uppercase tracking-wide text-[var(--text-subtle)] mb-1">
+    <div className="mt-2 pt-2 border-t border-(--border) text-xs leading-relaxed whitespace-pre-wrap">
+      <div className="text-[9px] uppercase tracking-wide text-(--text-subtle) mb-1">
         Changes from previous
       </div>
       {segments.map((seg, i) =>
         seg.type === "eq" ? (
-          <span key={i} className="text-[var(--text-muted)]">
+          <span key={i} className="text-(--text-muted)">
             {seg.text}
           </span>
         ) : seg.type === "add" ? (
           <span
             key={i}
-            className="rounded-sm bg-[var(--badge-active-bg)] text-[var(--success)]"
+            className="rounded-xs bg-(--badge-active-bg) text-(--success)"
           >
             {seg.text}
           </span>
         ) : (
           <span
             key={i}
-            className="rounded-sm bg-[var(--danger-bg)] text-[var(--danger)] line-through"
+            className="rounded-xs bg-(--danger-bg) text-(--danger) line-through"
           >
             {seg.text}
           </span>
@@ -53,6 +53,10 @@ function DiffView({ prev, current }) {
 }
 
 export default function MemoryHistoryTab({ chunkId }) {
+  return <MemoryHistory key={chunkId} chunkId={chunkId} />;
+}
+
+function MemoryHistory({ chunkId }) {
   const [chain, setChain] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -61,8 +65,6 @@ export default function MemoryHistoryTab({ chunkId }) {
   useEffect(() => {
     if (!chunkId) return undefined;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     getMemoryChain(chunkId)
       .then((data) => {
         if (!cancelled) {
@@ -83,7 +85,7 @@ export default function MemoryHistoryTab({ chunkId }) {
 
   if (loading) {
     return (
-      <div className="p-6 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
+      <div className="p-6 text-center text-xs text-(--text-muted) flex items-center justify-center gap-2">
         <RefreshCw size={13} className="animate-spin" /> Loading version history…
       </div>
     );
@@ -92,14 +94,14 @@ export default function MemoryHistoryTab({ chunkId }) {
   if (error) {
     return (
       <div className="p-3">
-        <ErrorState error={error} onRetry={() => setReloadKey((k) => k + 1)} compact />
+        <ErrorState error={error} onRetry={() => { setLoading(true); setError(null); setReloadKey((k) => k + 1); }} compact />
       </div>
     );
   }
 
   const versions = chain?.chain || [];
   if (versions.length === 0) {
-    return <div className="p-6 text-center text-xs text-[var(--text-subtle)]">No recorded versions</div>;
+    return <div className="p-6 text-center text-xs text-(--text-subtle)">No recorded versions</div>;
   }
 
   return (
@@ -107,19 +109,19 @@ export default function MemoryHistoryTab({ chunkId }) {
       {versions.map((v, idx) => (
         <div
           key={v.id}
-          className={`bg-[var(--bg)] border rounded-lg p-3 ${v.is_latest ? "border-[var(--accent)]/40" : "border-[var(--border)]"}`}
+          className={`bg-(--bg) border rounded-lg p-3 ${v.is_latest ? "border-(--accent)/40" : "border-(--border)"}`}
         >
           <div className="flex items-center gap-2 mb-1.5">
-            <span className="text-[10px] font-mono font-semibold text-[var(--accent)]">v{v.version}</span>
+            <span className="text-[10px] font-mono font-semibold text-(--accent)">v{v.version}</span>
             {v.is_latest && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--row-selected)] text-[var(--accent)]">latest</span>
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-(--row-selected) text-(--accent)">latest</span>
             )}
-            <span className="text-[10px] text-[var(--text-subtle)] ml-auto">{fmtTs(v.timestamp)}</span>
+            <span className="text-[10px] text-(--text-subtle) ml-auto">{fmtTs(v.timestamp)}</span>
           </div>
-          <div className="text-xs text-[var(--text)] leading-relaxed whitespace-pre-wrap">{v.content}</div>
+          <div className="text-xs text-(--text) leading-relaxed whitespace-pre-wrap">{v.content}</div>
           {idx > 0 && <DiffView prev={versions[idx - 1].content} current={v.content} />}
           {v.supersedes_id && (
-            <div className="text-[10px] text-[var(--text-subtle)] mt-1">supersedes: {v.supersedes_id.slice(0, 8)}…</div>
+            <div className="text-[10px] text-(--text-subtle) mt-1">supersedes: {v.supersedes_id.slice(0, 8)}…</div>
           )}
         </div>
       ))}

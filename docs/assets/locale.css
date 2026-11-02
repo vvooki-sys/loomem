@@ -1,0 +1,8 @@
+.locale-switch{display:inline-flex;align-items:center;gap:2px;flex:none;white-space:nowrap}
+.locale-switch a{display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:44px;padding:4px 6px;border:1px solid transparent;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none}
+.locale-switch a[aria-current=page]{color:#0f5491;border-color:#1684dc;background:#eef6fd}
+.locale-switch a:focus-visible{outline:3px solid #1684dc;outline-offset:2px}
+@media(max-width:420px){.locale-switch a{min-width:36px;padding:4px}}
+@media(max-width:600px){.topnav>a{display:none}.topnav{gap:8px}}
+@media(max-width:420px){.brand .tag{display:none}}
+:not(pre)>code,.doc-content a,.doc-content h2{overflow-wrap:anywhere}

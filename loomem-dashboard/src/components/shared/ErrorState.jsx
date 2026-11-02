@@ -23,10 +23,10 @@ export default function ErrorState({ error, onRetry, compact = false }) {
       role="alert"
     >
       <div className="text-center max-w-sm">
-        <AlertTriangle size={compact ? 20 : 26} className="text-[var(--danger)] mx-auto mb-2" />
-        <p className="text-[var(--text)] text-sm font-medium mb-1">{heading}</p>
+        <AlertTriangle size={compact ? 20 : 26} className="text-(--danger) mx-auto mb-2" />
+        <p className="text-(--text) text-sm font-medium mb-1">{heading}</p>
         {!isForbidden && (
-          <p className="text-[var(--text-muted)] text-xs mb-3 break-words">
+          <p className="text-(--text-muted) text-xs mb-3 wrap-break-word">
             {errorCopy(error)}
           </p>
         )}
@@ -34,7 +34,7 @@ export default function ErrorState({ error, onRetry, compact = false }) {
           <button
             type="button"
             onClick={onRetry}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-[var(--border-strong)] text-xs text-[var(--text)] hover:bg-[var(--row-hover)] transition-all hover:-translate-y-[1px]"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--border-strong) text-xs text-(--text) hover:bg-(--row-hover) transition-all hover:-translate-y-px"
           >
             <RefreshCw size={12} /> Retry
           </button>

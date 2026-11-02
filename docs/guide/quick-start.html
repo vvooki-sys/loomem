@@ -158,18 +158,21 @@ a:hover{text-decoration:underline}
   ]
 }
 </script>
+<link rel="stylesheet" href="/assets/locale.css"/>
+<script src="/assets/locale.js"></script>
+<link rel="alternate" hreflang="en" href="https://loomem.ai/guide/quick-start.html"/>
+<link rel="alternate" hreflang="pl" href="https://loomem.ai/pl/guide/quick-start.html"/>
 </head>
 <body>
 <header class="topbar"><div class="wrap inner">
 <a class="brand" href="../"><svg class="lm-ring" viewBox="0 0 200 200" fill="none" aria-hidden="true"><defs><linearGradient id="lmRingHdr" x1="0.05" y1="0" x2="0.95" y2="1"><stop offset="0" stop-color="#EE9913"/><stop offset="0.28" stop-color="#F7756F"/><stop offset="0.52" stop-color="#B86ED2"/><stop offset="0.74" stop-color="#667CE6"/><stop offset="1" stop-color="#1684DC"/></linearGradient></defs><g fill="none" stroke="url(#lmRingHdr)" stroke-linecap="round"><circle class="r1" cx="100" cy="100" r="77" stroke-width="15" stroke-dasharray="404 80"/><circle class="r2" cx="100" cy="100" r="56" stroke-width="15" stroke-dasharray="294 62"/><circle class="r3" cx="100" cy="100" r="36" stroke-width="14" stroke-dasharray="170 56"/></g></svg><span class="wm-word">loo<span class="wm">mem</span></span><span class="tag">Docs</span></a>
-<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a></nav>
+<nav class="topnav"><a href="../">Home</a><a href="./">All docs</a><a href="https://github.com/vvooki-sys/loomem">GitHub</a><span class="locale-switch" role="group" aria-label="Language"><a href="/pl/guide/quick-start.html" data-language="pl" lang="pl" aria-label="Polski">PL</a><a href="/guide/quick-start.html" data-language="en" lang="en" aria-label="English" aria-current="page">EN</a></span></nav>
 </div></header>
 <div class="doc-wrap"><aside class="doc-side"><a href="./" style="font-weight:600;margin-bottom:6px;display:block">← Documentation</a><div class="grp">Docs</div><a href="quick-start.html" class="active">Quick start</a><a href="installation.html">Installation</a><a href="configuration.html">Configuration</a><a href="api-reference.html">API reference</a><a href="mcp-tools.html">MCP tools</a><div class="grp">Project</div><a href="architecture.html">Architecture</a><a href="deployment.html">Deployment</a><a href="security.html">Security model</a><a href="backup-and-restore.html">Backup & restore</a></aside><main class="doc-main"><div class="doc-eyebrow">Docs</div><article class="doc-content"><h1 id="loomem-quick-start">Loomem — Quick start</h1>
-<p>Loomem gives your LLM agents memory that persists across conversations.
-Every fact, decision, or preference you share gets remembered.</p>
-<h2 id="setup-about-2-minutes-local">Setup (about 2 minutes, local)</h2>
+<p>Loomem gives your LLM agents memory that persists across conversations. It can store facts, decisions, and preferences you choose to share.</p>
+<h2 id="setup-about-2-minutes-local">Local setup</h2>
 <h3 id="1-install-and-start-the-server">1. Install and start the server</h3>
-<p>Install the prebuilt binaries (no sudo; they land in <code>~/.loomem</code>) and put <code>~/.loomem/bin</code> on your <code>PATH</code> — full steps in the <a href="installation.html">Installation guide</a>. Then start it:</p>
+<p>Install the prebuilt binaries (no sudo; they land in <code>~/.loomem</code>) and put <code>~/.loomem/bin</code> on your <code>PATH</code> — full steps in the <a href="installation.html">Installation guide</a>. Before starting, download the local embedding model as described there. The default configuration also requires an LLM key in <code>OPENAI_API_KEY</code>; alternatively, set <code>LOOMEM_ALLOW_KEYLESS=1</code> for reduced functionality. Then start it:</p>
 <pre><code class="language-bash">cd ~/.loomem &amp;&amp; loomem-server
 # listens on http://localhost:3030 — auth is off by default for local use
 </code></pre>
@@ -198,6 +201,7 @@ Every fact, decision, or preference you share gets remembered.</p>
 }
 </code></pre>
 <h3 id="3-try-it">3. Try it</h3>
+<p>Without an LLM key, <code>memory_ingest</code> returns an error and extracts no facts. It may still store the source text before extraction. Configure an LLM key to try extraction in the following example.</p>
 <p>In Claude, say:</p>
 <blockquote>
 <p>"Remember that I prefer dark mode in all my tools."</p>
@@ -206,18 +210,17 @@ Every fact, decision, or preference you share gets remembered.</p>
 <blockquote>
 <p>"What do you know about my preferences?"</p>
 </blockquote>
-<p>The answer comes back from Loomem.</p>
+<p>Claude can retrieve the answer from Loomem.</p>
 <h2 id="connecting-claudeai-or-chatgpt-remote">Connecting claude.ai or ChatGPT (remote)</h2>
 <p>These connect to <strong>remote</strong> MCP servers over HTTPS, so this is a separate, longer step: expose your instance behind TLS, set <code>SERVER_ORIGIN</code>, then add the connector pointing at <code>https://your-domain/mcp</code> (OAuth dynamic client registration works out of the box). Full walkthrough — TLS, reverse proxy, auth — in the <a href="deployment.html">Deployment guide</a>.</p>
 <h2 id="how-it-works">How it works</h2>
 <ul>
-<li>Claude automatically stores facts you share</li>
-<li>Claude searches memory before answering questions about you</li>
-<li>Memory persists across conversations, devices, and sessions</li>
+<li>Claude can store facts you share in memory</li>
+<li>Claude can search memory before answering questions about you</li>
+<li>Memory persists across conversations and sessions, and is available to devices that can access the server</li>
 </ul>
 <h2 id="privacy">Privacy</h2>
-<p>Your memory is stored on your own server. Loomem is self-hosted —
-no third party holds your data. See the <a href="security.html">Security overview</a>.</p>
+<p>Your memory is stored on your own server. Depending on your configuration, LLM-backed features can use an external provider. See the <a href="security.html">Security overview</a>.</p>
 <h2 id="more">More</h2>
 <ul>
 <li><a href="https://github.com/vvooki-sys/loomem/blob/main/docs/user-guide.md">User Guide</a> — day-to-day usage</li>

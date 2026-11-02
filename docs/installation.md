@@ -150,7 +150,7 @@ cargo build --release -p loomem-server -p loomem-cli -p loomem-migrate
 
 Requires Rust (stable), Node.js (for the dashboard) and libclang for the RocksDB build: `apt install libclang-dev` on Debian/Ubuntu; on macOS it ships with the Xcode Command Line Tools. On Windows, see [INSTALL_WINDOWS.md](https://github.com/vvooki-sys/loomem/blob/main/INSTALL_WINDOWS.md).
 
-Skipping the dashboard build leaves the dashboard returning 404. The local embedding model is **required**: with the default `embedding_provider = "local"`, the server refuses to start without it (`refusing cloud fallback`), with or without an API key. The default config also enables LLM-backed extraction and dreaming, so the server **refuses to start** unless an LLM key is set (`export OPENAI_API_KEY=...`) or `LOOMEM_ALLOW_KEYLESS=1` is set. In keyless mode, `memory_ingest` returns a missing-key error and stores nothing, entity extraction is off, and dreaming fails; `memory_store` and search keep working.
+Skipping the dashboard build leaves the dashboard returning 404. The local embedding model is **required**: with the default `embedding_provider = "local"`, the server refuses to start without it (`refusing cloud fallback`), with or without an API key. The default config also enables LLM-backed extraction and dreaming, so the server **refuses to start** unless an LLM key is set (`export OPENAI_API_KEY=...`) or `LOOMEM_ALLOW_KEYLESS=1` is set. In keyless mode, `memory_ingest` may store the source text but returns a missing-key error and extracts no facts; entity extraction is off and dreaming fails. `memory_store` and search keep working.
 
 ## Docker
 
@@ -175,7 +175,7 @@ The image contains no local embedding model, so the command switches embeddings 
 | `could not determine the latest release` | The only release is a prerelease (excluded from "latest") → pin it with `LOOMEM_VERSION=v0.2.0-rc1`. Installing from a **private fork**? Authenticate first: `gh auth login` or set `GH_TOKEN`. |
 | `download failed: … If this repo is private…` | Network/transient failure on the public repo — re-run. From a **private fork**, the installer can't see release assets without auth (`gh auth login` / `GH_TOKEN`). |
 | `checksum mismatch` | Corrupted or tampered download. Re-run; if it persists, **don't install** — compare against `SHA256SUMS` on the releases page and open an issue. |
-| `WARNING: SHA256SUMS not available` | The release has no checksum file (shouldn't happen for official releases). Install proceeds unverified — treat with suspicion. |
+| `SHA256SUMS could not be downloaded — refusing to install an unverified archive` | The installer stops without installing. Check that the checksum file is available in the selected release or mirror. |
 | `unsupported OS/architecture` | No prebuilt binary for your platform — [build from source](#from-source). |
 | `version 'GLIBC_2.35' not found` (or similar) | Your distro's glibc is older than the build baseline — [build from source](#from-source) or use [Docker](#docker). |
 | `loomem-server: command not found` after install | `~/.loomem/bin` not on PATH — see [PATH setup](#path-setup). |

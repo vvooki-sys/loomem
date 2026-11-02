@@ -10,33 +10,33 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint src --ext .js,.jsx"
+    "lint": "eslint src"
   },
   "dependencies": {
-    "@fontsource-variable/fraunces": "^5.2.5",
-    "@fontsource-variable/inter": "^5.2.5",
-    "@fontsource-variable/jetbrains-mono": "^5.2.5",
-    "lucide-react": "^0.383.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-router-dom": "^7.14.1",
-    "recharts": "^2.12.7"
+    "@fontsource-variable/fraunces": "^5.3.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "lucide-react": "1.66.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router-dom": "^7.18.5"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^14.3.1",
-    "@testing-library/user-event": "^14.6.1",
-    "@vitejs/plugin-react": "^4.3.1",
-    "@vitest/coverage-v8": "^1.6.1",
-    "@vitest/ui": "^1.6.1",
-    "autoprefixer": "^10.4.19",
-    "eslint": "^8.57.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
+    "@vitejs/plugin-react": "^6.1.2",
+    "@vitest/coverage-v8": "5.0.5",
+    "@vitest/ui": "5.0.5",
+    "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
-    "eslint-plugin-react-hooks": "^4.6.2",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "^17.14.0",
     "jsdom": "^24.1.3",
-    "postcss": "^8.4.38",
-    "tailwindcss": "^3.4.4",
-    "vite": "^5.3.4",
-    "vitest": "^1.6.1"
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.3.5",
+    "vitest": "5.0.5"
   }
 }

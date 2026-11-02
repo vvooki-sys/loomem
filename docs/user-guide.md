@@ -6,22 +6,22 @@ This guide is for end users who want to connect Claude to a Loomem instance and 
 
 ## What is Loomem?
 
-Loomem gives Claude long-term memory. Without it, every conversation starts from scratch. With Loomem, Claude remembers who you are, what you've discussed, and what decisions you've made — across all conversations and devices.
+Loomem gives Claude access to memory across conversations. Claude can store and recall information about you, what you discussed, and the decisions you made, from devices that can connect to your instance.
 
 ---
 
 ## Setup
 
-You need two things from whoever runs your Loomem server (possibly you — see the [Deployment Guide](deployment.md)):
+Ask whoever runs your Loomem server for its URL and, if authentication is enabled, an API key. You can also run the server yourself — see the [Deployment Guide](deployment.md).
 - **Server URL** — looks like `https://your-server.app/mcp`
-- **API key** — the server's configured Bearer key (e.g. `loom_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`)
+- **API key** — the server's configured Bearer key (e.g. `loom_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`), if authentication is enabled
 
 ### Claude.ai (web)
 
 1. Go to **Settings** → **Customize** → **Connectors**
 2. Click **Add connector**
 3. Paste the server URL
-4. When prompted for authorization, enter your API key
+4. When prompted for authorization, provide the credentials required by your server configuration
 5. Done
 
 ### Claude Desktop (macOS / Windows)
@@ -96,9 +96,9 @@ Add to your project's `.mcp.json` or global MCP config:
 
 ## How to use
 
-Once connected, Claude automatically uses memory. You don't need to learn any commands — just talk naturally.
+Once connected, Claude can use memory during a conversation. You don't need to learn commands — just talk naturally. Whether and when it calls the tools depends on the client and its configuration. Extraction also depends on the server's LLM configuration.
 
-### Claude remembers automatically
+### Claude can remember information
 
 ```
 You:    "I'm a data scientist working at Acme Corp"
@@ -132,21 +132,19 @@ You:    "Forget that I work at Acme Corp"
 Claude: [deletes the relevant memory]
 ```
 
+Deleting a derived fact does not automatically remove its source or other related facts. Delete the source ID to remove that conversation and its linked memories from retrieval.
+
 ---
 
 ## What gets remembered?
 
-Claude stores:
+Claude can store:
 - **Preferences** — tools, languages, coding style, work habits
 - **Decisions** — technology choices, project directions
 - **Facts about you** — role, expertise, projects
 - **Project state** — deadlines, goals, current status
 
-Claude does **not** store:
-- Raw conversation text
-- Small talk or greetings
-- Passwords, API keys, or secrets
-- Temporary status updates
+The client instructions recommend storing concrete, useful facts and skipping small talk, greetings, speculation, and transient status updates as standalone facts. `memory_ingest` can also preserve a sanitized conversation source alongside extracted facts, so do not assume that no conversation text is stored. Do not share secrets in conversations intended for ingestion.
 
 ---
 
@@ -156,21 +154,21 @@ Claude does **not** store:
 
 Your memories live in three layers:
 
-1. **Fresh memories** — exactly what you said, recent and detailed
+1. **Fresh memories** — recent, detailed information
 2. **Compressed memories** — multiple related facts merged into one clear statement
 3. **Core knowledge** — stable, long-term understanding (your identity, key preferences)
 
-Fresh memories naturally fade over time. Important ones get compressed and promoted. Frequently accessed memories persist longer.
+Fresh memories can fade over time. Important information can be consolidated, and frequently accessed memories can persist longer.
 
 ### Dream consolidation
 
-Periodically, Loomem runs a "dream" process that:
+Loomem can run a "dream" process that:
 - Groups related memories together
-- Removes duplicates
+- Merges similar information
 - Resolves contradictions (e.g., if you changed your preferred IDE)
 - Compresses verbose memories into concise facts
 
-This happens automatically in the background.
+Dreaming can be requested through `memory_dream` or triggered automatically when configured; it requires the relevant LLM-backed functions to be available.
 
 ### Contradiction handling
 
@@ -181,15 +179,15 @@ March:  "I use VSCode"
 April:  "I switched to Cursor"
 ```
 
-Loomem creates a version chain — the old fact is marked as superseded, and the new one becomes current. Claude will answer based on the latest version.
+Loomem can create a version chain, marking the old fact as superseded and the new one as current. Claude can then use the newer version.
 
 ---
 
 ## Privacy
 
-- **Single-user by design** — one API key controls the whole instance; nobody else has access
-- **PII protection** — phone numbers, emails, and IDs are redacted before any AI processing
-- **Your server, your data** — Loomem is self-hosted, not a cloud service
+- **Single-user by design** — Loomem is intended for one user. A Bearer token can protect the instance; authentication is off by default for local use, so secure the server according to your deployment.
+- **PII protection** — the default configuration enables redaction of phone numbers, email addresses, and IDs. Protection depends on configuration and detection; do not assume every sensitive item will be recognized.
+- **Your server, your data** — memory is stored on your self-hosted server. LLM-backed functions may send data to the configured provider.
 
 ---
 
@@ -199,7 +197,7 @@ Loomem creates a version chain — the old fact is marked as superseded, and the
 2. **Share context** — tell Claude about your role, projects, and goals early on
 3. **Correct mistakes** — if Claude remembers something wrong, tell it to update
 4. **Use across sessions** — the more you use it, the better Claude understands you
-5. **Don't worry about duplicates** — Loomem automatically deduplicates similar facts
+5. **Don't worry about duplicates** — Loomem can deduplicate similar facts
 
 ---
 
@@ -208,8 +206,9 @@ Loomem creates a version chain — the old fact is marked as superseded, and the
 ### "Claude doesn't seem to remember anything"
 
 - Check that the connector is active in Settings → Customize → Connectors
-- Try asking: "What do you know about me?" — if Loomem is connected, Claude will search memory
-- Verify your API key is correct
+- Try asking: "What do you know about me?" and check whether Claude calls the memory tools
+- If authentication is enabled, verify your API key is correct
+- Check the LLM configuration: in keyless mode `memory_store` and search work, but LLM-backed extraction is unavailable
 
 ### "Claude is remembering wrong things"
 
@@ -219,9 +218,9 @@ Loomem creates a version chain — the old fact is marked as superseded, and the
 
 ### "Memory seems slow"
 
-- First search in a conversation may take 1-2 seconds (cold cache)
-- Subsequent searches are faster (cached)
-- This is normal — memory quality is more important than speed
+- An initial search can take longer before the cache is populated
+- Later searches may use the cache if enabled in the configuration
+- Response time depends on the environment and configuration
 
 ---
 

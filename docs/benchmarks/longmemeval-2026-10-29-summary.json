@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "run_date": "2026-10-29",
+  "benchmark": "LongMemEval-S (cleaned)",
+  "dataset": {
+    "questions": 500,
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
+  },
+  "diagnostic_only": true,
+  "official_leaderboard_score": false,
+  "result": {
+    "correct": 427,
+    "total": 500,
+    "accuracy": 0.854,
+    "completed_readers": 500,
+    "completed_judges": 500,
+    "errors_after_documented_technical_retries": 0,
+    "missing": 0
+  },
+  "configuration": {
+    "engine": "Loomem E1 fragments evaluation binary",
+    "engine_binary_sha256": "2f16b74bc4a72a659314b494e7df6fb46bbfe3048ab73cf5baf17347e568eed4",
+    "embeddings": "local multilingual-e5-small, 384 dimensions",
+    "reader_model": "k3-256k",
+    "judge_model": "k3-256k",
+    "reader_max_output_tokens": 8000,
+    "judge_max_output_tokens": 512,
+    "reasoning_effort": "low",
+    "temperature": 1,
+    "seed": 42,
+    "returned_records_per_question": 60,
+    "evidence_contract": 2,
+    "evidence_context_budget_tokens": 8000,
+    "packing_policy": "ranked_full_records_first_fit_v1",
+    "evaluation_protocol": "loomem-longmemeval-strict-v2-context-v2"
+  },
+  "by_question_type": {
+    "knowledge-update": {"correct": 74, "total": 78, "accuracy": 0.9487179487},
+    "multi-session": {"correct": 93, "total": 133, "accuracy": 0.6992481203},
+    "single-session-assistant": {"correct": 54, "total": 56, "accuracy": 0.9642857143},
+    "single-session-preference": {"correct": 25, "total": 30, "accuracy": 0.8333333333},
+    "single-session-user": {"correct": 66, "total": 70, "accuracy": 0.9428571429},
+    "temporal-reasoning": {"correct": 115, "total": 133, "accuracy": 0.8646616541}
+  },
+  "retrieval_diagnostics": {
+    "macro_answer_session_recall": 0.9961666667,
+    "all_answer_sessions_covered": 496,
+    "session_metric_questions": 500,
+    "macro_gold_turn_recall_before_packing": 0.9207028532,
+    "all_gold_turns_covered_before_packing": 421,
+    "turn_metric_questions": 479,
+    "mean_returned_records": 60
+  },
+  "reader_context_diagnostics": {
+    "macro_gold_turn_recall_after_packing": 0.8632219903,
+    "all_gold_turns_covered_after_packing": 380,
+    "questions_with_gold_turns_lost_in_packing": 53,
+    "turn_metric_questions": 479
+  },
+  "multi_session_error_analysis": {
+    "incorrect": 40,
+    "gold_turn_lost_in_packing": 22,
+    "incomplete_retrieval_without_packing_loss": 11,
+    "all_gold_turns_available_but_reader_incorrect": 4,
+    "abstention_cases": 3,
+    "note": "Exclusive diagnostic buckets, not proof of sole causality. Gold-turn provenance does not certify semantic support. Abstention cases require manual judge review."
+  },
+  "limitations": [
+    "Self-run diagnostic evaluation, not an official leaderboard result.",
+    "Kimi k3-256k was both reader and judge; no independent semantic audit has closed the report.",
+    "The dataset had been used during earlier development, so this is not an unseen holdout.",
+    "Results are not directly comparable with other models, vendors, or evaluation protocols.",
+    "Retrieval provenance metrics are not QA accuracy and do not prove semantic support."
+  ]
+}

@@ -22,24 +22,24 @@ export default function SettingsPage({ userCtx }) {
   };
 
   return (
-    <div className="h-full w-full overflow-auto bg-[var(--bg)] text-[var(--text)]">
+    <div className="h-full w-full overflow-auto bg-(--bg) text-(--text)">
       <div className="max-w-2xl mx-auto px-8 py-12">
         <div className="flex items-center gap-3 mb-8">
-          <SettingsIcon size={22} className="text-[var(--text-muted)]" />
+          <SettingsIcon size={22} className="text-(--text-muted)" />
           <h1 className="font-display text-2xl font-semibold">Settings</h1>
         </div>
 
-        <div className="bg-[var(--panel)] border border-[var(--border)] rounded-lg divide-y divide-[var(--border)]">
+        <div className="bg-(--panel) border border-(--border) rounded-lg divide-y divide-(--border)">
           <div className="px-5 py-4">
-            <div className="text-[12px] uppercase tracking-wide text-[var(--text-muted)] mb-1">Stream ID</div>
+            <div className="text-[12px] uppercase tracking-wide text-(--text-muted) mb-1">Stream ID</div>
             <div className="font-mono text-sm">{userCtx?.stream_id || "—"}</div>
           </div>
           <div className="px-5 py-4">
-            <div className="text-[12px] uppercase tracking-wide text-[var(--text-muted)] mb-1">Role</div>
+            <div className="text-[12px] uppercase tracking-wide text-(--text-muted) mb-1">Role</div>
             <div className="text-sm">{userCtx?.role || "—"}</div>
           </div>
           <div className="px-5 py-4">
-            <div className="text-[12px] uppercase tracking-wide text-[var(--text-muted)] mb-1">Server version</div>
+            <div className="text-[12px] uppercase tracking-wide text-(--text-muted) mb-1">Server version</div>
             <div className="font-mono text-sm">{version ? `v${version}` : "—"}</div>
           </div>
         </div>
@@ -47,7 +47,7 @@ export default function SettingsPage({ userCtx }) {
         <div className="mt-6">
           <button
             onClick={logout}
-            className="px-4 py-2 rounded-full border border-[var(--border-strong)] text-sm hover:bg-[var(--row-hover)]"
+            className="px-4 py-2 rounded-full border border-(--border-strong) text-sm hover:bg-(--row-hover)"
           >
             Log out
           </button>

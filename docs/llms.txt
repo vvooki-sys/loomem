@@ -31,7 +31,7 @@
 
 ## Reference
 - Loomem vs Mem0 / Zep / Letta / cognee: https://loomem.ai/compare.html
-- Benchmarks (LongMemEval 75.0%): https://loomem.ai/benchmarks.html
+- Benchmarks (LongMemEval 85.4%, diagnostic run): https://loomem.ai/benchmarks.html
 - Full brief for LLMs: https://loomem.ai/llms-full.txt
 
 ## Source

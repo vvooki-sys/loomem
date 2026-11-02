@@ -298,7 +298,8 @@ ships in the default build; obtain the model files with:
 The completions LLM (consolidation, fact extraction, dream) is independent. With
 the default config (those subsystems enabled) and no `OPENAI_API_KEY`, the server
 refuses to start unless `LOOMEM_ALLOW_KEYLESS=1` is set, and then `memory_ingest`
-returns a missing-key error (nothing stored), entity extraction is off and
+may store the source text but returns a missing-key error and extracts no facts;
+LLM-based entity extraction is off and
 dream/consolidation fail, while `memory_store` and semantic search work fully
 locally. Disabling those subsystems in `config.toml` lifts the startup check, and
 with `knowledge_extraction.enabled = false` `memory_ingest` stores the raw

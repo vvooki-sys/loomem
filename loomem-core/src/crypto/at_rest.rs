@@ -5,8 +5,8 @@
 // deriving deterministic, opaque RocksDB key suffixes from plaintext names.
 // Rationale: ADR-013 §4 "Reverse-name index" (amended 2026-06-01).
 
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
-use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, Generate, KeyInit};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -77,8 +77,8 @@ pub fn encrypt_blob(
     dek_id: u32,
     plaintext: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(dek));
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let cipher = Aes256Gcm::new(dek.into());
+    let nonce = Nonce::try_generate().map_err(|_| CryptoError::EncryptionFailed)?;
     let ct_and_tag = cipher
         .encrypt(&nonce, plaintext)
         .map_err(|_| CryptoError::EncryptionFailed)?;
@@ -108,16 +108,17 @@ pub fn decrypt_blob(dek: &[u8; DEK_SIZE], blob: &[u8]) -> Result<Vec<u8>, Crypto
     }
     let nonce_start = MAGIC.len() + 1 + 4;
     let nonce_end = nonce_start + NONCE_SIZE;
-    let nonce = Nonce::from_slice(&blob[nonce_start..nonce_end]);
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(dek));
+    let nonce = Nonce::try_from(&blob[nonce_start..nonce_end])
+        .map_err(|_| CryptoError::DecryptionFailed)?;
+    let cipher = Aes256Gcm::new(dek.into());
     cipher
-        .decrypt(nonce, &blob[nonce_end..])
+        .decrypt(&nonce, &blob[nonce_end..])
         .map_err(|_| CryptoError::DecryptionFailed)
 }
 
 #[must_use]
 pub fn generate_dek() -> [u8; DEK_SIZE] {
-    let key = Aes256Gcm::generate_key(&mut OsRng);
+    let key = Key::<Aes256Gcm>::generate();
     let mut out = [0u8; DEK_SIZE];
     out.copy_from_slice(key.as_slice());
     out
@@ -129,8 +130,8 @@ pub fn wrap_dek(
     dek_id: u32,
     master_key_version: u8,
 ) -> Result<WrappedStreamDek, CryptoError> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(master_key));
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let cipher = Aes256Gcm::new(master_key.into());
+    let nonce = Nonce::try_generate().map_err(|_| CryptoError::EncryptionFailed)?;
     let ct_and_tag = cipher
         .encrypt(&nonce, dek.as_slice())
         .map_err(|_| CryptoError::EncryptionFailed)?;
@@ -170,7 +171,7 @@ pub fn wrap_dek(
 /// ADR-013 §4 Decision 1: HMAC-SHA256 (not BLAKE3). Primitive kept here for
 /// unit-testability in isolation from the provider layer.
 pub fn index_token(mac_key: &[u8; DEK_SIZE], lowercased: &[u8]) -> String {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(mac_key)
+    let mut mac = <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(mac_key)
         .expect("HMAC-SHA256 accepts any key length; 32-byte key is always valid");
     mac.update(lowercased);
     let result = mac.finalize().into_bytes();
@@ -186,15 +187,15 @@ pub fn unwrap_dek(
     master_key: &[u8; DEK_SIZE],
     wrapped: &WrappedStreamDek,
 ) -> Result<[u8; DEK_SIZE], CryptoError> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(master_key));
-    let nonce = Nonce::from_slice(&wrapped.wrap_nonce);
+    let cipher = Aes256Gcm::new(master_key.into());
+    let nonce = Nonce::from(wrapped.wrap_nonce);
 
     let mut ct_and_tag = Vec::with_capacity(wrapped.wrapped_blob.len() + TAG_SIZE);
     ct_and_tag.extend_from_slice(&wrapped.wrapped_blob);
     ct_and_tag.extend_from_slice(&wrapped.wrap_tag);
 
     let raw = cipher
-        .decrypt(nonce, ct_and_tag.as_ref())
+        .decrypt(&nonce, ct_and_tag.as_ref())
         .map_err(|_| CryptoError::DecryptionFailed)?;
 
     if raw.len() != DEK_SIZE {
@@ -208,7 +209,6 @@ pub fn unwrap_dek(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes_gcm::aead::rand_core::RngCore;
 
     fn fixed_dek() -> [u8; DEK_SIZE] {
         let mut k = [0u8; DEK_SIZE];
@@ -219,9 +219,66 @@ mod tests {
     }
 
     fn random_dek() -> [u8; DEK_SIZE] {
-        let mut k = [0u8; DEK_SIZE];
-        OsRng.fill_bytes(&mut k);
-        k
+        generate_dek()
+    }
+
+    #[test]
+    fn decrypts_existing_v1_nist_aes256_gcm_vector() {
+        // NIST AES-256-GCM: all-zero key, nonce and 16-byte plaintext.
+        let mut blob = Vec::from(MAGIC);
+        blob.push(ENCRYPTION_VERSION_V1);
+        blob.extend_from_slice(&42u32.to_le_bytes());
+        blob.extend_from_slice(&[0; NONCE_SIZE]);
+        blob.extend_from_slice(&[
+            0xce, 0xa7, 0x40, 0x3d, 0x4d, 0x60, 0x6b, 0x6e, 0x07, 0x4e, 0xc5, 0xd3, 0xba, 0xf3,
+            0x9d, 0x18, 0xd0, 0xd1, 0xc8, 0xa7, 0x99, 0x99, 0x6b, 0xf0, 0x26, 0x5b, 0x98, 0xb5,
+            0xd4, 0x8a, 0xb9, 0x19,
+        ]);
+        assert_eq!(read_dek_id(&blob).unwrap(), 42);
+        assert_eq!(decrypt_blob(&[0; DEK_SIZE], &blob).unwrap(), [0; 16]);
+        assert!(matches!(
+            decrypt_blob(&[1; DEK_SIZE], &blob),
+            Err(CryptoError::DecryptionFailed)
+        ));
+        *blob.last_mut().unwrap() ^= 1;
+        assert!(matches!(
+            decrypt_blob(&[0; DEK_SIZE], &blob),
+            Err(CryptoError::DecryptionFailed)
+        ));
+    }
+
+    #[test]
+    fn decrypts_v1_blob_and_wrapped_key_from_aes_gcm_010() {
+        // Fixtures generated by aes-gcm 0.10.3 with key [7; 32] and nonce [42; 12].
+        let mut blob = Vec::from(MAGIC);
+        blob.push(ENCRYPTION_VERSION_V1);
+        blob.extend_from_slice(&42u32.to_le_bytes());
+        blob.extend_from_slice(&[42; NONCE_SIZE]);
+        blob.extend_from_slice(&[
+            0x61, 0xec, 0x0e, 0x92, 0x95, 0x6a, 0xbc, 0xef, 0x35, 0x1d, 0x81, 0x6a, 0x7a, 0x56,
+            0x7b, 0x29, 0x6b, 0x50, 0x8a, 0x75, 0xae, 0xb5, 0xea, 0x3a, 0x03, 0xe9, 0x14, 0x34,
+            0x75, 0xda, 0x0c, 0x2c, 0x61, 0xbd, 0x34, 0xce, 0xa2,
+        ]);
+        assert_eq!(
+            decrypt_blob(&[7; DEK_SIZE], &blob).unwrap(),
+            b"synthetic loomem data"
+        );
+        let wrapped = WrappedStreamDek {
+            dek_id: 42,
+            master_key_version: 1,
+            wrapped_blob: vec![
+                0x1b, 0x9c, 0x69, 0xef, 0xf4, 0x06, 0xc1, 0x8f, 0x5f, 0x34, 0xe4, 0x0c, 0x1c, 0x32,
+                0x17, 0x4d, 0x42, 0x3d, 0xe2, 0x08, 0xc6, 0xc8, 0x5d, 0xa1, 0x4f, 0x5f, 0x89, 0xf1,
+                0xd9, 0x83, 0xe1, 0x57,
+            ],
+            wrap_nonce: [42; NONCE_SIZE],
+            wrap_tag: [
+                0xd1, 0x1f, 0x71, 0x3e, 0x04, 0x4a, 0x0c, 0xf5, 0x27, 0x4f, 0xf9, 0xb4, 0xc6, 0xd1,
+                0x54, 0x3e,
+            ],
+            created_at: 0,
+        };
+        assert_eq!(unwrap_dek(&[7; DEK_SIZE], &wrapped).unwrap(), [9; DEK_SIZE]);
     }
 
     #[test]
@@ -245,7 +302,9 @@ mod tests {
         let dek = fixed_dek();
         for i in 0..100 {
             let mut plaintext = vec![0u8; 16 + (i * 3) % 200];
-            OsRng.fill_bytes(&mut plaintext);
+            for chunk in plaintext.chunks_mut(DEK_SIZE) {
+                chunk.copy_from_slice(&generate_dek()[..chunk.len()]);
+            }
             let blob = encrypt_blob(&dek, 42, &plaintext).expect("encrypt should succeed");
             assert!(is_encrypted(&blob));
             assert_eq!(blob[0..4], MAGIC);
@@ -379,6 +438,10 @@ mod tests {
         let mac_key = [0u8; DEK_SIZE];
         let t1 = index_token(&mac_key, b"alice");
         let t2 = index_token(&mac_key, b"alice");
+        assert_eq!(
+            t1,
+            "ce3837f76a54a635191b1704ac7672264fc17c3397ff52e7dacfc1ef3603a493"
+        );
         assert_eq!(t1, t2, "index_token must be deterministic");
         assert_eq!(t1.len(), 64, "HMAC-SHA256 produces 32 bytes = 64 hex chars");
         assert!(

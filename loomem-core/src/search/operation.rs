@@ -131,7 +131,14 @@ impl OperationPlan {
 
     #[must_use]
     pub fn identity_sha256(&self) -> String {
-        format!("{:x}", Sha256::digest(self.identity().as_bytes()))
+        Sha256::digest(self.identity().as_bytes()).iter().fold(
+            String::with_capacity(64),
+            |mut s, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(s, "{byte:02x}");
+                s
+            },
+        )
     }
 
     #[must_use]
