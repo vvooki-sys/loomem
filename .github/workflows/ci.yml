@@ -121,9 +121,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
       - name: Test language selection
         run: node scripts/test-site-locale.cjs
-      - name: Browser smoke (English and Polish)
+      - name: Browser language switching and persistence
         run: bash scripts/test-site-browser.sh
 
   audit:
