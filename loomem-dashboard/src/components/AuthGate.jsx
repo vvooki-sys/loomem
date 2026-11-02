@@ -77,7 +77,7 @@ export default function AuthGate({ children }) {
     }
   };
 
-  if (checking) return <div className="h-screen w-full bg-[var(--bg)]" />;
+  if (checking) return <div className="h-screen w-full bg-(--bg)" />;
   if (userCtx) {
     return typeof children === "function" ? children(userCtx) : children;
   }
@@ -95,9 +95,9 @@ export default function AuthGate({ children }) {
           <LoginHeroRing size={170} />
         </div>
         <img src="/wordmark.svg" alt="loomem" className="h-8 w-auto mx-auto" />
-        <div className="text-[11px] text-[var(--text-muted)] mt-1.5 mb-7">dashboard</div>
+        <div className="text-[11px] text-(--text-muted) mt-1.5 mb-7">dashboard</div>
 
-        <div className="bg-[var(--panel)] border border-[var(--border)] rounded-2xl p-5 shadow-[var(--shadow-md)] text-left">
+        <div className="bg-(--panel) border border-(--border) rounded-2xl p-5 shadow-(--shadow-md) text-left">
           <div className="space-y-3">
             <input
               type="password"
@@ -106,17 +106,17 @@ export default function AuthGate({ children }) {
               onKeyDown={(e) => e.key === "Enter" && handleLogin()}
               placeholder="API token"
               autoFocus
-              className="w-full bg-[var(--bg)] border border-[var(--border-strong)] rounded-lg px-4 py-3 text-sm text-[var(--text)] placeholder-[var(--text-subtle)] focus:outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--focus-ring)] font-mono"
+              className="w-full bg-(--bg) border border-(--border-strong) rounded-lg px-4 py-3 text-sm text-(--text) placeholder-(--text-subtle) focus:outline-hidden focus:border-(--accent) focus:ring-2 focus:ring-(--focus-ring) font-mono"
             />
             <button
               onClick={handleLogin}
-              className="w-full text-white rounded-full py-2.5 text-sm font-medium transition-all hover:-translate-y-[1px] shadow-[0_10px_30px_rgba(15,105,184,0.18)]"
+              className="w-full text-white rounded-full py-2.5 text-sm font-medium transition-all hover:-translate-y-px shadow-[0_10px_30px_rgba(15,105,184,0.18)]"
               style={{ backgroundImage: "var(--weave-vivid)" }}
             >
               Unlock
             </button>
-            {error && <div className="text-[var(--danger)] text-xs text-center">{error}</div>}
-            <div className="text-[var(--text-subtle)] text-[11px] text-center pt-1">
+            {error && <div className="text-(--danger) text-xs text-center">{error}</div>}
+            <div className="text-(--text-subtle) text-[11px] text-center pt-1">
               Paste this instance&apos;s API token to open the dashboard
             </div>
           </div>

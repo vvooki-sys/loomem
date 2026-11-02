@@ -7,9 +7,76 @@
 @import '@fontsource-variable/inter';
 @import '@fontsource-variable/jetbrains-mono';
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+@theme {
+  /* Loomem DS v2 semantic tokens (bg-surface-panel, text-ink-muted, …).
+     Values mirror the CSS vars in :root below; the duplication is kept from
+     the v3 config, which could not apply opacity modifiers to var(). */
+  --color-surface-bg: #FBF8F1;
+  --color-surface-panel: #FFFFFF;
+  --color-surface-hover: #F4EFE4;
+  --color-surface-selected: #EEF6FD;
+
+  --color-line: #DED7C8;
+  --color-line-strong: #B7AE9E;
+
+  --color-ink: #1F1B16;
+  --color-ink-muted: #6B6256;
+  --color-ink-subtle: #8E8474;
+
+  --color-brand: #1684DC;
+  --color-brand-hover: #0F69B8;
+
+  --color-danger: #D2553B;
+  --color-danger-bg: #FBE9E3;
+
+  --color-success: #2E9E6B;
+
+  --color-warn: #CE7D08;
+  --color-warn-bg: #FEF6E7;
+
+  --font-display: 'Fraunces Variable', 'Fraunces', 'Iowan Old Style', Georgia, serif;
+
+  --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-fade-in: fadeIn 0.3s ease-in-out;
+
+  @keyframes fadeIn {
+    0% {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+
+/* Tailwind v3 preflight defaults that v4 changed, restored so the v4 upgrade
+   is visually a no-op: bare `border`/`divide-*` default to v3 gray-200 (v4:
+   currentColor), placeholders to v3 gray-400 (v4: 50% of the text color),
+   and buttons keep the pointer cursor (v4: default). Explicit utilities
+   still win over these base styles. */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: #E5E7EB;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: #9CA3AF;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
 
 @layer base {
   :root {

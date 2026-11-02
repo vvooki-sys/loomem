@@ -30,19 +30,19 @@ export default function Layout({ userCtx }) {
   };
 
   return (
-    <div className="flex h-screen w-screen bg-[var(--bg)] text-[var(--text)] overflow-hidden">
-      <aside className="w-[220px] shrink-0 bg-[var(--panel)] border-r border-[var(--border)] flex flex-col">
-        <div className="px-5 py-4 border-b border-[var(--border)]">
+    <div className="flex h-screen w-screen bg-(--bg) text-(--text) overflow-hidden">
+      <aside className="w-[220px] shrink-0 bg-(--panel) border-r border-(--border) flex flex-col">
+        <div className="px-5 py-4 border-b border-(--border)">
           {/* Canonical wordmark asset from the brand pack: text as paths, so
               it renders identically before the Fraunces webfont loads.
               Static (no flow) — the app surface stays calm. */}
           <img src="/wordmark.svg" alt="loomem" className="h-6 w-auto" />
-          <div className="text-[11px] text-[var(--text-muted)] truncate" title={streamLabel}>
+          <div className="text-[11px] text-(--text-muted) truncate" title={streamLabel}>
             {streamLabel}
           </div>
           <button
             onClick={handleLogout}
-            className="text-[10px] text-[var(--text-subtle)] hover:text-[var(--text)] mt-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+            className="text-[10px] text-(--text-subtle) hover:text-(--text) mt-1.5 transition-colors focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-(--focus-ring)"
             title="Log out"
           >
             logout
@@ -56,10 +56,10 @@ export default function Layout({ userCtx }) {
               to={to}
               end={end}
               className={({ isActive }) =>
-                `flex items-center gap-2.5 px-3 py-2 rounded-full text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] ${
+                `flex items-center gap-2.5 px-3 py-2 rounded-full text-sm transition-colors focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-(--focus-ring) ${
                   isActive
-                    ? "bg-[var(--row-selected)] text-[var(--accent)] font-medium"
-                    : "text-[var(--text-muted)] hover:bg-[var(--row-hover)] hover:text-[var(--text)]"
+                    ? "bg-(--row-selected) text-(--accent) font-medium"
+                    : "text-(--text-muted) hover:bg-(--row-hover) hover:text-(--text)"
                 }`
               }
             >
@@ -69,7 +69,7 @@ export default function Layout({ userCtx }) {
           ))}
         </nav>
 
-        <div className="px-3 py-3 border-t border-[var(--border)] text-[10px] text-[var(--text-subtle)]">
+        <div className="px-3 py-3 border-t border-(--border) text-[10px] text-(--text-subtle)">
           loomem dashboard{version ? ` v${version}` : ""}
         </div>
       </aside>

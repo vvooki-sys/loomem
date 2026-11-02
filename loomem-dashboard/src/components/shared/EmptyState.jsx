@@ -14,11 +14,11 @@ export default function EmptyState({ title, hint, action, icon, compact = false 
   return (
     <div className={`h-full w-full flex items-center justify-center ${compact ? "p-4" : "p-6"}`}>
       <div className="text-center max-w-sm">
-        <div className="text-[var(--text-subtle)] mx-auto mb-2 flex items-center justify-center">
+        <div className="text-(--text-subtle) mx-auto mb-2 flex items-center justify-center">
           {icon ?? <Inbox size={compact ? 20 : 26} />}
         </div>
-        <p className="text-[var(--text-muted)] text-sm font-medium mb-1">{title}</p>
-        {hint && <p className="text-[var(--text-subtle)] text-xs">{hint}</p>}
+        <p className="text-(--text-muted) text-sm font-medium mb-1">{title}</p>
+        {hint && <p className="text-(--text-subtle) text-xs">{hint}</p>}
         {action && <div className="mt-3">{action}</div>}
       </div>
     </div>

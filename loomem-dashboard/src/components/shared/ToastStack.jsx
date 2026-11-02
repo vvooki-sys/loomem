@@ -6,19 +6,19 @@ export default function ToastStack({ toasts, onDismiss }) {
         <div
           key={t.id}
           role="status"
-          className={`rounded-md border px-4 py-2.5 text-[13px] shadow-sm bg-[var(--panel)] animate-fade-in flex items-start gap-3 ${
+          className={`rounded-md border px-4 py-2.5 text-[13px] shadow-xs bg-(--panel) animate-fade-in flex items-start gap-3 ${
             t.tone === "error"
-              ? "border-[#fecaca] text-[var(--danger)]"
+              ? "border-[#fecaca] text-(--danger)"
               : t.tone === "warn"
-                ? "border-[#fcd34d] text-[var(--warn)]"
-                : "border-[var(--border)] text-[var(--text)]"
+                ? "border-[#fcd34d] text-(--warn)"
+                : "border-(--border) text-(--text)"
           }`}
         >
           <span className="flex-1">{t.message}</span>
           <button
             type="button"
             onClick={() => onDismiss(t.id)}
-            className="text-[var(--text-subtle)] hover:text-[var(--text)]"
+            className="text-(--text-subtle) hover:text-(--text)"
           >
             ✕
           </button>
