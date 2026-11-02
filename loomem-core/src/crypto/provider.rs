@@ -424,7 +424,7 @@ impl EncryptionProvider for MasterKeyEnvProvider {
 /// ADR-013 §4 Decision 4: MAC key derived from `stream_dek` inside the
 /// provider; raw DEK never exposed to callers.
 fn derive_mac_key(dek: &[u8; 32]) -> [u8; 32] {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(dek)
+    let mut mac = <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(dek)
         .expect("HMAC-SHA256 accepts any key length; 32-byte DEK is always valid");
     mac.update(b"loomem-index-v1");
     let result = mac.finalize().into_bytes();
@@ -441,7 +441,7 @@ fn derive_mac_key(dek: &[u8; 32]) -> [u8; 32] {
 /// output is unlinkable to any DEK or index token. Free function (not a method)
 /// so it can be unit-tested against a known-key → known-vector pair.
 fn fingerprint_key(master_key: &[u8; 32]) -> String {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(master_key)
+    let mut mac = <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(master_key)
         .expect("HMAC-SHA256 accepts any key length; 32-byte key is always valid");
     mac.update(FINGERPRINT_TAG);
     let result = mac.finalize().into_bytes();
@@ -871,6 +871,19 @@ mod tests {
         let (_tmp, store) = test_store();
         let provider = MasterKeyEnvProvider::new([7u8; 32], store.db_arc());
         assert_eq!(provider.fingerprint(), "1f7e91cc");
+    }
+
+    #[test]
+    fn index_key_and_token_match_persisted_format() {
+        let mut dek = [0u8; 32];
+        for (i, byte) in dek.iter_mut().enumerate() {
+            *byte = u8::try_from(i).unwrap();
+        }
+        let key = derive_mac_key(&dek);
+        assert_eq!(
+            at_rest::index_token(&key, b"alice"),
+            "d1c9014000ce8cfa875164606f24419821bee4863d0705b3eba3d31d87fabff2"
+        );
     }
 
     // AC-4 (/144): deterministic, differs per key, 8 lowercase hex chars.
