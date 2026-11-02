@@ -37,7 +37,7 @@ export default function MemoryList({
   const hasFilter = Boolean(query) || layer !== "all" || Boolean(sourceAgent);
 
   return (
-    <div className="flex flex-col min-w-0 h-full bg-[var(--panel)] border-r border-[var(--border)]">
+    <div className="flex flex-col min-w-0 h-full bg-(--panel) border-r border-(--border)">
       <IdentityBanner streamId={streamId} total={total} />
       <MemoryToolbar
         query={query}
@@ -53,7 +53,7 @@ export default function MemoryList({
 
       <div className="flex-1 overflow-y-auto">
         {loading && !items.length ? (
-          <div className="p-8 text-center text-[var(--text-subtle)] text-xs flex items-center justify-center gap-2">
+          <div className="p-8 text-center text-(--text-subtle) text-xs flex items-center justify-center gap-2">
             <RefreshCw size={14} className="animate-spin" /> Loading memories…
           </div>
         ) : error ? (
@@ -76,26 +76,26 @@ export default function MemoryList({
       </div>
 
       {mode === "substring" && total > perPage && (
-        <div className="px-4 py-2.5 border-t border-[var(--border)] bg-[var(--bg)] flex items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2 text-[var(--text-muted)]">
+        <div className="px-4 py-2.5 border-t border-(--border) bg-(--bg) flex items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 text-(--text-muted)">
             <span>Per page:</span>
             {[25, 50, 100].map((n) => (
               <button
                 key={n}
                 type="button"
                 onClick={() => onPerPage(n)}
-                className={`px-2 py-0.5 rounded ${perPage === n ? "bg-[var(--row-hover)] text-[var(--text)]" : "hover:text-[var(--text)]"}`}
+                className={`px-2 py-0.5 rounded-sm ${perPage === n ? "bg-(--row-hover) text-(--text)" : "hover:text-(--text)"}`}
               >
                 {n}
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-3 text-[var(--text-muted)]">
+          <div className="flex items-center gap-3 text-(--text-muted)">
             <button
               type="button"
               onClick={() => onPage(Math.max(1, page - 1))}
               disabled={page <= 1}
-              className="px-2.5 py-1 rounded border border-[var(--border)] disabled:opacity-40 disabled:cursor-not-allowed hover:text-[var(--text)]"
+              className="px-2.5 py-1 rounded-sm border border-(--border) disabled:opacity-40 disabled:cursor-not-allowed hover:text-(--text)"
             >
               « Prev
             </button>
@@ -106,7 +106,7 @@ export default function MemoryList({
               type="button"
               onClick={() => onPage(Math.min(totalPages, page + 1))}
               disabled={page >= totalPages}
-              className="px-2.5 py-1 rounded border border-[var(--border)] disabled:opacity-40 disabled:cursor-not-allowed hover:text-[var(--text)]"
+              className="px-2.5 py-1 rounded-sm border border-(--border) disabled:opacity-40 disabled:cursor-not-allowed hover:text-(--text)"
             >
               Next »
             </button>

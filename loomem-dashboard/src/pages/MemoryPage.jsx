@@ -172,7 +172,7 @@ export default function MemoryPage({ userCtx }) {
                   aria-label="Close"
                   onClick={() => setSelectedId(null)}
                 />
-                <aside className="relative w-full max-w-[520px] bg-[var(--panel)] border-l border-[var(--border)] shadow-2xl">
+                <aside className="relative w-full max-w-[520px] bg-(--panel) border-l border-(--border) shadow-2xl">
                   {detail}
                 </aside>
               </div>
@@ -188,10 +188,10 @@ export default function MemoryPage({ userCtx }) {
 
 function EmptyDetail() {
   return (
-    <div className="h-full flex items-center justify-center text-center p-10 bg-[var(--panel)]">
+    <div className="h-full flex items-center justify-center text-center p-10 bg-(--panel)">
       <div>
-        <div className="text-[14px] text-[var(--text-muted)] mb-1">Select a memory</div>
-        <div className="text-[12px] text-[var(--text-subtle)]">Click a row to see its full content, history, and entities.</div>
+        <div className="text-[14px] text-(--text-muted) mb-1">Select a memory</div>
+        <div className="text-[12px] text-(--text-subtle)">Click a row to see its full content, history, and entities.</div>
       </div>
     </div>
   );

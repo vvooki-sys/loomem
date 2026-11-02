@@ -19,8 +19,8 @@ function fmtCreatedAt(sec) {
 function MetaRow({ label, children }) {
   return (
     <div className="flex items-baseline gap-2 text-[11px]">
-      <span className="text-[var(--text-subtle)] uppercase tracking-wider w-24 shrink-0">{label}</span>
-      <span className="text-[var(--text)] min-w-0 break-words">{children}</span>
+      <span className="text-(--text-subtle) uppercase tracking-wider w-24 shrink-0">{label}</span>
+      <span className="text-(--text) min-w-0 wrap-break-word">{children}</span>
     </div>
   );
 }
@@ -77,11 +77,11 @@ function MemoryDetailPanel({ memory, readOnly, onEdit, onDelete, onClose, saving
   const created = fmtCreatedAt(m.created_at);
 
   return (
-    <div className="flex flex-col h-full min-w-0 bg-[var(--panel)]">
-      <header className="flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--border)] shrink-0">
+    <div className="flex flex-col h-full min-w-0 bg-(--panel)">
+      <header className="flex items-center justify-between gap-2 px-4 py-3 border-b border-(--border) shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <span
-            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold shrink-0"
+            className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono font-semibold shrink-0"
             style={{
               backgroundColor: (MEMORY_LAYERS[m.layer]?.color || "#6b7280") + "20",
               color: MEMORY_LAYERS[m.layer]?.color || "#6b7280",
@@ -93,20 +93,20 @@ function MemoryDetailPanel({ memory, readOnly, onEdit, onDelete, onClose, saving
             type="button"
             onClick={copyId}
             title="Copy ID"
-            className="flex items-center gap-1 text-[11px] font-mono text-[var(--text-subtle)] hover:text-[var(--text)] truncate"
+            className="flex items-center gap-1 text-[11px] font-mono text-(--text-subtle) hover:text-(--text) truncate"
           >
             <span className="truncate">{m.id}</span>
-            {copied ? <Check size={11} className="text-[var(--success)] shrink-0" /> : <Copy size={11} className="shrink-0" />}
+            {copied ? <Check size={11} className="text-(--success) shrink-0" /> : <Copy size={11} className="shrink-0" />}
           </button>
         </div>
         {onClose && (
-          <button type="button" onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text)] shrink-0" aria-label="Close">
+          <button type="button" onClick={onClose} className="text-(--text-muted) hover:text-(--text) shrink-0" aria-label="Close">
             <X size={16} />
           </button>
         )}
       </header>
 
-      <nav className="flex border-b border-[var(--border)] text-[12px] shrink-0">
+      <nav className="flex border-b border-(--border) text-[12px] shrink-0">
         {[
           ["content", "Content"],
           ["history", "History"],
@@ -118,8 +118,8 @@ function MemoryDetailPanel({ memory, readOnly, onEdit, onDelete, onClose, saving
             onClick={() => setTab(id)}
             className={`px-4 py-2 border-b-2 ${
               tab === id
-                ? "border-[var(--accent)] text-[var(--accent)] font-medium"
-                : "border-transparent text-[var(--text-muted)] hover:text-[var(--text)]"
+                ? "border-(--accent) text-(--accent) font-medium"
+                : "border-transparent text-(--text-muted) hover:text-(--text)"
             }`}
           >
             {label}
@@ -138,14 +138,14 @@ function MemoryDetailPanel({ memory, readOnly, onEdit, onDelete, onClose, saving
                   rows={6}
                   autoFocus
                   aria-label="Edit memory content"
-                  className="w-full bg-[var(--bg)] border border-[var(--accent)] rounded-lg text-[13px] text-[var(--text)] p-3 leading-relaxed resize-y focus:outline-none"
+                  className="w-full bg-(--bg) border border-(--accent) rounded-lg text-[13px] text-(--text) p-3 leading-relaxed resize-y focus:outline-hidden"
                 />
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={save}
                     disabled={saving}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs bg-(--accent) text-white hover:bg-(--accent-hover) disabled:opacity-50"
                   >
                     <Check size={12} /> {saving ? "Saving…" : "Save"}
                   </button>
@@ -156,17 +156,17 @@ function MemoryDetailPanel({ memory, readOnly, onEdit, onDelete, onClose, saving
                       setMode("view");
                     }}
                     disabled={saving}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs bg-[var(--row-hover)] text-[var(--text-muted)] hover:text-[var(--text)] disabled:opacity-50"
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs bg-(--row-hover) text-(--text-muted) hover:text-(--text) disabled:opacity-50"
                   >
                     <X size={12} /> Cancel
                   </button>
                 </div>
               </div>
             ) : (
-              <p className="text-[14px] text-[var(--text)] leading-relaxed whitespace-pre-wrap">{m.content}</p>
+              <p className="text-[14px] text-(--text) leading-relaxed whitespace-pre-wrap">{m.content}</p>
             )}
 
-            <div className="space-y-1.5 pt-3 border-t border-[var(--border)]">
+            <div className="space-y-1.5 pt-3 border-t border-(--border)">
               {typeof m.confidence === "number" && (
                 <MetaRow label="Confidence">{(m.confidence * 100).toFixed(0)}%</MetaRow>
               )}
@@ -183,11 +183,11 @@ function MemoryDetailPanel({ memory, readOnly, onEdit, onDelete, onClose, saving
             </div>
 
             {!readOnly && mode === "view" && (
-              <div className="flex items-center gap-2 pt-3 border-t border-[var(--border)]">
+              <div className="flex items-center gap-2 pt-3 border-t border-(--border)">
                 <button
                   type="button"
                   onClick={() => setMode("edit")}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs border border-[var(--border-strong)] text-[var(--text)] hover:bg-[var(--row-hover)]"
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs border border-(--border-strong) text-(--text) hover:bg-(--row-hover)"
                 >
                   <Pencil size={12} /> Edit
                 </button>
@@ -197,14 +197,14 @@ function MemoryDetailPanel({ memory, readOnly, onEdit, onDelete, onClose, saving
                       type="button"
                       onClick={remove}
                       disabled={deleting}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs bg-[var(--danger)] text-white hover:opacity-90 disabled:opacity-50"
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs bg-(--danger) text-white hover:opacity-90 disabled:opacity-50"
                     >
                       <Trash2 size={12} /> {deleting ? "Deleting…" : "Confirm delete"}
                     </button>
                     <button
                       type="button"
                       onClick={() => setConfirmDelete(false)}
-                      className="px-3 py-1.5 rounded-full text-xs bg-[var(--row-hover)] text-[var(--text-muted)] hover:text-[var(--text)]"
+                      className="px-3 py-1.5 rounded-full text-xs bg-(--row-hover) text-(--text-muted) hover:text-(--text)"
                     >
                       Cancel
                     </button>
@@ -213,7 +213,7 @@ function MemoryDetailPanel({ memory, readOnly, onEdit, onDelete, onClose, saving
                   <button
                     type="button"
                     onClick={() => setConfirmDelete(true)}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs border border-[var(--danger)]/40 text-[var(--danger)] hover:bg-[var(--danger-bg)]"
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs border border-(--danger)/40 text-(--danger) hover:bg-(--danger-bg)"
                   >
                     <Trash2 size={12} /> Delete
                   </button>

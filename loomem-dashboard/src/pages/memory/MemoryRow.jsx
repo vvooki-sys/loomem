@@ -16,13 +16,13 @@ export default function MemoryRow({ memory, selected, onSelect }) {
       type="button"
       onClick={() => onSelect(m.id)}
       aria-pressed={selected}
-      className={`w-full text-left px-4 py-2.5 border-b border-[var(--border)] transition-colors ${
-        selected ? "bg-[var(--row-selected)]" : "hover:bg-[var(--row-hover)]"
+      className={`w-full text-left px-4 py-2.5 border-b border-(--border) transition-colors ${
+        selected ? "bg-(--row-selected)" : "hover:bg-(--row-hover)"
       }`}
     >
       <div className="flex items-center gap-2 mb-1">
         <span
-          className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold shrink-0"
+          className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono font-semibold shrink-0"
           style={{
             backgroundColor: (MEMORY_LAYERS[m.layer]?.color || "#6b7280") + "20",
             color: MEMORY_LAYERS[m.layer]?.color || "#6b7280",
@@ -31,10 +31,10 @@ export default function MemoryRow({ memory, selected, onSelect }) {
           {m.layer}
         </span>
         {m.source_agent && (
-          <span className="text-[10px] text-[var(--text-subtle)] font-mono truncate">{m.source_agent}</span>
+          <span className="text-[10px] text-(--text-subtle) font-mono truncate">{m.source_agent}</span>
         )}
         {typeof m.score === "number" && (
-          <span className="text-[10px] text-[var(--accent)] font-mono shrink-0">
+          <span className="text-[10px] text-(--accent) font-mono shrink-0">
             {(m.score * 100).toFixed(0)}%
           </span>
         )}
@@ -47,11 +47,11 @@ export default function MemoryRow({ memory, selected, onSelect }) {
             />
           )}
           {m.event_date && (
-            <span className="text-[10px] text-[var(--text-subtle)] font-mono">{m.event_date}</span>
+            <span className="text-[10px] text-(--text-subtle) font-mono">{m.event_date}</span>
           )}
         </span>
       </div>
-      <p className="text-[13px] text-[var(--text)] leading-snug line-clamp-2">{m.content}</p>
+      <p className="text-[13px] text-(--text) leading-snug line-clamp-2">{m.content}</p>
     </button>
   );
 }
