@@ -8,6 +8,12 @@ use std::path::Path;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
     let (root, config) = arguments()?;
     let mut engine = SharedEngine::new(Path::new(&root), Config::load(&config)?)?;
     let stdin = std::io::stdin();

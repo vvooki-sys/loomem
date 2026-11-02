@@ -57,7 +57,7 @@ pub struct AppState {
     pub pii_filter: Arc<PiiFilter>,
     pub last_activity: Arc<tokio::sync::Mutex<Instant>>,
     #[cfg(feature = "onnx-rerank")]
-    pub onnx_reranker: Option<loomem_core::onnx_reranker::OnnxReranker>,
+    pub onnx_reranker: Option<Arc<loomem_core::onnx_reranker::OnnxReranker>>,
     pub event_tx: Option<loomem_core::event_log::EventSender>,
     pub mcp_sessions: mcp::SessionStore,
     pub workers: WorkerRegistry,
@@ -580,6 +580,7 @@ async fn main() -> Result<()> {
     #[cfg(feature = "onnx-rerank")]
     let onnx_reranker = if config.search.rerank_enabled {
         loomem_core::onnx_reranker::try_load(config.search.rerank_model_dir.as_deref())
+            .map(Arc::new)
     } else {
         None
     };

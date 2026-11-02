@@ -120,7 +120,8 @@ impl ScopeServices {
             .then(|| {
                 loomem_core::onnx_reranker::try_load(config.search.rerank_model_dir.as_deref())
             })
-            .flatten();
+            .flatten()
+            .map(Arc::new);
         let workers = build_registry(
             &config.worker,
             config.retention.hard_purge_interval_secs,

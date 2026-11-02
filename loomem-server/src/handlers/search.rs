@@ -747,22 +747,38 @@ pub async fn search_handler(
             let llm_config = state.config.llm.clone();
 
             #[cfg(feature = "onnx-rerank")]
-            let _onnx = state.onnx_reranker.as_ref().map(|_| state.graph.clone()); // marker for has_onnx
-                                                                                   // Clone ONNX reranker ref if available — tract SimplePlan is Send+Sync
-            #[cfg(feature = "onnx-rerank")]
-            let has_onnx = state.onnx_reranker.is_some();
-            #[cfg(not(feature = "onnx-rerank"))]
-            let has_onnx = false;
+            let onnx_reranker = state.onnx_reranker.as_ref().map(Arc::clone);
 
             tokio::spawn(async move {
-                let rerank_result = if has_onnx {
-                    // ONNX reranker not easily cloneable into spawn — use LLM fallback in async
-                    reranker::rerank(&http_client, &llm_config, &query_for_rerank, &chunks, top_k)
+                #[cfg(feature = "onnx-rerank")]
+                let rerank_result = match onnx_reranker {
+                    Some(onnx) => {
+                        let query = query_for_rerank.clone();
+                        let documents = chunks.clone();
+                        match tokio::task::spawn_blocking(move || {
+                            onnx.rerank(&query, &documents, top_k)
+                        })
                         .await
-                } else {
-                    reranker::rerank(&http_client, &llm_config, &query_for_rerank, &chunks, top_k)
+                        {
+                            Ok(result) => result,
+                            Err(error) => Err(anyhow::anyhow!("ONNX rerank task failed: {error}")),
+                        }
+                    }
+                    None => {
+                        reranker::rerank(
+                            &http_client,
+                            &llm_config,
+                            &query_for_rerank,
+                            &chunks,
+                            top_k,
+                        )
                         .await
+                    }
                 };
+                #[cfg(not(feature = "onnx-rerank"))]
+                let rerank_result =
+                    reranker::rerank(&http_client, &llm_config, &query_for_rerank, &chunks, top_k)
+                        .await;
 
                 match rerank_result {
                     Ok(indices) => {
