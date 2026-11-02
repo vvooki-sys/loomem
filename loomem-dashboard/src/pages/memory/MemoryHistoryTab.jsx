@@ -53,6 +53,10 @@ function DiffView({ prev, current }) {
 }
 
 export default function MemoryHistoryTab({ chunkId }) {
+  return <MemoryHistory key={chunkId} chunkId={chunkId} />;
+}
+
+function MemoryHistory({ chunkId }) {
   const [chain, setChain] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -61,8 +65,6 @@ export default function MemoryHistoryTab({ chunkId }) {
   useEffect(() => {
     if (!chunkId) return undefined;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     getMemoryChain(chunkId)
       .then((data) => {
         if (!cancelled) {
@@ -92,7 +94,7 @@ export default function MemoryHistoryTab({ chunkId }) {
   if (error) {
     return (
       <div className="p-3">
-        <ErrorState error={error} onRetry={() => setReloadKey((k) => k + 1)} compact />
+        <ErrorState error={error} onRetry={() => { setLoading(true); setError(null); setReloadKey((k) => k + 1); }} compact />
       </div>
     );
   }

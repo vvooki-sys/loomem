@@ -17,8 +17,6 @@ export default function MemoryEntitiesTab({ entityIds }) {
   useEffect(() => {
     if (!entityId) return undefined;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     getMemory({ entity_id: entityId, per_page: 50 })
       .then((data) => {
         if (!cancelled) {
@@ -48,7 +46,11 @@ export default function MemoryEntitiesTab({ entityIds }) {
           <button
             key={eid}
             type="button"
-            onClick={() => setEntityId(eid)}
+            onClick={() => {
+              setLoading(true);
+              setError(null);
+              setEntityId(eid);
+            }}
             className="text-xs px-2.5 py-1 rounded-full border border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text)] font-mono transition-colors"
           >
             {eid.slice(0, 8)}…
