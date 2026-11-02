@@ -31,7 +31,7 @@ unicode-normalization.workspace = true
 tract-onnx = { version = "0.22", optional = true }
 tokenizers = { version = "0.23", optional = true }
 tiktoken-rs = "0.12.1"
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 hmac = "0.12"
 sha2 = "0.10"
 zeroize.workspace = true
