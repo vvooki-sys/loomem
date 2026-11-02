@@ -27,7 +27,7 @@ async function until(predicate, message) {
     }
     await sleep(100);
   }
-  throw Error(`Timed out: ${message}`);
+  throw Error(`Timed out: ${typeof message === 'function' ? message() : message}`);
 }
 async function main() {
   const activePort = path.join(profile, 'DevToolsActivePort');
@@ -66,14 +66,26 @@ async function main() {
   }
   async function evaluate(expression) {
     const result = await send('Runtime.evaluate', { expression, returnByValue: true });
-    if (result.exceptionDetails) throw Error(result.exceptionDetails.text);
+    if (result.exceptionDetails) {
+      // `text` is just "Uncaught"; the actual exception lives in `exception.description`.
+      const { text, exception } = result.exceptionDetails;
+      throw Error(exception?.description || text);
+    }
     return result.result.value;
   }
   async function waitPage(pathname, language) {
+    let lastError;
     await until(async () => {
-      const state = await evaluate('({url: location.href, lang: document.documentElement.lang, ready: document.readyState})');
-      return state.ready === 'complete' && new URL(state.url).pathname === pathname && state.lang === language;
-    }, `page ${pathname} (${language})`);
+      try {
+        const state = await evaluate('({url: location.href, lang: document.documentElement?.lang, ready: document.readyState})');
+        return state.ready === 'complete' && new URL(state.url).pathname === pathname && state.lang === language;
+      } catch (error) {
+        // A document that is still being swapped in by a navigation can throw while
+        // probed; keep polling and report the last error only if the page never settles.
+        lastError = error;
+        return false;
+      }
+    }, () => `page ${pathname} (${language})${lastError ? `; last error: ${lastError.message}` : ''}`);
   }
   async function clickLanguage(language) {
     const point = await evaluate(`(() => {
@@ -114,5 +126,11 @@ main().catch(error => { console.error(error); process.exitCode = 1; }).finally(a
     browser.kill();
     await exited;
   }
-  fs.rmSync(profile, { recursive: true, force: true });
+  try {
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (error) {
+    // Chrome helper processes can still be flushing the profile after the browser exits;
+    // a leftover temp directory must not turn a passing run into a failure.
+    console.warn(`Could not remove Chrome profile ${profile}: ${error.message}`);
+  }
 });
