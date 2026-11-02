@@ -7,11 +7,15 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 
 fn main() -> Result<()> {
-    // The Hosted worker sandbox denies IPC socket creation. Tokio's signal
-    // driver creates a socket pair, so build only the runtime drivers we use.
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_io()
-        .enable_time()
+    // Tokio's I/O driver also starts the signal driver, which creates an IPC
+    // socket pair. The fully isolated Hosted worker has no network and denies
+    // that operation; unsandboxed evaluation retains normal loopback I/O.
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_time();
+    if std::env::var_os("LOOMEM_HOSTED_SANDBOXED").is_none() {
+        builder.enable_io();
+    }
+    builder
         .build()
         .context("build Hosted shared-engine runtime")?
         .block_on(run())
