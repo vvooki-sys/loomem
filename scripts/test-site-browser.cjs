@@ -18,8 +18,13 @@ async function until(predicate, message) {
   while (Date.now() < deadline) {
     if (browserError) throw browserError;
     if (browser.exitCode !== null) throw Error(`Chrome exited with ${browser.exitCode}`);
-    const result = await predicate();
-    if (result) return result;
+    try {
+      const result = await predicate();
+      if (result) return result;
+    } catch (error) {
+      // Chrome can replace the execution context while a navigation is in flight.
+      if (!/Execution context was destroyed|Cannot find context with specified id|Cannot find default execution context/i.test(error.message)) throw error;
+    }
     await sleep(100);
   }
   throw Error(`Timed out: ${message}`);
@@ -35,15 +40,28 @@ async function main() {
   socket.onmessage = ({ data }) => {
     const message = JSON.parse(data);
     if (!message.id || !pending.has(message.id)) return;
-    const { resolve, reject } = pending.get(message.id);
+    const { resolve, reject, timer } = pending.get(message.id);
+    clearTimeout(timer);
     pending.delete(message.id);
     if (message.error) reject(Error(message.error.message)); else resolve(message.result);
+  };
+  socket.onclose = () => {
+    for (const { reject, timer } of pending.values()) {
+      clearTimeout(timer);
+      reject(Error('Chrome DevTools connection closed'));
+    }
+    pending.clear();
   };
   function send(method, params = {}) {
     return new Promise((resolve, reject) => {
       const id = ++nextId;
-      pending.set(id, { resolve, reject });
-      socket.send(JSON.stringify({ id, method, params }));
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(Error(`Chrome DevTools command timed out: ${method}`));
+      }, 10000);
+      pending.set(id, { resolve, reject, timer });
+      try { socket.send(JSON.stringify({ id, method, params })); }
+      catch (error) { clearTimeout(timer); pending.delete(id); reject(error); }
     });
   }
   async function evaluate(expression) {
