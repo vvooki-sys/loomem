@@ -36,6 +36,10 @@ pub struct SharedEngine {
 
 impl SharedEngine {
     pub fn new(root: &Path, config: Config) -> Result<Self> {
+        enforce_llm_key_policy(
+            &config,
+            std::env::var("LOOMEM_ALLOW_KEYLESS").as_deref() == Ok("1"),
+        )?;
         std::fs::create_dir_all(root).context("create shared engine root")?;
         let embedder = crate::local_embedding::load(&config.llm)?;
         Ok(Self {
@@ -66,7 +70,7 @@ impl SharedEngine {
             }
             "revoke" => {
                 let context = request.context()?;
-                self.revoke(context.clone())?;
+                self.revoke(context.clone()).await?;
                 Ok(self.reply(context, json!({"revoked": true})))
             }
             "status" => {
@@ -176,6 +180,7 @@ impl SharedEngine {
     async fn tool_async(&mut self, request: Request) -> Result<Value> {
         let context = request.context()?;
         let operation = request.operation()?;
+        self.ensure_job_available(&operation, &context)?;
         let name = request.name()?.to_owned();
         let args = request.args.unwrap_or_else(|| json!({}));
         let state = self.live_state(&context)?;
@@ -193,13 +198,14 @@ impl SharedEngine {
                 .map_err(|error| anyhow::anyhow!("tool dispatch failed: {error:?}"))?;
             serde_json::to_value(result).context("serialize original tool result")
         });
-        self.insert_job(operation.clone(), context.clone(), task)?;
+        self.insert_job(operation.clone(), context.clone(), task);
         Ok(self.reply(context, json!({"accepted": true, "op_id": operation})))
     }
 
     async fn worker_async(&mut self, request: Request) -> Result<Value> {
         let context = request.context()?;
         let operation = request.operation()?;
+        self.ensure_job_available(&operation, &context)?;
         let name = request.name()?.to_owned();
         let scheduler = self.live_scheduler(&context)?;
         let task = tokio::spawn(async move {
@@ -207,12 +213,13 @@ impl SharedEngine {
             scheduler.wait_for_idle().await;
             Ok(json!({"worker": name, "completed": true}))
         });
-        self.insert_job(operation.clone(), context.clone(), task)?;
+        self.insert_job(operation.clone(), context.clone(), task);
         Ok(self.reply(context, json!({"accepted": true, "op_id": operation})))
     }
 
     async fn await_job(&mut self, request: Request) -> Result<Value> {
         let context = request.context()?;
+        self.ensure_epoch(&context)?;
         let operation = request.operation()?;
         let key = job_key(&context, &operation);
         let job = self.jobs.remove(&key).context("unknown scoped job")?;
@@ -268,11 +275,18 @@ impl SharedEngine {
         ))
     }
 
-    fn revoke(&mut self, context: ScopeContext) -> Result<()> {
+    async fn revoke(&mut self, context: ScopeContext) -> Result<()> {
         let current = self.epochs.get(&context.scope).copied().unwrap_or(-1);
         if context.epoch <= current {
             bail!("revocation must advance scope epoch")
         }
+        // Cancel and close every old-epoch writer before acknowledging the new
+        // epoch. A late response still fails its own epoch check afterwards.
+        self.abort_jobs(&context.scope).await;
+        if let Some(entry) = self.scopes.get(&context.scope) {
+            entry.runtime.state.deferred.abort().await;
+        }
+        self.replace_scope(&context.scope).await?;
         self.epochs.insert(context.scope, context.epoch);
         Ok(())
     }
@@ -280,19 +294,17 @@ impl SharedEngine {
     async fn shutdown(&mut self) -> Result<()> {
         let scopes: Vec<String> = self.scopes.keys().cloned().collect();
         for scope in scopes {
-            self.drain_jobs(&scope).await;
-            if let Some(mut entry) = self.scopes.remove(&scope) {
-                entry.runtime.quiesce().await?;
-            }
+            self.replace_scope(&scope).await?;
         }
         Ok(())
     }
 
     async fn replace_scope(&mut self, scope: &str) -> Result<()> {
         self.drain_jobs(scope).await;
-        if let Some(mut entry) = self.scopes.remove(scope) {
+        if let Some(entry) = self.scopes.get_mut(scope) {
             entry.runtime.quiesce().await?;
         }
+        self.scopes.remove(scope);
         Ok(())
     }
 
@@ -310,19 +322,37 @@ impl SharedEngine {
         }
     }
 
+    async fn abort_jobs(&mut self, scope: &str) {
+        let keys: Vec<String> = self
+            .jobs
+            .iter()
+            .filter(|(_, job)| job.context.scope == scope)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in keys {
+            if let Some(job) = self.jobs.remove(&key) {
+                job.task.abort();
+                let _ = job.task.await;
+            }
+        }
+    }
+
+    fn ensure_job_available(&self, operation: &str, context: &ScopeContext) -> Result<()> {
+        self.ensure_live(context)?;
+        if self.jobs.contains_key(&job_key(context, operation)) {
+            bail!("duplicate scoped op_id")
+        }
+        Ok(())
+    }
+
     fn insert_job(
         &mut self,
         operation: String,
         context: ScopeContext,
         task: JoinHandle<Result<Value>>,
-    ) -> Result<()> {
-        self.ensure_live(&context)?;
-        let key = job_key(&context, &operation);
-        if self.jobs.contains_key(&key) {
-            bail!("duplicate scoped op_id")
-        }
-        self.jobs.insert(key, Job { context, task });
-        Ok(())
+    ) {
+        self.jobs
+            .insert(job_key(&context, &operation), Job { context, task });
     }
 
     fn live_state(&self, context: &ScopeContext) -> Result<Arc<crate::AppState>> {
@@ -341,6 +371,9 @@ impl SharedEngine {
     fn ensure_live(&self, context: &ScopeContext) -> Result<()> {
         self.ensure_epoch(context)?;
         let entry = self.scopes.get(&context.scope).context("scope not open")?;
+        if entry.context != *context {
+            bail!("scope context does not match the open runtime")
+        }
         if entry.runtime.is_quiesced() {
             bail!("scope generation is quiesced")
         }
@@ -385,6 +418,25 @@ impl SharedEngine {
         }
         response
     }
+}
+
+fn enforce_llm_key_policy(config: &Config, allow_keyless: bool) -> Result<()> {
+    let keyless_subsystems = config.llm_dependent_enabled_without_key();
+    if keyless_subsystems.is_empty() {
+        return Ok(());
+    }
+    if allow_keyless {
+        tracing::warn!(
+            "Running Hosted WITHOUT an LLM API key while [{}] are enabled (LOOMEM_ALLOW_KEYLESS=1)",
+            keyless_subsystems.join(", ")
+        );
+        return Ok(());
+    }
+    bail!(
+        "[{}] enabled but no LLM API key found: export {} (or set the [llm] api_key config field), or start with LOOMEM_ALLOW_KEYLESS=1 to accept degraded keyless mode",
+        keyless_subsystems.join(", "),
+        config.llm.api_key_env
+    )
 }
 
 fn job_key(context: &ScopeContext, operation: &str) -> String {

@@ -21,6 +21,62 @@ use crate::tantivy_index::{TantivyIndex, TextDocument};
 
 use super::Chunk;
 
+#[cfg(feature = "evaluation")]
+tokio::task_local! {
+    static EVALUATION_FAILPOINT: Option<EvaluationFailpoint>;
+}
+
+/// Request-local crash injection for the evaluation-only shared-engine harness.
+#[cfg(feature = "evaluation")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvaluationFailpoint {
+    AfterRocksdbWait,
+    AfterRocksdbAbort,
+}
+
+#[cfg(feature = "evaluation")]
+impl EvaluationFailpoint {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "after_rocksdb_wait" => Some(Self::AfterRocksdbWait),
+            "after_rocksdb_abort" => Some(Self::AfterRocksdbAbort),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(feature = "evaluation")]
+pub async fn with_evaluation_failpoint<F: std::future::Future>(
+    failpoint: Option<EvaluationFailpoint>,
+    future: F,
+) -> F::Output {
+    EVALUATION_FAILPOINT.scope(failpoint, future).await
+}
+
+pub fn evaluation_failpoint_allowed(value: Option<&str>) -> bool {
+    #[cfg(feature = "evaluation")]
+    {
+        value.is_none_or(|name| EvaluationFailpoint::parse(name).is_some())
+    }
+    #[cfg(not(feature = "evaluation"))]
+    {
+        value.is_none()
+    }
+}
+
+#[cfg(feature = "evaluation")]
+fn inject_evaluation_failpoint(failpoint: EvaluationFailpoint) -> ! {
+    match failpoint {
+        EvaluationFailpoint::AfterRocksdbWait => {
+            eprintln!("LOOMEM_POC_BARRIER_AFTER_ROCKSDB");
+            loop {
+                std::thread::park();
+            }
+        }
+        EvaluationFailpoint::AfterRocksdbAbort => std::process::abort(),
+    }
+}
+
 /// Arguments for [`persist_chunk_with_index`].
 ///
 /// `intent_log` is `None` for callsites that do not participate in the
@@ -65,6 +121,11 @@ pub async fn persist_chunk_with_index(
         .store_chunk(args.chunk)
         .context("store_chunk failed")?;
 
+    #[cfg(feature = "evaluation")]
+    if let Ok(Some(failpoint)) = EVALUATION_FAILPOINT.try_with(|failpoint| *failpoint) {
+        inject_evaluation_failpoint(failpoint);
+    }
+
     // Step 3: Tantivy write (upsert + commit)
     // upsert_document (delete-then-insert by id) is required for idempotency:
     // on a fresh id it behaves identically to index_document; on a duplicate id
@@ -93,4 +154,36 @@ pub async fn persist_chunk_with_index(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::evaluation_failpoint_allowed;
+
+    #[cfg(feature = "evaluation")]
+    #[test]
+    fn evaluation_failpoint_parser_is_exact() {
+        use super::EvaluationFailpoint;
+        assert_eq!(
+            EvaluationFailpoint::parse("after_rocksdb_wait"),
+            Some(EvaluationFailpoint::AfterRocksdbWait)
+        );
+        assert_eq!(
+            EvaluationFailpoint::parse("after_rocksdb_abort"),
+            Some(EvaluationFailpoint::AfterRocksdbAbort)
+        );
+        assert_eq!(EvaluationFailpoint::parse("after_tantivy"), None);
+        assert!(evaluation_failpoint_allowed(None));
+        assert!(evaluation_failpoint_allowed(Some("after_rocksdb_wait")));
+        assert!(evaluation_failpoint_allowed(Some("after_rocksdb_abort")));
+        assert!(!evaluation_failpoint_allowed(Some("after_tantivy")));
+    }
+
+    #[cfg(not(feature = "evaluation"))]
+    #[test]
+    fn synthetic_failpoints_require_evaluation() {
+        assert!(evaluation_failpoint_allowed(None));
+        assert!(!evaluation_failpoint_allowed(Some("after_rocksdb_wait")));
+        assert!(!evaluation_failpoint_allowed(Some("after_rocksdb_abort")));
+    }
 }

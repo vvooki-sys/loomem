@@ -55,6 +55,7 @@ pub(super) async fn build_async(engine: &mut SharedEngine, request: Request) -> 
     let context = request.context()?;
     let generation = request.generation()?;
     ensure_current_generation(engine, &context, &generation)?;
+    engine.ensure_job_available(&generation, &context)?;
     let records = request.records.context("missing records")?;
     validate_records(engine, &records)?;
     validate_failpoint(request.failpoint.as_deref())?;
@@ -67,12 +68,12 @@ pub(super) async fn build_async(engine: &mut SharedEngine, request: Request) -> 
         request.failpoint,
         generation.clone(),
     ));
-    engine.insert_job(generation.clone(), context.clone(), task)?;
+    engine.insert_job(generation.clone(), context.clone(), task);
     Ok(engine.reply(context, json!({"pending": true, "job": generation})))
 }
 
 fn validate_failpoint(failpoint: Option<&str>) -> Result<()> {
-    if failpoint.is_some_and(|value| value != "after_rocksdb_abort") {
+    if !loomem_core::storage::persist::evaluation_failpoint_allowed(failpoint) {
         bail!("invalid synthetic failpoint")
     }
     Ok(())
@@ -87,20 +88,28 @@ async fn store_records(
     generation: String,
 ) -> Result<Value> {
     let count = records.len();
+    #[cfg(feature = "evaluation")]
+    let failpoint = failpoint
+        .as_deref()
+        .and_then(loomem_core::storage::persist::EvaluationFailpoint::parse);
+    #[cfg(not(feature = "evaluation"))]
+    let _ = failpoint;
     for record in records {
-        let result = crate::mcp::dispatcher::hosted_store(
+        let store = crate::mcp::dispatcher::hosted_store(
             &state,
             json!({"content": record.content}),
             &stream,
             Some(actor.clone()),
             record.id,
-        )
-        .await
-        .map_err(|error| anyhow::anyhow!("original memory_store failed: {error:?}"))?;
+        );
+        #[cfg(feature = "evaluation")]
+        let result =
+            loomem_core::storage::persist::with_evaluation_failpoint(failpoint, store).await;
+        #[cfg(not(feature = "evaluation"))]
+        let result = store.await;
+        let result =
+            result.map_err(|error| anyhow::anyhow!("original memory_store failed: {error:?}"))?;
         ensure_tool_success(result)?;
-        if failpoint.as_deref() == Some("after_rocksdb_abort") {
-            std::process::abort();
-        }
     }
     Ok(json!({"generation": generation, "count": count}))
 }

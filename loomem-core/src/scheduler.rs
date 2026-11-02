@@ -88,7 +88,7 @@ pub struct Scheduler {
     pii_filter: Arc<PiiFilter>,
     cost_tracker: Arc<CostTracker>,
     config: Config,
-    shutdown_rx: broadcast::Receiver<()>,
+    shutdown_rx: tokio::sync::Mutex<broadcast::Receiver<()>>,
     intent_log: Option<Arc<tokio::sync::Mutex<IntentLog>>>,
     entity_extractor: Arc<EntityExtractor>,
     graph: Arc<GraphStore>,
@@ -136,7 +136,7 @@ impl Scheduler {
             pii_filter,
             cost_tracker: Arc::new(cost_tracker),
             config,
-            shutdown_rx,
+            shutdown_rx: tokio::sync::Mutex::new(shutdown_rx),
             intent_log,
             entity_extractor,
             graph,
@@ -179,7 +179,9 @@ impl Scheduler {
 
     /// Run scheduler with tokio::select!
     pub async fn run(&self) {
-        let mut shutdown_rx = self.shutdown_rx.resubscribe();
+        // Use the original receiver: resubscribe() would miss a shutdown sent
+        // before this task first polls.
+        let mut shutdown_rx = self.shutdown_rx.lock().await;
         info!("🚀 Scheduler started");
 
         // Recover orphaned chunks first
@@ -345,11 +347,8 @@ impl Scheduler {
     }
 
     async fn wait_for_running_tasks_to_complete(&self) {
-        // Wait for running tasks (max 10s)
-        info!("Waiting for running tasks to complete (max 10s)...");
-
-        let start = std::time::Instant::now();
-        while start.elapsed() < Duration::from_secs(10) {
+        info!("Waiting for running tasks to complete...");
+        loop {
             let all_stopped = !self.consolidation_running.load(Ordering::SeqCst)
                 && !self.decay_running.load(Ordering::SeqCst)
                 && !self.compaction_running.load(Ordering::SeqCst)

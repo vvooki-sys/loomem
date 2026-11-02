@@ -10,9 +10,7 @@ use loomem_core::query_cache::QueryCache;
 use loomem_core::query_expansion::QueryExpander;
 use loomem_core::scheduler::Scheduler;
 use loomem_core::workers_registry::build_registry;
-use loomem_core::{
-    Config, CostTracker, EntityExtractor, HybridSearchEngine, PiiFilter, RocksDbStore, TantivyIndex,
-};
+use loomem_core::{Config, CostTracker, EntityExtractor, PiiFilter, RocksDbStore, TantivyIndex};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -109,7 +107,7 @@ impl ScopeServices {
         Ok(())
     }
 
-    fn into_state(self) -> (Arc<AppState>, Option<EventLogWorker>) {
+    fn into_state(self) -> Result<(Arc<AppState>, Option<EventLogWorker>)> {
         let config = self.config;
         let query_expander = QueryExpander::load(Path::new(&config.search.synonyms_file))
             .map_or_else(|_| Arc::new(QueryExpander::empty()), Arc::new);
@@ -127,10 +125,11 @@ impl ScopeServices {
             config.retention.hard_purge_interval_secs,
             3600,
         );
+        let hybrid_search = crate::evaluation_clock::engine(config.clone())?;
         let state = Arc::new(AppState {
             rate_limiter: Arc::new(rate_limiter::RateLimiter::new(config.rate_limit.clone())),
             dream_auto: dream_trigger(&config),
-            hybrid_search: HybridSearchEngine::new(config.clone()),
+            hybrid_search,
             query_expander,
             entity_extractor: self.entity_extractor,
             intent_log: self.intent_log,
@@ -157,7 +156,7 @@ impl ScopeServices {
             http_client: self.http_client,
             config,
         });
-        (state, self.event_worker)
+        Ok((state, self.event_worker))
     }
 }
 
@@ -188,7 +187,7 @@ impl ScopeRuntime {
     ) -> Result<Self> {
         let mut services = ScopeServices::open(config, root, local_embedder, rebuild_index)?;
         services.start_queues(reader)?;
-        let (state, event_worker) = services.into_state();
+        let (state, event_worker) = services.into_state()?;
         let (scheduler_shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
         let scheduler = build_scheduler(&state, shutdown_rx);
         if !reader {
@@ -218,7 +217,6 @@ impl ScopeRuntime {
         if self.quiesced {
             return Ok(());
         }
-        self.quiesced = true;
         self.stop_scheduler().await?;
         self.state
             .deferred
@@ -226,7 +224,9 @@ impl ScopeRuntime {
             .await
             .context("drain deferred")?;
         self.stop_queues().await?;
-        self.flush().await
+        self.flush().await?;
+        self.quiesced = true;
+        Ok(())
     }
 
     async fn stop_scheduler(&mut self) -> Result<()> {

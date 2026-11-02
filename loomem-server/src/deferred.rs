@@ -29,6 +29,13 @@ impl DeferredTasks {
         }
         Ok(())
     }
+
+    /// Cancel old-epoch fire-and-forget work during Hosted revocation.
+    pub async fn abort(&self) {
+        let mut tasks = std::mem::take(&mut *self.lock());
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    }
 }
 
 #[cfg(test)]
@@ -48,5 +55,18 @@ mod tests {
         });
         tasks.drain().await.expect("deferred task succeeds");
         assert_eq!(completed.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn abort_cancels_registered_work() {
+        let tasks = DeferredTasks::default();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let observed = completed.clone();
+        tasks.track(async move {
+            std::future::pending::<()>().await;
+            observed.fetch_add(1, Ordering::SeqCst);
+        });
+        tasks.abort().await;
+        assert_eq!(completed.load(Ordering::SeqCst), 0);
     }
 }

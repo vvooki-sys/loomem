@@ -260,7 +260,11 @@ impl EventLogWorker {
 /// Spawn the background event log writer task.
 /// Returns the EventSender to use on hot paths.
 pub fn spawn_writer(data_dir: &Path, config: &EventLogConfig) -> Result<EventSender> {
-    Ok(spawn_writer_managed(data_dir, config)?.0)
+    let (sender, worker) = spawn_writer_managed(data_dir, config)?;
+    // The legacy API has no shutdown owner. Keep its shutdown channel alive;
+    // dropping EventLogWorker would otherwise stop the writer immediately.
+    std::mem::forget(worker);
+    Ok(sender)
 }
 
 pub fn spawn_writer_managed(
@@ -308,6 +312,25 @@ pub fn spawn_writer_managed(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn legacy_spawn_writer_keeps_receiver_alive() {
+        let tmp = TempDir::new().unwrap();
+        let sender = spawn_writer(tmp.path(), &EventLogConfig::default()).unwrap();
+        tokio::task::yield_now().await;
+        let before = emit_drop_count();
+        emit(
+            &sender,
+            MemoryEvent::Search {
+                query: "legacy writer remains active".into(),
+                stream_id: "s".into(),
+                top_scores: vec![],
+                latency_ms: 0,
+                result_count: 0,
+            },
+        );
+        assert_eq!(emit_drop_count(), before);
+    }
 
     #[test]
     fn emit_drop_increments_counter_on_closed_channel() {
