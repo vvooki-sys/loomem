@@ -136,6 +136,8 @@ function LiveStatus() {
   }, []);
 
   useEffect(() => {
+    // The initial network probe must immediately disable repeated requests.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     probe();
     const t = window.setInterval(probe, 20000);
     return () => window.clearInterval(t);

@@ -36,14 +36,13 @@ function mapSearchResults(raw) {
   return { items, total: items.length, mode: "semantic" };
 }
 
-export default function useMemoryList({ query, mode, layer, sourceAgent, page, perPage }) {
+export default function useMemoryList({ query, mode, layer, sourceAgent, page, perPage, onResult }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const tokenRef = useRef(0);
 
   const q = (query || "").trim();
-
   const fetchList = useCallback(async () => {
     const myToken = ++tokenRef.current;
     setLoading(true);
@@ -63,15 +62,22 @@ export default function useMemoryList({ query, mode, layer, sourceAgent, page, p
         if (sourceAgent) params.source_agent = sourceAgent;
         result = { ...(await getMemory(params)), mode: "substring" };
       }
-      if (myToken === tokenRef.current) setData(result);
+      if (myToken === tokenRef.current) {
+        setData(result);
+        onResult?.(result);
+      }
     } catch (err) {
       if (myToken === tokenRef.current) setError(err);
     } finally {
-      if (myToken === tokenRef.current) setLoading(false);
+      if (myToken === tokenRef.current) {
+        setLoading(false);
+      }
     }
-  }, [q, mode, layer, sourceAgent, page, perPage]);
+  }, [q, mode, layer, sourceAgent, page, perPage, onResult]);
 
   useEffect(() => {
+    // A new request must immediately mark old results as loading.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchList();
   }, [fetchList]);
 

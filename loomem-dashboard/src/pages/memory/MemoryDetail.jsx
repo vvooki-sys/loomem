@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, Copy, Pencil, Trash2, X } from "lucide-react";
 import { MEMORY_LAYERS } from "../../lib/constants";
 import MemoryHistoryTab from "./MemoryHistoryTab";
@@ -26,21 +26,17 @@ function MetaRow({ label, children }) {
 }
 
 export default function MemoryDetail({ memory, readOnly, onEdit, onDelete, onClose }) {
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  return <MemoryDetailPanel key={JSON.stringify([memory.id, memory.content])} memory={memory} readOnly={readOnly} onEdit={onEdit} onDelete={onDelete} onClose={onClose} saving={saving} setSaving={setSaving} deleting={deleting} setDeleting={setDeleting} />;
+}
+
+function MemoryDetailPanel({ memory, readOnly, onEdit, onDelete, onClose, saving, setSaving, deleting, setDeleting }) {
   const [tab, setTab] = useState("content");
   const [mode, setMode] = useState("view");
   const [draft, setDraft] = useState(memory.content);
-  const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [copied, setCopied] = useState(false);
-
-  // Reset transient UI when the selected memory changes.
-  useEffect(() => {
-    setTab("content");
-    setMode("view");
-    setDraft(memory.content);
-    setConfirmDelete(false);
-  }, [memory.id, memory.content]);
 
   const save = async () => {
     if (saving) return;

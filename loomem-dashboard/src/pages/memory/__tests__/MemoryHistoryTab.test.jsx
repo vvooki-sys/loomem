@@ -39,6 +39,19 @@ describe("MemoryHistoryTab (AC-8)", () => {
     await waitFor(() => expect(screen.getByText(/No recorded versions/i)).toBeInTheDocument());
   });
 
+  it("does not show an older memory's late history after selection changes", async () => {
+    let resolveFirst;
+    api.getMemoryChain.mockImplementation((id) => id === "m1"
+      ? new Promise((resolve) => { resolveFirst = resolve; })
+      : Promise.resolve({ chain: [{ id: "v2", version: 2, content: "second history" }] }));
+    const { rerender } = render(<MemoryHistoryTab chunkId="m1" />);
+    rerender(<MemoryHistoryTab chunkId="m2" />);
+    expect(await screen.findByText("second history")).toBeInTheDocument();
+    resolveFirst({ chain: [{ id: "v1", version: 1, content: "stale history" }] });
+    await waitFor(() => expect(screen.queryByText("stale history")).not.toBeInTheDocument());
+    expect(screen.getByText("second history")).toBeInTheDocument();
+  });
+
   // Cycle/173 S3 / AC-4 — a diff between adjacent versions surfaces the added
   // and removed words. First version has no predecessor → no diff block.
   it("renders a word-level diff between two versions", async () => {
