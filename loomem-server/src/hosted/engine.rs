@@ -305,6 +305,7 @@ impl SharedEngine {
                 "vector_enabled": self.config.storage.vector_enabled,
                 "embedding_provider": self.config.llm.embedding_provider,
                 "embedding_dim": self.config.llm.embedding_dim,
+                "rerank_loaded": entry.runtime.rerank_loaded(),
                 "retrieval": entry.runtime.state.retrieval_counters.snapshot(),
                 "queues": entry.runtime.queue_depths(),
             }),

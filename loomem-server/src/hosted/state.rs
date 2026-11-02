@@ -227,6 +227,19 @@ impl ScopeRuntime {
         self.accepting_writes && !self.quiesced
     }
 
+    /// True only when the ONNX cross-encoder was really loaded for this
+    /// generation; `try_load` otherwise degrades silently to the HTTP reranker.
+    pub fn rerank_loaded(&self) -> bool {
+        #[cfg(feature = "onnx-rerank")]
+        {
+            self.state.onnx_reranker.is_some()
+        }
+        #[cfg(not(feature = "onnx-rerank"))]
+        {
+            false
+        }
+    }
+
     /// Accepted background work that is not yet durable, per queue.
     pub fn queue_depths(&self) -> QueueDepths {
         QueueDepths {
