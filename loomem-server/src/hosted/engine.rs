@@ -322,6 +322,10 @@ impl SharedEngine {
                 None,
                 WritePhase::new().with_apply_hold(Box::pin(gate.wait())),
             ),
+            hold::HoldPoint::AfterDurable(gate) => (
+                None,
+                WritePhase::new().with_durable_hold(Box::pin(gate.wait())),
+            ),
         };
         let job = ToolJob {
             state: self.live_state(&context)?,

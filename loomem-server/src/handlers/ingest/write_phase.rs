@@ -43,6 +43,9 @@ pub(crate) struct WritePhase {
     /// Evaluation-only: awaited once inside the first apply section so a test
     /// can revoke while the section is open.
     apply_hold: tokio::sync::Mutex<Option<ApplyHold>>,
+    /// Evaluation-only: awaited once right after entering the durable phase
+    /// so a test can revoke while a durable write is in progress.
+    durable_hold: tokio::sync::Mutex<Option<ApplyHold>>,
 }
 
 impl WritePhase {
@@ -53,6 +56,14 @@ impl WritePhase {
                 revoke_requested: false,
             }),
             apply_hold: tokio::sync::Mutex::new(None),
+            durable_hold: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn with_durable_hold(self, hold: ApplyHold) -> Self {
+        Self {
+            durable_hold: tokio::sync::Mutex::new(Some(hold)),
+            ..self
         }
     }
 
@@ -166,11 +177,24 @@ pub(crate) async fn track<F: std::future::Future>(phase: Arc<WritePhase>, future
         .await
 }
 
-pub(crate) fn enter_durable() -> Result<()> {
-    match WRITE_PHASE.try_with(|phase| phase.enter_durable()) {
-        Ok(result) => result,
-        Err(_) => Ok(()),
+/// `enter_durable` for the persist handler, with its error type.
+pub(crate) async fn enter_durable_write() -> std::result::Result<(), crate::handlers::AppError> {
+    enter_durable()
+        .await
+        .map_err(crate::handlers::AppError::Internal)
+}
+
+/// Marks the tracked job durable; outside a tracked job this is a no-op.
+pub(crate) async fn enter_durable() -> Result<()> {
+    let Ok(phase) = WRITE_PHASE.try_with(Arc::clone) else {
+        return Ok(());
+    };
+    phase.enter_durable()?;
+    let hold = phase.durable_hold.lock().await.take();
+    if let Some(hold) = hold {
+        hold.await?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
