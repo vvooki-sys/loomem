@@ -1,6 +1,7 @@
 pub mod access_audit;
 pub mod advisor;
 pub mod ambient;
+pub mod apply_guard;
 pub mod associator;
 pub mod audit;
 pub mod backfill_trace;

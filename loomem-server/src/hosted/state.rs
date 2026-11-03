@@ -121,14 +121,13 @@ impl ScopeServices {
         let query_expander = QueryExpander::load(Path::new(&config.search.synonyms_file))
             .map_or_else(|_| Arc::new(QueryExpander::empty()), Arc::new);
         #[cfg(feature = "onnx-rerank")]
-        let onnx_reranker = config
-            .search
-            .rerank_enabled
-            .then(|| {
-                loomem_core::onnx_reranker::try_load(config.search.rerank_model_dir.as_deref())
-            })
-            .flatten()
-            .map(Arc::new);
+        let onnx_reranker = load_reranker(&config.search)?;
+        #[cfg(not(feature = "onnx-rerank"))]
+        if config.search.rerank_enabled {
+            anyhow::bail!(
+                "Hosted scope requires the ONNX reranker but this build disables onnx-rerank"
+            );
+        }
         let workers = build_registry(
             &config.worker,
             config.retention.hard_purge_interval_secs,
@@ -319,6 +318,27 @@ fn evaluation_quiesce_failure() -> bool {
     static FIRST_FAILURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
     std::env::var("LOOMEM_EVALUATION_QUIESCE_FAIL").as_deref() == Ok("1")
         && FIRST_FAILURE.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Hosted fails closed where the public server degrades to the HTTP reranker:
+/// a configured reranker that does not load is an error, never a silent
+/// lexical-only generation.
+#[cfg(feature = "onnx-rerank")]
+fn load_reranker(
+    search: &loomem_core::config::SearchConfig,
+) -> Result<Option<Arc<loomem_core::onnx_reranker::OnnxReranker>>> {
+    if !search.rerank_enabled {
+        return Ok(None);
+    }
+    let dir = search.rerank_model_dir.as_deref().context(
+        "Hosted scope has rerank_enabled without search.rerank_model_dir; refusing silent degradation",
+    )?;
+    let reranker = loomem_core::onnx_reranker::try_load(Some(dir)).with_context(|| {
+        format!(
+            "Hosted scope could not load the ONNX reranker from {dir}; refusing silent degradation"
+        )
+    })?;
+    Ok(Some(Arc::new(reranker)))
 }
 
 fn build_scheduler(

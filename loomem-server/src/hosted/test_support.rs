@@ -25,8 +25,16 @@ fn config(root: &Path) -> Config {
 }
 
 pub(super) async fn new_engine() -> (tempfile::TempDir, SharedEngine) {
+    new_engine_with(|_| {}).await
+}
+
+pub(super) async fn new_engine_with(
+    adjust: impl FnOnce(&mut Config),
+) -> (tempfile::TempDir, SharedEngine) {
     let root = tempfile::tempdir().expect("temporary engine root");
-    let engine = SharedEngine::new(&root.path().join("engine"), config(root.path()))
-        .expect("open shared engine");
+    let mut config = config(root.path());
+    adjust(&mut config);
+    let engine =
+        SharedEngine::new(&root.path().join("engine"), config).expect("open shared engine");
     (root, engine)
 }
