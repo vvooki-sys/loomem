@@ -19,7 +19,8 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(120);
 const APPLY_HOLD_MARKER: &str = "LOOMEM_HOSTED_HOLD_APPLY";
 const REVOKE_DEFERRED_MARKER: &str = "LOOMEM_HOSTED_REVOKE_DEFERRED";
 const DEFERRED_DROPPED_MARKER: &str = "LOOMEM_HOSTED_DEFERRED_DROPPED";
-const ROCKSDB_PAUSE_MARKER: &str = "LOOMEM_POC_PAUSE_AFTER_ROCKSDB";
+const DEFERRED_CLOSED_MARKER: &str = "LOOMEM_HOSTED_DEFERRED_CLOSED";
+const DURABLE_HOLD_MARKER: &str = "LOOMEM_HOSTED_HOLD_DURABLE";
 
 /// Loopback chat-completions endpoint that merges every subject and flags
 /// each source it was shown as contradicted.
@@ -479,16 +480,28 @@ fn revocation_drops_deferred_work_tracked_by_a_durable_job() {
 
     // A store already in its durable phase when revocation starts crosses the
     // auto-dream threshold only afterwards. Its deferred run must not start.
+    // The store is held right after entering its durable phase and released
+    // only once revocation has closed the deferred registry.
     let a = context("actor-a", "scope-a", 1);
     engine.ok(json!({"cmd": "open_scope", "context": a, "generation": "live"}));
     engine.ok(json!({
         "cmd": "tool_async", "context": a, "op_id": "store", "name": "memory_store",
         "args": {"content": "synthetic durable source", "subject": "subject-a"},
-        "failpoint": "after_rocksdb_pause",
+        "failpoint": "hosted_hold_durable",
     }));
-    engine.wait_for_stderr(ROCKSDB_PAUSE_MARKER);
+    engine.wait_for_stderr(DURABLE_HOLD_MARKER);
     let revoked = context("actor-a", "scope-a", 2);
-    engine.ok(json!({"cmd": "revoke", "context": revoked}));
+    let revoke_id = engine.send(json!({"cmd": "revoke", "context": revoked}));
+    engine.wait_for_stderr(DEFERRED_CLOSED_MARKER);
+    let release_id = engine.send(json!({"cmd": "release_holds"}));
+    let mut replies = std::collections::HashMap::new();
+    for _ in 0..2 {
+        let reply = engine.reply();
+        let id = reply["request_id"].as_str().expect("request_id").to_owned();
+        replies.insert(id, reply);
+    }
+    assert_eq!(replies[&release_id]["ok"], Value::Bool(true), "{replies:?}");
+    assert_eq!(replies[&revoke_id]["ok"], Value::Bool(true), "{replies:?}");
     assert_eq!(
         *llm.requests.lock().expect("counter"),
         1,

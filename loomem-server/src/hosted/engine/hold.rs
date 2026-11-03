@@ -1,13 +1,15 @@
 //! Evaluation-only gates that keep a scoped job in flight until released.
 //!
 //! The concurrency tests need a job that stays pending deterministically,
-//! without sleeping. A `tool_async` request may name one of two synthetic
+//! without sleeping. A `tool_async` request may name one of three synthetic
 //! failpoints: `hosted_hold` waits before dispatch, where `revoke` can still
-//! abort the job, and `hosted_hold_apply` waits inside the job's first apply
-//! section (see `loomem_core::apply_guard`), where `revoke` must wait for the
-//! section to finish. Both wait until `release_holds` arrives; the apply hold
-//! prints `LOOMEM_HOSTED_HOLD_APPLY` on stderr when it starts waiting so an
-//! external test can sequence its revocation. Without the `evaluation`
+//! abort the job; `hosted_hold_apply` waits inside the job's first apply
+//! section (see `loomem_core::apply_guard`), and `hosted_hold_durable` waits
+//! right after the job entered its durable phase; in both `revoke` must wait
+//! for the job. All wait until `release_holds` arrives; the apply and durable
+//! holds print `LOOMEM_HOSTED_HOLD_APPLY` / `LOOMEM_HOSTED_HOLD_DURABLE` on
+//! stderr when they start waiting so an external test can sequence its
+//! revocation. Without the `evaluation`
 //! feature the names are rejected like any other unknown failpoint, so
 //! production binaries never hold anything.
 use anyhow::Result;
@@ -18,6 +20,10 @@ const HOLD_FAILPOINT: &str = "hosted_hold";
 const APPLY_HOLD_FAILPOINT: &str = "hosted_hold_apply";
 #[cfg(feature = "evaluation")]
 const APPLY_HOLD_MARKER: &str = "LOOMEM_HOSTED_HOLD_APPLY";
+#[cfg(feature = "evaluation")]
+const DURABLE_HOLD_FAILPOINT: &str = "hosted_hold_durable";
+#[cfg(feature = "evaluation")]
+const DURABLE_HOLD_MARKER: &str = "LOOMEM_HOSTED_HOLD_DURABLE";
 
 /// Where a job waits for release.
 #[cfg_attr(not(feature = "evaluation"), allow(dead_code))]
@@ -25,6 +31,7 @@ pub(super) enum HoldPoint {
     None,
     BeforeDispatch(HoldGate),
     InsideApply(HoldGate),
+    AfterDurable(HoldGate),
 }
 
 #[cfg(feature = "evaluation")]
@@ -46,6 +53,10 @@ impl Holds {
             Some(HOLD_FAILPOINT) => (HoldPoint::BeforeDispatch(self.new_gate(None)), None),
             Some(APPLY_HOLD_FAILPOINT) => (
                 HoldPoint::InsideApply(self.new_gate(Some(APPLY_HOLD_MARKER))),
+                None,
+            ),
+            Some(DURABLE_HOLD_FAILPOINT) => (
+                HoldPoint::AfterDurable(self.new_gate(Some(DURABLE_HOLD_MARKER))),
                 None,
             ),
             other => (HoldPoint::None, other),

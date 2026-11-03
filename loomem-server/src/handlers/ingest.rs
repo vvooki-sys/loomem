@@ -51,7 +51,7 @@ pub async fn persist_chunk(
     _metadata: Option<&serde_json::Value>,
 ) -> Result<String, AppError> {
     #[cfg(feature = "hosted-engine")]
-    write_phase::enter_durable().map_err(AppError::Internal)?;
+    write_phase::enter_durable_write().await?;
     // Pre-ingestion sanitization (HTML strip + injection detection, then PII
     // redaction before any storage) — see `sanitize::persist_content`.
     let prepared = sanitize::persist_content(&state.pii_filter, content);

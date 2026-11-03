@@ -11,6 +11,9 @@ use std::sync::Arc;
 /// Logged when work is tracked after revocation began; tests sequence on it.
 #[cfg(feature = "hosted-engine")]
 pub(crate) const DEFERRED_DROPPED_MARKER: &str = "LOOMEM_HOSTED_DEFERRED_DROPPED";
+/// Logged once `begin_abort` has closed the registry; tests sequence on it.
+#[cfg(feature = "hosted-engine")]
+pub(crate) const DEFERRED_CLOSED_MARKER: &str = "LOOMEM_HOSTED_DEFERRED_CLOSED";
 
 #[derive(Default)]
 struct Inner {
@@ -99,6 +102,9 @@ impl DeferredTasks {
             #[cfg(feature = "hosted-engine")]
             {
                 guard.closed = true;
+                tracing::info!(
+                    "deferred registry closed for revocation ({DEFERRED_CLOSED_MARKER})"
+                );
             }
             guard.take_work()
         };
