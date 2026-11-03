@@ -191,3 +191,63 @@ async fn reader_context_count_is_process_wide_and_tracks_failed_reopen() {
     }
     scopes.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn failed_unknown_scope_lookups_do_not_retain_slots() {
+    let (_root, engine) = new_engine().await;
+    let scopes = Scopes::new(engine);
+    for index in 0..32 {
+        let scope = format!("unknown-{index}");
+        for command in [
+            "status",
+            "tools/list",
+            "tool_async",
+            "worker_async",
+            "quiesce",
+            "prepare",
+            "build_async",
+            "search",
+            "read",
+            "close_scope",
+        ] {
+            assert!(scopes.handle(request(command, &scope, 1)).await.is_err());
+        }
+        let mut awaiting = request("await", &scope, 1);
+        awaiting.op_id = Some("unknown-job".into());
+        assert!(scopes.await_job(awaiting).await.is_err());
+        assert!(scopes.slots.lock().unwrap().is_empty());
+    }
+    assert_eq!(scopes.opened.load(Ordering::SeqCst), 0);
+    scopes
+        .handle(request("open_scope", "unknown-0", 1))
+        .await
+        .unwrap();
+    scopes
+        .handle(request("status", "unknown-0", 1))
+        .await
+        .unwrap();
+    scopes
+        .handle(request("tools/list", "unknown-0", 1))
+        .await
+        .unwrap();
+    assert_eq!(scopes.slots.lock().unwrap().len(), 1);
+    scopes.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn first_revoke_establishes_a_stable_epoch_tombstone() {
+    let (_root, engine) = new_engine().await;
+    let scopes = Scopes::new(engine);
+    scopes.handle(request("revoke", "a", 7)).await.unwrap();
+    let tombstone = scopes.slot(&request("status", "a", 7)).unwrap();
+    assert!(scopes.handle(request("status", "a", 7)).await.is_err());
+    assert!(scopes.handle(request("open_scope", "a", 6)).await.is_err());
+    assert_eq!(scopes.slots.lock().unwrap().len(), 1);
+    scopes.handle(request("open_scope", "a", 7)).await.unwrap();
+    assert!(Arc::ptr_eq(
+        &tombstone,
+        &scopes.slot(&request("status", "a", 7)).unwrap()
+    ));
+    scopes.handle(request("status", "a", 7)).await.unwrap();
+    scopes.shutdown().await.unwrap();
+}

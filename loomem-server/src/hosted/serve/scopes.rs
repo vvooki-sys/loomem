@@ -44,6 +44,17 @@ impl Scopes {
         if let Some(slot) = slots.get(&context.scope) {
             return Ok(slot.clone());
         }
+        // Only lifecycle establishment may allocate a permanent slot. Reads,
+        // job commands and close must not retain state for unknown scopes.
+        // Revoke is deliberately included: its epoch tombstone must reject
+        // a later stale open even when this scope has never been opened.
+        anyhow::ensure!(
+            matches!(
+                request.cmd.as_str(),
+                "open_scope" | "restore_scope" | "revoke"
+            ),
+            "scope not open"
+        );
         anyhow::ensure!(!self.closing.load(Ordering::SeqCst), "engine is closing");
         Ok(slots
             .entry(context.scope.clone())
