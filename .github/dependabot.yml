@@ -32,11 +32,9 @@ updates:
       day: monday
     commit-message:
       prefix: "ci(deps)"
+    # github-actions supports only default-days (no semver-*-days).
     cooldown:
       default-days: 7
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 7
     groups:
       actions:
         patterns: ["*"]
