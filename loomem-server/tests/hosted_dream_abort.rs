@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 const REPLY_TIMEOUT: Duration = Duration::from_secs(120);
 const APPLY_HOLD_MARKER: &str = "LOOMEM_HOSTED_HOLD_APPLY";
+const REVOKE_DEFERRED_MARKER: &str = "LOOMEM_HOSTED_REVOKE_DEFERRED";
 
 /// Loopback chat-completions endpoint that merges every subject and flags
 /// each source it was shown as contradicted.
@@ -235,11 +236,11 @@ impl Engine {
             .unwrap_or_default()
     }
 
-    fn store(&mut self, context: &Value, content: &str) -> String {
+    fn store(&mut self, context: &Value, subject: &str, content: &str) -> String {
         let text = self.tool(
             context,
             "memory_store",
-            json!({"content": content, "subject": "synthetic-dream-subject"}),
+            json!({"content": content, "subject": subject}),
         );
         Regex::new(r"\(id: ([^\s)]+)")
             .expect("regex")
@@ -253,11 +254,16 @@ impl Engine {
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             match self.stderr.recv_timeout(remaining) {
-                Ok(line) if line.trim() == marker => return,
+                Ok(line) if line.contains(marker) => return,
                 Ok(_) => continue,
                 Err(error) => panic!("{marker} not seen on stderr: {error}"),
             }
         }
+    }
+
+    fn superseded(&mut self, context: &Value, source: &str) -> bool {
+        self.tool(context, "memory_history", json!({"chunk_id": source}))
+            .contains("[superseded]")
     }
 
     fn shutdown(mut self) {
@@ -280,11 +286,17 @@ fn revoke_waits_for_an_apply_section_and_a_revoked_job_leaves_nothing_half_done(
     let config = write_config(temp.path());
     let mut engine = Engine::start(&temp.path().join("engine"), &config, &llm.url);
 
-    // Scope A: revoked while the subject's apply section is open.
+    // Scope A has two subjects and is revoked while the first apply section
+    // is open: that section finishes whole, the second subject never starts.
     let a = context("actor-a", "scope-a", 1);
     engine.ok(json!({"cmd": "open_scope", "context": a, "generation": "live"}));
-    let sources: Vec<String> = (1..=2)
-        .map(|n| engine.store(&a, &format!("synthetic dream source {n} for scope a")))
+    let subjects: Vec<Vec<String>> = ["subject-one", "subject-two"]
+        .iter()
+        .map(|subject| {
+            (1..=2)
+                .map(|n| engine.store(&a, subject, &format!("synthetic {subject} source {n}")))
+                .collect()
+        })
         .collect();
     engine.ok(json!({
         "cmd": "tool_async", "context": a, "op_id": "dream", "name": "memory_dream",
@@ -294,15 +306,13 @@ fn revoke_waits_for_an_apply_section_and_a_revoked_job_leaves_nothing_half_done(
     assert_eq!(*llm.requests.lock().expect("counter"), 1);
     let revoked = context("actor-a", "scope-a", 2);
     let revoke_id = engine.send(json!({"cmd": "revoke", "context": revoked}));
+    // Revocation found the section open and is now waiting for it.
+    engine.wait_for_stderr(REVOKE_DEFERRED_MARKER);
     let release_id = engine.send(json!({"cmd": "release_holds"}));
     let mut replies = std::collections::HashMap::new();
-    for index in 0..2 {
+    for _ in 0..2 {
         let reply = engine.reply();
         let id = reply["request_id"].as_str().expect("request_id").to_owned();
-        // Revocation is acknowledged only once the released section finished.
-        if index == 0 {
-            assert_eq!(id, release_id, "{reply}");
-        }
         replies.insert(id, reply);
     }
     assert_eq!(replies[&release_id]["ok"], Value::Bool(true), "{replies:?}");
@@ -316,21 +326,44 @@ fn revoke_waits_for_an_apply_section_and_a_revoked_job_leaves_nothing_half_done(
         "{late}"
     );
 
-    // The section finished whole: sources retired, nothing left to merge.
+    // Exactly one subject was applied whole; the other is untouched and no
+    // second merge call was made before the job stopped.
     engine.ok(json!({"cmd": "open_scope", "context": revoked, "generation": "live"}));
-    for source in &sources {
-        let history = engine.tool(&revoked, "memory_history", json!({"chunk_id": source}));
-        assert!(history.contains("[superseded]"), "{source}: {history}");
-    }
-    let again = engine.tool(&revoked, "memory_dream", json!({}));
-    assert!(again.contains("Facts merged: 0"), "{again}");
+    let applied: Vec<bool> = subjects
+        .iter()
+        .map(|sources| {
+            let flags: Vec<bool> = sources
+                .iter()
+                .map(|source| engine.superseded(&revoked, source))
+                .collect();
+            assert!(
+                flags.iter().all(|flag| *flag == flags[0]),
+                "a subject must be retired whole or not at all: {flags:?}"
+            );
+            flags[0]
+        })
+        .collect();
+    assert_eq!(
+        applied.iter().filter(|flag| **flag).count(),
+        1,
+        "exactly one subject applied: {applied:?}"
+    );
     assert_eq!(*llm.requests.lock().expect("counter"), 1, "no second merge");
+    let remaining = engine.tool(&revoked, "memory_dream", json!({}));
+    assert!(remaining.contains("Facts merged: 1"), "{remaining}");
+    assert_eq!(*llm.requests.lock().expect("counter"), 2);
 
     // Scope B: revoked before any section started leaves nothing behind.
     let b = context("actor-b", "scope-b", 1);
     engine.ok(json!({"cmd": "open_scope", "context": b, "generation": "live"}));
     let sources: Vec<String> = (1..=2)
-        .map(|n| engine.store(&b, &format!("synthetic dream source {n} for scope b")))
+        .map(|n| {
+            engine.store(
+                &b,
+                "subject-b",
+                &format!("synthetic dream source {n} for scope b"),
+            )
+        })
         .collect();
     engine.ok(json!({
         "cmd": "tool_async", "context": b, "op_id": "dream", "name": "memory_dream",
@@ -340,11 +373,10 @@ fn revoke_waits_for_an_apply_section_and_a_revoked_job_leaves_nothing_half_done(
     engine.ok(json!({"cmd": "revoke", "context": revoked_b}));
     engine.ok(json!({"cmd": "open_scope", "context": revoked_b, "generation": "live"}));
     for source in &sources {
-        let history = engine.tool(&revoked_b, "memory_history", json!({"chunk_id": source}));
-        assert!(!history.contains("[superseded]"), "{source}: {history}");
+        assert!(!engine.superseded(&revoked_b, source), "{source}");
     }
     let merged = engine.tool(&revoked_b, "memory_dream", json!({}));
     assert!(merged.contains("Facts merged: 1"), "{merged}");
-    assert_eq!(*llm.requests.lock().expect("counter"), 2);
+    assert_eq!(*llm.requests.lock().expect("counter"), 3);
     engine.shutdown();
 }

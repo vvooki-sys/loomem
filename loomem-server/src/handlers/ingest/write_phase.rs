@@ -35,6 +35,9 @@ impl State {
 
 type ApplyHold = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
+/// Logged when revocation finds an apply section open; tests sequence on it.
+pub(crate) const REVOKE_DEFERRED_MARKER: &str = "LOOMEM_HOSTED_REVOKE_DEFERRED";
+
 pub(crate) struct WritePhase {
     state: Mutex<State>,
     /// Evaluation-only: awaited once inside the first apply section so a test
@@ -87,6 +90,9 @@ impl WritePhase {
             Phase::Durable => false,
             Phase::Applying => {
                 state.revoke_requested = true;
+                tracing::info!(
+                    "revocation deferred until the open apply section finishes ({REVOKE_DEFERRED_MARKER})"
+                );
                 false
             }
             Phase::Pending | Phase::Revoked => {
@@ -168,44 +174,4 @@ pub(crate) fn enter_durable() -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use loomem_core::apply_guard::ApplyGuard;
-
-    #[test]
-    fn pending_write_is_revocable_but_durable_write_must_finish() {
-        let pending = WritePhase::new();
-        assert!(pending.revoke());
-        assert!(pending.enter_durable().is_err());
-
-        let durable = WritePhase::new();
-        durable.enter_durable().expect("enter durable phase");
-        assert!(!durable.revoke());
-    }
-
-    #[tokio::test]
-    async fn open_apply_section_defers_revocation_to_the_next_checkpoint() {
-        let phase = WritePhase::new();
-        phase.begin().await.expect("section opens");
-        assert!(!phase.revoke(), "an open section must finish");
-        assert!(phase.enter_durable().is_err());
-        phase.end();
-        assert!(WritePhase::checkpoint(&phase).is_err());
-        assert!(phase.begin().await.is_err());
-        assert!(phase.revoke(), "between sections the task is abortable");
-    }
-
-    #[tokio::test]
-    async fn sections_track_the_installed_phase() {
-        let phase = Arc::new(WritePhase::new());
-        track(phase.clone(), async {
-            let section = loomem_core::apply_guard::begin_section()
-                .await
-                .expect("section opens");
-            assert!(!WRITE_PHASE.with(|phase| phase.revoke()));
-            drop(section);
-            assert!(loomem_core::apply_guard::checkpoint().is_err());
-        })
-        .await;
-    }
-}
+mod tests;

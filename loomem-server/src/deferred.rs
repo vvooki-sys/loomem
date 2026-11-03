@@ -103,11 +103,10 @@ mod tests {
     }
 
     #[cfg(feature = "hosted-engine")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn abort_waits_for_an_open_apply_section_and_stops_after_it() {
         let tasks = DeferredTasks::default();
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let applied = Arc::new(AtomicUsize::new(0));
         let observed = applied.clone();
         tasks.track(async move {
@@ -115,7 +114,11 @@ mod tests {
                 .await
                 .expect("first section opens");
             let _ = entered_tx.send(());
-            let _ = release_rx.await;
+            // Inside the section a checkpoint fails only once revocation was
+            // requested, so the section provably outlives the abort call.
+            while loomem_core::apply_guard::checkpoint().is_ok() {
+                tokio::task::yield_now().await;
+            }
             observed.fetch_add(1, Ordering::SeqCst);
             drop(section);
             if loomem_core::apply_guard::checkpoint().is_ok() {
@@ -123,15 +126,11 @@ mod tests {
             }
         });
         entered_rx.await.expect("section entered");
-        let aborting = tokio::spawn(async move {
-            tasks.abort().await;
-        });
-        let _ = release_tx.send(());
-        aborting.await.expect("abort completes");
+        tasks.abort().await;
         assert_eq!(
             applied.load(Ordering::SeqCst),
             1,
-            "section finished, next checkpoint stopped the task"
+            "section finished after revocation, next checkpoint stopped the task"
         );
     }
 }
