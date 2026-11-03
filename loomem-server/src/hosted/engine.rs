@@ -17,6 +17,9 @@
 //! the next subject. A subject is therefore either fully applied or untouched.
 mod compat;
 mod hold;
+mod shard;
+
+pub(crate) use shard::EngineSeed;
 
 pub use hold::Holds;
 
@@ -144,6 +147,7 @@ pub struct SharedEngine {
     jobs: HashMap<String, Job>,
     next_job: u64,
     holds: Arc<Holds>,
+    bound_scope: Option<String>,
 }
 
 impl SharedEngine {
@@ -163,6 +167,7 @@ impl SharedEngine {
             epochs: HashMap::new(),
             jobs: HashMap::new(),
             next_job: 0,
+            bound_scope: None,
             holds: Arc::new(Holds::new()),
         })
     }
@@ -264,45 +269,6 @@ impl SharedEngine {
             context,
             json!({"opened": true, "generation": generation, "root": root}),
         ))
-    }
-
-    async fn restore_scope(&mut self, request: Request) -> Result<Value> {
-        let context = request.context()?;
-        let generation = request.generation()?;
-        let source = self.restore_source(&request)?;
-        self.advance_epoch(&context)?;
-        self.replace_scope(&context.scope).await?;
-        let root = self.scope_root(&context, &generation)?;
-        std::fs::create_dir_all(&root).context("create Hosted restore root")?;
-        copy_tree(&source, &root.join("rocksdb"))?;
-        let runtime =
-            ScopeRuntime::open(self.config.clone(), &root, self.embedder.clone(), true).await?;
-        self.epochs.insert(context.scope.clone(), context.epoch);
-        self.scopes.insert(
-            context.scope.clone(),
-            ScopeEntry {
-                context: context.clone(),
-                runtime,
-            },
-        );
-        Ok(self.reply(
-            context,
-            json!({"restored": true, "generation": generation, "root": root}),
-        ))
-    }
-
-    fn restore_source(&self, request: &Request) -> Result<PathBuf> {
-        let checkpoint = request
-            .checkpoint
-            .as_deref()
-            .context("missing checkpoint")?;
-        let source = PathBuf::from(checkpoint)
-            .canonicalize()
-            .context("canonicalize scope checkpoint")?;
-        if !source.starts_with(&self.root) || !source.is_dir() {
-            bail!("checkpoint escapes shared engine root")
-        }
-        Ok(source)
     }
 
     async fn tool_async(&mut self, request: Request) -> Result<Value> {
@@ -469,6 +435,7 @@ impl SharedEngine {
     }
 
     async fn revoke(&mut self, context: ScopeContext) -> Result<()> {
+        self.ensure_bound_context(&context)?;
         let current = self.epochs.get(&context.scope).copied().unwrap_or(-1);
         if context.epoch <= current {
             bail!("revocation must advance scope epoch")
@@ -620,6 +587,7 @@ impl SharedEngine {
     }
 
     fn ensure_epoch(&self, context: &ScopeContext) -> Result<()> {
+        self.ensure_bound_context(context)?;
         if self.epochs.get(&context.scope) != Some(&context.epoch) {
             bail!("stale scope epoch")
         }
@@ -627,6 +595,7 @@ impl SharedEngine {
     }
 
     fn advance_epoch(&self, context: &ScopeContext) -> Result<()> {
+        self.ensure_bound_context(context)?;
         if self
             .epochs
             .get(&context.scope)
