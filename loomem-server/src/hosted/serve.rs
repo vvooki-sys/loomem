@@ -231,6 +231,7 @@ mod tests {
         lines: mpsc::Sender<String>,
         replies: mpsc::Receiver<Value>,
         task: JoinHandle<Result<()>>,
+        last_reply_at: Instant,
         _root: tempfile::TempDir,
     }
 
@@ -244,6 +245,7 @@ mod tests {
                 lines,
                 replies,
                 task,
+                last_reply_at: Instant::now(),
                 _root: root,
             }
         }
@@ -265,7 +267,21 @@ mod tests {
                 .as_str()
                 .expect("reply carries request_id")
                 .to_owned();
-            (request_id, reply, Instant::now())
+            self.last_reply_at = Instant::now();
+            (request_id, reply, self.last_reply_at)
+        }
+
+        /// Next `count` replies keyed by request_id, in whatever order they land.
+        async fn replies_by_id(
+            &mut self,
+            count: usize,
+        ) -> std::collections::HashMap<String, Value> {
+            let mut replies = std::collections::HashMap::new();
+            for _ in 0..count {
+                let (id, reply, _) = self.reply().await;
+                assert!(replies.insert(id, reply).is_none(), "duplicate reply id");
+            }
+            replies
         }
 
         async fn expect(&mut self, request_id: &str) -> Value {
@@ -341,11 +357,12 @@ mod tests {
         harness
             .send("release", json!({"cmd": "release_holds"}))
             .await;
-        harness.expect_ok("release").await;
-        let (second, awaited, awaited_at) = harness.reply().await;
-        assert_eq!(second, "await-a", "{awaited}");
-        assert_eq!(awaited["ok"], Value::Bool(true));
-        assert!(status_at <= awaited_at);
+        // The released job and the release itself reply in either order.
+        let replies = harness.replies_by_id(2).await;
+        assert_eq!(replies["release"]["ok"], Value::Bool(true));
+        let awaited = &replies["await-a"];
+        assert_eq!(awaited["ok"], Value::Bool(true), "{awaited}");
+        assert!(status_at <= harness.last_reply_at);
         harness.close().await;
     }
 
@@ -369,22 +386,10 @@ mod tests {
         harness
             .send("revoke-a", json!({"cmd": "revoke", "context": revoked}))
             .await;
-        let mut replies = Vec::new();
-        for _ in 0..2 {
-            let (id, reply, _) = harness.reply().await;
-            replies.push((id, reply));
-        }
-        let revoke = &replies
-            .iter()
-            .find(|(id, _)| id == "revoke-a")
-            .expect("revoke reply")
-            .1;
+        let replies = harness.replies_by_id(2).await;
+        let revoke = &replies["revoke-a"];
         assert_eq!(revoke["ok"], Value::Bool(true), "{revoke}");
-        let awaited = &replies
-            .iter()
-            .find(|(id, _)| id == "await-a")
-            .expect("await reply")
-            .1;
+        let awaited = &replies["await-a"];
         assert_eq!(awaited["ok"], Value::Bool(false), "{awaited}");
         assert!(
             awaited["error"]
@@ -506,14 +511,54 @@ mod tests {
         assert!(unknown["error"]
             .as_str()
             .is_some_and(|error| error.contains("unknown shared-engine command")));
+        harness.close().await;
+    }
+
+    #[cfg(feature = "evaluation")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_job_has_a_single_awaiter() {
+        let mut harness = Harness::start(ServeLimits::default()).await;
+        let a = context("actor-a", "scope-a", 1);
+        harness.open(&a, "gen-a").await;
+        harness.hold("hold-a", &a, "slow").await;
         harness
             .send(
-                "double",
-                json!({"cmd": "await", "context": context("a", "s", 1), "op_id": "x"}),
+                "await-1",
+                json!({"cmd": "await", "context": a, "op_id": "slow"}),
             )
             .await;
-        let double = harness.expect("double").await;
-        assert_eq!(double["ok"], Value::Bool(false));
+        harness
+            .send(
+                "await-2",
+                json!({"cmd": "await", "context": a, "op_id": "slow"}),
+            )
+            .await;
+        // Each request runs on its own task, so either await may win the lock;
+        // the loser is rejected at once, the winner completes after release.
+        let (rejected_id, rejected, _) = harness.reply().await;
+        assert_eq!(rejected["ok"], Value::Bool(false), "{rejected}");
+        assert!(
+            rejected["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("scoped job is already being awaited")),
+            "{rejected}"
+        );
+        let winner = if rejected_id == "await-1" {
+            "await-2"
+        } else {
+            "await-1"
+        };
+        harness
+            .send("release", json!({"cmd": "release_holds"}))
+            .await;
+        let replies = harness.replies_by_id(2).await;
+        assert_eq!(replies["release"]["ok"], Value::Bool(true));
+        assert_eq!(
+            replies[winner]["ok"],
+            Value::Bool(true),
+            "{}",
+            replies[winner]
+        );
         harness.close().await;
     }
 }

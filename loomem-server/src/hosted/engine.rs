@@ -33,6 +33,8 @@ struct ScopeEntry {
 
 struct Job {
     context: ScopeContext,
+    /// Distinguishes this job from a later one registered under the same key.
+    serial: u64,
     /// Cancels the job itself; the wrapper task observes the cancellation.
     abort: tokio::task::AbortHandle,
     /// Finishes once the job's outcome has been delivered to `outcome`.
@@ -47,6 +49,7 @@ struct Job {
 pub struct PendingAwait {
     context: ScopeContext,
     operation: String,
+    serial: u64,
     outcome: oneshot::Receiver<Result<Value>>,
 }
 
@@ -59,6 +62,7 @@ impl PendingAwait {
         AwaitedJob {
             context: self.context,
             operation: self.operation,
+            serial: self.serial,
             outcome,
         }
     }
@@ -68,6 +72,7 @@ impl PendingAwait {
 pub struct AwaitedJob {
     context: ScopeContext,
     operation: String,
+    serial: u64,
     outcome: Result<Value>,
 }
 
@@ -120,6 +125,7 @@ pub struct SharedEngine {
     scopes: HashMap<String, ScopeEntry>,
     epochs: HashMap<String, i64>,
     jobs: HashMap<String, Job>,
+    next_job: u64,
     holds: hold::Holds,
 }
 
@@ -139,6 +145,7 @@ impl SharedEngine {
             scopes: HashMap::new(),
             epochs: HashMap::new(),
             jobs: HashMap::new(),
+            next_job: 0,
             holds: hold::Holds::new(),
         })
     }
@@ -353,6 +360,7 @@ impl SharedEngine {
         Ok(PendingAwait {
             context,
             operation,
+            serial: job.serial,
             outcome,
         })
     }
@@ -363,10 +371,13 @@ impl SharedEngine {
         let AwaitedJob {
             context,
             operation,
+            serial,
             outcome,
         } = awaited;
         let key = job_key(&context, &operation);
-        if self.jobs.get(&key).is_some_and(|job| job.outcome.is_none()) {
+        // A replacement job may already hold this key (the old one was drained
+        // by a same-epoch reopen); only the awaited job itself is removed.
+        if self.jobs.get(&key).is_some_and(|job| job.serial == serial) {
             self.jobs.remove(&key);
         }
         self.ensure_epoch(&context)?;
@@ -500,6 +511,8 @@ impl SharedEngine {
         task: JoinHandle<Result<Value>>,
         write_phase: Arc<crate::handlers::ingest::write_phase::WritePhase>,
     ) {
+        let serial = self.next_job;
+        self.next_job += 1;
         let abort = task.abort_handle();
         let (sender, receiver) = oneshot::channel();
         let task = tokio::spawn(async move {
@@ -513,6 +526,7 @@ impl SharedEngine {
             job_key(&context, &operation),
             Job {
                 context,
+                serial,
                 abort,
                 task,
                 outcome: Some(receiver),
