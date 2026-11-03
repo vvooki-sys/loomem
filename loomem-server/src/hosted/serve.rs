@@ -15,7 +15,7 @@
 //! client with more than one request in flight. The caller feeds parsed lines
 //! through one channel and drains replies through another, so one writer
 //! serializes stdout and lines never interleave.
-use super::engine::SharedEngine;
+use super::engine::{Holds, SharedEngine};
 use super::protocol::{Request, ScopeContext};
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -80,6 +80,7 @@ async fn send(replies: &mpsc::Sender<Value>, reply: Value) -> Result<()> {
 
 struct Server {
     engine: Mutex<SharedEngine>,
+    holds: Arc<Holds>,
     instance: String,
     permits: Arc<Semaphore>,
     limits: ServeLimits,
@@ -90,6 +91,7 @@ impl Server {
         let permits = usize::try_from(limits.max_in_flight).unwrap_or(usize::MAX);
         Self {
             instance: engine.instance().to_owned(),
+            holds: engine.holds(),
             engine: Mutex::new(engine),
             permits: Arc::new(Semaphore::new(permits)),
             limits,
@@ -146,10 +148,20 @@ impl Server {
     async fn execute(&self, mut request: Request) -> Value {
         let context = request.context.clone();
         let request_id = request.request_id.take();
-        let outcome = if request.cmd == "await" {
-            self.await_job(request).await
-        } else {
-            self.engine.lock().await.handle(request).await
+        let outcome = match request.cmd.as_str() {
+            "await" => self.await_job(request).await,
+            // Released without the engine lock: a lock-holding command such
+            // as `revoke` may be waiting on the very apply section a hold
+            // keeps open.
+            "release_holds" => self.holds.release().map(|released| {
+                json!({
+                    "ok": true,
+                    "engine_pid": std::process::id(),
+                    "engine_instance": self.instance,
+                    "released": released,
+                })
+            }),
+            _ => self.engine.lock().await.handle(request).await,
         };
         match outcome {
             Ok(mut reply) => {
@@ -220,7 +232,7 @@ fn stamp(reply: &mut Value, request_id: Option<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::new_engine;
+    use super::super::test_support::new_engine_with;
     use super::*;
     use std::time::Instant;
     use tokio::task::JoinHandle;
@@ -237,7 +249,14 @@ mod tests {
 
     impl Harness {
         async fn start(limits: ServeLimits) -> Self {
-            let (root, engine) = new_engine().await;
+            Self::start_with(limits, |_| {}).await
+        }
+
+        async fn start_with(
+            limits: ServeLimits,
+            adjust: impl FnOnce(&mut loomem_core::Config),
+        ) -> Self {
+            let (root, engine) = new_engine_with(adjust).await;
             let (lines, line_rx) = mpsc::channel(16);
             let (reply_tx, replies) = mpsc::channel(16);
             let task = tokio::spawn(serve(engine, line_rx, reply_tx, limits));
@@ -316,6 +335,25 @@ mod tests {
             )
             .await;
             self.expect_ok(request_id).await;
+        }
+
+        /// Runs one original tool to completion for `context`.
+        async fn tool(&mut self, id: &str, context: &Value, name: &str, args: Value) -> Value {
+            self.send(
+                id,
+                json!({"cmd": "tool_async", "context": context, "op_id": id, "name": name, "args": args}),
+            )
+            .await;
+            self.expect_ok(id).await;
+            let await_id = format!("{id}-await");
+            self.send(
+                &await_id,
+                json!({"cmd": "await", "context": context, "op_id": id}),
+            )
+            .await;
+            let reply = self.expect_ok(&await_id).await;
+            assert_ne!(reply["result"]["isError"], Value::Bool(true), "{reply}");
+            reply["result"].clone()
         }
 
         async fn close(mut self) {
@@ -558,6 +596,101 @@ mod tests {
             Value::Bool(true),
             "{}",
             replies[winner]
+        );
+        harness.close().await;
+    }
+
+    #[cfg(feature = "evaluation")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn every_actor_of_a_scope_shares_the_open_runtime() {
+        let mut harness = Harness::start(ServeLimits::default()).await;
+        let first = context("actor-1", "shared", 1);
+        let second = context("actor-2", "shared", 1);
+        harness.open(&first, "live").await;
+        harness
+            .send("status-1", json!({"cmd": "status", "context": first}))
+            .await;
+        let before = harness.expect_ok("status-1").await;
+        harness.hold("hold-1", &first, "slow").await;
+        // The second actor neither reopens nor drains the scope.
+        harness
+            .send(
+                "open-2",
+                json!({"cmd": "open_scope", "context": second, "generation": "live"}),
+            )
+            .await;
+        let reopened = harness.expect_ok("open-2").await;
+        assert_eq!(reopened["opened"], Value::Bool(true));
+        for (index, actor) in [&first, &second, &first, &second].into_iter().enumerate() {
+            let id = format!("store-{index}");
+            let content = format!("shared fact {index} from {}", actor["actor"]);
+            harness
+                .tool(&id, actor, "memory_store", json!({"content": content}))
+                .await;
+        }
+        harness
+            .tool(
+                "search-2",
+                &second,
+                "memory_search",
+                json!({"query": "shared fact"}),
+            )
+            .await;
+        harness
+            .send("status-2", json!({"cmd": "status", "context": second}))
+            .await;
+        let after = harness.expect_ok("status-2").await;
+        assert_eq!(after["root"], before["root"]);
+        assert_eq!(after["engine_instance"], before["engine_instance"]);
+        assert_eq!(after["context"], second);
+        assert_eq!(after["active_jobs"], json!(1), "{after}");
+        harness
+            .send("release", json!({"cmd": "release_holds"}))
+            .await;
+        harness.expect_ok("release").await;
+        harness
+            .send(
+                "await-1",
+                json!({"cmd": "await", "context": first, "op_id": "slow"}),
+            )
+            .await;
+        harness.expect_ok("await-1").await;
+        let stale = context("actor-2", "shared", 0);
+        harness
+            .send("stale-2", json!({"cmd": "status", "context": stale}))
+            .await;
+        let rejected = harness.expect("stale-2").await;
+        assert_eq!(rejected["ok"], Value::Bool(false));
+        assert!(
+            rejected["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("stale scope epoch")),
+            "{rejected}"
+        );
+        harness.close().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn open_scope_fails_closed_without_the_configured_reranker() {
+        let mut harness = Harness::start_with(ServeLimits::default(), |config| {
+            config.search.rerank_enabled = true;
+            config.search.rerank_model_dir = Some("/nonexistent/hosted-reranker".into());
+        })
+        .await;
+        let a = context("actor-a", "scope-a", 1);
+        harness
+            .send(
+                "open-a",
+                json!({"cmd": "open_scope", "context": a, "generation": "live"}),
+            )
+            .await;
+        let refused = harness.expect("open-a").await;
+        assert_eq!(refused["ok"], Value::Bool(false), "{refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("reranker")),
+            "{refused}"
         );
         harness.close().await;
     }

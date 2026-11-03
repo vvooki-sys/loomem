@@ -9,12 +9,21 @@
 //! epoch can never publish into the next generation; only the revocation
 //! acknowledgement is delayed. Revocation latency is therefore bounded by the
 //! extraction timeout for every in-flight ingest.
+//!
+//! Multi-step background writes (`memory_dream`, deferred auto-dream) are not
+//! sticky as a whole: each subject's apply section (persist, retire sources,
+//! request the embedding) is guarded through `loomem_core::apply_guard`, so
+//! `revoke` waits only for the section in progress and the job stops before
+//! the next subject. A subject is therefore either fully applied or untouched.
 mod compat;
 mod hold;
+
+pub use hold::Holds;
 
 use super::protocol::{Request, ScopeContext};
 use super::state::ScopeRuntime;
 use crate::auth::{AuthContext, KeyScope};
+use crate::handlers::ingest::write_phase::WritePhase;
 use anyhow::{bail, Context, Result};
 use loomem_core::local_embeddings::LocalEmbedder;
 use loomem_core::storage::UserRole;
@@ -29,6 +38,14 @@ use tokio::task::JoinHandle;
 struct ScopeEntry {
     context: ScopeContext,
     runtime: ScopeRuntime,
+}
+
+impl ScopeEntry {
+    /// An open runtime serves every actor of its scope at the open epoch; the
+    /// actor travels with each request into the original tool dispatch.
+    fn binds(&self, context: &ScopeContext) -> bool {
+        self.context.scope == context.scope && self.context.epoch == context.epoch
+    }
 }
 
 struct Job {
@@ -126,7 +143,7 @@ pub struct SharedEngine {
     epochs: HashMap<String, i64>,
     jobs: HashMap<String, Job>,
     next_job: u64,
-    holds: hold::Holds,
+    holds: Arc<Holds>,
 }
 
 impl SharedEngine {
@@ -146,8 +163,13 @@ impl SharedEngine {
             epochs: HashMap::new(),
             jobs: HashMap::new(),
             next_job: 0,
-            holds: hold::Holds::new(),
+            holds: Arc::new(Holds::new()),
         })
+    }
+
+    /// Evaluation holds, releasable without the engine lock.
+    pub fn holds(&self) -> Arc<Holds> {
+        self.holds.clone()
     }
 
     /// Identity of this process lifetime, echoed in every reply.
@@ -216,9 +238,11 @@ impl SharedEngine {
         rebuild: bool,
     ) -> Result<Value> {
         self.advance_epoch(&context)?;
-        if self.scopes.get(&context.scope).is_some_and(|entry| {
-            entry.context == context && entry.runtime.root.ends_with(&generation)
-        }) {
+        if self
+            .scopes
+            .get(&context.scope)
+            .is_some_and(|entry| entry.binds(&context) && entry.runtime.root.ends_with(&generation))
+        {
             if !self.scopes[&context.scope].runtime.accepts_writes() {
                 bail!("scope generation is closing or quiesced")
             }
@@ -287,10 +311,18 @@ impl SharedEngine {
         self.ensure_job_available(&operation, &context)?;
         let name = request.name()?.to_owned();
         let args = request.args.unwrap_or_else(|| json!({}));
-        let (hold, failpoint) = self.holds.gate(request.failpoint.as_deref());
+        let (hold_point, failpoint) = self.holds.gate(request.failpoint.as_deref());
         if !loomem_core::storage::persist::evaluation_failpoint_allowed(failpoint) {
             bail!("invalid synthetic failpoint")
         }
+        let (hold, write_phase) = match hold_point {
+            hold::HoldPoint::None => (None, WritePhase::new()),
+            hold::HoldPoint::BeforeDispatch(gate) => (Some(gate), WritePhase::new()),
+            hold::HoldPoint::InsideApply(gate) => (
+                None,
+                WritePhase::new().with_apply_hold(Box::pin(gate.wait())),
+            ),
+        };
         let job = ToolJob {
             state: self.live_state(&context)?,
             name,
@@ -306,7 +338,7 @@ impl SharedEngine {
             failpoint: failpoint.map(str::to_owned),
             hold,
         };
-        let write_phase = Arc::new(crate::handlers::ingest::write_phase::WritePhase::new());
+        let write_phase = Arc::new(write_phase);
         let task = tokio::spawn(crate::handlers::ingest::write_phase::track(
             write_phase.clone(),
             job.run(),
@@ -560,7 +592,7 @@ impl SharedEngine {
     fn ensure_scope_context(&self, context: &ScopeContext) -> Result<()> {
         self.ensure_epoch(context)?;
         let entry = self.scopes.get(&context.scope).context("scope not open")?;
-        if entry.context != *context {
+        if !entry.binds(context) {
             bail!("scope context does not match the open runtime")
         }
         Ok(())

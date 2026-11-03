@@ -318,9 +318,7 @@ pub async fn dream_run(
         let request_body = build_dream_request(&dream_config.model, subject, chunks);
 
         let response = match client
-            .post(crate::evaluation_url::chat_completions(
-                "LOOMEM_EVALUATION_DREAM_URL",
-            )?)
+            .post(next_subject_endpoint()?)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -430,6 +428,13 @@ pub async fn dream_run(
         duration_ms: start.elapsed().as_millis() as u64,
         cost_cap_reached: false,
     })
+}
+
+/// Endpoint for the next subject's merge call. Hosted revocation cancels the
+/// run here, between subjects, never inside a subject's apply section.
+fn next_subject_endpoint() -> Result<String> {
+    crate::apply_guard::checkpoint()?;
+    crate::evaluation_url::chat_completions("LOOMEM_EVALUATION_DREAM_URL")
 }
 
 /// Context passed to `apply_dream_response_for_subject` — groups the
@@ -583,6 +588,10 @@ pub async fn apply_dream_response_for_subject(
         "Dream output is empty after filtering"
     );
     let text_doc = build_dream_text_doc(&new_chunk);
+    // Persist, retire the sources and request the embedding as one section:
+    // a cancellation in between would leave a merged chunk that the
+    // idempotency check above treats as complete.
+    let _section = crate::apply_guard::begin_section().await?;
     // L1 chunk from dream consolidation pipeline.
     // OpType::Consolidate is semantically accurate; recover() is symmetric
     // for Store and Consolidate since /51 PR #106.
