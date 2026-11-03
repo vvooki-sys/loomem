@@ -472,8 +472,10 @@ impl SharedEngine {
         // Cancel and close every old-epoch writer before acknowledging the new
         // epoch. Every job and deferred task is signalled before any is
         // joined, so one open apply section cannot let another job keep
-        // starting new sections while revocation waits. A late response still
-        // fails its own epoch check afterwards.
+        // starting new sections while revocation waits. `begin_abort` also
+        // closes the scope's deferred registry: a job still finishing a
+        // durable write cannot start new deferred work (an auto-dream) while
+        // it is joined. A late response still fails its own epoch check.
         let jobs = self.signal_jobs(&context.scope);
         let deferred = self
             .scopes

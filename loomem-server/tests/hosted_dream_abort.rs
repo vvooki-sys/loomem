@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 const REPLY_TIMEOUT: Duration = Duration::from_secs(120);
 const APPLY_HOLD_MARKER: &str = "LOOMEM_HOSTED_HOLD_APPLY";
 const REVOKE_DEFERRED_MARKER: &str = "LOOMEM_HOSTED_REVOKE_DEFERRED";
+const DEFERRED_DROPPED_MARKER: &str = "LOOMEM_HOSTED_DEFERRED_DROPPED";
+const ROCKSDB_PAUSE_MARKER: &str = "LOOMEM_POC_PAUSE_AFTER_ROCKSDB";
 
 /// Loopback chat-completions endpoint that merges every subject and flags
 /// each source it was shown as contradicted.
@@ -80,6 +82,11 @@ fn dream_reply(request: &Value) -> Value {
 }
 
 fn write_config(dir: &Path) -> PathBuf {
+    write_config_with(dir, &[])
+}
+
+/// Reference config adjusted for the tests, plus `edits` (setting lines).
+fn write_config_with(dir: &Path, edits: &[(&str, &str)]) -> PathBuf {
     let reference = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config.toml");
     let mut text = std::fs::read_to_string(reference).expect("read reference config");
     let entities = dir.join("entities.toml");
@@ -109,6 +116,9 @@ fn write_config(dir: &Path) -> PathBuf {
         "[knowledge_extraction]",
     ] {
         disable_section(&mut text, section);
+    }
+    for (old, new) in edits {
+        replace_once(&mut text, old, new);
     }
     let path = dir.join("config.toml");
     std::fs::write(&path, text).expect("write config");
@@ -439,4 +449,54 @@ fn revoke_signals_every_job_before_waiting_for_any_section() {
         .count();
     assert!(untouched >= 1, "at least one subject stays untouched");
     engine.shutdown();
+}
+
+#[test]
+fn revocation_drops_deferred_work_tracked_by_a_durable_job() {
+    let llm = start_mock_llm();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = write_config_with(
+        temp.path(),
+        &[
+            ("min_group_size = 2", "min_group_size = 1"),
+            ("auto_trigger_threshold = 50", "auto_trigger_threshold = 1"),
+            ("auto_cooldown_secs = 900", "auto_cooldown_secs = 0"),
+        ],
+    );
+    let mut engine = Engine::start(&temp.path().join("engine"), &config, &llm.url);
+
+    // Control: in this configuration one store arms an auto-dream that calls
+    // the LLM and runs to completion before the generation is sealed.
+    let b = context("actor-b", "scope-b", 1);
+    engine.ok(json!({"cmd": "open_scope", "context": b, "generation": "live"}));
+    engine.store(&b, "subject-b", "synthetic auto-dream control source");
+    engine.ok(json!({"cmd": "quiesce", "context": b}));
+    assert_eq!(
+        *llm.requests.lock().expect("counter"),
+        1,
+        "control auto-dream ran"
+    );
+
+    // A store already in its durable phase when revocation starts crosses the
+    // auto-dream threshold only afterwards. Its deferred run must not start.
+    let a = context("actor-a", "scope-a", 1);
+    engine.ok(json!({"cmd": "open_scope", "context": a, "generation": "live"}));
+    engine.ok(json!({
+        "cmd": "tool_async", "context": a, "op_id": "store", "name": "memory_store",
+        "args": {"content": "synthetic durable source", "subject": "subject-a"},
+        "failpoint": "after_rocksdb_pause",
+    }));
+    engine.wait_for_stderr(ROCKSDB_PAUSE_MARKER);
+    let revoked = context("actor-a", "scope-a", 2);
+    engine.ok(json!({"cmd": "revoke", "context": revoked}));
+    assert_eq!(
+        *llm.requests.lock().expect("counter"),
+        1,
+        "no auto-dream LLM call after revocation started"
+    );
+    engine.wait_for_stderr(DEFERRED_DROPPED_MARKER);
+    let late = engine.request(json!({"cmd": "await", "context": a, "op_id": "store"}));
+    assert_eq!(late["ok"], Value::Bool(false), "{late}");
+    engine.shutdown();
+    assert_eq!(*llm.requests.lock().expect("counter"), 1);
 }
