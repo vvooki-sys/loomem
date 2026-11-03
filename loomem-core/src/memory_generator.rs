@@ -162,11 +162,9 @@ async fn llm_format_memory(
     model: &str,
     grouped_content: String,
 ) -> Result<String> {
-    let api_key = llm_config
-        .get_api_key()
-        .context("OpenAI API key not configured")?;
-
-    let url = "https://api.openai.com/v1/chat/completions";
+    let provider = llm_config
+        .active_provider()
+        .context("LLM provider not available for memory formatting")?;
 
     let request_body = CompletionRequest {
         model: model.to_string(),
@@ -188,13 +186,13 @@ async fn llm_format_memory(
 
     debug!("Calling LLM to format memory (model: {})", model);
 
-    let response = client
-        .post(url)
-        .header("Authorization", format!("Bearer {}", api_key))
+    let request = provider
+        .chat_request(client)
         .header("Content-Type", "application/json")
         .json(&request_body)
-        .timeout(timeout)
-        .send()
+        .timeout(timeout);
+    let response = provider
+        .send_chat(request, "memory_generator", model)
         .await
         .context("Failed to send LLM request")?;
 

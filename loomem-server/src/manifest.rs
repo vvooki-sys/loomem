@@ -75,6 +75,10 @@ impl ManifestCompleter for HttpManifestCompleter {
             let response = client
                 .post(loomem_core::evaluation_url::chat_completions(
                     "LOOMEM_EVALUATION_MANIFEST_URL",
+                    &format!(
+                        "{}/chat/completions",
+                        loomem_core::llm_provider::OPENAI_BASE_URL
+                    ),
                 )?)
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")

@@ -540,11 +540,14 @@ pub async fn compress(
     texts: &[String],
     consolidation_style: Option<&str>,
 ) -> Result<(String, Usage)> {
-    let api_key = config
-        .get_api_key()
-        .context("OpenAI API key not configured")?;
+    let provider = config
+        .active_provider()
+        .context("LLM provider not available for compression")?;
 
-    let url = crate::evaluation_url::chat_completions("LOOMEM_EVALUATION_CONSOLIDATION_URL")?;
+    let url = crate::evaluation_url::chat_completions(
+        "LOOMEM_EVALUATION_CONSOLIDATION_URL",
+        &provider.chat_completions_url(),
+    )?;
 
     // Concatenate all texts
     let combined_text = texts.join("\n\n---\n\n");
@@ -575,13 +578,13 @@ pub async fn compress(
             combined_text.len()
         );
 
-        let response = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
+        let request = provider
+            .authorize(client.post(&url))
             .header("Content-Type", "application/json")
             .json(&request_body)
-            .timeout(timeout)
-            .send()
+            .timeout(timeout);
+        let response = provider
+            .send_chat(request, "llm.compress", &config.compression_model)
             .await;
 
         match response {
@@ -693,9 +696,9 @@ pub async fn reflect(
     config: &LlmConfig,
     chunks: &[(String, String)], // (id, content)
 ) -> Result<(serde_json::Value, Usage)> {
-    let api_key = config
-        .get_api_key()
-        .context("OpenAI API key not configured")?;
+    let provider = config
+        .active_provider()
+        .context("LLM provider not available for reflect")?;
 
     let combined: String = chunks
         .iter()
@@ -718,13 +721,13 @@ pub async fn reflect(
         max_tokens: 2000,
     };
 
-    let resp = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
+    let request = provider
+        .chat_request(client)
         .header("Content-Type", "application/json")
         .json(&request_body)
-        .timeout(Duration::from_secs(60))
-        .send()
+        .timeout(Duration::from_secs(60));
+    let resp = provider
+        .send_chat(request, "llm.reflect", &config.compression_model)
         .await
         .context("Reflect API request failed")?;
 

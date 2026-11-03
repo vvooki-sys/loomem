@@ -22,9 +22,9 @@ pub async fn decompose(client: &reqwest::Client, config: &LlmConfig, query: &str
         return vec![query.to_string()];
     }
 
-    let api_key = match config.get_api_key() {
-        Some(k) => k,
-        None => return vec![query.to_string()],
+    let provider = match config.active_provider() {
+        Ok(p) => p,
+        Err(_) => return vec![query.to_string()],
     };
 
     let prompt = format!(
@@ -46,12 +46,12 @@ pub async fn decompose(client: &reqwest::Client, config: &LlmConfig, query: &str
         "max_tokens": 150,
     });
 
-    let resp = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
+    let request = provider
+        .chat_request(client)
         .json(&body)
-        .timeout(std::time::Duration::from_secs(8))
-        .send()
+        .timeout(std::time::Duration::from_secs(8));
+    let resp = provider
+        .send_chat(request, "multi_query", &config.compression_model)
         .await;
 
     match resp {

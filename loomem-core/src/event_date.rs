@@ -27,6 +27,7 @@ use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::llm::LlmConfig;
+use crate::llm_provider::ResolvedProvider;
 
 /// /151 scope extension (CLAUDE.md §9.5): the LLM probe in the
 /// `memory_store` write path is opt-in. Set to `1`/`true`/`yes` to enable.
@@ -83,10 +84,10 @@ pub async fn extract_event_date(
     if content.trim().len() < 8 {
         return None;
     }
-    let api_key = llm_config.get_api_key()?;
+    let provider = llm_config.active_provider().ok()?;
     let prompt = EVENT_DATE_PROMPT.replace("{anchor_date}", anchor_date);
 
-    match call_llm(client, &api_key, model, &prompt, content).await {
+    match call_llm(client, &provider, model, &prompt, content).await {
         Ok(Some(date)) => Some(date),
         Ok(None) => None,
         Err(e) => {
@@ -98,7 +99,7 @@ pub async fn extract_event_date(
 
 async fn call_llm(
     client: &Client,
-    api_key: &str,
+    provider: &ResolvedProvider,
     model: &str,
     system_prompt: &str,
     content: &str,
@@ -113,14 +114,12 @@ async fn call_llm(
         "temperature": 0.0,
     });
 
-    let resp = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {api_key}"))
+    let request = provider
+        .chat_request(client)
         .header("Content-Type", "application/json")
         .json(&body)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await?;
+        .timeout(Duration::from_secs(10));
+    let resp = provider.send_chat(request, "event_date", model).await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
