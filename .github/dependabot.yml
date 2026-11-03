@@ -66,3 +66,7 @@ updates:
       prefix: "chore(deps)"
     cooldown:
       default-days: 3
+    ignore:
+      # The rust builder image tracks `rust-version` (MSRV) in Cargo.toml.
+      # Raise both together by hand; see the Dockerfile builder stage.
+      - dependency-name: "rust"

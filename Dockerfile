@@ -8,9 +8,10 @@ COPY loomem-dashboard/ ./
 RUN npm run build
 
 # Stage 1: Build Rust server
-# Pinned builder (trivy DS-0001): 1.93 tracks `rust-version` in Cargo.toml;
+# Pinned builder (trivy DS-0001): 1.99 tracks `rust-version` in Cargo.toml;
 # -trixie matches the runtime base below, so the binaries link against the
-# same glibc generation.
+# same glibc generation. Dependabot ignores this image (.github/dependabot.yml):
+# raise it together with `rust-version`, never alone.
 FROM rust:1.99-trixie AS builder
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends clang libclang-dev pkg-config && rm -rf /var/lib/apt/lists/*
