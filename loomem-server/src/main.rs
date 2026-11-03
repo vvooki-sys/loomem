@@ -1,6 +1,7 @@
 mod access_hook;
 mod auth;
 mod content_type;
+mod deferred;
 mod entity_worker;
 mod evaluation_clock;
 mod evidence;
@@ -13,6 +14,12 @@ mod oauth;
 pub mod rate_limiter;
 mod resource_guards;
 mod spa;
+// The Hosted adapter is compiled into the library for `hosted_shared_engine`.
+// Its unit tests run through this binary because the shared handler tests
+// need this file's router fixture, which the library target cannot provide.
+#[cfg(all(test, feature = "hosted-engine"))]
+#[allow(dead_code, unused_imports)]
+mod hosted;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -56,24 +63,17 @@ pub struct AppState {
     pub pii_filter: Arc<PiiFilter>,
     pub last_activity: Arc<tokio::sync::Mutex<Instant>>,
     #[cfg(feature = "onnx-rerank")]
-    pub onnx_reranker: Option<loomem_core::onnx_reranker::OnnxReranker>,
+    pub onnx_reranker: Option<Arc<loomem_core::onnx_reranker::OnnxReranker>>,
     pub event_tx: Option<loomem_core::event_log::EventSender>,
     pub mcp_sessions: mcp::SessionStore,
     pub workers: WorkerRegistry,
-    /// Cycle/103a: in-memory LRU cache for `/v1/ambient` Layer 1 responses.
-    /// 60s TTL, 10k entry cap (configurable via `LOOMEM_AMBIENT_CACHE_TTL_SECS`
-    /// — see `loomem_core::ambient::cache_ttl`). Distributed cache deferred
-    /// to /103a-full per `cycles/cycle-103a-layer1-endpoint-brief.md` AC-9.
+    pub deferred: Arc<deferred::DeferredTasks>,
+    pub process_diagnostics: bool,
     pub ambient_cache: Arc<loomem_core::ambient::AmbientCache>,
-    /// Count-based auto-trigger for background dream consolidation. Records every
-    /// newly-persisted chunk per stream and signals when a dream run should fire
-    /// (private streams only; see `handlers::ingest::persist_chunk`). Disabled
-    /// when `[dream].enabled = false` or `auto_trigger_threshold = 0`.
     pub dream_auto: Arc<loomem_core::dream_auto::DreamAutoTrigger>,
-    /// Per-stream token-bucket rate limiter for hot paths (audit 2026-07-01
-    /// item 3). Enforced in the `/v1` middleware and the MCP dispatcher;
-    /// no-op unless `[rate_limit].enabled`.
     pub rate_limiter: Arc<rate_limiter::RateLimiter>,
+    /// Retrieval path and reranker counters; diagnostics only.
+    pub retrieval_counters: Arc<handlers::search::RetrievalCounters>,
 }
 
 /// Build the auto-dream trigger from `[dream]` config. Auto-firing is gated on
@@ -588,6 +588,7 @@ async fn main() -> Result<()> {
     #[cfg(feature = "onnx-rerank")]
     let onnx_reranker = if config.search.rerank_enabled {
         loomem_core::onnx_reranker::try_load(config.search.rerank_model_dir.as_deref())
+            .map(Arc::new)
     } else {
         None
     };
@@ -634,6 +635,9 @@ async fn main() -> Result<()> {
         event_tx,
         mcp_sessions: mcp::session::new_session_store(),
         workers: workers_registry,
+        deferred: Arc::new(deferred::DeferredTasks::default()),
+        process_diagnostics: true,
+        retrieval_counters: Arc::new(handlers::search::RetrievalCounters::default()),
         ambient_cache: Arc::new(loomem_core::ambient::AmbientCache::new()),
     });
 
@@ -1361,6 +1365,9 @@ mod tests {
             event_tx: None,
             mcp_sessions: mcp::session::new_session_store(),
             workers,
+            deferred: Arc::new(deferred::DeferredTasks::default()),
+            process_diagnostics: true,
+            retrieval_counters: Arc::new(handlers::search::RetrievalCounters::default()),
             ambient_cache: Arc::new(loomem_core::ambient::AmbientCache::with_config(
                 std::time::Duration::from_secs(60),
                 64,

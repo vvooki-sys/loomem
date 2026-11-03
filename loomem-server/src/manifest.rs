@@ -73,7 +73,9 @@ impl ManifestCompleter for HttpManifestCompleter {
             });
 
             let response = client
-                .post("https://api.openai.com/v1/chat/completions")
+                .post(loomem_core::evaluation_url::chat_completions(
+                    "LOOMEM_EVALUATION_MANIFEST_URL",
+                )?)
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
                 .json(&request_body)

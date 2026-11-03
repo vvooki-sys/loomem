@@ -417,6 +417,28 @@ async fn tool_store(
     stream_id: &str,
     user_id: Option<String>,
 ) -> Result<ToolResult, JsonRpcError> {
+    tool_store_inner(state, args, stream_id, user_id, None).await
+}
+
+#[cfg(feature = "hosted-engine")]
+#[allow(dead_code)] // only the Hosted library target calls this
+pub(crate) async fn hosted_store(
+    state: &Arc<AppState>,
+    args: Value,
+    stream_id: &str,
+    user_id: Option<String>,
+    record_id: String,
+) -> Result<ToolResult, JsonRpcError> {
+    tool_store_inner(state, args, stream_id, user_id, Some(record_id)).await
+}
+
+async fn tool_store_inner(
+    state: &Arc<AppState>,
+    args: Value,
+    stream_id: &str,
+    user_id: Option<String>,
+    record_id: Option<String>,
+) -> Result<ToolResult, JsonRpcError> {
     let args: StoreArgs =
         serde_json::from_value(args).map_err(|e| JsonRpcError::invalid_params(&e.to_string()))?;
 
@@ -455,9 +477,10 @@ async fn tool_store(
         .as_ref()
         .map(|m| state.pii_filter.sanitize_json(m));
 
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = record_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let timestamp = Utc::now().timestamp() as u64;
     let stream = stream_id.to_string();
+    let audit_actor = user_id.clone().unwrap_or_else(|| "default".to_string());
     let subject = args.subject.unwrap_or_else(|| "user".into());
     let source = args.source.unwrap_or_else(|| "mcp".into());
     let fact_type = classify_fact_type(&content);
@@ -549,7 +572,7 @@ async fn tool_store(
         state,
         chunk,
         &content,
-        "default",
+        &audit_actor,
         "default",
         &stream,
         0,
@@ -1142,15 +1165,29 @@ async fn tool_status(
 
     // /150b Gap 6: surface process-wide log-loss counters (0 in healthy
     // operation; non-zero signals the event log / audit trail is incomplete).
-    let event_log_drops = loomem_core::event_log::emit_drop_count();
-    let audit_write_failures = loomem_core::audit::append_failure_count();
+    // Hosted scopes never expose process-wide diagnostics from another scope.
+    let (event_log_drops, audit_write_failures, llm_fail) = if state.process_diagnostics {
+        (
+            loomem_core::event_log::emit_drop_count(),
+            loomem_core::audit::append_failure_count(),
+            loomem_core::llm_failures::global().recent(),
+        )
+    } else {
+        (
+            0,
+            0,
+            loomem_core::llm_failures::LlmFailureCounts {
+                window_secs: loomem_core::llm_failures::WINDOW.as_secs(),
+                ..Default::default()
+            },
+        )
+    };
 
     // /157 S3: backlog + LLM failure visibility (incidents A/B, 2026-06-11).
     let undecodable = state.store.last_scan_decode_summary().map_or_else(
         || "n/a (no full scan yet)".to_string(),
         |s| s.undecodable.to_string(),
     );
-    let llm_fail = loomem_core::llm_failures::global().recent();
 
     let text = format!(
         "Loomem Status: ok\nYour stream: {stream_id}\nYour memories: {chunk_count}\nEmbeddings (this stream): {embedding_status}\nAssociator: {assoc_status}\nEvent log drops: {event_log_drops}\nAudit write failures: {audit_write_failures}\nUndecodable chunks (last full scan): {undecodable}\nLLM failures (last {}m): extraction={}, ner={}, embedding={}, consolidation={}\nEmpty extractions (last {}m): {}",
@@ -1215,6 +1252,13 @@ async fn tool_stats(
     };
     // Per-stream BM25 index count (async index handle).
     stats.retrieval.tantivy_indexed_count = state.tantivy.lock().await.count_stream(stream_id).ok();
+    if !state.process_diagnostics {
+        let failures = &mut stats.extraction.llm_failures_recent_global;
+        *failures = loomem_core::llm_failures::LlmFailureCounts {
+            window_secs: failures.window_secs,
+            ..Default::default()
+        };
+    }
 
     Ok(ToolResult::text(loomem_core::stream_stats::render_text(
         &stats,
@@ -1727,6 +1771,90 @@ async fn tool_associate(
         }
         Err(e) => Ok(ToolResult::error(format!("Association failed: {:?}", e))),
     }
+}
+
+// ── Cycle /113: memory_feedback ───────────────────────────────────
+
+async fn tool_feedback(
+    state: &Arc<AppState>,
+    args: Value,
+    stream_id: &str,
+    auth: &AuthContext,
+) -> Result<ToolResult, JsonRpcError> {
+    #[derive(Deserialize)]
+    struct FeedbackArgs {
+        chunk_id: String,
+        usefulness: u8,
+        harmful: bool,
+        justification: String,
+        model_version: String,
+        #[serde(default = "default_prompt_version")]
+        prompt_version: String,
+        #[serde(default)]
+        trajectory_id: Option<String>,
+    }
+    fn default_prompt_version() -> String {
+        "loomem-feedback-v1".to_string()
+    }
+
+    let args: FeedbackArgs =
+        serde_json::from_value(args).map_err(|e| JsonRpcError::invalid_params(&e.to_string()))?;
+
+    let cfg = &state.config.feedback;
+    if !cfg.enabled {
+        return Ok(ToolResult::error(
+            "feedback endpoint disabled in config".to_string(),
+        ));
+    }
+
+    let svc = FeedbackService::new(&state.store, cfg);
+
+    if let Err(e) = svc.validate_rating(args.usefulness, args.harmful, &args.justification) {
+        return Ok(ToolResult::error(format!("validation failed: {e}")));
+    }
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let event_id = uuid::Uuid::new_v4().to_string();
+    let agent_id = auth
+        .user_id
+        .clone()
+        .unwrap_or_else(|| stream_id.to_string());
+
+    let outcome = svc
+        .apply_rating(ApplyRatingArgs {
+            chunk_id: &args.chunk_id,
+            usefulness: args.usefulness,
+            harmful: args.harmful,
+            justification: &args.justification,
+            caller_stream: stream_id,
+            caller_is_admin: auth.is_admin,
+            agent_id: &agent_id,
+            model_version: &args.model_version,
+            prompt_version: &args.prompt_version,
+            trajectory_id: args.trajectory_id.as_deref(),
+            now_unix_ms: now_ms,
+            event_id: &event_id,
+        })
+        .map_err(|e| JsonRpcError::internal(&format!("apply_rating: {e}")))?;
+
+    let payload = match outcome {
+        RatingOutcome::Accepted => serde_json::json!({
+            "ok": true,
+            "accepted": 1,
+            "rejected": []
+        }),
+        RatingOutcome::Rejected { chunk_id, reason } => serde_json::json!({
+            "ok": true,
+            "accepted": 0,
+            "rejected": [{
+                "chunk_id": chunk_id,
+                "reason": reason
+            }]
+        }),
+    };
+    Ok(ToolResult::text(
+        serde_json::to_string_pretty(&payload).unwrap_or_default(),
+    ))
 }
 
 #[cfg(test)]
@@ -2742,88 +2870,4 @@ mod tests {
         let untouched = state.store.get_chunk(&foreign).unwrap().expect("exists");
         assert!(untouched.is_latest && untouched.superseded_by.is_none());
     }
-}
-
-// ── Cycle /113: memory_feedback ───────────────────────────────────
-
-async fn tool_feedback(
-    state: &Arc<AppState>,
-    args: Value,
-    stream_id: &str,
-    auth: &AuthContext,
-) -> Result<ToolResult, JsonRpcError> {
-    #[derive(Deserialize)]
-    struct FeedbackArgs {
-        chunk_id: String,
-        usefulness: u8,
-        harmful: bool,
-        justification: String,
-        model_version: String,
-        #[serde(default = "default_prompt_version")]
-        prompt_version: String,
-        #[serde(default)]
-        trajectory_id: Option<String>,
-    }
-    fn default_prompt_version() -> String {
-        "loomem-feedback-v1".to_string()
-    }
-
-    let args: FeedbackArgs =
-        serde_json::from_value(args).map_err(|e| JsonRpcError::invalid_params(&e.to_string()))?;
-
-    let cfg = &state.config.feedback;
-    if !cfg.enabled {
-        return Ok(ToolResult::error(
-            "feedback endpoint disabled in config".to_string(),
-        ));
-    }
-
-    let svc = FeedbackService::new(&state.store, cfg);
-
-    if let Err(e) = svc.validate_rating(args.usefulness, args.harmful, &args.justification) {
-        return Ok(ToolResult::error(format!("validation failed: {e}")));
-    }
-
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let event_id = uuid::Uuid::new_v4().to_string();
-    let agent_id = auth
-        .user_id
-        .clone()
-        .unwrap_or_else(|| stream_id.to_string());
-
-    let outcome = svc
-        .apply_rating(ApplyRatingArgs {
-            chunk_id: &args.chunk_id,
-            usefulness: args.usefulness,
-            harmful: args.harmful,
-            justification: &args.justification,
-            caller_stream: stream_id,
-            caller_is_admin: auth.is_admin,
-            agent_id: &agent_id,
-            model_version: &args.model_version,
-            prompt_version: &args.prompt_version,
-            trajectory_id: args.trajectory_id.as_deref(),
-            now_unix_ms: now_ms,
-            event_id: &event_id,
-        })
-        .map_err(|e| JsonRpcError::internal(&format!("apply_rating: {e}")))?;
-
-    let payload = match outcome {
-        RatingOutcome::Accepted => serde_json::json!({
-            "ok": true,
-            "accepted": 1,
-            "rejected": []
-        }),
-        RatingOutcome::Rejected { chunk_id, reason } => serde_json::json!({
-            "ok": true,
-            "accepted": 0,
-            "rejected": [{
-                "chunk_id": chunk_id,
-                "reason": reason
-            }]
-        }),
-    };
-    Ok(ToolResult::text(
-        serde_json::to_string_pretty(&payload).unwrap_or_default(),
-    ))
 }

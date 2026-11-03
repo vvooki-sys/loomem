@@ -13,14 +13,14 @@ pub(super) fn cache_key(
     limit: usize,
     operation_plan_identity: Option<&str>,
 ) -> Option<u64> {
-    // These responses need fresh pipeline metadata or explicit side-effect control.
+    // These responses need fresh pipeline metadata. `dry_run` only suppresses
+    // implicit boosts/access tracking; cached retrieval and reranking stay read-only.
     if !config.enabled
         || payload.trace
         || payload.debug_channels
         || payload.debug_signal_breakdown
         || payload.debug_operation
         || payload.include_associations
-        || payload.dry_run
     {
         return None;
     }
@@ -209,7 +209,6 @@ mod tests {
             "debug_signal_breakdown",
             "debug_operation",
             "include_associations",
-            "dry_run",
         ] {
             let mut value = json!({"query": "apple"});
             value[flag] = json!(true);
@@ -223,6 +222,19 @@ mod tests {
             )
             .is_none());
         }
+    }
+
+    #[test]
+    fn dry_run_allows_read_only_retrieval_cache() {
+        assert!(cache_key(
+            &QueryCacheConfig::default(),
+            &request(json!({"query": "apple", "dry_run": true})),
+            None,
+            None,
+            10,
+            Some("plain")
+        )
+        .is_some());
     }
 }
 

@@ -44,15 +44,20 @@ fn fixture() -> (tempfile::TempDir, Worker, Chunk) {
         tantivy: Arc::new(tokio::sync::Mutex::new(index)),
         http_client,
         context,
+        pending: Arc::new(AtomicUsize::new(0)),
     };
     (dir, worker, chunk)
 }
 
 async fn queued(worker: &Worker, chunk: &Chunk) -> ExtractRequest {
     let (tx, mut rx) = mpsc::channel(1);
+    let (shutdown, _shutdown_rx) = tokio::sync::broadcast::channel(1);
     let queue = EntityExtractionQueue {
         tx,
         graph: worker.graph.clone(),
+        shutdown,
+        worker: Arc::new(tokio::sync::Mutex::new(None)),
+        pending: Arc::new(AtomicUsize::new(0)),
     };
     queue
         .enqueue(

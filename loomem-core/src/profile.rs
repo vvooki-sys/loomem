@@ -257,7 +257,9 @@ pub async fn generate_profile(
     });
 
     let response = client
-        .post("https://api.openai.com/v1/chat/completions")
+        .post(crate::evaluation_url::chat_completions(
+            "LOOMEM_EVALUATION_PROFILE_URL",
+        )?)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&request_body)

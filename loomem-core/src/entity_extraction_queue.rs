@@ -3,6 +3,7 @@ use crate::cost_tracker::CostTracker;
 use crate::graph::{GraphContributionTarget, GraphStore};
 use crate::{llm_ner, pii_filter::PiiFilter, storage::RocksDbStore, tantivy_index::TantivyIndex};
 use anyhow::Result;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -22,8 +23,29 @@ struct ExtractRequest {
 pub struct EntityExtractionQueue {
     tx: mpsc::Sender<ExtractRequest>,
     graph: Arc<GraphStore>,
+    shutdown: tokio::sync::broadcast::Sender<()>,
+    worker: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Accepted requests that no flush has settled yet (queued or in a batch).
+    pending: Arc<AtomicUsize>,
 }
 impl EntityExtractionQueue {
+    /// Accepted requests the worker has not settled yet. Zero after `shutdown`.
+    pub fn pending(&self) -> usize {
+        self.pending.load(Ordering::Acquire)
+    }
+
+    /// Flush accepted work and join the worker before Hosted seals a generation.
+    pub async fn shutdown(&self) -> Result<()> {
+        let _ = self.shutdown.send(());
+        let handle = self.worker.lock().await.take();
+        if let Some(handle) = handle {
+            handle
+                .await
+                .map_err(|e| anyhow::anyhow!("Entity worker join: {e}"))?;
+        }
+        Ok(())
+    }
+
     pub fn enqueue(
         &self,
         chunk_id: String,
@@ -34,6 +56,9 @@ impl EntityExtractionQueue {
         let target = self
             .graph
             .capture_contribution_target(&chunk_id, &stream, &content)?;
+        // Count before publishing so a fast worker cannot settle the request
+        // ahead of the increment and wrap the gauge.
+        self.pending.fetch_add(1, Ordering::AcqRel);
         self.tx
             .try_send(ExtractRequest {
                 chunk_id,
@@ -42,7 +67,11 @@ impl EntityExtractionQueue {
                 dict_entities,
                 target,
             })
-            .map_err(|e| anyhow::anyhow!("Entity extraction queue full or closed: {}", e))
+            .map_err(|e| {
+                self.pending.fetch_sub(1, Ordering::AcqRel);
+                anyhow::anyhow!("Entity extraction queue full or closed: {}", e)
+            })?;
+        Ok(())
     }
 }
 
@@ -59,6 +88,7 @@ struct Worker {
     tantivy: Arc<tokio::sync::Mutex<TantivyIndex>>,
     http_client: reqwest::Client,
     context: EntityExtractionWorkerContext,
+    pending: Arc<AtomicUsize>,
 }
 pub fn spawn_worker(
     store: Arc<RocksDbStore>,
@@ -68,23 +98,33 @@ pub fn spawn_worker(
     context: EntityExtractionWorkerContext,
 ) -> EntityExtractionQueue {
     let (tx, rx) = mpsc::channel(context.config.queue_capacity);
-    let queue = EntityExtractionQueue {
-        tx,
-        graph: graph.clone(),
-    };
-    tokio::spawn(worker_loop(
+    let (shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let pending = Arc::new(AtomicUsize::new(0));
+    let worker = tokio::spawn(worker_loop(
         rx,
         Worker {
             store,
-            graph,
+            graph: graph.clone(),
             tantivy,
             http_client,
             context,
+            pending: Arc::clone(&pending),
         },
+        shutdown_rx,
     ));
-    queue
+    EntityExtractionQueue {
+        tx,
+        graph,
+        shutdown,
+        worker: Arc::new(tokio::sync::Mutex::new(Some(worker))),
+        pending,
+    }
 }
-async fn worker_loop(mut rx: mpsc::Receiver<ExtractRequest>, worker: Worker) {
+async fn worker_loop(
+    mut rx: mpsc::Receiver<ExtractRequest>,
+    worker: Worker,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
+) {
     let config = &worker.context.config;
     info!(
         "Entity extraction queue started (batch_size={}, flush={}s, confidence={})",
@@ -123,6 +163,11 @@ async fn worker_loop(mut rx: mpsc::Receiver<ExtractRequest>, worker: Worker) {
                         }
                     }
                 }
+                _ = shutdown.recv() => {
+                    drain_queue(&mut rx, &mut batch, &mut batch_tokens, &worker).await;
+                    info!("Entity extraction queue shutting down");
+                    return;
+                }
                 _ = tokio::time::sleep(remaining) => {
                     break;
                 }
@@ -135,10 +180,32 @@ async fn worker_loop(mut rx: mpsc::Receiver<ExtractRequest>, worker: Worker) {
     }
 }
 
+async fn drain_queue(
+    rx: &mut mpsc::Receiver<ExtractRequest>,
+    batch: &mut Vec<ExtractRequest>,
+    tokens: &mut usize,
+    worker: &Worker,
+) {
+    rx.close();
+    while let Some(request) = rx.recv().await {
+        *tokens += llm_ner::estimate_tokens(&request.content);
+        batch.push(request);
+        if batch.len() >= worker.context.config.batch_size
+            || *tokens >= worker.context.config.max_tokens_per_batch
+        {
+            flush_batch(batch, tokens, worker).await;
+        }
+    }
+    if !batch.is_empty() {
+        flush_batch(batch, tokens, worker).await;
+    }
+}
+
 async fn flush_batch(batch: &mut Vec<ExtractRequest>, tokens: &mut usize, worker: &Worker) {
     if let Err(error) = extract_batch(batch, worker).await {
         warn!(%error, "Entity extraction batch failed");
     }
+    worker.pending.fetch_sub(batch.len(), Ordering::AcqRel);
     batch.clear();
     *tokens = 0;
 }

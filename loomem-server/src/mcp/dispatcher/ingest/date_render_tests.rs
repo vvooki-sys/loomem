@@ -107,7 +107,7 @@ async fn context_relevant_rejects_tombstoned_source_family_even_with_stale_bm25(
         .get_all_chunks()
         .unwrap()
         .into_iter()
-        .find(|chunk| loomem_core::storage::is_ingest_source(chunk))
+        .find(loomem_core::storage::is_ingest_source)
         .unwrap();
     let deleted = state
         .store

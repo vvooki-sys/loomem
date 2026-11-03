@@ -242,21 +242,64 @@ impl EventLog {
     }
 }
 
+/// Owned event-log worker for callers that must flush before publishing storage.
+pub struct EventLogWorker {
+    shutdown: tokio::sync::broadcast::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+    queued: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl EventLogWorker {
+    /// Entries still queued behind the writer, as the writer last observed them.
+    /// The writer refreshes the gauge after every append, so an idle writer
+    /// reports zero and a backlog shows up as soon as it is being consumed.
+    pub fn queued(&self) -> usize {
+        self.queued.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub async fn shutdown(self) -> Result<()> {
+        let _ = self.shutdown.send(());
+        self.task
+            .await
+            .map_err(|e| anyhow::anyhow!("Event log worker join: {e}"))
+    }
+}
+
 /// Spawn the background event log writer task.
 /// Returns the EventSender to use on hot paths.
 pub fn spawn_writer(data_dir: &Path, config: &EventLogConfig) -> Result<EventSender> {
+    let (sender, worker) = spawn_writer_managed(data_dir, config)?;
+    // The legacy API has no shutdown owner. Keep its shutdown channel alive;
+    // dropping EventLogWorker would otherwise stop the writer immediately.
+    std::mem::forget(worker);
+    Ok(sender)
+}
+
+pub fn spawn_writer_managed(
+    data_dir: &Path,
+    config: &EventLogConfig,
+) -> Result<(EventSender, EventLogWorker)> {
     let mut log = EventLog::open(data_dir, config)?;
     let (tx, mut rx) = event_channel();
-
-    tokio::spawn(async move {
+    let (shutdown, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let queued = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let gauge = std::sync::Arc::clone(&queued);
+    let task = tokio::spawn(async move {
         let mut flush_interval = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             tokio::select! {
-                Some(entry) = rx.recv() => {
-                    if let Err(e) = log.append(&entry) {
-                        warn!("Failed to write event: {}", e);
+                entry = rx.recv() => {
+                    match entry {
+                        Some(entry) => {
+                            if let Err(e) = log.append(&entry) {
+                                warn!("Failed to write event: {}", e);
+                            }
+                            gauge.store(rx.len(), std::sync::atomic::Ordering::Release);
+                        }
+                        None => break,
                     }
                 }
+                _ = shutdown_rx.recv() => break,
                 _ = flush_interval.tick() => {
                     if let Err(e) = log.flush() {
                         warn!("Failed to flush event log: {}", e);
@@ -264,15 +307,49 @@ pub fn spawn_writer(data_dir: &Path, config: &EventLogConfig) -> Result<EventSen
                 }
             }
         }
+        while let Ok(entry) = rx.try_recv() {
+            if let Err(e) = log.append(&entry) {
+                warn!("Failed to write event during shutdown: {}", e);
+            }
+        }
+        if let Err(e) = log.flush() {
+            warn!("Failed to flush event log during shutdown: {}", e);
+        }
+        gauge.store(0, std::sync::atomic::Ordering::Release);
     });
-
-    Ok(tx)
+    Ok((
+        tx,
+        EventLogWorker {
+            shutdown,
+            task,
+            queued,
+        },
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn legacy_spawn_writer_keeps_receiver_alive() {
+        let tmp = TempDir::new().unwrap();
+        let sender = spawn_writer(tmp.path(), &EventLogConfig::default()).unwrap();
+        tokio::task::yield_now().await;
+        let before = emit_drop_count();
+        emit(
+            &sender,
+            MemoryEvent::Search {
+                query: "legacy writer remains active".into(),
+                stream_id: "s".into(),
+                top_scores: vec![],
+                latency_ms: 0,
+                result_count: 0,
+            },
+        );
+        assert_eq!(emit_drop_count(), before);
+    }
 
     #[test]
     fn emit_drop_increments_counter_on_closed_channel() {

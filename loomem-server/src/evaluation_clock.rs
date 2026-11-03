@@ -13,17 +13,24 @@ pub(crate) fn now() -> DateTime<Utc> {
     Utc::now()
 }
 
-pub(crate) fn engine(config: Config) -> anyhow::Result<HybridSearchEngine> {
+pub fn engine(config: Config) -> anyhow::Result<HybridSearchEngine> {
     #[cfg(feature = "evaluation")]
-    if let Some(time) = configured_time(std::env::var("LOOMEM_EVALUATION_TIME_UNIX"))? {
-        FIXED_TIME
-            .set(time)
-            .map_err(|_| anyhow::anyhow!("evaluation clock already initialized"))?;
-        tracing::info!(
-            evaluation_time_unix = time.timestamp(),
-            "Fixed evaluation clock enabled"
-        );
-        return Ok(HybridSearchEngine::with_fixed_time(config, time));
+    {
+        if let Some(time) = FIXED_TIME.get() {
+            return Ok(HybridSearchEngine::with_fixed_time(config, *time));
+        }
+        if let Some(time) = configured_time(std::env::var("LOOMEM_EVALUATION_TIME_UNIX"))? {
+            let _ = FIXED_TIME.set(time);
+            let time = FIXED_TIME
+                .get()
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("evaluation clock initialization failed"))?;
+            tracing::info!(
+                evaluation_time_unix = time.timestamp(),
+                "Fixed evaluation clock enabled"
+            );
+            return Ok(HybridSearchEngine::with_fixed_time(config, time));
+        }
     }
     Ok(HybridSearchEngine::new(config))
 }

@@ -9,9 +9,18 @@ license.workspace = true
 [lints]
 workspace = true
 
+[lib]
+# Original unit tests remain in the server binary with its HTTP router fixture.
+test = false
+
 [[bin]]
 name = "loomem-server"
 path = "src/main.rs"
+
+[[bin]]
+name = "hosted_shared_engine"
+path = "src/bin/hosted_shared_engine.rs"
+required-features = ["hosted-engine"]
 
 [dependencies]
 
@@ -45,6 +54,7 @@ rust-embed.workspace = true
 evaluation = ["loomem-core/evaluation"]
 default = ["onnx-rerank"]
 onnx-rerank = []
+hosted-engine = []
 
 [dev-dependencies]
 tempfile = "3.8"

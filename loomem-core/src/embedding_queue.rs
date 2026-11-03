@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -21,6 +22,31 @@ struct EmbedRequest {
 pub struct EmbeddingQueue {
     tx: mpsc::Sender<EmbedRequest>,
     store: Arc<RocksDbStore>,
+    shutdown: tokio::sync::broadcast::Sender<()>,
+    worker: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Accepted requests that no flush has settled yet (queued or in a batch).
+    pending: Arc<AtomicUsize>,
+}
+
+impl EmbeddingQueue {
+    /// Stop accepting worker progress, flush the current batch and join the task.
+    /// Existing single-user servers do not call this during ordinary operation.
+    pub async fn shutdown(&self) -> Result<()> {
+        let _ = self.shutdown.send(());
+        let handle = self.worker.lock().await.take();
+        if let Some(handle) = handle {
+            handle
+                .await
+                .map_err(|e| anyhow::anyhow!("Embedding worker join: {e}"))?;
+        }
+        Ok(())
+    }
+
+    /// Accepted requests the worker has not settled yet: queued plus the batch
+    /// being embedded. Zero after `shutdown` returns.
+    pub fn pending(&self) -> usize {
+        self.pending.load(Ordering::Acquire)
+    }
 }
 
 impl EmbeddingQueue {
@@ -30,13 +56,20 @@ impl EmbeddingQueue {
         let Some(target) = self.store.embedding_target(&chunk_id, &content)? else {
             return Ok(());
         };
+        // Count before publishing: the worker may settle the request before
+        // `try_send` returns, and the gauge must never wrap below zero.
+        self.pending.fetch_add(1, Ordering::AcqRel);
         self.tx
             .try_send(EmbedRequest {
                 target,
                 chunk_id,
                 content,
             })
-            .map_err(|e| anyhow::anyhow!("Embedding queue full or closed: {}", e))
+            .map_err(|e| {
+                self.pending.fetch_sub(1, Ordering::AcqRel);
+                anyhow::anyhow!("Embedding queue full or closed: {}", e)
+            })?;
+        Ok(())
     }
 }
 
@@ -57,6 +90,15 @@ impl Default for EmbeddingQueueConfig {
     }
 }
 
+struct Worker {
+    store: Arc<RocksDbStore>,
+    http_client: reqwest::Client,
+    llm_config: LlmConfig,
+    config: EmbeddingQueueConfig,
+    local_embedder: Option<Arc<LocalEmbedder>>,
+    pending: Arc<AtomicUsize>,
+}
+
 /// Spawn the embedding queue background worker. Returns a handle for submitting requests.
 pub fn spawn_worker(
     store: Arc<RocksDbStore>,
@@ -66,34 +108,43 @@ pub fn spawn_worker(
     local_embedder: Option<Arc<LocalEmbedder>>,
 ) -> EmbeddingQueue {
     let (tx, rx) = mpsc::channel(config.queue_capacity);
+    let (shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let pending = Arc::new(AtomicUsize::new(0));
 
-    tokio::spawn(worker_loop(
+    let worker = tokio::spawn(worker_loop(
         rx,
-        Arc::clone(&store),
-        http_client,
-        llm_config,
-        config,
-        local_embedder,
+        Worker {
+            store: Arc::clone(&store),
+            http_client,
+            llm_config,
+            config,
+            local_embedder,
+            pending: Arc::clone(&pending),
+        },
+        shutdown_rx,
     ));
 
-    EmbeddingQueue { tx, store }
+    EmbeddingQueue {
+        tx,
+        store,
+        shutdown,
+        worker: Arc::new(tokio::sync::Mutex::new(Some(worker))),
+        pending,
+    }
 }
 
 async fn worker_loop(
     mut rx: mpsc::Receiver<EmbedRequest>,
-    store: Arc<RocksDbStore>,
-    http_client: reqwest::Client,
-    llm_config: LlmConfig,
-    config: EmbeddingQueueConfig,
-    local_embedder: Option<Arc<LocalEmbedder>>,
+    worker: Worker,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) {
     info!(
         "Embedding queue worker started (batch_size={}, flush_interval={}s)",
-        config.batch_size, config.flush_interval_secs
+        worker.config.batch_size, worker.config.flush_interval_secs
     );
 
-    let mut batch: Vec<EmbedRequest> = Vec::with_capacity(config.batch_size);
-    let flush_interval = tokio::time::Duration::from_secs(config.flush_interval_secs);
+    let mut batch: Vec<EmbedRequest> = Vec::with_capacity(worker.config.batch_size);
+    let flush_interval = tokio::time::Duration::from_secs(worker.config.flush_interval_secs);
 
     loop {
         // Collect items until batch is full or timeout
@@ -101,7 +152,7 @@ async fn worker_loop(
 
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() || batch.len() >= config.batch_size {
+            if remaining.is_zero() || batch.len() >= worker.config.batch_size {
                 break;
             }
 
@@ -112,12 +163,26 @@ async fn worker_loop(
                         None => {
                             // Channel closed — flush remaining and exit
                             if !batch.is_empty() {
-                                flush_batch(&mut batch, &store, &http_client, &llm_config, &local_embedder).await;
+                                flush_pending(&mut batch, &worker).await;
                             }
                             info!("Embedding queue worker shutting down");
                             return;
                         }
                     }
+                }
+                _ = shutdown.recv() => {
+                    rx.close();
+                    while let Some(req) = rx.recv().await {
+                        batch.push(req);
+                        if batch.len() >= worker.config.batch_size {
+                            flush_pending(&mut batch, &worker).await;
+                        }
+                    }
+                    if !batch.is_empty() {
+                        flush_pending(&mut batch, &worker).await;
+                    }
+                    info!("Embedding queue worker shutting down");
+                    return;
                 }
                 _ = tokio::time::sleep(remaining) => {
                     break;
@@ -126,16 +191,23 @@ async fn worker_loop(
         }
 
         if !batch.is_empty() {
-            flush_batch(
-                &mut batch,
-                &store,
-                &http_client,
-                &llm_config,
-                &local_embedder,
-            )
-            .await;
+            flush_pending(&mut batch, &worker).await;
         }
     }
+}
+
+/// Flush one batch and settle its requests in the pending gauge.
+async fn flush_pending(batch: &mut Vec<EmbedRequest>, worker: &Worker) {
+    let count = batch.len();
+    flush_batch(
+        batch,
+        &worker.store,
+        &worker.http_client,
+        &worker.llm_config,
+        &worker.local_embedder,
+    )
+    .await;
+    worker.pending.fetch_sub(count, Ordering::AcqRel);
 }
 
 async fn flush_batch(
@@ -248,6 +320,72 @@ mod tests {
         let results = all_failed(4, "provider down");
         assert_eq!(results.len(), 4);
         assert!(results.iter().all(Result::is_err));
+    }
+
+    fn queued_store(dir: &std::path::Path, ids: &[&str]) -> Arc<RocksDbStore> {
+        use crate::config::RocksDbConfig;
+        let store = RocksDbStore::open(
+            dir,
+            &RocksDbConfig {
+                max_open_files: 100,
+                compression: "none".to_string(),
+                write_buffer_size: 4 * 1024 * 1024,
+                max_write_buffer_number: 2,
+            },
+        )
+        .expect("open store");
+        for id in ids {
+            let chunk: crate::storage::Chunk = serde_json::from_value(serde_json::json!({
+                "id": id, "content": format!("pending fact {id}"), "stream": "test",
+                "level": 0, "score": 1.0, "timestamp": 1, "consolidated": false,
+                "dormant": false, "in_progress": false
+            }))
+            .expect("chunk fixture");
+            store.store_chunk(&chunk).expect("store chunk");
+        }
+        Arc::new(store)
+    }
+
+    /// Hosted quiesces a scope by calling `shutdown` while requests may still
+    /// be queued. Every accepted request must be handed to a flush (not
+    /// dropped) and the pending gauge must settle to zero before `shutdown`
+    /// returns. No provider is configured, so each flush fails offline; the
+    /// gauge proves the hand-off, the warning log proves no silent drop.
+    #[tokio::test]
+    async fn shutdown_drains_every_pending_request() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ids = ["pending-1", "pending-2", "pending-3"];
+        let store = queued_store(temp.path(), &ids);
+        let queue = spawn_worker(
+            store,
+            reqwest::Client::new(),
+            LlmConfig::default(),
+            EmbeddingQueueConfig {
+                batch_size: 50,
+                flush_interval_secs: 3600,
+                queue_capacity: 8,
+            },
+            None,
+        );
+        for id in ids {
+            queue
+                .enqueue(id.to_string(), format!("pending fact {id}"))
+                .expect("enqueue");
+        }
+        assert_eq!(
+            queue.pending(),
+            ids.len(),
+            "requests stay pending until flushed"
+        );
+        queue.shutdown().await.expect("shutdown");
+        assert_eq!(
+            queue.pending(),
+            0,
+            "shutdown must settle every accepted request"
+        );
+        let late = queue.enqueue("pending-1".into(), "pending fact pending-1".into());
+        assert!(late.is_err(), "closed queue must reject late requests");
+        assert_eq!(queue.pending(), 0);
     }
 
     /// Cycle /015 end-to-end regression for the "buried entity" incident: a

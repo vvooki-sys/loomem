@@ -6,7 +6,7 @@ use loomem_core::graph::GraphStore;
 use loomem_core::{Config, CostTracker, PiiFilter, RocksDbStore, TantivyIndex};
 use std::sync::Arc;
 
-pub(crate) fn start(
+pub fn start(
     config: &Config,
     store: Arc<RocksDbStore>,
     graph: Arc<GraphStore>,

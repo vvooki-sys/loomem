@@ -544,7 +544,7 @@ pub async fn compress(
         .get_api_key()
         .context("OpenAI API key not configured")?;
 
-    let url = "https://api.openai.com/v1/chat/completions";
+    let url = crate::evaluation_url::chat_completions("LOOMEM_EVALUATION_CONSOLIDATION_URL")?;
 
     // Concatenate all texts
     let combined_text = texts.join("\n\n---\n\n");
@@ -576,7 +576,7 @@ pub async fn compress(
         );
 
         let response = client
-            .post(url)
+            .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(&request_body)
