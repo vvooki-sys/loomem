@@ -1,10 +1,22 @@
 //! Trusted-owner JSONL adapter for the full original tool and worker set.
+//!
+//! Requests are served concurrently (see `loomem_server::hosted::serve`): a
+//! reader thread feeds stdin lines to the serving loop, which answers every
+//! request on its own task, and one writer thread serializes replies to
+//! stdout so lines never interleave. Replies leave in completion order and
+//! carry the request's `request_id`.
 use anyhow::{Context, Result};
 use loomem_core::Config;
-use loomem_server::hosted::{Request, SharedEngine};
-use serde_json::{json, Value};
+use loomem_server::hosted::{serve, ServeLimits, SharedEngine};
+use serde_json::Value;
 use std::io::{BufRead, Write};
 use std::path::Path;
+use tokio::sync::mpsc;
+
+/// Lines parsed ahead of execution; backpressure stops the reader beyond it.
+const LINE_QUEUE: usize = 256;
+/// Replies waiting for stdout; backpressure stops dispatch beyond it.
+const REPLY_QUEUE: usize = 256;
 
 fn main() -> Result<()> {
     // Tokio's I/O driver also starts the signal driver, which creates an IPC
@@ -15,13 +27,22 @@ fn main() -> Result<()> {
     if std::env::var_os("LOOMEM_HOSTED_SANDBOXED").is_none() {
         builder.enable_io();
     }
-    builder
+    let runtime = builder
         .build()
-        .context("build Hosted shared-engine runtime")?
-        .block_on(run())
+        .context("build Hosted shared-engine runtime")?;
+    let (replies, reply_rx) = mpsc::channel::<Value>(REPLY_QUEUE);
+    let writer = std::thread::spawn(move || write_replies(reply_rx));
+    let served = runtime.block_on(run(replies));
+    // Dropping the runtime cancels any request that outlived the drain
+    // timeout, which releases the last reply senders and ends the writer.
+    drop(runtime);
+    writer
+        .join()
+        .map_err(|_| anyhow::anyhow!("reply writer panicked"))??;
+    served
 }
 
-async fn run() -> Result<()> {
+async fn run(replies: mpsc::Sender<Value>) -> Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let _ = tracing_subscriber::fmt()
@@ -29,17 +50,10 @@ async fn run() -> Result<()> {
         .with_writer(std::io::stderr)
         .try_init();
     let (root, config) = arguments()?;
-    let mut engine = SharedEngine::new(Path::new(&root), Config::load(&config)?)?;
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout().lock();
-    for line in stdin.lock().lines() {
-        let (response, shutdown) = process_line(&mut engine, &line?).await;
-        write_reply(&mut stdout, response)?;
-        if shutdown {
-            break;
-        }
-    }
-    Ok(())
+    let engine = SharedEngine::new(Path::new(&root), Config::load(&config)?)?;
+    let (lines, line_rx) = mpsc::channel::<String>(LINE_QUEUE);
+    std::thread::spawn(move || read_lines(lines));
+    serve(engine, line_rx, replies, ServeLimits::default()).await
 }
 
 fn arguments() -> Result<(String, String)> {
@@ -56,32 +70,29 @@ fn arguments() -> Result<(String, String)> {
     Ok((root, config))
 }
 
-async fn process_line(engine: &mut SharedEngine, line: &str) -> (Value, bool) {
-    let mut request: Request = match serde_json::from_str(line) {
-        Ok(request) => request,
-        Err(error) => return (json!({"ok": false, "error": error.to_string()}), false),
-    };
-    let context = request.context.clone();
-    let request_id = request.request_id.take();
-    let shutdown = request.cmd == "shutdown";
-    let mut response = match engine.handle(request).await {
-        Ok(response) => response,
-        Err(error) => json!({
-            "ok": false,
-            "error": format!("{error:#}"),
-            "engine_pid": std::process::id(),
-            "context": context,
-        }),
-    };
-    if let (Some(object), Some(request_id)) = (response.as_object_mut(), request_id) {
-        object.insert("request_id".into(), Value::String(request_id));
+/// Feeds stdin to the serving loop; a read error or EOF ends the input, which
+/// the loop treats as a request to drain and exit.
+fn read_lines(lines: mpsc::Sender<String>) {
+    for line in std::io::stdin().lock().lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(error) => {
+                tracing::error!(%error, "stdin read failed; closing input");
+                return;
+            }
+        };
+        if lines.blocking_send(line).is_err() {
+            return;
+        }
     }
-    (response, shutdown)
 }
 
-fn write_reply(output: &mut impl Write, response: Value) -> Result<()> {
-    serde_json::to_writer(&mut *output, &response)?;
-    output.write_all(b"\n")?;
-    output.flush()?;
+fn write_replies(mut replies: mpsc::Receiver<Value>) -> Result<()> {
+    let mut output = std::io::stdout().lock();
+    while let Some(reply) = replies.blocking_recv() {
+        serde_json::to_writer(&mut output, &reply)?;
+        output.write_all(b"\n")?;
+        output.flush()?;
+    }
     Ok(())
 }

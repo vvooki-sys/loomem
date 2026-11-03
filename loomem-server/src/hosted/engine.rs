@@ -10,6 +10,7 @@
 //! acknowledgement is delayed. Revocation latency is therefore bounded by the
 //! extraction timeout for every in-flight ingest.
 mod compat;
+mod hold;
 
 use super::protocol::{Request, ScopeContext};
 use super::state::ScopeRuntime;
@@ -22,6 +23,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 struct ScopeEntry {
@@ -31,8 +33,88 @@ struct ScopeEntry {
 
 struct Job {
     context: ScopeContext,
-    task: JoinHandle<Result<Value>>,
+    /// Distinguishes this job from a later one registered under the same key.
+    serial: u64,
+    /// Cancels the job itself; the wrapper task observes the cancellation.
+    abort: tokio::task::AbortHandle,
+    /// Finishes once the job's outcome has been delivered to `outcome`.
+    task: JoinHandle<()>,
+    /// Taken by the quick phase of `await`; `None` while a client waits on it.
+    outcome: Option<oneshot::Receiver<Result<Value>>>,
     write_phase: Arc<crate::handlers::ingest::write_phase::WritePhase>,
+}
+
+/// An `await` whose job outcome is still pending; waiting on it needs no
+/// engine lock, so other scopes keep being served meanwhile.
+pub struct PendingAwait {
+    context: ScopeContext,
+    operation: String,
+    serial: u64,
+    outcome: oneshot::Receiver<Result<Value>>,
+}
+
+impl PendingAwait {
+    pub async fn outcome(self) -> AwaitedJob {
+        let outcome = match self.outcome.await {
+            Ok(outcome) => outcome,
+            Err(_) => Err(anyhow::anyhow!("scoped job dropped before completion")),
+        };
+        AwaitedJob {
+            context: self.context,
+            operation: self.operation,
+            serial: self.serial,
+            outcome,
+        }
+    }
+}
+
+/// Outcome of a job, ready for the epoch check under the engine lock.
+pub struct AwaitedJob {
+    context: ScopeContext,
+    operation: String,
+    serial: u64,
+    outcome: Result<Value>,
+}
+
+/// One original tool call, dispatched on its own task for a scope.
+struct ToolJob {
+    state: Arc<crate::AppState>,
+    name: String,
+    args: Value,
+    stream: String,
+    auth: AuthContext,
+    failpoint: Option<String>,
+    hold: Option<hold::HoldGate>,
+}
+
+impl ToolJob {
+    async fn run(self) -> Result<Value> {
+        if let Some(hold) = self.hold {
+            hold.wait().await?;
+        }
+        let dispatch = crate::mcp::dispatcher::dispatch_tool(
+            &self.state,
+            &self.name,
+            self.args,
+            &self.stream,
+            &self.auth,
+        );
+        #[cfg(feature = "evaluation")]
+        let failpoint = self
+            .failpoint
+            .as_deref()
+            .and_then(loomem_core::storage::persist::EvaluationFailpoint::parse);
+        #[cfg(feature = "evaluation")]
+        let result =
+            loomem_core::storage::persist::with_evaluation_failpoint(failpoint, dispatch).await;
+        #[cfg(not(feature = "evaluation"))]
+        let result = {
+            let _ = self.failpoint;
+            dispatch.await
+        };
+        let result = result.map_err(|error| anyhow::anyhow!("tool dispatch failed: {error:?}"))?;
+        serde_json::to_value(result).context("serialize original tool result")
+    }
 }
 
 pub struct SharedEngine {
@@ -43,6 +125,8 @@ pub struct SharedEngine {
     scopes: HashMap<String, ScopeEntry>,
     epochs: HashMap<String, i64>,
     jobs: HashMap<String, Job>,
+    next_job: u64,
+    holds: hold::Holds,
 }
 
 impl SharedEngine {
@@ -61,7 +145,14 @@ impl SharedEngine {
             scopes: HashMap::new(),
             epochs: HashMap::new(),
             jobs: HashMap::new(),
+            next_job: 0,
+            holds: hold::Holds::new(),
         })
+    }
+
+    /// Identity of this process lifetime, echoed in every reply.
+    pub fn instance(&self) -> &str {
+        &self.instance
     }
 
     pub async fn handle(&mut self, request: Request) -> Result<Value> {
@@ -90,9 +181,11 @@ impl SharedEngine {
             }
             "shutdown" => {
                 self.shutdown().await?;
-                Ok(
-                    json!({"ok": true, "engine_pid": std::process::id(), "engine_instance": self.instance}),
-                )
+                Ok(self.process_reply(json!({})))
+            }
+            "release_holds" => {
+                let released = self.holds.release()?;
+                Ok(self.process_reply(json!({"released": released})))
             }
             other => bail!("unknown shared-engine command: {other}"),
         }
@@ -194,43 +287,30 @@ impl SharedEngine {
         self.ensure_job_available(&operation, &context)?;
         let name = request.name()?.to_owned();
         let args = request.args.unwrap_or_else(|| json!({}));
-        if !loomem_core::storage::persist::evaluation_failpoint_allowed(
-            request.failpoint.as_deref(),
-        ) {
+        let (hold, failpoint) = self.holds.gate(request.failpoint.as_deref());
+        if !loomem_core::storage::persist::evaluation_failpoint_allowed(failpoint) {
             bail!("invalid synthetic failpoint")
         }
-        let state = self.live_state(&context)?;
-        let auth = AuthContext::single_stream(
-            context.scope.clone(),
-            UserRole::Admin,
-            KeyScope::Private,
-            Some(context.actor.clone()),
-            true,
-        );
-        let stream = context.scope.clone();
+        let job = ToolJob {
+            state: self.live_state(&context)?,
+            name,
+            args,
+            stream: context.scope.clone(),
+            auth: AuthContext::single_stream(
+                context.scope.clone(),
+                UserRole::Admin,
+                KeyScope::Private,
+                Some(context.actor.clone()),
+                true,
+            ),
+            failpoint: failpoint.map(str::to_owned),
+            hold,
+        };
         let write_phase = Arc::new(crate::handlers::ingest::write_phase::WritePhase::new());
-        let task_phase = write_phase.clone();
-        let task = tokio::spawn(async move {
-            crate::handlers::ingest::write_phase::track(task_phase, async move {
-                let dispatch =
-                    crate::mcp::dispatcher::dispatch_tool(&state, &name, args, &stream, &auth);
-                #[cfg(feature = "evaluation")]
-                let failpoint = request
-                    .failpoint
-                    .as_deref()
-                    .and_then(loomem_core::storage::persist::EvaluationFailpoint::parse);
-                #[cfg(feature = "evaluation")]
-                let result =
-                    loomem_core::storage::persist::with_evaluation_failpoint(failpoint, dispatch)
-                        .await;
-                #[cfg(not(feature = "evaluation"))]
-                let result = dispatch.await;
-                let result =
-                    result.map_err(|error| anyhow::anyhow!("tool dispatch failed: {error:?}"))?;
-                serde_json::to_value(result).context("serialize original tool result")
-            })
-            .await
-        });
+        let task = tokio::spawn(crate::handlers::ingest::write_phase::track(
+            write_phase.clone(),
+            job.run(),
+        ));
         self.insert_job(operation.clone(), context.clone(), task, write_phase);
         Ok(self.reply(context, json!({"accepted": true, "op_id": operation})))
     }
@@ -251,17 +331,57 @@ impl SharedEngine {
         Ok(self.reply(context, json!({"accepted": true, "op_id": operation})))
     }
 
+    /// Serial form of `await`: holds the engine while the job finishes. The
+    /// concurrent front end uses `begin_await` and `finish_await` instead.
     async fn await_job(&mut self, request: Request) -> Result<Value> {
+        let pending = self.begin_await(&request)?;
+        let awaited = pending.outcome().await;
+        self.finish_await(awaited)
+    }
+
+    /// Quick phase of `await`: validates the request and detaches the job's
+    /// outcome channel. The job stays registered so `revoke` can still cancel
+    /// it while the caller waits without the engine lock.
+    pub fn begin_await(&mut self, request: &Request) -> Result<PendingAwait> {
         let context = request.context()?;
         self.ensure_epoch(&context)?;
         let operation = request.operation()?;
-        let key = job_key(&context, &operation);
-        let job = self.jobs.remove(&key).context("unknown scoped job")?;
+        let job = self
+            .jobs
+            .get_mut(&job_key(&context, &operation))
+            .context("unknown scoped job")?;
         if job.context != context {
             bail!("job context mismatch")
         }
-        let output = job.task.await.context("join scoped job")??;
+        let outcome = job
+            .outcome
+            .take()
+            .context("scoped job is already being awaited")?;
+        Ok(PendingAwait {
+            context,
+            operation,
+            serial: job.serial,
+            outcome,
+        })
+    }
+
+    /// Final phase of `await`: publishes the outcome only while the scope
+    /// epoch that accepted the job is still current.
+    pub fn finish_await(&mut self, awaited: AwaitedJob) -> Result<Value> {
+        let AwaitedJob {
+            context,
+            operation,
+            serial,
+            outcome,
+        } = awaited;
+        let key = job_key(&context, &operation);
+        // A replacement job may already hold this key (the old one was drained
+        // by a same-epoch reopen); only the awaited job itself is removed.
+        if self.jobs.get(&key).is_some_and(|job| job.serial == serial) {
+            self.jobs.remove(&key);
+        }
         self.ensure_epoch(&context)?;
+        let output = outcome?;
         Ok(self.reply(context, json!({"op_id": operation, "result": output})))
     }
 
@@ -369,7 +489,7 @@ impl SharedEngine {
         for key in keys {
             if let Some(job) = self.jobs.remove(&key) {
                 if job.write_phase.revoke() {
-                    job.task.abort();
+                    job.abort.abort();
                 }
                 let _ = job.task.await;
             }
@@ -391,11 +511,25 @@ impl SharedEngine {
         task: JoinHandle<Result<Value>>,
         write_phase: Arc<crate::handlers::ingest::write_phase::WritePhase>,
     ) {
+        let serial = self.next_job;
+        self.next_job += 1;
+        let abort = task.abort_handle();
+        let (sender, receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let outcome = task
+                .await
+                .context("join scoped job")
+                .and_then(|result| result);
+            let _ = sender.send(outcome);
+        });
         self.jobs.insert(
             job_key(&context, &operation),
             Job {
                 context,
+                serial,
+                abort,
                 task,
+                outcome: Some(receiver),
                 write_phase,
             },
         );
@@ -456,6 +590,18 @@ impl SharedEngine {
             bail!("scope generation already exists")
         }
         Ok(root)
+    }
+
+    fn process_reply(&self, fields: Value) -> Value {
+        let mut response = json!({
+            "ok": true,
+            "engine_pid": std::process::id(),
+            "engine_instance": self.instance,
+        });
+        if let (Some(response), Some(fields)) = (response.as_object_mut(), fields.as_object()) {
+            response.extend(fields.clone());
+        }
+        response
     }
 
     fn reply(&self, context: ScopeContext, fields: Value) -> Value {

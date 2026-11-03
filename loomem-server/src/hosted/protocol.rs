@@ -35,6 +35,10 @@ pub struct Request {
     pub cmd: String,
     #[serde(default)]
     pub context: Option<ScopeContext>,
+    /// Correlates the reply with this request. Replies leave in completion
+    /// order, so a client with more than one request in flight must set it;
+    /// a request without it is still served but cannot be correlated, which
+    /// is only safe for a client that waits for each reply before sending.
     #[serde(default)]
     pub request_id: Option<String>,
     #[serde(default)]
