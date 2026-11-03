@@ -57,7 +57,13 @@ impl DeferredTasks {
     /// inside an apply section or a durable write is not aborted; it finishes
     /// that section and stops at its next checkpoint, and this waits for it.
     pub async fn abort(&self) {
-        let mut inner = std::mem::take(&mut *self.lock());
+        self.begin_abort().join().await;
+    }
+
+    /// Signals every tracked task without waiting, so a caller revoking more
+    /// than one kind of work can signal all of it before joining any.
+    pub fn begin_abort(&self) -> AbortingTasks {
+        let inner = std::mem::take(&mut *self.lock());
         #[cfg(feature = "hosted-engine")]
         for (handle, phase) in &inner.phases {
             if phase.revoke() {
@@ -65,8 +71,22 @@ impl DeferredTasks {
             }
         }
         #[cfg(not(feature = "hosted-engine"))]
-        inner.tasks.abort_all();
-        while inner.tasks.join_next().await.is_some() {}
+        let inner = {
+            let mut inner = inner;
+            inner.tasks.abort_all();
+            inner
+        };
+        AbortingTasks(inner.tasks)
+    }
+}
+
+/// Tasks already signalled by [`DeferredTasks::begin_abort`].
+pub struct AbortingTasks(JoinSet<()>);
+
+impl AbortingTasks {
+    /// Waits for aborted tasks and for protected sections to finish.
+    pub async fn join(mut self) {
+        while self.0.join_next().await.is_some() {}
     }
 }
 

@@ -250,13 +250,19 @@ impl Engine {
     }
 
     fn wait_for_stderr(&self, marker: &str) {
+        self.wait_for_stderr_count(marker, 1);
+    }
+
+    /// Waits until `marker` appeared `count` more times on stderr.
+    fn wait_for_stderr_count(&self, marker: &str, count: usize) {
         let deadline = Instant::now() + REPLY_TIMEOUT;
-        loop {
+        let mut seen = 0;
+        while seen < count {
             let remaining = deadline.saturating_duration_since(Instant::now());
             match self.stderr.recv_timeout(remaining) {
-                Ok(line) if line.contains(marker) => return,
+                Ok(line) if line.contains(marker) => seen += 1,
                 Ok(_) => continue,
-                Err(error) => panic!("{marker} not seen on stderr: {error}"),
+                Err(error) => panic!("{marker} seen {seen}/{count} on stderr: {error}"),
             }
         }
     }
@@ -378,5 +384,59 @@ fn revoke_waits_for_an_apply_section_and_a_revoked_job_leaves_nothing_half_done(
     let merged = engine.tool(&revoked_b, "memory_dream", json!({}));
     assert!(merged.contains("Facts merged: 1"), "{merged}");
     assert_eq!(*llm.requests.lock().expect("counter"), 3);
+    engine.shutdown();
+}
+
+#[test]
+fn revoke_signals_every_job_before_waiting_for_any_section() {
+    let llm = start_mock_llm();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = write_config(temp.path());
+    let mut engine = Engine::start(&temp.path().join("engine"), &config, &llm.url);
+    let a = context("actor-a", "scope-a", 1);
+    engine.ok(json!({"cmd": "open_scope", "context": a, "generation": "live"}));
+    let subjects: Vec<Vec<String>> = ["subject-one", "subject-two", "subject-three"]
+        .iter()
+        .map(|subject| {
+            (1..=2)
+                .map(|n| engine.store(&a, subject, &format!("synthetic {subject} source {n}")))
+                .collect()
+        })
+        .collect();
+    // Two dream jobs of one scope, each held inside its first apply section.
+    for op in ["dream-1", "dream-2"] {
+        engine.ok(json!({
+            "cmd": "tool_async", "context": a, "op_id": op, "name": "memory_dream",
+            "args": {}, "failpoint": "hosted_hold_apply",
+        }));
+    }
+    engine.wait_for_stderr_count(APPLY_HOLD_MARKER, 2);
+    assert_eq!(*llm.requests.lock().expect("counter"), 2);
+    let revoked = context("actor-a", "scope-a", 2);
+    let revoke_id = engine.send(json!({"cmd": "revoke", "context": revoked}));
+    // Both jobs are told to stop before revocation waits for either section;
+    // joining the first job before signalling the second would stall here.
+    engine.wait_for_stderr_count(REVOKE_DEFERRED_MARKER, 2);
+    let release_id = engine.send(json!({"cmd": "release_holds"}));
+    let mut replies = std::collections::HashMap::new();
+    for _ in 0..2 {
+        let reply = engine.reply();
+        let id = reply["request_id"].as_str().expect("request_id").to_owned();
+        replies.insert(id, reply);
+    }
+    assert_eq!(replies[&release_id]["ok"], Value::Bool(true), "{replies:?}");
+    assert_eq!(replies[&revoke_id]["ok"], Value::Bool(true), "{replies:?}");
+    // Each job finished only its open section and started no further subject.
+    assert_eq!(*llm.requests.lock().expect("counter"), 2, "no third merge");
+    engine.ok(json!({"cmd": "open_scope", "context": revoked, "generation": "live"}));
+    let untouched = subjects
+        .iter()
+        .filter(|sources| {
+            sources
+                .iter()
+                .all(|source| !engine.superseded(&revoked, source))
+        })
+        .count();
+    assert!(untouched >= 1, "at least one subject stays untouched");
     engine.shutdown();
 }
