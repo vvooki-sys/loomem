@@ -1,13 +1,10 @@
 //! Concurrent JSONL front end of one shared engine process.
 //!
-//! Lock discipline: every command takes the engine mutex only for its quick
-//! phase. `await` detaches the job's outcome channel under the lock, waits on
-//! it with the lock released, then re-takes the lock for the epoch check and
-//! the reply. `open_scope`, `restore_scope`, `quiesce`, `revoke`, `shutdown`
-//! and the synthetic compatibility commands hold the lock for their whole
-//! duration: they are rare, bounded by the scope they touch, and other scopes
-//! wait on the lock for that time instead of on the job itself. Jobs never
-//! take the lock.
+//! Every scope has a stable engine slot. Its lifecycle operations may hold
+//! that slot while awaiting jobs or I/O; unrelated scopes never need it.
+//! The registry lock only resolves slots, never spans an await. `await`
+//! detaches its outcome under its own slot lock and rechecks the epoch in
+//! that same slot on completion. Model and process identity remain shared.
 //!
 //! Replies leave in completion order, not request order; the owner correlates
 //! them by `request_id`. A request without `request_id` is accepted and
@@ -23,7 +20,10 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex, Semaphore};
+use tokio::sync::{mpsc, Semaphore};
+
+mod scopes;
+use scopes::Scopes;
 
 /// Bounds of one serving loop.
 #[derive(Clone, Copy, Debug)]
@@ -81,7 +81,7 @@ async fn send(replies: &mpsc::Sender<Value>, reply: Value) -> Result<()> {
 }
 
 struct Server {
-    engine: Mutex<SharedEngine>,
+    scopes: Scopes,
     holds: Arc<Holds>,
     instance: String,
     permits: Arc<Semaphore>,
@@ -94,7 +94,7 @@ impl Server {
         Self {
             instance: engine.instance().to_owned(),
             holds: engine.holds(),
-            engine: Mutex::new(engine),
+            scopes: Scopes::new(engine),
             permits: Arc::new(Semaphore::new(permits)),
             limits,
         }
@@ -151,7 +151,14 @@ impl Server {
         let context = request.context.clone();
         let request_id = request.request_id.take();
         let outcome = match request.cmd.as_str() {
-            "await" => self.await_job(request).await,
+            "await" => self.scopes.await_job(request).await,
+            "shutdown" => self.scopes.shutdown().await.map(|()| {
+                json!({
+                    "ok": true,
+                    "engine_pid": std::process::id(),
+                    "engine_instance": self.instance,
+                })
+            }),
             // Released without the engine lock: a lock-holding command such
             // as `revoke` may be waiting on the very apply section a hold
             // keeps open.
@@ -163,7 +170,7 @@ impl Server {
                     "released": released,
                 })
             }),
-            _ => self.engine.lock().await.handle(request).await,
+            _ => self.scopes.handle(request).await,
         };
         match outcome {
             Ok(mut reply) => {
@@ -172,12 +179,6 @@ impl Server {
             }
             Err(error) => self.error_reply(format!("{error:#}"), context, request_id),
         }
-    }
-
-    async fn await_job(&self, request: Request) -> Result<Value> {
-        let pending = self.engine.lock().await.begin_await(&request)?;
-        let awaited = pending.outcome().await;
-        self.engine.lock().await.finish_await(awaited)
     }
 
     /// Waits for in-flight requests, then closes every scope. A request that

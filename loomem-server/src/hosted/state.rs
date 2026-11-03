@@ -17,6 +17,10 @@ use std::time::Instant;
 use tokio::task::JoinHandle;
 
 const CURRENT_SCHEMA_VERSION: u32 = 13;
+mod native_io;
+pub(super) use native_io::native_io;
+#[cfg(test)]
+mod native_tests;
 
 /// Point-in-time depth of the scope's asynchronous queues.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -194,9 +198,8 @@ impl ScopeRuntime {
         rebuild_index: bool,
         reader: bool,
     ) -> Result<Self> {
-        let mut services = ScopeServices::open(config, root, local_embedder, rebuild_index)?;
-        services.start_queues(reader)?;
-        let (state, event_worker) = services.into_state()?;
+        let (state, event_worker) =
+            native_io::open_state(config, root, local_embedder, rebuild_index, reader).await?;
         let (scheduler_shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
         let scheduler = build_scheduler(&state, shutdown_rx);
         if !reader {
