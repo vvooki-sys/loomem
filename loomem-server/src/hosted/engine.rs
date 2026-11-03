@@ -470,10 +470,22 @@ impl SharedEngine {
             bail!("revocation must advance scope epoch")
         }
         // Cancel and close every old-epoch writer before acknowledging the new
-        // epoch. A late response still fails its own epoch check afterwards.
-        self.abort_jobs(&context.scope).await;
-        if let Some(entry) = self.scopes.get(&context.scope) {
-            entry.runtime.state.deferred.abort().await;
+        // epoch. Every job and deferred task is signalled before any is
+        // joined, so one open apply section cannot let another job keep
+        // starting new sections while revocation waits. `begin_abort` also
+        // closes the scope's deferred registry: a job still finishing a
+        // durable write cannot start new deferred work (an auto-dream) while
+        // it is joined. A late response still fails its own epoch check.
+        let jobs = self.signal_jobs(&context.scope);
+        let deferred = self
+            .scopes
+            .get(&context.scope)
+            .map(|entry| entry.runtime.state.deferred.begin_abort());
+        for task in jobs {
+            let _ = task.await;
+        }
+        if let Some(deferred) = deferred {
+            deferred.join().await;
         }
         self.replace_scope(&context.scope).await?;
         self.epochs.insert(context.scope, context.epoch);
@@ -511,21 +523,26 @@ impl SharedEngine {
         }
     }
 
-    async fn abort_jobs(&mut self, scope: &str) {
+    /// Revokes every job of `scope` without waiting: jobs between sections
+    /// are aborted, jobs inside one finish it and stop at the next checkpoint.
+    /// Returns the tasks to join.
+    fn signal_jobs(&mut self, scope: &str) -> Vec<JoinHandle<()>> {
         let keys: Vec<String> = self
             .jobs
             .iter()
             .filter(|(_, job)| job.context.scope == scope)
             .map(|(key, _)| key.clone())
             .collect();
+        let mut tasks = Vec::with_capacity(keys.len());
         for key in keys {
             if let Some(job) = self.jobs.remove(&key) {
                 if job.write_phase.revoke() {
                     job.abort.abort();
                 }
-                let _ = job.task.await;
+                tasks.push(job.task);
             }
         }
+        tasks
     }
 
     fn ensure_job_available(&self, operation: &str, context: &ScopeContext) -> Result<()> {

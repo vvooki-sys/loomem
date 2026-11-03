@@ -8,12 +8,35 @@ use crate::handlers::ingest::write_phase::{self, WritePhase};
 #[cfg(feature = "hosted-engine")]
 use std::sync::Arc;
 
+/// Logged when work is tracked after revocation began; tests sequence on it.
+#[cfg(feature = "hosted-engine")]
+pub(crate) const DEFERRED_DROPPED_MARKER: &str = "LOOMEM_HOSTED_DEFERRED_DROPPED";
+
 #[derive(Default)]
 struct Inner {
     tasks: JoinSet<()>,
     /// Hosted only: the revocation phase of every tracked task.
     #[cfg(feature = "hosted-engine")]
     phases: Vec<(AbortHandle, Arc<WritePhase>)>,
+    /// Hosted only: set by `begin_abort` and never cleared. A job that was
+    /// still finishing a durable write when revocation began may track new
+    /// work afterwards (an auto-dream); that work is dropped unstarted.
+    #[cfg(feature = "hosted-engine")]
+    closed: bool,
+}
+
+impl Inner {
+    /// Takes the outstanding work, keeping the registry's closed state.
+    fn take_work(&mut self) -> Inner {
+        #[cfg(feature = "hosted-engine")]
+        let closed = self.closed;
+        let work = std::mem::take(self);
+        #[cfg(feature = "hosted-engine")]
+        {
+            self.closed = closed;
+        }
+        work
+    }
 }
 
 #[derive(Default)]
@@ -33,6 +56,12 @@ impl DeferredTasks {
         while inner.tasks.try_join_next().is_some() {}
         #[cfg(feature = "hosted-engine")]
         {
+            if inner.closed {
+                tracing::info!(
+                    "deferred work tracked after scope revocation began; dropped unstarted ({DEFERRED_DROPPED_MARKER})"
+                );
+                return;
+            }
             inner.phases.retain(|(handle, _)| !handle.is_finished());
             let phase = Arc::new(WritePhase::new());
             let handle = inner.tasks.spawn(write_phase::track(phase.clone(), future));
@@ -46,7 +75,7 @@ impl DeferredTasks {
 
     /// Take ownership of outstanding tasks so no lock is held across `.await`.
     pub async fn drain(&self) -> Result<(), JoinError> {
-        let mut inner = std::mem::take(&mut *self.lock());
+        let mut inner = self.lock().take_work();
         while let Some(result) = inner.tasks.join_next().await {
             result?;
         }
@@ -57,7 +86,22 @@ impl DeferredTasks {
     /// inside an apply section or a durable write is not aborted; it finishes
     /// that section and stops at its next checkpoint, and this waits for it.
     pub async fn abort(&self) {
-        let mut inner = std::mem::take(&mut *self.lock());
+        self.begin_abort().join().await;
+    }
+
+    /// Signals every tracked task without waiting, so a caller revoking more
+    /// than one kind of work can signal all of it before joining any. In
+    /// Hosted it also closes the registry: work tracked afterwards, e.g. by a
+    /// job still finishing its durable write, never starts.
+    pub fn begin_abort(&self) -> AbortingTasks {
+        let inner = {
+            let mut guard = self.lock();
+            #[cfg(feature = "hosted-engine")]
+            {
+                guard.closed = true;
+            }
+            guard.take_work()
+        };
         #[cfg(feature = "hosted-engine")]
         for (handle, phase) in &inner.phases {
             if phase.revoke() {
@@ -65,8 +109,22 @@ impl DeferredTasks {
             }
         }
         #[cfg(not(feature = "hosted-engine"))]
-        inner.tasks.abort_all();
-        while inner.tasks.join_next().await.is_some() {}
+        let inner = {
+            let mut inner = inner;
+            inner.tasks.abort_all();
+            inner
+        };
+        AbortingTasks(inner.tasks)
+    }
+}
+
+/// Tasks already signalled by [`DeferredTasks::begin_abort`].
+pub struct AbortingTasks(JoinSet<()>);
+
+impl AbortingTasks {
+    /// Waits for aborted tasks and for protected sections to finish.
+    pub async fn join(mut self) {
+        while self.0.join_next().await.is_some() {}
     }
 }
 
@@ -132,5 +190,23 @@ mod tests {
             1,
             "section finished after revocation, next checkpoint stopped the task"
         );
+    }
+
+    #[cfg(feature = "hosted-engine")]
+    #[tokio::test]
+    async fn work_tracked_after_revocation_began_never_starts() {
+        let tasks = DeferredTasks::default();
+        let aborting = tasks.begin_abort();
+        let started = Arc::new(AtomicUsize::new(0));
+        let observed = started.clone();
+        tasks.track(async move {
+            observed.fetch_add(1, Ordering::SeqCst);
+        });
+        aborting.join().await;
+        tasks.drain().await.expect("nothing to drain");
+        assert_eq!(started.load(Ordering::SeqCst), 0);
+        // Draining does not reopen a revoked registry.
+        tasks.track(async {});
+        assert!(tasks.lock().tasks.is_empty());
     }
 }
