@@ -5,16 +5,24 @@ const os = require('node:os');
 const path = require('node:path');
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'loomem-browser-'));
+// Keep the Chrome log outside the profile so it survives profile cleanup and can be
+// printed when the test fails (a silent stall is otherwise impossible to diagnose).
+const chromeLogPath = `${profile}.chrome.log`;
+const chromeLog = fs.openSync(chromeLogPath, 'w');
+// A cold Chrome start on a CI runner occasionally takes longer than the page checks.
+const CHROME_STARTUP_TIMEOUT_MS = 60000;
 const browser = spawn(process.env.CHROME_BIN || 'google-chrome', [
   '--headless', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
+  // Avoid first-run and keyring prompts that can stall a fresh profile on a headless runner.
+  '--no-first-run', '--no-default-browser-check', '--password-store=basic',
   '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--window-size=1440,900', 'about:blank',
-], { stdio: 'ignore' });
+], { stdio: ['ignore', chromeLog, chromeLog] });
 let socket;
 let browserError;
 browser.on('error', error => { browserError = error; });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(predicate, message) {
-  const deadline = Date.now() + 15000;
+async function until(predicate, message, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (browserError) throw browserError;
     if (browser.exitCode !== null) throw Error(`Chrome exited with ${browser.exitCode}`);
@@ -31,7 +39,7 @@ async function until(predicate, message) {
 }
 async function main() {
   const activePort = path.join(profile, 'DevToolsActivePort');
-  const port = await until(() => fs.existsSync(activePort) && fs.readFileSync(activePort, 'utf8').split('\n')[0], 'Chrome startup');
+  const port = await until(() => fs.existsSync(activePort) && fs.readFileSync(activePort, 'utf8').split('\n')[0], 'Chrome startup', CHROME_STARTUP_TIMEOUT_MS);
   const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   socket = new WebSocket(tabs.find(tab => tab.type === 'page').webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
@@ -119,7 +127,16 @@ async function main() {
   assert.equal(await evaluate('localStorage.getItem("loomem.locale")'), 'en');
   console.log('Browser language switching and preference persistence passed');
 }
-main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
+main().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+  try {
+    const log = fs.readFileSync(chromeLogPath, 'utf8').trim();
+    console.error(`--- Chrome output ---\n${log || '(empty)'}\n--- end Chrome output ---`);
+  } catch (logError) {
+    console.error(`Could not read Chrome output: ${logError.message}`);
+  }
+}).finally(async () => {
   if (socket) socket.close();
   if (browser.pid && browser.exitCode === null) {
     const exited = new Promise(resolve => browser.once('exit', resolve));
@@ -133,4 +150,6 @@ main().catch(error => { console.error(error); process.exitCode = 1; }).finally(a
     // a leftover temp directory must not turn a passing run into a failure.
     console.warn(`Could not remove Chrome profile ${profile}: ${error.message}`);
   }
+  try { fs.closeSync(chromeLog); } catch {}
+  fs.rmSync(chromeLogPath, { force: true });
 });
