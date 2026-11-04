@@ -15,9 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`<base_url>/chat/completions`). A keyless provider gets no `Authorization`
   header. Each call logs provider, model, call site, status and latency at
   DEBUG, and a WARN on a transport error or a non-2xx status. With the default
-  `openai` provider the requests are unchanged. Knowledge extraction, the
-  evidence selector, LLM NER and the server-side calls still go to OpenAI
-  until a follow-up change.
+  `openai` provider the requests are unchanged.
+- Knowledge extraction (`memory_ingest`), the semantic evidence selector, LLM
+  NER (entity worker and the extract-entities backfill), content-type
+  classification and manifest generation also use the active `llm.provider`.
+  The entity worker, the backfill and `memory_ingest` extraction now start on
+  a keyless provider such as local Ollama; before, they needed an OpenAI key.
+  Evaluation builds keep the `LOOMEM_EVALUATION_*_URL` loopback overrides.
+  Embeddings still use `embedding_provider` and the OpenAI key, as before.
+
+### Changed
+
+- When the active provider cannot be resolved, `memory_ingest` returns
+  "Extraction failed: LLM provider unavailable. No facts stored." (before:
+  "API key unavailable"). `ExtractionError::NoApiKey` is replaced by
+  `ExtractionError::Provider`, which carries the provider error text.
 
 ## [0.5.4] - 2026-10-27
 

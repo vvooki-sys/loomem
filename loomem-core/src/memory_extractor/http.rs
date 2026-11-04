@@ -1,21 +1,20 @@
 //! HTTP transport; local metering is available only in evaluation builds.
 
 use super::{ChatHttpReply, ExtractionChat};
+use crate::llm_provider::ResolvedProvider;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use std::time::Duration;
 
-const PROVIDER_URL: &str = "https://api.openai.com/v1/chat/completions";
-
-/// Production [`ExtractionChat`]: posts to the OpenAI chat endpoint.
+/// Production [`ExtractionChat`]: posts to the active provider's chat endpoint.
 pub struct HttpExtractionChat<'a> {
     client: &'a Client,
-    api_key: String,
+    provider: ResolvedProvider,
 }
 
 impl<'a> HttpExtractionChat<'a> {
-    pub fn new(client: &'a Client, api_key: String) -> Self {
-        Self { client, api_key }
+    pub fn new(client: &'a Client, provider: ResolvedProvider) -> Self {
+        Self { client, provider }
     }
 }
 
@@ -26,18 +25,20 @@ impl ExtractionChat for HttpExtractionChat<'_> {
     ) -> impl std::future::Future<Output = Result<ChatHttpReply>> + Send {
         // Clone captures so the future owns them (Send, no borrow across await).
         let client = self.client.clone();
-        let api_key = self.api_key.clone();
+        let provider = self.provider.clone();
         let body = request_body.clone();
         async move {
-            let endpoint = endpoint()?;
+            let provider_url = provider.chat_completions_url();
+            let endpoint = endpoint(&provider_url)?;
             let timeout = request_timeout(&endpoint)?;
-            let response = client
-                .post(endpoint)
-                .header("Authorization", format!("Bearer {}", api_key))
+            let request = provider
+                .authorize(client.post(&endpoint))
                 .header("Content-Type", "application/json")
                 .json(&body)
-                .timeout(timeout)
-                .send()
+                .timeout(timeout);
+            let model = body["model"].as_str().unwrap_or_default();
+            let response = provider
+                .send_chat(request, "memory_extractor", model)
                 .await
                 .context("Failed to send extraction request")?;
             let status = response.status().as_u16();
@@ -73,7 +74,7 @@ fn evaluation_timeout(
         }
     };
     // A timeout override must never affect a direct provider request.
-    evaluation_endpoint(Ok(endpoint.to_string()))?;
+    evaluation_endpoint(endpoint, Ok(endpoint.to_string()))?;
     anyhow::ensure!(
         !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()),
         "Evaluation extraction timeout must be an integer in 1..=600 seconds"
@@ -88,18 +89,25 @@ fn evaluation_timeout(
     Ok(Duration::from_secs(seconds))
 }
 
-fn endpoint() -> Result<String> {
+/// The provider URL, or in evaluation builds the local metering override.
+fn endpoint(provider_url: &str) -> Result<String> {
     #[cfg(feature = "evaluation")]
-    return evaluation_endpoint(std::env::var("LOOMEM_EVALUATION_EXTRACTION_URL"));
+    return evaluation_endpoint(
+        provider_url,
+        std::env::var("LOOMEM_EVALUATION_EXTRACTION_URL"),
+    );
     #[cfg(not(feature = "evaluation"))]
-    Ok(PROVIDER_URL.to_string())
+    Ok(provider_url.to_string())
 }
 
 #[cfg(feature = "evaluation")]
-fn evaluation_endpoint(value: Result<String, std::env::VarError>) -> Result<String> {
+fn evaluation_endpoint(
+    provider_url: &str,
+    value: Result<String, std::env::VarError>,
+) -> Result<String> {
     let value = match value {
         Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => return Ok(PROVIDER_URL.to_string()),
+        Err(std::env::VarError::NotPresent) => return Ok(provider_url.to_string()),
         Err(std::env::VarError::NotUnicode(_)) => {
             anyhow::bail!("Invalid evaluation extraction endpoint encoding")
         }
@@ -132,10 +140,14 @@ fn is_local_metering_url(url: &reqwest::Url) -> bool {
 mod tests {
     use super::*;
 
+    const PROVIDER_URL: &str = "https://api.openai.com/v1/chat/completions";
+
     #[cfg(not(feature = "evaluation"))]
     #[test]
     fn production_endpoint_is_unchanged() {
-        assert_eq!(endpoint().unwrap(), PROVIDER_URL);
+        assert_eq!(endpoint(PROVIDER_URL).unwrap(), PROVIDER_URL);
+        let ollama = "http://localhost:11434/v1/chat/completions";
+        assert_eq!(endpoint(ollama).unwrap(), ollama);
         assert_eq!(
             request_timeout(PROVIDER_URL).unwrap(),
             Duration::from_secs(30)
@@ -146,7 +158,7 @@ mod tests {
     #[test]
     fn missing_override_uses_provider() {
         assert_eq!(
-            evaluation_endpoint(Err(std::env::VarError::NotPresent)).unwrap(),
+            evaluation_endpoint(PROVIDER_URL, Err(std::env::VarError::NotPresent)).unwrap(),
             PROVIDER_URL
         );
         assert_eq!(
@@ -204,7 +216,10 @@ mod tests {
     #[test]
     fn literal_loopback_metering_is_accepted() {
         let local = "http://127.0.0.1:49152/v1/chat/completions";
-        assert_eq!(evaluation_endpoint(Ok(local.to_string())).unwrap(), local);
+        assert_eq!(
+            evaluation_endpoint(PROVIDER_URL, Ok(local.to_string())).unwrap(),
+            local
+        );
     }
 
     #[cfg(feature = "evaluation")]
@@ -223,11 +238,14 @@ mod tests {
             "http://127.0.0.1:49152/other",
             "not a URL",
         ] {
-            assert!(evaluation_endpoint(Ok(value.to_string())).is_err());
+            assert!(evaluation_endpoint(PROVIDER_URL, Ok(value.to_string())).is_err());
         }
-        assert!(evaluation_endpoint(Err(std::env::VarError::NotUnicode(
-            std::ffi::OsString::from("invalid")
-        )))
+        assert!(evaluation_endpoint(
+            PROVIDER_URL,
+            Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+                "invalid"
+            )))
+        )
         .is_err());
     }
 }

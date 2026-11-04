@@ -3,7 +3,7 @@
 //! The domain (`loomem_core::content_type`) is HTTP-agnostic: it talks to the
 //! LLM through the [`ContentTypeClassifier`] trait. This module supplies the
 //! production implementation ([`HttpContentTypeClassifier`], wrapping `reqwest`
-//! and the OpenAI chat endpoint), so the domain stays free of `reqwest` (the
+//! and the active provider's chat endpoint), so the domain stays free of `reqwest` (the
 //! trait is the seam — CLAUDE.md §4, ADR-014). Mirrors `HttpManifestCompleter`.
 
 use std::time::Duration;
@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 use loomem_core::config::LlmConfig;
 use loomem_core::content_type::{ContentType, ContentTypeClassifier};
+use loomem_core::llm_provider::{ProviderError, ResolvedProvider};
 
 /// Max content bytes sent to the classifier. The form of a document is evident
 /// from its head; capping keeps token cost bounded.
@@ -27,10 +28,10 @@ case_study=client project write-up; article=opinion/thought-leadership; person_p
 index=list of pointers; org_fact=organizational fact (client, award, structure); technical_project=architecture/code/cycle; \
 other=none of the above. If unsure, reply other.";
 
-/// Production [`ContentTypeClassifier`] — one OpenAI chat completion.
+/// Production [`ContentTypeClassifier`] — one chat completion on the active provider.
 pub(crate) struct HttpContentTypeClassifier {
     client: reqwest::Client,
-    api_key: Option<String>,
+    provider: Result<ResolvedProvider, ProviderError>,
     model: String,
     timeout_secs: u64,
 }
@@ -39,7 +40,7 @@ impl HttpContentTypeClassifier {
     pub(crate) fn new(client: reqwest::Client, llm: &LlmConfig, model: String) -> Self {
         Self {
             client,
-            api_key: llm.get_api_key(),
+            provider: llm.active_provider(),
             model,
             timeout_secs: llm.timeout_secs,
         }
@@ -77,13 +78,13 @@ impl ContentTypeClassifier for HttpContentTypeClassifier {
     ) -> impl std::future::Future<Output = Result<ContentType>> + Send {
         // Clone captures so the future owns them (Send, no borrow across await).
         let client = self.client.clone();
-        let api_key = self.api_key.clone();
+        let provider = self.provider.clone();
         let model = self.model.clone();
         let timeout = self.timeout_secs;
         let input = truncate_to_char_boundary(content, MAX_INPUT_BYTES).to_string();
 
         async move {
-            let api_key = api_key.context("OpenAI API key not configured for content-type")?;
+            let provider = provider.context("LLM provider not available for content-type")?;
             let request_body = serde_json::json!({
                 "model": model,
                 "messages": [
@@ -94,13 +95,13 @@ impl ContentTypeClassifier for HttpContentTypeClassifier {
                 "temperature": 0.0
             });
 
-            let response = client
-                .post("https://api.openai.com/v1/chat/completions")
-                .header("Authorization", format!("Bearer {api_key}"))
+            let request = provider
+                .chat_request(&client)
                 .header("Content-Type", "application/json")
                 .json(&request_body)
-                .timeout(Duration::from_secs(timeout))
-                .send()
+                .timeout(Duration::from_secs(timeout));
+            let response = provider
+                .send_chat(request, "content_type", &model)
                 .await
                 .context("Failed to send content-type classification request")?;
 

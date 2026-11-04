@@ -1,11 +1,12 @@
 //! LLM-based Named Entity Recognition.
 //!
-//! Sends chunk content to OpenAI and extracts entities + relations
+//! Sends chunk content to the active LLM provider and extracts entities + relations
 //! with confidence scores. Complements dictionary-based extraction.
 
 mod privacy;
 pub use privacy::prepare_entry;
 
+use crate::llm_provider::ResolvedProvider;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -89,11 +90,11 @@ pub fn estimate_tokens(text: &str) -> usize {
     text.len() / 4 + 1
 }
 
-/// Call OpenAI to extract entities from a batch of chunks.
+/// Call the active LLM provider to extract entities from a batch of chunks.
 pub async fn extract_entities_llm(
     client: &reqwest::Client,
+    provider: &ResolvedProvider,
     model: &str,
-    api_key: &str,
     chunks: &[ChunkBatchEntry],
 ) -> Result<(Vec<ChunkExtraction>, u64, u64)> {
     // Returns (extractions, input_tokens, output_tokens)
@@ -109,19 +110,15 @@ pub async fn extract_entities_llm(
         "max_tokens": 1000,
     });
 
-    let url = "https://api.openai.com/v1/chat/completions";
-
     for attempt in 1..=2 {
         debug!("LLM NER attempt {} for {} chunks", attempt, chunks.len());
 
-        let response = client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", api_key))
+        let request = provider
+            .chat_request(client)
             .header("Content-Type", "application/json")
             .json(&body)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await;
+            .timeout(std::time::Duration::from_secs(30));
+        let response = provider.send_chat(request, "llm_ner", model).await;
 
         match response {
             Ok(resp) => {

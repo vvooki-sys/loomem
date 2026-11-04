@@ -63,6 +63,24 @@ fn provider_response_rejects_extra_fields_refusal_and_truncation() {
     }
 }
 
+#[cfg(not(feature = "evaluation"))]
+#[test]
+fn endpoint_follows_the_active_provider() {
+    let provider = |base_url: &str| ResolvedProvider {
+        name: "p".into(),
+        base_url: base_url.into(),
+        api_key: None,
+    };
+    assert_eq!(
+        endpoint(&provider("https://api.openai.com/v1")).as_deref(),
+        Some("https://api.openai.com/v1/chat/completions")
+    );
+    assert_eq!(
+        endpoint(&provider("http://localhost:11434/v1")).as_deref(),
+        Some("http://localhost:11434/v1/chat/completions")
+    );
+}
+
 #[cfg(feature = "evaluation")]
 #[test]
 fn evaluation_url_is_loopback_only_and_fail_closed() {

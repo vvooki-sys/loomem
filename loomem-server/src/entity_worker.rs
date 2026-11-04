@@ -17,8 +17,8 @@ pub fn start(
     if !config.entity_extraction.enabled {
         return None;
     }
-    if config.llm.get_api_key().is_none() {
-        tracing::warn!("Entity extraction disabled (no API key)");
+    if let Err(error) = config.llm.active_provider() {
+        tracing::warn!("Entity extraction disabled (LLM provider unavailable: {error})");
         return None;
     }
     let context = EntityExtractionWorkerContext {

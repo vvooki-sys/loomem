@@ -340,13 +340,14 @@ fn first_reason(failures: &[ChunkFailure]) -> &str {
     failures.first().map_or("unknown", |f| f.reason.as_str())
 }
 
-/// Extraction produced no usable result (/157 S1): either the API key is
-/// missing, configuration is invalid, or every transcript chunk failed. Partial failures (some chunks
+/// Extraction produced no usable result (/157 S1): either the LLM provider is
+/// unavailable, configuration is invalid, or every transcript chunk failed. Partial failures (some chunks
 /// succeeded) are NOT an error; they surface as [`ExtractionOutcome::failures`].
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractionError {
-    #[error("OpenAI API key not configured for knowledge extraction")]
-    NoApiKey,
+    /// The active LLM provider cannot be resolved (unknown name or missing key).
+    #[error("LLM provider not available for knowledge extraction: {0}")]
+    Provider(crate::llm_provider::ProviderError),
     #[error("invalid knowledge extraction configuration: {0}")]
     InvalidConfig(&'static str),
     #[error(
@@ -367,10 +368,7 @@ impl ExtractionError {
     /// `Extraction failed (<status>): <reason>` message.
     pub fn status_and_reason(&self) -> (String, String) {
         match self {
-            Self::NoApiKey => (
-                "config".to_string(),
-                "OpenAI API key not configured".to_string(),
-            ),
+            Self::Provider(error) => ("config".to_string(), error.to_string()),
             Self::InvalidConfig(reason) => ("config".to_string(), (*reason).to_string()),
             Self::AllChunksFailed { failures, .. } => (
                 first_status_label(failures),
@@ -430,7 +428,7 @@ fn build_extraction_request(
 /// /157 S1 error contract:
 /// - `Ok` with non-empty `facts` — success (`failures` lists failed chunks),
 /// - `Ok` with empty `facts` and empty `failures` — genuine zero facts,
-/// - `Err` — no API key, or every chunk failed (HTTP / transport / parse).
+/// - `Err` — no usable LLM provider, or every chunk failed (HTTP / transport / parse).
 pub async fn extract_knowledge(
     client: &Client,
     llm_config: &LlmConfig,
@@ -438,8 +436,10 @@ pub async fn extract_knowledge(
     conversation_text: &str,
     conversation_date: &str,
 ) -> Result<ExtractionOutcome, ExtractionError> {
-    let api_key = llm_config.get_api_key().ok_or(ExtractionError::NoApiKey)?;
-    let chat = HttpExtractionChat::new(client, api_key);
+    let provider = llm_config
+        .active_provider()
+        .map_err(ExtractionError::Provider)?;
+    let chat = HttpExtractionChat::new(client, provider);
     extract_knowledge_with(
         &chat,
         extraction_config,

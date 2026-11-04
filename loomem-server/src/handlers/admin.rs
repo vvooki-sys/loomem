@@ -1061,11 +1061,14 @@ pub async fn extract_entities_handler(
             }
         };
 
-        let api_key = match llm_config.get_api_key() {
-            Some(k) => k,
-            None => {
-                trace.emit("backfill_error", serde_json::json!({"error": "no API key"}));
-                tracing::error!("Extract-entities: no API key");
+        let provider = match llm_config.active_provider() {
+            Ok(provider) => provider,
+            Err(e) => {
+                trace.emit(
+                    "backfill_error",
+                    serde_json::json!({"error": "LLM provider unavailable"}),
+                );
+                tracing::error!("Extract-entities: LLM provider unavailable: {e}");
                 RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
                 return;
             }
@@ -1132,8 +1135,8 @@ pub async fn extract_entities_handler(
             // LLM call
             match loomem_core::llm_ner::extract_entities_llm(
                 &http_client,
+                &provider,
                 &extraction_config.model,
-                &api_key,
                 &batch_items,
             )
             .await
