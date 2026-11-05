@@ -518,4 +518,77 @@ mod tests {
         assert_eq!(parsed["ollama"].api_key_env, None);
         assert_eq!(parsed["router"].api_key_env.as_deref(), Some("ROUTER_KEY"));
     }
+
+    fn provider_at(base_url: &str, api_key: Option<&str>) -> ResolvedProvider {
+        ResolvedProvider {
+            name: "mock".into(),
+            base_url: base_url.into(),
+            api_key: api_key.map(str::to_string),
+        }
+    }
+
+    async fn send_to(
+        provider: &ResolvedProvider,
+        request: reqwest::RequestBuilder,
+    ) -> reqwest::Result<reqwest::Response> {
+        let body = serde_json::json!({"model": "m", "messages": []});
+        provider.send_chat(request.json(&body), "test", "m").await
+    }
+
+    #[tokio::test]
+    async fn send_chat_posts_bearer_key_to_chat_completions() {
+        let (base_url, server) =
+            crate::test_http::serve_once("200 OK", r#"{"ok":true}"#, Some("Bearer sk-test")).await;
+        let provider = provider_at(&base_url, Some("sk-test"));
+        let request = provider.chat_request(&reqwest::Client::new());
+        let response = send_to(&provider, request).await.expect("send");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), r#"{"ok":true}"#);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_chat_keyless_provider_sends_no_authorization_header() {
+        let (base_url, server) = crate::test_http::serve_once("200 OK", "{}", None).await;
+        let provider = provider_at(&base_url, None);
+        let request = provider.chat_request(&reqwest::Client::new());
+        let response = send_to(&provider, request).await.expect("send");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_chat_returns_non_2xx_response_as_ok() {
+        let (base_url, server) =
+            crate::test_http::serve_once("429 Too Many Requests", "slow down", None).await;
+        let provider = provider_at(&base_url, None);
+        let request = provider.chat_request(&reqwest::Client::new());
+        let response = send_to(&provider, request).await.expect("send");
+        assert_eq!(response.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.text().await.unwrap(), "slow down");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn authorize_adds_key_to_a_request_for_another_url() {
+        let (mock_url, server) =
+            crate::test_http::serve_once("200 OK", "{}", Some("Bearer sk-test")).await;
+        // As with an evaluation loopback override: the URL is not base_url.
+        let provider = provider_at("http://127.0.0.1:9/v1", Some("sk-test"));
+        let request =
+            provider.authorize(reqwest::Client::new().post(format!("{mock_url}/chat/completions")));
+        let response = send_to(&provider, request).await.expect("send");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_chat_returns_err_when_nothing_listens() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+        drop(listener);
+        let provider = provider_at(&base_url, None);
+        let request = provider.chat_request(&reqwest::Client::new());
+        assert!(send_to(&provider, request).await.is_err());
+    }
 }
