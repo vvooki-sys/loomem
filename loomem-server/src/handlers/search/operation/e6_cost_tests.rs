@@ -25,7 +25,10 @@ async fn complete(
     State(provider): State<Provider>,
     Json(body): Json<Value>,
 ) -> (axum::http::StatusCode, Json<Value>) {
-    assert_eq!(body["model"], "gpt-4.1");
+    assert!(matches!(
+        body["model"].as_str(),
+        Some("gpt-4.1" | "unpriced-synthetic-model")
+    ));
     assert_eq!(body["service_tier"], "default");
     provider.calls.fetch_add(1, Ordering::SeqCst);
     (
@@ -148,6 +151,7 @@ async fn e6_native_http_books_paid_invalid_and_enforces_both_caps() {
     verify_unpriced_tiers(&provider, reservation).await;
     verify_concurrent_unknown(&provider, reservation).await;
     verify_blocked_calls(&provider).await;
+    verify_unpriced_model_is_free(&provider).await;
     server.abort();
 }
 
@@ -258,12 +262,19 @@ async fn verify_blocked_calls(provider: &Provider) {
     super::e6_tests::http_results(&app, OperationPolicy::E6).await;
     assert_eq!(provider.calls.load(Ordering::SeqCst), before);
     assert_eq!(daily(&state, None).total_usd, 0.0);
+}
 
+/// A model with no known price (for example a local Ollama model) costs zero:
+/// the selector calls the provider and writes no selector accounting.
+async fn verify_unpriced_model_is_free(provider: &Provider) {
     let (app, state) = fixture("unpriced-synthetic-model").await;
     let before = provider.calls.load(Ordering::SeqCst);
     super::e6_tests::http_results(&app, OperationPolicy::E6).await;
-    assert_eq!(provider.calls.load(Ordering::SeqCst), before);
-    assert_eq!(daily(&state, None).total_usd, 0.0);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), before + 1);
+    let cost = daily(&state, None);
+    assert_eq!(cost.total_usd, 0.0);
+    assert_eq!(cost.selector_calls, 0);
+    assert_eq!(cost.selector_unknown_usage_calls, 0);
 }
 
 fn cost_rows(state: &AppState) -> Vec<(Vec<u8>, Vec<u8>)> {

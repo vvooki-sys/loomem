@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+mod feature_models;
 mod search_validation;
 
 // Re-exports: each *Config lives in its owning module (CLAUDE.md §5).
@@ -374,6 +375,7 @@ impl Config {
         config.access_audit.apply_env_overrides(); // LOOMEM_ACCESS_AUDIT_ENABLED per-instance access-audit toggle (ADR-018, /150e)
         config.llm.apply_env_overrides(); // LOOMEM_EMBEDDING_PROVIDER / _DIM per-instance embedding override (cloud/Docker)
         config.worker.consolidation.apply_env_overrides(); // LOOMEM_CONSOLIDATION_INTERVAL_SECS per-instance (cloud)
+        config.inherit_feature_models(); // unset per-feature `model` → [llm] compression_model
 
         config.validate()?;
         Ok(config)

@@ -18,6 +18,9 @@ pub struct ContradictionConfig {
     pub enabled: bool,
     pub similarity_threshold: f64,
     pub max_candidates: usize,
+    /// Unset or empty: inherits `[llm] compression_model`
+    /// (see `Config::inherit_feature_models`).
+    #[serde(default)]
     pub model: String,
     /// /156: when true, a trust-OK supersede merges old+new into one
     /// trajectory-carrying sentence via an LLM rewrite. Default false keeps
@@ -33,7 +36,7 @@ impl Default for ContradictionConfig {
             enabled: false,
             similarity_threshold: 0.70,
             max_candidates: 5,
-            model: "gpt-4.1-mini".to_string(),
+            model: String::new(),
             history_preserving_rewrite: false,
         }
     }

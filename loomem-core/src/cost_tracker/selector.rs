@@ -1,5 +1,7 @@
 //! Persisted conservative charges reserve selector budget before network dispatch.
 //! Unknown usage retains its charge, including cancellation and process restarts.
+//! A model without a known price (for example a local Ollama model) costs zero,
+//! as in `CostTracker::record`: it gets no reservation and no accounting rows.
 use anyhow::{Context, Result};
 use serde_json::Value;
 
@@ -33,8 +35,12 @@ impl SelectorUsage {
     }
 }
 
+/// A selector call's charge: a persisted reservation for a priced model,
+/// or nothing for an unpriced model.
+pub struct SelectorReservation<'a>(Option<PricedReservation<'a>>);
+
 /// An already-persisted conservative charge; dropping intentionally retains unknown usage.
-pub struct SelectorReservation<'a> {
+struct PricedReservation<'a> {
     tracker: &'a CostTracker,
     keys: Vec<String>,
     reserved: f64,
@@ -46,14 +52,27 @@ pub struct SelectorReservation<'a> {
 
 impl<'a> SelectorAccounting<'a> {
     /// Reserve the full model context and the provider output ceiling.
-    /// Unknown models and disabled persistence fail closed before dispatch.
+    /// For a priced model, disabled persistence or budget fails closed before
+    /// dispatch. An unpriced model costs zero and reserves nothing.
     pub fn reserve(self, model: &str) -> Result<SelectorReservation<'a>> {
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
         self.reserve_on_day(model, &date)
     }
 
     fn reserve_on_day(self, model: &str, date: &str) -> Result<SelectorReservation<'a>> {
-        let prices = prices(model).context("Selector model pricing unavailable")?;
+        let Some(prices) = prices(model) else {
+            return Ok(SelectorReservation(None));
+        };
+        self.reserve_priced(model, prices, date)
+            .map(|reservation| SelectorReservation(Some(reservation)))
+    }
+
+    fn reserve_priced(
+        self,
+        model: &str,
+        prices: (f64, f64),
+        date: &str,
+    ) -> Result<PricedReservation<'a>> {
         anyhow::ensure!(
             self.tracker.config.daily_cap_usd.is_finite()
                 && self.tracker.config.daily_cap_usd > 0.0,
@@ -93,7 +112,7 @@ impl<'a> SelectorAccounting<'a> {
         }
         let pending: Vec<_> = pending.iter().map(|amount| amount + reserved).collect();
         save_costs(self.tracker, &keys, &costs, &pending_keys, &pending)?;
-        Ok(SelectorReservation {
+        Ok(PricedReservation {
             tracker: self.tracker,
             keys,
             reserved,
@@ -107,7 +126,17 @@ impl<'a> SelectorAccounting<'a> {
 
 impl SelectorReservation<'_> {
     /// Reconcile known billed usage once, even when the selected output is invalid.
+    /// An unpriced model has nothing to reconcile.
     pub fn reconcile(self, response: &Value) -> Result<()> {
+        match self.0 {
+            Some(reservation) => reservation.reconcile(response),
+            None => Ok(()),
+        }
+    }
+}
+
+impl PricedReservation<'_> {
+    fn reconcile(self, response: &Value) -> Result<()> {
         anyhow::ensure!(
             response.get("service_tier").and_then(Value::as_str) == Some("default"),
             "Selector processing tier unavailable or unsupported"
