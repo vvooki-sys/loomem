@@ -262,3 +262,79 @@ fn risk_routing_request_preserves_competing_sources_and_empty_response_keeps_e0(
         serde_json::to_value(candidates).unwrap()
     );
 }
+
+/// A keyless provider with a model that has no OpenAI price (Greptile P1 on
+/// #122): `select()` must call the provider and apply the selection.
+#[cfg(not(feature = "evaluation"))]
+#[tokio::test]
+async fn select_calls_keyless_provider_with_unpriced_model() {
+    let content = "apple preferences ".repeat(120);
+    let input = vec![HybridSearchResult {
+        id: "original".into(),
+        content: content.clone(),
+        user_id: "user".into(),
+        app_id: "app".into(),
+        level: 2,
+        timestamp: 123,
+        score: 0.4,
+        bm25_score: 0.2,
+        vector_score: 0.3,
+        time_decay_factor: 1.0,
+    }];
+    let selection = r#"{"selections":[{"record_index":0,"window_indices":[2]}]}"#;
+    let body = json!({
+        "model": "qwen2.5:3b",
+        "choices": [{"finish_reason": "stop", "message": {"content": selection}}],
+        "usage": {"prompt_tokens": 900, "completion_tokens": 20, "total_tokens": 920}
+    })
+    .to_string();
+    let (base_url, server) = crate::test_http::serve_once("200 OK", &body, None).await;
+    let config = LlmConfig {
+        provider: "ollama".into(),
+        providers: [(
+            "ollama".to_string(),
+            crate::llm_provider::LlmProviderConfig {
+                base_url,
+                api_key_env: None,
+            },
+        )]
+        .into(),
+        compression_model: "qwen2.5:3b".into(),
+        ..LlmConfig::default()
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(
+        crate::storage::RocksDbStore::open(
+            temp.path(),
+            &crate::config::RocksDbConfig {
+                max_open_files: 100,
+                compression: "none".into(),
+                write_buffer_size: 4 * 1024 * 1024,
+                max_write_buffer_number: 2,
+            },
+        )
+        .unwrap(),
+    );
+    let tracker = crate::CostTracker::new(
+        store,
+        crate::cost_tracker::CostConfig::default(),
+        Client::new(),
+    );
+    let accounting = SelectorAccounting {
+        tracker: &tracker,
+        stream_id: None,
+    };
+    let output = tokio::time::timeout(
+        crate::test_http::DEADLINE,
+        select(&config, "apple preferences", None, input, accounting),
+    )
+    .await
+    .expect("select did not finish in time");
+    crate::test_http::finish(server).await;
+    assert_eq!(output.len(), 1);
+    assert_eq!(output[0].id, "original");
+    assert_ne!(output[0].content, content, "selection was not applied");
+    let cost = tracker.daily_summary();
+    assert_eq!(cost.total_usd, 0.0);
+    assert_eq!(cost.selector_unknown_usage_calls, 0);
+}

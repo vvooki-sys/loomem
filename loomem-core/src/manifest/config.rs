@@ -16,6 +16,9 @@ pub struct ManifestConfig {
     /// the manifest still returns governance + stats. Default false.
     pub enabled: bool,
     /// Model used for the contents-summary completion.
+    /// Unset or empty: inherits `[llm] compression_model`
+    /// (see `Config::inherit_feature_models`).
+    #[serde(default)]
     pub model: String,
     /// Cap on chunks fed to the contents-summary prompt.
     pub max_chunks: usize,
@@ -31,7 +34,7 @@ impl Default for ManifestConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            model: "gpt-4.1-mini".to_string(),
+            model: String::new(),
             max_chunks: 100,
             cache_ttl_secs: 3600,
             streams: HashMap::new(),

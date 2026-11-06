@@ -30,6 +30,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Extraction failed: LLM provider unavailable. No facts stored." (before:
   "API key unavailable"). `ExtractionError::NoApiKey` is replaced by
   `ExtractionError::Provider`, which carries the provider error text.
+- The per-feature `model` keys (`[knowledge_extraction]`, `[entity_extraction]`,
+  `[memory_generator]`, `[contradiction]`, `[profile]`, `[manifest]`, `[dream]`,
+  `[content_type]`) are now optional. A missing or empty `model` uses
+  `[llm] compression_model`, so a switch to another provider needs only one
+  model setting. The shipped `config.toml` leaves them unset. An explicit
+  `model` still wins: an existing config that names `gpt-4.1-mini` in these
+  sections keeps it, so remove those lines when you switch to a provider that
+  does not serve that model.
+- The semantic evidence selector now runs with a model that has no known
+  price, for example a local Ollama model. Such a call costs $0, as in the
+  general cost tracker, and reserves no selector budget. Priced OpenAI models
+  keep the full budget reservation. Before, the selector skipped every
+  unpriced model and returned the original results.
+- An unpriced model now logs "Unknown model for cost tracking" once per model,
+  not on every call.
 
 ## [0.5.4] - 2026-10-27
 

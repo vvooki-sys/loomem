@@ -7,6 +7,9 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityExtractionConfig {
     pub enabled: bool,
+    /// Unset or empty: inherits `[llm] compression_model`
+    /// (see `Config::inherit_feature_models`).
+    #[serde(default)]
     pub model: String,
     pub batch_size: usize,
     pub flush_interval_secs: u64,
@@ -19,7 +22,7 @@ impl Default for EntityExtractionConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            model: "gpt-4.1-mini".to_string(),
+            model: String::new(),
             batch_size: 5,
             flush_interval_secs: 10,
             queue_capacity: 200,

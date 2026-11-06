@@ -13,6 +13,9 @@ pub struct MemoryGeneratorConfig {
     pub enabled: bool,
     pub max_chunks: usize,
     pub max_sections: usize,
+    /// Unset or empty: inherits `[llm] compression_model`
+    /// (see `Config::inherit_feature_models`).
+    #[serde(default)]
     pub model: String,
 }
 
@@ -22,7 +25,7 @@ impl Default for MemoryGeneratorConfig {
             enabled: true,
             max_chunks: 200,
             max_sections: 20,
-            model: "gpt-4.1-mini".to_string(),
+            model: String::new(),
         }
     }
 }
