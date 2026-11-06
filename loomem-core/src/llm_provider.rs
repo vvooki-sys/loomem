@@ -532,7 +532,12 @@ mod tests {
         request: reqwest::RequestBuilder,
     ) -> reqwest::Result<reqwest::Response> {
         let body = serde_json::json!({"model": "m", "messages": []});
-        provider.send_chat(request.json(&body), "test", "m").await
+        tokio::time::timeout(
+            crate::test_http::DEADLINE,
+            provider.send_chat(request.json(&body), "test", "m"),
+        )
+        .await
+        .expect("send_chat did not finish in time")
     }
 
     #[tokio::test]
@@ -544,7 +549,7 @@ mod tests {
         let response = send_to(&provider, request).await.expect("send");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert_eq!(response.text().await.unwrap(), r#"{"ok":true}"#);
-        server.await.unwrap();
+        crate::test_http::finish(server).await;
     }
 
     #[tokio::test]
@@ -554,7 +559,7 @@ mod tests {
         let request = provider.chat_request(&reqwest::Client::new());
         let response = send_to(&provider, request).await.expect("send");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
-        server.await.unwrap();
+        crate::test_http::finish(server).await;
     }
 
     #[tokio::test]
@@ -566,7 +571,7 @@ mod tests {
         let response = send_to(&provider, request).await.expect("send");
         assert_eq!(response.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(response.text().await.unwrap(), "slow down");
-        server.await.unwrap();
+        crate::test_http::finish(server).await;
     }
 
     #[tokio::test]
@@ -579,7 +584,7 @@ mod tests {
             provider.authorize(reqwest::Client::new().post(format!("{mock_url}/chat/completions")));
         let response = send_to(&provider, request).await.expect("send");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
-        server.await.unwrap();
+        crate::test_http::finish(server).await;
     }
 
     #[tokio::test]

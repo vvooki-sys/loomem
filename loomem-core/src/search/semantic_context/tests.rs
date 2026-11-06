@@ -118,7 +118,7 @@ async fn transport_handles_success_http_error_and_response_limit_without_retry()
         )
         .await;
         assert_eq!(output.is_some(), succeeds);
-        server.await.unwrap();
+        crate::test_http::finish(server).await;
     }
 }
 

@@ -38,6 +38,17 @@ pub(crate) async fn serve_once(
     (base_url, task)
 }
 
+/// Deadline for one mock exchange. A stuck connection fails the test.
+pub(crate) const DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Wait for the server task from [`serve_once`], at most [`DEADLINE`].
+pub(crate) async fn finish(server: JoinHandle<()>) {
+    tokio::time::timeout(DEADLINE, server)
+        .await
+        .expect("mock server did not finish in time")
+        .unwrap();
+}
+
 /// Read until the end of the request headers (or 8 KiB).
 async fn read_head(socket: &mut tokio::net::TcpStream) -> String {
     let mut input = Vec::with_capacity(8192);
