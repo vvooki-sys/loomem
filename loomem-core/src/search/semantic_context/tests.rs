@@ -98,31 +98,6 @@ fn evaluation_url_is_loopback_only_and_fail_closed() {
     }
 }
 
-async fn serve_once(status: &str, body: &str) -> (String, tokio::task::JoinHandle<()>) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!(
-        "http://{}/v1/chat/completions",
-        listener.local_addr().unwrap()
-    );
-    let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    let task = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut input = vec![0; 8192];
-        let size = socket.read(&mut input).await.unwrap();
-        let header = String::from_utf8_lossy(&input[..size]);
-        assert!(header.starts_with("POST /v1/chat/completions "));
-        assert!(header
-            .to_ascii_lowercase()
-            .contains("authorization: bearer fake-test-key"));
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
-    (endpoint, task)
-}
-
 #[tokio::test]
 async fn transport_handles_success_http_error_and_response_limit_without_retry() {
     let valid = json!({"choices":[{"finish_reason":"stop","message":{"content":r#"{"selections":[{"record_index":0,"window_indices":[0]}]}"#}}]}).to_string();
@@ -131,7 +106,9 @@ async fn transport_handles_success_http_error_and_response_limit_without_retry()
         ("429 Too Many Requests", "private error".into(), false),
         ("200 OK", "x".repeat(MAX_RESPONSE_BYTES + 1), false),
     ] {
-        let (endpoint, server) = serve_once(status, &body).await;
+        let (base_url, server) =
+            crate::test_http::serve_once(status, &body, Some("Bearer fake-test-key")).await;
+        let endpoint = format!("{base_url}/chat/completions");
         let output = request(
             &selector_client(&LlmConfig::default()).unwrap(),
             &endpoint,
@@ -141,7 +118,7 @@ async fn transport_handles_success_http_error_and_response_limit_without_retry()
         )
         .await;
         assert_eq!(output.is_some(), succeeds);
-        server.await.unwrap();
+        crate::test_http::finish(server).await;
     }
 }
 

@@ -55,6 +55,8 @@ pub mod stats_aggregator;
 pub mod storage;
 pub mod stream_stats;
 pub mod tantivy_index;
+#[cfg(test)]
+pub(crate) mod test_http;
 pub mod vector_search;
 pub mod workers_registry;
 
