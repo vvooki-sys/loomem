@@ -302,6 +302,26 @@ mod tests {
         assert!(!same_record(&original, &changed));
     }
     #[test]
+    fn interval_bytes_preserve_micros_z_normalization_and_boundaries() {
+        let (_app, state) = crate::tests::make_test_app();
+        let mut config = state.config.search.clone();
+        config.operation.enabled = true;
+        let payload: crate::handlers::types::SearchRequest =
+            serde_json::from_value(serde_json::json!({
+                "query": "What happened last month?",
+                "operation_policy": "E2-C",
+                "reference_time": "2026-10-19T12:00:00.120+02:00",
+                "top_k": 10
+            }))
+            .unwrap();
+        let prepared = super::super::operation::prepare(&config, &payload, 10, None).unwrap();
+        assert_eq!(
+            String::from_utf8(interval_json(&prepared).unwrap()).unwrap(),
+            "{\"reference_time\":\"2026-10-19T10:00:00.120000Z\",\"resolved_half_open_start\":1788220800,\"resolved_half_open_end\":1790812800,\"tantivy_inclusive_start\":1788220800,\"tantivy_inclusive_end\":1790812799}"
+        );
+    }
+
+    #[test]
     fn interval_proof_has_a_separate_disabled_domain() {
         let key = [0; 32];
         assert_ne!(

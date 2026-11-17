@@ -326,6 +326,16 @@ mod tests {
     }
 
     #[test]
+    fn t6_invalid_calendar_day_preserves_error_message() {
+        let err = validate_snapshot_token("snap-20260230-prod-aabb1234", today())
+            .expect_err("invalid calendar day must fail");
+        assert_eq!(
+            err,
+            "snapshot_token date parse error: input is out of range"
+        );
+    }
+
+    #[test]
     fn t6_malformed_no_hex_suffix() {
         // All-letter suffix is not hex.
         let err =

@@ -486,6 +486,24 @@ mod tests {
         assert_eq!(resolve_date("2 miesiec temu", a()), Some(d(2026, 2, 5)));
     }
 
+    #[test]
+    fn relative_dates_preserve_leap_days_and_clamp_month_ends() {
+        assert_eq!(
+            resolve_date("3 months ago", d(2026, 5, 31)),
+            Some(d(2026, 2, 28))
+        );
+        assert_eq!(
+            resolve_date("3 miesiące temu", d(2024, 5, 31)),
+            Some(d(2024, 2, 29))
+        );
+        assert_eq!(
+            resolve_date("yesterday", d(2026, 1, 1)),
+            Some(d(2025, 12, 31))
+        );
+        assert_eq!(resolve_date("2024-02-29", a()), Some(d(2024, 2, 29)));
+        assert_eq!(resolve_date("2026-02-29", a()), None);
+    }
+
     // ── Last [weekday] ──
 
     #[test]

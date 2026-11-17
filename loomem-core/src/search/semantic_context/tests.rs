@@ -42,6 +42,33 @@ fn request_is_deterministic_strict_and_keeps_untrusted_data_in_user_message() {
 }
 
 #[test]
+fn request_preserves_rfc3339_precision_and_original_offsets() {
+    for (input, expected) in [
+        ("2023-11-14T22:13:20Z", "2023-11-14T22:13:20+00:00"),
+        ("2023-11-14T22:13:20.120Z", "2023-11-14T22:13:20.120+00:00"),
+        ("2023-11-14T22:13:20.123Z", "2023-11-14T22:13:20.123+00:00"),
+        (
+            "2023-11-14T22:13:20.123456Z",
+            "2023-11-14T22:13:20.123456+00:00",
+        ),
+        (
+            "2023-11-14T22:13:20.123456789Z",
+            "2023-11-14T22:13:20.123456789+00:00",
+        ),
+        (
+            "2026-01-02T03:04:05.120+05:30",
+            "2026-01-02T03:04:05.120+05:30",
+        ),
+        ("2026-01-02T03:04:05+00:00", "2026-01-02T03:04:05+00:00"),
+    ] {
+        let body = build_request("query", Some(input), &[], "model");
+        let data: Value =
+            serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(data["reference_time"], expected, "input={input}");
+    }
+}
+
+#[test]
 fn provider_response_rejects_extra_fields_refusal_and_truncation() {
     let wrap =
         |content: &str| json!({"choices":[{"finish_reason":"stop","message":{"content":content}}]});

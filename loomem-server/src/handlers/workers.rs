@@ -269,6 +269,11 @@ mod tests {
     }
 
     #[test]
+    fn epoch_rfc3339_preserves_numeric_utc_suffix() {
+        assert_eq!(epoch_to_rfc3339(1_700_000_000), "2023-11-14T22:13:20+00:00");
+    }
+
+    #[test]
     fn build_registry_has_correct_worker_count() {
         let reg = make_test_registry();
         assert_eq!(reg.len(), KNOWN_WORKERS.len());

@@ -183,6 +183,12 @@ fn epoch_to_rfc3339(secs: u64) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn epoch_rfc3339_preserves_seconds_z_and_fallback() {
+        assert_eq!(epoch_to_rfc3339(1_700_000_000), "2023-11-14T22:13:20Z");
+        assert_eq!(epoch_to_rfc3339(u64::MAX), "1970-01-01T00:00:00Z");
+    }
+
     // ── Unit: sort comparator ────────────────────────────────────────────
 
     /// Build a minimal CoOccurResult for sort testing.

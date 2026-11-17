@@ -50,6 +50,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn last_month_boundaries_are_byte_stable() {
+        let reference = DateTime::parse_from_rfc3339("2026-10-19T12:00:00+02:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let interval = last_month_interval("last month", reference).unwrap();
+        assert_eq!(
+            interval,
+            HalfOpenInterval {
+                start: 1_788_220_800,
+                end: 1_790_812_800,
+            }
+        );
+        assert_eq!(
+            interval.inclusive_bounds(),
+            Some((1_788_220_800, 1_790_812_799))
+        );
+    }
+
+    #[test]
     fn date_markers_are_bounded_and_do_not_capture_facet_only_operations() {
         for query in [
             "recommend yesterday",

@@ -199,6 +199,22 @@ mod tests {
         assert!(parse_and_validate("not a date").is_none());
         assert!(parse_and_validate("").is_none());
         assert!(parse_and_validate("2026-13-45").is_none());
+        assert!(parse_and_validate("2026-02-29").is_none());
+    }
+
+    #[test]
+    fn parse_and_validate_preserves_leap_days_and_year_boundaries() {
+        assert_eq!(
+            parse_and_validate("2024-02-29")
+                .unwrap()
+                .format("%Y-%m-%d")
+                .to_string(),
+            "2024-02-29"
+        );
+        assert!(parse_and_validate("1900-01-01").is_some());
+        assert!(parse_and_validate("2100-12-31").is_some());
+        assert!(parse_and_validate("1899-12-31").is_none());
+        assert!(parse_and_validate("2101-01-01").is_none());
     }
 
     #[test]
