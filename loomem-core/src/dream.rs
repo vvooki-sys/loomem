@@ -523,17 +523,13 @@ fn build_dream_chunk(
 /// Extracted from `apply_dream_response_for_subject` to reduce NLOC of the
 /// orchestrator (cycle /46 fixup: original NLOC=139, limit ≤100).
 fn build_dream_text_doc(chunk: &Chunk) -> TextDocument {
-    // Parse event_date from extraction_meta for Tantivy temporal indexing.
-    // and_hms_opt(12,0,0) returns None only for invalid h/m/s values;
-    // 12:00:00 is always valid, so the and_then chain returns None only
-    // when the date string is absent or unparseable.
+    // Invalid dates remain unknown; valid dates retain the legacy noon timestamp.
     let event_date: Option<i64> = chunk
         .extraction_meta
         .as_ref()
         .and_then(|m| m.event_date.as_ref())
-        .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-        .and_then(|d| d.and_hms_opt(12, 0, 0))
-        .map(|dt| dt.and_utc().timestamp());
+        .and_then(|d| jiff::civil::Date::strptime("%Y-%m-%d", d).ok())
+        .and_then(|d| crate::temporal::utc_timestamp(d, 12));
 
     TextDocument {
         id: chunk.id.clone(),
@@ -628,10 +624,8 @@ fn now_secs() -> u64 {
 }
 
 fn parse_date(date_str: &str) -> Option<u64> {
-    chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-        .ok()
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
-        .map(|dt| dt.and_utc().timestamp() as u64)
+    let date = jiff::civil::Date::strptime("%Y-%m-%d", date_str).ok()?;
+    crate::temporal::utc_timestamp(date, 0).map(|timestamp| timestamp as u64)
 }
 
 #[cfg(test)]

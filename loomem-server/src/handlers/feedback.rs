@@ -57,7 +57,7 @@ pub async fn feedback_handler(
             .map_err(AppError::BadRequest)?;
     }
 
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = jiff::Timestamp::now().as_millisecond();
     let (accepted, rejected) = apply_all(&svc, &auth, &payload, now_ms)?;
 
     if accepted == 0 {

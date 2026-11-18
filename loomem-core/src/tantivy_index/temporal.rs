@@ -21,11 +21,11 @@ pub fn event_timestamp_for_chunk(chunk: &Chunk) -> Option<i64> {
         return None;
     }
     let raw = chunk.extraction_meta.as_ref()?.event_date.as_deref()?;
-    let date = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()?;
-    if date.format("%Y-%m-%d").to_string() != raw {
+    let date = jiff::civil::Date::strptime("%Y-%m-%d", raw).ok()?;
+    if date.strftime("%Y-%m-%d").to_string() != raw {
         return None;
     }
-    Some(date.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
+    crate::temporal::utc_timestamp(date, 0)
 }
 
 fn bind_document(doc: &TextDocument, chunk: &Chunk) -> Result<()> {

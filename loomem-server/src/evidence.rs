@@ -12,7 +12,7 @@
 //!
 //! Pure: no I/O, no config. Surfaces gate it on `[search] evidence_fields`.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use loomem_core::storage::{is_ingest_fact_shape, is_ingest_source, Chunk, ExtractionMeta};
 use serde::Serialize;
 
@@ -148,9 +148,9 @@ fn event_date_provenance(meta: Option<&ExtractionMeta>) -> &'static str {
 
 /// `value` when it is a calendar-valid `YYYY-MM-DD` in canonical spelling.
 fn iso_date(value: &str, field: &'static str) -> Option<String> {
-    let canonical = NaiveDate::parse_from_str(value, "%Y-%m-%d")
+    let canonical = Date::strptime("%Y-%m-%d", value)
         .ok()
-        .is_some_and(|parsed| parsed.format("%Y-%m-%d").to_string() == value);
+        .is_some_and(|parsed| parsed.strftime("%Y-%m-%d").to_string() == value);
     if !canonical {
         tracing::debug!(field, "evidence: dropping non-ISO date");
     }

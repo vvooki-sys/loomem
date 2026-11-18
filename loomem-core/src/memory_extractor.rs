@@ -550,7 +550,9 @@ pub async fn extract_memories(
     extraction_config: &KnowledgeExtractionConfig,
     conversation_text: &str,
 ) -> Result<ExtractionOutcome, ExtractionError> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = crate::temporal::utc_date(jiff::Timestamp::now())
+        .strftime("%Y-%m-%d")
+        .to_string();
     extract_knowledge(
         client,
         llm_config,

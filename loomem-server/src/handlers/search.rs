@@ -3769,7 +3769,7 @@ mod tests {
             let cls = classify(&req.query);
             // Use realistic recent timestamps so recency `exp(-Δt/τ)` doesn't
             // underflow to zero against the wall-clock-anchored `FusionParams::now_default()`.
-            let now = chrono::Utc::now().timestamp();
+            let now = jiff::Timestamp::now().as_second();
             let cs = vec![
                 hsr("alpha", 0.9, 4.0, now - 86_400),
                 hsr("bravo", 0.5, 8.0, now - 2 * 86_400),

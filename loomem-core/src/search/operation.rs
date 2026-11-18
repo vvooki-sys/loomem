@@ -1,5 +1,5 @@
 //! Deterministic, bounded operation facets for opt-in search experiments.
-use chrono::{DateTime, Duration, Utc};
+use jiff::{SignedDuration, Timestamp};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -168,7 +168,7 @@ impl OperationPlan {
 
 pub fn plan(
     query: &str,
-    reference_time: Option<DateTime<Utc>>,
+    reference_time: Option<Timestamp>,
     policy: OperationPolicy,
 ) -> OperationPlan {
     if policy.is_e2() {
@@ -231,7 +231,7 @@ pub fn plan(
 
 fn plan_e2(
     query: &str,
-    reference_time: Option<DateTime<Utc>>,
+    reference_time: Option<Timestamp>,
     policy: OperationPolicy,
 ) -> OperationPlan {
     if query.trim().is_empty() || query.len() > MAX_QUERY_BYTES {
@@ -462,7 +462,7 @@ fn requested_count(query: &str) -> Option<u8> {
         .and_then(|value| value.as_str().parse().ok())
 }
 
-fn relative_interval(query: &str, reference: DateTime<Utc>) -> Option<(i64, i64)> {
+fn relative_interval(query: &str, reference: Timestamp) -> Option<(i64, i64)> {
     let pattern = relative_regex()?;
     if pattern.captures_iter(query).count() != 1 {
         return None;
@@ -473,7 +473,11 @@ fn relative_interval(query: &str, reference: DateTime<Utc>) -> Option<(i64, i64)
         return None;
     }
     let days = relative_days(amount, &unit)?;
-    day_interval(reference.checked_sub_signed(Duration::days(days))?)
+    let hours = days.checked_mul(24)?;
+    let target = reference
+        .checked_sub(SignedDuration::from_hours(hours))
+        .ok()?;
+    day_interval(target)
 }
 
 fn relative_values(captures: &regex::Captures<'_>) -> Option<(i64, String)> {
@@ -492,10 +496,11 @@ fn relative_days(amount: i64, unit: &str) -> Option<i64> {
     amount.checked_mul(multiplier)
 }
 
-fn day_interval(target: DateTime<Utc>) -> Option<(i64, i64)> {
-    let start = target.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
-    let end = target.date_naive().and_hms_opt(23, 59, 59)?.and_utc();
-    Some((start.timestamp(), end.timestamp()))
+fn day_interval(target: Timestamp) -> Option<(i64, i64)> {
+    let date = crate::temporal::utc_date(target);
+    let start = crate::temporal::utc_timestamp(date, 0)?;
+    let end = start.checked_add(86_399)?;
+    Some((start, end))
 }
 
 fn relative_regex() -> Option<&'static Regex> {
@@ -509,10 +514,9 @@ fn count_regex() -> Option<&'static Regex> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
 
-    fn anchor() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 10, 19, 12, 0, 0).unwrap()
+    fn anchor() -> Timestamp {
+        "2026-10-19T12:00:00Z".parse().unwrap()
     }
 
     #[test]

@@ -9,7 +9,7 @@
 //!   and `eval/reality-bench-*.json`, return metadata array sorted by timestamp asc.
 
 use axum::Json;
-use chrono::Utc;
+use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -65,7 +65,7 @@ pub async fn admin_bench_run_handler(
     require_admin_forbidden(&request)?;
 
     let task_id = uuid::Uuid::new_v4().to_string();
-    let started_at = Utc::now().to_rfc3339();
+    let started_at = crate::temporal::to_rfc3339(Timestamp::now());
 
     let task_id_for_log = task_id.clone();
     tokio::spawn(async move {

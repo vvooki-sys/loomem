@@ -1,6 +1,6 @@
 use anyhow::Result;
 #[cfg(test)]
-use chrono::Utc;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::debug;
@@ -744,7 +744,7 @@ mod tests {
         let config = test_config();
         let engine = HybridSearchEngine::new(config.clone());
 
-        let now = Utc::now().timestamp();
+        let now = Timestamp::now().as_second();
 
         // Recent document (1 day old) at L0 - fast decay
         let decay_l0_1d = engine.compute_time_decay(now - 86400, 0, &config.search.decay);
@@ -777,7 +777,7 @@ mod tests {
         let config = test_config();
         assert_eq!(config.search.vector_similarity_floor, 0.0);
         let engine = HybridSearchEngine::new(config);
-        let now = Utc::now().timestamp();
+        let now = Timestamp::now().as_second();
 
         let results = engine
             .fuse_with_vector(
@@ -796,7 +796,7 @@ mod tests {
         let mut config = test_config();
         config.search.vector_similarity_floor = 0.8;
         let engine = HybridSearchEngine::new(config);
-        let now = Utc::now().timestamp();
+        let now = Timestamp::now().as_second();
 
         // "noise" sits below the floor: its vector contribution must vanish
         // (bm25-only scoring), while "strong" keeps the vector channel.
@@ -827,7 +827,7 @@ mod tests {
         let mut config = test_config();
         config.search.vector_similarity_floor = 0.8;
         let engine = HybridSearchEngine::new(config);
-        let now = Utc::now().timestamp();
+        let now = Timestamp::now().as_second();
 
         let results = engine
             .fuse_with_vector(
@@ -872,7 +872,7 @@ mod tests {
         // Cycle/012 buried-needle shape: the only strong lexical match is 60
         // days old (l1_lambda=0.03 → decay ≈ 0.165) and loses to a fresh,
         // loosely-matching chunk. With relief enabled the needle wins.
-        let now = Utc::now().timestamp();
+        let now = Timestamp::now().as_second();
         let old_ts = now - 60 * 86400;
         let bm25 = || {
             vec![

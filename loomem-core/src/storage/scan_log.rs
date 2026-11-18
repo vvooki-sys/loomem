@@ -166,7 +166,7 @@ impl ScanDecodeLog {
             decrypt: self.decrypt,
             payload: self.payload,
             first_error: self.first_error,
-            at_unix: u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(0),
+            at_unix: u64::try_from(jiff::Timestamp::now().as_second()).unwrap_or(0),
         }
     }
 }

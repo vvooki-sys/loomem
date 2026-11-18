@@ -1,7 +1,7 @@
 //! Bounded, deterministic operation-stage reranking.
 pub(super) use super::operation_lane::rerank;
 use super::telemetry::{base_temporary_bytes, temporary_bytes};
-use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use jiff::{civil::Date, Timestamp};
 use loomem_core::hybrid_search::SearchConfig;
 use loomem_core::search::operation::{
     OperationPlan, OperationPolicy, MAX_QUERY_BYTES, MAX_RETURNED,
@@ -32,7 +32,7 @@ pub(super) struct E2LaneSpec {
 pub(super) struct PreparedOperation {
     pub policy: OperationPolicy,
     pub plan: OperationPlan,
-    pub(super) reference_time: Option<DateTime<Utc>>,
+    pub(super) reference_time: Option<Timestamp>,
     fallback: Option<&'static str>,
     e2_lane: Option<E2LaneSpec>,
     e2_fallback: Option<&'static str>,
@@ -60,9 +60,12 @@ impl PreparedOperation {
 
     pub fn cache_identity(&self, date: &PreparedDate) -> Option<String> {
         if self.policy == OperationPolicy::E6 {
+            let reference_time = self.reference_time.map_or_else(
+                || "None".to_string(),
+                |value| format!("Some({})", crate::temporal::to_rfc3339_z(value)),
+            );
             return Some(format!(
-                "e6-semantic-evidence-v2-temporal-veto-v1|{:?}",
-                self.reference_time
+                "e6-semantic-evidence-v2-temporal-veto-v1|{reference_time}"
             ));
         }
         if self.policy == OperationPolicy::E5 {
@@ -86,7 +89,7 @@ impl PreparedOperation {
     }
 
     #[cfg(feature = "evaluation")]
-    pub(super) fn evidence_reference_time(&self) -> Option<DateTime<Utc>> {
+    pub(super) fn evidence_reference_time(&self) -> Option<Timestamp> {
         self.reference_time
     }
 
@@ -115,7 +118,7 @@ impl PreparedOperation {
         serde_json::json!({
             "version": E2_CACHE_VERSION, "policy": self.policy,
             "plan": self.plan.identity(), "range": range,
-            "anchor": self.reference_time, "date_source": DATE_SOURCE_POLICY,
+            "anchor": self.reference_time.map(crate::temporal::to_rfc3339_z), "date_source": DATE_SOURCE_POLICY,
             "explicit_precedence": "intersection", "caps": [60, 180, 20, 2, 524288, 1048576],
         })
         .to_string()
@@ -293,16 +296,18 @@ fn gate_reason(state: GateState) -> Option<&'static str> {
     Some(reason)
 }
 
-fn normalized_reference_time(payload: &SearchRequest) -> Option<DateTime<Utc>> {
+fn normalized_reference_time(payload: &SearchRequest) -> Option<Timestamp> {
     if !payload.operation_policy.date_enabled() && payload.operation_policy != OperationPolicy::E6 {
         return None;
     }
     payload
         .reference_time
         .as_deref()
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&Utc))
-        .filter(|value| !payload.operation_policy.is_e2() || (1970..=9999).contains(&value.year()))
+        .and_then(|value| value.parse::<Timestamp>().ok())
+        .filter(|value| {
+            !payload.operation_policy.is_e2()
+                || (1970..=9999).contains(&crate::temporal::utc_date(*value).year())
+        })
 }
 
 pub(super) fn resolve_date(payload: &SearchRequest, operation: &PreparedOperation) -> PreparedDate {
@@ -354,24 +359,29 @@ fn strict_explicit_date_filter(payload: &SearchRequest) -> Result<Option<DateFil
 fn strict_bound(value: Option<&str>, end: bool) -> Result<i64, AppError> {
     let value = value.unwrap_or(if end { "9999-12-31" } else { "1970-01-01" });
     let parsed = if value.len() == 10 {
-        let date =
-            NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| invalid_explicit_date())?;
+        let date = Date::strptime("%Y-%m-%d", value).map_err(|_| invalid_explicit_date())?;
         if date.to_string() != value {
             return Err(invalid_explicit_date());
         }
-        let time = if end { (23, 59, 59) } else { (0, 0, 0) };
-        date.and_hms_opt(time.0, time.1, time.2)
-            .map(|value| value.and_utc())
-            .ok_or_else(invalid_explicit_date)?
+        let hour = if end { 23 } else { 0 };
+        let seconds =
+            crate::temporal::utc_timestamp(date, hour).ok_or_else(invalid_explicit_date)?;
+        if end {
+            seconds + 59 * 60 + 59
+        } else {
+            seconds
+        }
     } else {
-        DateTime::parse_from_rfc3339(value)
+        value
+            .parse::<Timestamp>()
             .map_err(|_| invalid_explicit_date())?
-            .with_timezone(&Utc)
+            .as_second()
     };
-    if !(1970..=9999).contains(&parsed.year()) {
+    let timestamp = Timestamp::from_second(parsed).map_err(|_| invalid_explicit_date())?;
+    if !(1970..=9999).contains(&crate::temporal::utc_date(timestamp).year()) {
         return Err(invalid_explicit_date());
     }
-    Ok(parsed.timestamp())
+    Ok(parsed)
 }
 
 fn invalid_explicit_date() -> AppError {
@@ -405,7 +415,7 @@ pub(super) fn merge_expanded_results(
     results.into_iter().map(|(item, _)| item).collect()
 }
 
-fn anchored_date(payload: &SearchRequest, anchor: Option<DateTime<Utc>>) -> PreparedDate {
+fn anchored_date(payload: &SearchRequest, anchor: Option<Timestamp>) -> PreparedDate {
     let Some(anchor) = anchor else {
         return PreparedDate {
             query: payload.query.clone(),
@@ -426,7 +436,7 @@ fn explicit_date_filter(payload: &SearchRequest) -> Option<DateFilter> {
         (Some(from), Some(to)) => Some(DateFilter::Range(start_of_day(from)?, end_of_day(to)?)),
         (Some(from), None) => Some(DateFilter::Range(
             start_of_day(from)?,
-            crate::evaluation_clock::now().timestamp(),
+            crate::evaluation_clock::now().as_second(),
         )),
         (None, Some(to)) => Some(DateFilter::Range(0, end_of_day(to)?)),
         (None, None) => None,
@@ -434,17 +444,13 @@ fn explicit_date_filter(payload: &SearchRequest) -> Option<DateFilter> {
 }
 
 fn start_of_day(value: &str) -> Option<i64> {
-    NaiveDate::parse_from_str(value, "%Y-%m-%d")
-        .ok()?
-        .and_hms_opt(0, 0, 0)
-        .map(|value| value.and_utc().timestamp())
+    let date = Date::strptime("%Y-%m-%d", value).ok()?;
+    crate::temporal::utc_timestamp(date, 0)
 }
 
 fn end_of_day(value: &str) -> Option<i64> {
-    NaiveDate::parse_from_str(value, "%Y-%m-%d")
-        .ok()?
-        .and_hms_opt(23, 59, 59)
-        .map(|value| value.and_utc().timestamp())
+    let date = Date::strptime("%Y-%m-%d", value).ok()?;
+    Some(crate::temporal::utc_timestamp(date, 23)? + 59 * 60 + 59)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

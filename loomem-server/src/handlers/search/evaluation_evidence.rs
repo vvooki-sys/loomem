@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 
-use chrono::SecondsFormat;
 use loomem_core::HybridSearchResult;
 use serde::Serialize;
 
@@ -180,9 +179,7 @@ fn interval_json(prepared: &PreparedOperation) -> Option<Vec<u8>> {
     let interval = prepared.plan.half_open_interval()?;
     let (start, end) = prepared.e2_lane_spec()?.inclusive_range?;
     serde_json::to_vec(&Interval {
-        reference_time: prepared
-            .evidence_reference_time()?
-            .to_rfc3339_opts(SecondsFormat::Micros, true),
+        reference_time: format!("{:.6}", prepared.evidence_reference_time()?),
         resolved_half_open_start: interval.start,
         resolved_half_open_end: interval.end,
         tantivy_inclusive_start: start,

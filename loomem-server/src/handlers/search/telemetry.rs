@@ -660,7 +660,7 @@ fn allocation_slots(items: usize) -> usize {
 mod e2_invariants {
     use super::*;
     use crate::handlers::search::stream_scoping_e2e_tests::configured_state;
-    use chrono::{DateTime, Utc};
+    use jiff::Timestamp;
     use loomem_core::search::operation::{plan, OperationPolicy};
     use serde_json::json;
 
@@ -683,9 +683,7 @@ mod e2_invariants {
 
     #[test]
     fn calendar_window_is_explicit_and_half_open() {
-        let anchor = DateTime::parse_from_rfc3339("2023-05-30T15:40:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
+        let anchor = "2023-05-30T15:40:00Z".parse::<Timestamp>().unwrap();
         for policy in [OperationPolicy::E2D, OperationPolicy::E2C] {
             let value = plan("what happened last month", Some(anchor), policy);
             let interval = value.half_open_interval().unwrap();

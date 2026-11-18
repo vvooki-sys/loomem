@@ -41,7 +41,7 @@ pub enum AdminStreamStatsResponse {
 /// clock-free and testable).
 fn opts_for(state: &AppState) -> ComputeOpts {
     ComputeOpts {
-        now: u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(0),
+        now: u64::try_from(jiff::Timestamp::now().as_second()).unwrap_or(0),
         min_chunks_to_consolidate: u64::try_from(
             state.config.worker.consolidation.min_chunks_to_consolidate,
         )

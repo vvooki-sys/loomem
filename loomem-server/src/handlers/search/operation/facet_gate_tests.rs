@@ -1,5 +1,4 @@
 use super::*;
-use chrono::TimeZone;
 
 fn prepared(query: &str, policy: OperationPolicy, anchor: Option<&str>) -> PreparedOperation {
     let payload: SearchRequest = serde_json::from_value(serde_json::json!({
@@ -108,10 +107,10 @@ fn calendar_combined_keeps_range_and_plain_combined_stays_inactive() {
 
 #[test]
 fn cache_identity_uses_effective_dates_instead_of_anchor_text() {
-    let make = |hour| PreparedOperation {
+    let make = |hour: i64| PreparedOperation {
         policy: OperationPolicy::E1D,
         plan: OperationPlan::plain(),
-        reference_time: Utc.with_ymd_and_hms(2026, 10, 19, hour, 0, 0).single(),
+        reference_time: Timestamp::from_second(1_792_368_000 + hour * 3600).ok(),
         fallback: None,
         e2_lane: None,
         e2_fallback: None,

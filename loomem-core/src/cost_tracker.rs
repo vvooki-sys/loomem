@@ -3,7 +3,6 @@ pub mod selector;
 static COST_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
@@ -57,7 +56,9 @@ pub struct DailyCost {
 impl Default for DailyCost {
     fn default() -> Self {
         Self {
-            date: Utc::now().format("%Y-%m-%d").to_string(),
+            date: crate::temporal::utc_date(jiff::Timestamp::now())
+                .strftime("%Y-%m-%d")
+                .to_string(),
             total_usd: 0.0,
             embed_calls: 0,
             compress_calls: 0,
@@ -114,7 +115,7 @@ impl CostTracker {
     }
 
     fn today_key(workspace_id: Option<&str>) -> String {
-        let date = Utc::now().format("%Y-%m-%d");
+        let date = crate::temporal::utc_date(jiff::Timestamp::now()).strftime("%Y-%m-%d");
         match workspace_id {
             Some(ws) => format!("cost:{}:{}", ws, date),
             None => format!("cost:{}", date), // global key for backward compat
@@ -307,8 +308,13 @@ impl CostTracker {
 
         // Get last 7 days
         for i in 1..=7 {
-            let date = Utc::now() - chrono::Duration::days(i);
-            let key = format!("cost:{}", date.format("%Y-%m-%d"));
+            let Ok(timestamp) =
+                jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(i * 24))
+            else {
+                continue;
+            };
+            let date = crate::temporal::utc_date(timestamp);
+            let key = format!("cost:{}", date.strftime("%Y-%m-%d"));
 
             if let Some(bytes) = self.store.db().get_cf(cf, key.as_bytes())? {
                 if let Ok(cost) = serde_json::from_slice::<DailyCost>(&bytes) {
@@ -430,7 +436,10 @@ impl CostBudgetStatus {
 ///
 /// This is advisory — it logs warnings but does not hard-block operations.
 pub fn check_cost_budget(store: &RocksDbStore, daily_budget_usd: f64) -> CostBudgetStatus {
-    let today_key = format!("cost:{}", Utc::now().format("%Y-%m-%d"));
+    let today_key = format!(
+        "cost:{}",
+        crate::temporal::utc_date(jiff::Timestamp::now()).strftime("%Y-%m-%d")
+    );
 
     // Try to read from the costs column family
     let cost_opt = store
@@ -481,7 +490,11 @@ pub fn check_cost_budget_for_stream(
     stream_id: &str,
     daily_budget_usd: f64,
 ) -> CostBudgetStatus {
-    let today_key = format!("cost:{}:{}", stream_id, Utc::now().format("%Y-%m-%d"));
+    let today_key = format!(
+        "cost:{}:{}",
+        stream_id,
+        crate::temporal::utc_date(jiff::Timestamp::now()).strftime("%Y-%m-%d")
+    );
 
     let cost_opt = store
         .db()

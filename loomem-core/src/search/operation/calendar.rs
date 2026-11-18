@@ -1,6 +1,6 @@
 //! Canonical calendar-window recognition shared by planning and lane safety gates.
 use super::HalfOpenInterval;
-use chrono::{DateTime, Datelike, Utc};
+use jiff::Timestamp;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -28,20 +28,16 @@ pub fn has_date_window_marker(query: &str) -> bool {
         .is_none_or(|pattern| pattern.is_match(query))
 }
 
-pub(super) fn last_month_interval(
-    query: &str,
-    reference: DateTime<Utc>,
-) -> Option<HalfOpenInterval> {
+pub(super) fn last_month_interval(query: &str, reference: Timestamp) -> Option<HalfOpenInterval> {
     let mut markers = DATE_WINDOW_REGEX.as_ref()?.find_iter(query);
     let marker = markers.next()?.as_str().to_lowercase();
     (markers.next().is_none() && matches!(marker.as_str(), "last month" | "ostatni miesiąc"))
         .then_some(())?;
-    let end_date = reference.date_naive().with_day(1)?;
-    let start_date = end_date.pred_opt()?.with_day(1)?;
-    let end = end_date.and_hms_opt(0, 0, 0)?.and_utc().timestamp();
+    let end_date = crate::temporal::utc_date(reference).first_of_month();
+    let start_date = end_date.yesterday().ok()?.first_of_month();
     Some(HalfOpenInterval {
-        start: start_date.and_hms_opt(0, 0, 0)?.and_utc().timestamp(),
-        end,
+        start: crate::temporal::utc_timestamp(start_date, 0)?,
+        end: crate::temporal::utc_timestamp(end_date, 0)?,
     })
 }
 
@@ -51,9 +47,7 @@ mod tests {
 
     #[test]
     fn last_month_boundaries_are_byte_stable() {
-        let reference = DateTime::parse_from_rfc3339("2026-10-19T12:00:00+02:00")
-            .unwrap()
-            .with_timezone(&Utc);
+        let reference: Timestamp = "2026-10-19T12:00:00+02:00".parse().unwrap();
         let interval = last_month_interval("last month", reference).unwrap();
         assert_eq!(
             interval,

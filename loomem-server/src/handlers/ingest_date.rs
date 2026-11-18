@@ -1,5 +1,5 @@
 //! Date provenance for the versioned MCP ingestion contract only.
-use chrono::{DateTime, NaiveDate};
+use jiff::{civil::Date, Timestamp};
 use loomem_core::storage::{is_ingest_fact_shape, is_ingest_fragment, is_ingest_source, Chunk};
 
 /// Date prefix contents (without brackets), or `None` for unchanged legacy rendering.
@@ -28,8 +28,12 @@ pub(crate) fn new_ingest_date_prefix(chunk: &Chunk) -> Option<String> {
     }
     let recorded = i64::try_from(chunk.timestamp)
         .ok()
-        .and_then(|timestamp| DateTime::from_timestamp(timestamp, 0))
-        .map(|date| date.format("%Y-%m-%d").to_string())
+        .and_then(|timestamp| Timestamp::from_second(timestamp).ok())
+        .map(|timestamp| {
+            crate::temporal::utc_date(timestamp)
+                .strftime("%Y-%m-%d")
+                .to_string()
+        })
         .unwrap_or_else(|| "unknown".to_string());
     Some(format!("recorded:{recorded}"))
 }
@@ -41,8 +45,12 @@ pub(crate) fn date_prefix(chunk: Option<&Chunk>, timestamp: Option<i64>) -> Stri
         .or_else(|| chunk.and_then(|chunk| chunk.extraction_meta.as_ref()?.event_date.clone()))
         .unwrap_or_else(|| {
             timestamp
-                .and_then(|value| DateTime::from_timestamp(value, 0))
-                .map(|date| date.format("%Y-%m-%d").to_string())
+                .and_then(|value| Timestamp::from_second(value).ok())
+                .map(|timestamp| {
+                    crate::temporal::utc_date(timestamp)
+                        .strftime("%Y-%m-%d")
+                        .to_string()
+                })
                 .unwrap_or_default()
         })
 }
@@ -77,8 +85,8 @@ pub(crate) fn context_line(chunk: &Chunk, timestamp: i64) -> String {
 }
 
 fn canonical_date(value: &str) -> Option<&str> {
-    let parsed = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
-    (parsed.format("%Y-%m-%d").to_string() == value).then_some(value)
+    let parsed = Date::strptime("%Y-%m-%d", value).ok()?;
+    (parsed.strftime("%Y-%m-%d").to_string() == value).then_some(value)
 }
 
 #[cfg(test)]

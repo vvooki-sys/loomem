@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use loomem_core::storage::{Chunk, FactType};
 use loomem_core::{HybridSearchResult, SearchResult};
 
@@ -446,9 +446,8 @@ fn event_date_matches(chunk: &Chunk, range: Option<(i64, i64)>) -> bool {
         .extraction_meta
         .as_ref()
         .and_then(|meta| meta.event_date.as_deref())
-        .and_then(|value| NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d").ok())
-        .and_then(|date| date.and_hms_opt(0, 0, 0))
-        .map(|date| date.and_utc().timestamp());
+        .and_then(|value| Date::strptime("%Y-%m-%d", value.trim()).ok())
+        .and_then(|date| crate::temporal::utc_timestamp(date, 0));
     timestamp.is_some_and(|value| (start..=end).contains(&value))
 }
 

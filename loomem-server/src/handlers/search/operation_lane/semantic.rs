@@ -24,7 +24,10 @@ pub(super) async fn primary_outcome(
             loomem_core::search::context_relevance::select(&payload.query, primary)
         }
         OperationPolicy::E6 if budget_allows(state, ctx.stream_list.as_deref()) => {
-            let reference = ctx.operation.reference_time.map(|value| value.to_rfc3339());
+            let reference = ctx
+                .operation
+                .reference_time
+                .map(crate::temporal::to_rfc3339);
             let tracker = loomem_core::CostTracker::new(
                 state.store.clone(),
                 state.config.cost.clone(),

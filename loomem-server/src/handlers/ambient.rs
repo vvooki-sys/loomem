@@ -178,7 +178,7 @@ async fn run_layer1_pipeline(
     let retrieval_ms = retrieval_start.elapsed().as_millis() as u32;
 
     let synthesis_start = Instant::now();
-    let now_ts = chrono::Utc::now().timestamp();
+    let now_ts = jiff::Timestamp::now().as_second();
     let fusion = apply_layer1_fusion(&candidates, now_ts);
     let (kept, mut debug) = selection::pack_selected(&candidates, &fusion)?;
     let synthesis_ms = synthesis_start.elapsed().as_millis() as u32;

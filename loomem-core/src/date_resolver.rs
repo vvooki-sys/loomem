@@ -4,9 +4,29 @@
 //! Used by the consolidation pipeline to anchor events in time.
 //! Pure Rust, zero LLM cost. Supports Polish and English.
 
-use chrono::{Datelike, NaiveDate, Weekday};
+use jiff::civil::{Date, Weekday};
+use jiff::{SignedDuration, Span};
 use regex::Regex;
 use std::sync::LazyLock;
+
+fn date_from_ymd(year: impl Into<i32>, month: u32, day: u32) -> Option<Date> {
+    Date::new(
+        i16::try_from(year.into()).ok()?,
+        i8::try_from(month).ok()?,
+        i8::try_from(day).ok()?,
+    )
+    .ok()
+}
+
+fn subtract_days(date: Date, days: i64) -> Option<Date> {
+    let hours = days.checked_mul(24)?;
+    date.checked_sub(SignedDuration::from_hours(hours)).ok()
+}
+
+fn add_days(date: Date, days: i64) -> Option<Date> {
+    let hours = days.checked_mul(24)?;
+    date.checked_add(SignedDuration::from_hours(hours)).ok()
+}
 
 // ── Absolute date patterns ──────────────────────────────────────────
 
@@ -98,13 +118,13 @@ fn parse_english_month(name: &str) -> Option<u32> {
 
 fn parse_weekday_en(name: &str) -> Option<Weekday> {
     match name {
-        "monday" => Some(Weekday::Mon),
-        "tuesday" => Some(Weekday::Tue),
-        "wednesday" => Some(Weekday::Wed),
-        "thursday" => Some(Weekday::Thu),
-        "friday" => Some(Weekday::Fri),
-        "saturday" => Some(Weekday::Sat),
-        "sunday" => Some(Weekday::Sun),
+        "monday" => Some(Weekday::Monday),
+        "tuesday" => Some(Weekday::Tuesday),
+        "wednesday" => Some(Weekday::Wednesday),
+        "thursday" => Some(Weekday::Thursday),
+        "friday" => Some(Weekday::Friday),
+        "saturday" => Some(Weekday::Saturday),
+        "sunday" => Some(Weekday::Sunday),
         _ => None,
     }
 }
@@ -116,22 +136,22 @@ fn parse_weekday_pl(name: &str) -> Option<Weekday> {
         .replace('ą', "a")
         .replace('ę', "e");
     match normalized.as_str() {
-        "poniedzialek" => Some(Weekday::Mon),
-        "wtorek" => Some(Weekday::Tue),
-        "srode" | "sroda" => Some(Weekday::Wed),
-        "czwartek" => Some(Weekday::Thu),
-        "piatek" => Some(Weekday::Fri),
-        "sobote" | "sobota" => Some(Weekday::Sat),
-        "niedziele" | "niedziela" => Some(Weekday::Sun),
+        "poniedzialek" => Some(Weekday::Monday),
+        "wtorek" => Some(Weekday::Tuesday),
+        "srode" | "sroda" => Some(Weekday::Wednesday),
+        "czwartek" => Some(Weekday::Thursday),
+        "piatek" => Some(Weekday::Friday),
+        "sobote" | "sobota" => Some(Weekday::Saturday),
+        "niedziele" | "niedziela" => Some(Weekday::Sunday),
         _ => None,
     }
 }
 
 /// Find the most recent past occurrence of a weekday, strictly before anchor.
 /// If anchor IS that weekday, returns 7 days ago (previous week).
-fn last_weekday(anchor: NaiveDate, target: Weekday) -> NaiveDate {
-    let anchor_wd = anchor.weekday().num_days_from_monday();
-    let target_wd = target.num_days_from_monday();
+fn last_weekday(anchor: Date, target: Weekday) -> Option<Date> {
+    let anchor_wd = i64::from(anchor.weekday().to_monday_zero_offset());
+    let target_wd = i64::from(target.to_monday_zero_offset());
     let days_back = if anchor_wd >= target_wd {
         let diff = anchor_wd - target_wd;
         if diff == 0 {
@@ -142,20 +162,20 @@ fn last_weekday(anchor: NaiveDate, target: Weekday) -> NaiveDate {
     } else {
         7 - (target_wd - anchor_wd)
     };
-    anchor - chrono::Days::new(days_back as u64)
+    subtract_days(anchor, days_back)
 }
 
 /// Resolve nearest past named month+day relative to anchor.
 /// "March 15" on March 10 → previous year's March 15.
-fn resolve_month_day(month: u32, day: u32, anchor: NaiveDate) -> Option<NaiveDate> {
+fn resolve_month_day(month: u32, day: u32, anchor: Date) -> Option<Date> {
     // Try current year first
-    if let Some(date) = NaiveDate::from_ymd_opt(anchor.year(), month, day) {
+    if let Some(date) = date_from_ymd(anchor.year(), month, day) {
         if date <= anchor {
             return Some(date);
         }
     }
     // Try previous year
-    NaiveDate::from_ymd_opt(anchor.year() - 1, month, day)
+    date_from_ymd(anchor.year().checked_sub(1)?, month, day)
 }
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -167,7 +187,7 @@ fn resolve_month_day(month: u32, day: u32, anchor: NaiveDate) -> Option<NaiveDat
 /// # Arguments
 /// - `raw`: verbatim temporal reference from text (e.g. "yesterday", "2026-03-15", "w zeszły piątek")
 /// - `anchor`: reference date (typically the session/conversation date)
-pub fn resolve_date(raw: &str, anchor: NaiveDate) -> Option<NaiveDate> {
+pub fn resolve_date(raw: &str, anchor: Date) -> Option<Date> {
     let normalized = raw.trim().to_lowercase();
     let s = normalized.as_str();
 
@@ -178,7 +198,7 @@ pub fn resolve_date(raw: &str, anchor: NaiveDate) -> Option<NaiveDate> {
         let y: i32 = caps[1].parse().ok()?;
         let m: u32 = caps[2].parse().ok()?;
         let d: u32 = caps[3].parse().ok()?;
-        return NaiveDate::from_ymd_opt(y, m, d);
+        return date_from_ymd(y, m, d);
     }
 
     // Dotted: 15.03.2026
@@ -186,7 +206,7 @@ pub fn resolve_date(raw: &str, anchor: NaiveDate) -> Option<NaiveDate> {
         let d: u32 = caps[1].parse().ok()?;
         let m: u32 = caps[2].parse().ok()?;
         let y: i32 = caps[3].parse().ok()?;
-        return NaiveDate::from_ymd_opt(y, m, d);
+        return date_from_ymd(y, m, d);
     }
 
     // Slashed (LongMemEval): "2023/12/15" or "2023/12/15 (Fri) 14:30"
@@ -194,7 +214,7 @@ pub fn resolve_date(raw: &str, anchor: NaiveDate) -> Option<NaiveDate> {
         let y: i32 = caps[1].parse().ok()?;
         let m: u32 = caps[2].parse().ok()?;
         let d: u32 = caps[3].parse().ok()?;
-        return NaiveDate::from_ymd_opt(y, m, d);
+        return date_from_ymd(y, m, d);
     }
 
     // Polish named: "15 marca 2026" or "15 marca"
@@ -203,7 +223,7 @@ pub fn resolve_date(raw: &str, anchor: NaiveDate) -> Option<NaiveDate> {
         let m = parse_polish_month(&caps[2])?;
         if let Some(year_str) = caps.get(3) {
             let y: i32 = year_str.as_str().parse().ok()?;
-            return NaiveDate::from_ymd_opt(y, m, d);
+            return date_from_ymd(y, m, d);
         }
         return resolve_month_day(m, d, anchor);
     }
@@ -214,7 +234,7 @@ pub fn resolve_date(raw: &str, anchor: NaiveDate) -> Option<NaiveDate> {
         let d: u32 = caps[2].parse().ok()?;
         if let Some(year_str) = caps.get(3) {
             let y: i32 = year_str.as_str().parse().ok()?;
-            return NaiveDate::from_ymd_opt(y, m, d);
+            return date_from_ymd(y, m, d);
         }
         return resolve_month_day(m, d, anchor);
     }
@@ -223,26 +243,25 @@ pub fn resolve_date(raw: &str, anchor: NaiveDate) -> Option<NaiveDate> {
 
     match s {
         "today" | "dziś" | "dzisiaj" | "dzis" => return Some(anchor),
-        "yesterday" | "wczoraj" => return Some(anchor - chrono::Days::new(1)),
-        "day before yesterday" | "przedwczoraj" => return Some(anchor - chrono::Days::new(2)),
-        "tomorrow" | "jutro" => return Some(anchor + chrono::Days::new(1)),
+        "yesterday" | "wczoraj" => return subtract_days(anchor, 1),
+        "day before yesterday" | "przedwczoraj" => return subtract_days(anchor, 2),
+        "tomorrow" | "jutro" => return add_days(anchor, 1),
         _ => {}
     }
 
     // "last week" / "w zeszłym tygodniu" → Monday of previous week
     if s == "last week" || s == "w zeszłym tygodniu" || s == "w zeszlym tygodniu" {
-        let days_back = u64::from(anchor.weekday().num_days_from_monday()) + 7;
-        return anchor.checked_sub_days(chrono::Days::new(days_back));
+        let days_back = i64::from(anchor.weekday().to_monday_zero_offset()) + 7;
+        return subtract_days(anchor, days_back);
     }
 
     // "last month" / "w zeszłym miesiącu"
     if s == "last month" || s == "w zeszłym miesiącu" || s == "w zeszlym miesiacu" {
-        let prev = if anchor.month() == 1 {
-            NaiveDate::from_ymd_opt(anchor.year() - 1, 12, 1)
-        } else {
-            NaiveDate::from_ymd_opt(anchor.year(), anchor.month() - 1, 1)
-        };
-        return prev;
+        let month = u32::try_from(anchor.month()).ok()?;
+        if month == 1 {
+            return date_from_ymd(anchor.year().checked_sub(1)?, 12, 1);
+        }
+        return date_from_ymd(anchor.year(), month - 1, 1);
     }
 
     // ── N units ago ──
@@ -250,13 +269,14 @@ pub fn resolve_date(raw: &str, anchor: NaiveDate) -> Option<NaiveDate> {
     // English: "3 days ago"
     if let Some(caps) = RE_N_DAYS_AGO_EN.captures(s) {
         let n: u64 = caps[1].parse().ok()?;
-        return Some(anchor - chrono::Days::new(n));
+        return subtract_days(anchor, i64::try_from(n).ok()?);
     }
 
     // English: "2 weeks ago"
     if let Some(caps) = RE_N_WEEKS_AGO_EN.captures(s) {
         let n: u64 = caps[1].parse().ok()?;
-        return Some(anchor - chrono::Days::new(n * 7));
+        let days = i64::try_from(n).ok()?.checked_mul(7)?;
+        return subtract_days(anchor, days);
     }
 
     // English: "3 months ago"
@@ -268,13 +288,14 @@ pub fn resolve_date(raw: &str, anchor: NaiveDate) -> Option<NaiveDate> {
     // Polish: "3 dni temu"
     if let Some(caps) = RE_N_DNI_TEMU.captures(s) {
         let n: u64 = caps[1].parse().ok()?;
-        return Some(anchor - chrono::Days::new(n));
+        return subtract_days(anchor, i64::try_from(n).ok()?);
     }
 
     // Polish: "2 tygodnie temu"
     if let Some(caps) = RE_N_TYGODNI_TEMU.captures(s) {
         let n: u64 = caps[1].parse().ok()?;
-        return Some(anchor - chrono::Days::new(n * 7));
+        let days = i64::try_from(n).ok()?.checked_mul(7)?;
+        return subtract_days(anchor, days);
     }
 
     // Polish: "3 miesiące temu"
@@ -288,41 +309,30 @@ pub fn resolve_date(raw: &str, anchor: NaiveDate) -> Option<NaiveDate> {
     // English: "last Friday"
     if let Some(caps) = RE_LAST_WEEKDAY_EN.captures(s) {
         let wd = parse_weekday_en(&caps[1])?;
-        return Some(last_weekday(anchor, wd));
+        return last_weekday(anchor, wd);
     }
 
     // Polish: "w zeszły piątek"
     if let Some(caps) = RE_LAST_WEEKDAY_PL.captures(s) {
         let wd = parse_weekday_pl(&caps[1])?;
-        return Some(last_weekday(anchor, wd));
+        return last_weekday(anchor, wd);
     }
 
     // ── Unresolvable ──
     None
 }
 
-fn subtract_months(date: NaiveDate, months: u32) -> Option<NaiveDate> {
-    let total_months = date.year() * 12 + date.month0() as i32 - months as i32;
-    let y = total_months / 12;
-    let m = (total_months % 12) as u32 + 1;
-    let d = date.day().min(days_in_month(y, m));
-    NaiveDate::from_ymd_opt(y, m, d)
-}
-
-fn days_in_month(year: i32, month: u32) -> u32 {
-    NaiveDate::from_ymd_opt(year, month + 1, 1)
-        .unwrap_or_else(|| NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap())
-        .pred_opt()
-        .unwrap()
-        .day()
+fn subtract_months(date: Date, months: u32) -> Option<Date> {
+    let months = i32::try_from(months).ok()?;
+    date.checked_sub(Span::new().months(months)).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn d(y: i32, m: u32, d: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    fn d(y: i32, m: u32, d: u32) -> Date {
+        date_from_ymd(y, m, d).unwrap()
     }
 
     // Anchor for most tests: 2026-04-05 (Sunday)
@@ -330,7 +340,7 @@ mod tests {
     const fn anchor() -> (i32, u32, u32) {
         (2026, 4, 5)
     }
-    fn a() -> NaiveDate {
+    fn a() -> Date {
         d(2026, 4, 5)
     }
 
@@ -567,7 +577,7 @@ mod tests {
 
     #[test]
     fn last_week_outside_calendar_returns_none() {
-        assert_eq!(resolve_date("last week", NaiveDate::MIN), None);
+        assert_eq!(resolve_date("last week", Date::MIN), None);
     }
 
     #[test]

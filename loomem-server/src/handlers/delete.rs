@@ -27,7 +27,7 @@ struct SystemClock;
 
 impl Clock for SystemClock {
     fn timestamp(&self) -> Result<u64> {
-        u64::try_from(crate::evaluation_clock::now().timestamp()).context("clock before epoch")
+        u64::try_from(crate::evaluation_clock::now().as_second()).context("clock before epoch")
     }
 }
 

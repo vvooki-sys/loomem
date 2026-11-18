@@ -17,14 +17,16 @@ pub struct TraceLog {
 
 impl TraceLog {
     pub fn new(dir: &str) -> Self {
-        let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let date = crate::temporal::utc_date(jiff::Timestamp::now())
+            .strftime("%Y-%m-%d")
+            .to_string();
         let path = PathBuf::from(dir).join(format!("backfill-{}.jsonl", date));
         Self { path }
     }
 
     pub fn emit(&self, event: &'static str, data: serde_json::Value) {
         let entry = TraceEvent {
-            ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            ts: format!("{:.3}", jiff::Timestamp::now()),
             event,
             data,
         };

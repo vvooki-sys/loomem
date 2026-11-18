@@ -1,16 +1,16 @@
 //! Evaluation-only wall-clock override; production binaries never read its env.
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use loomem_core::{Config, HybridSearchEngine};
 
 #[cfg(feature = "evaluation")]
-static FIXED_TIME: std::sync::OnceLock<DateTime<Utc>> = std::sync::OnceLock::new();
+static FIXED_TIME: std::sync::OnceLock<Timestamp> = std::sync::OnceLock::new();
 
-pub(crate) fn now() -> DateTime<Utc> {
+pub(crate) fn now() -> Timestamp {
     #[cfg(feature = "evaluation")]
     if let Some(time) = FIXED_TIME.get() {
         return *time;
     }
-    Utc::now()
+    Timestamp::now()
 }
 
 pub(crate) fn engine(config: Config) -> anyhow::Result<HybridSearchEngine> {
@@ -20,7 +20,7 @@ pub(crate) fn engine(config: Config) -> anyhow::Result<HybridSearchEngine> {
             .set(time)
             .map_err(|_| anyhow::anyhow!("evaluation clock already initialized"))?;
         tracing::info!(
-            evaluation_time_unix = time.timestamp(),
+            evaluation_time_unix = time.as_second(),
             "Fixed evaluation clock enabled"
         );
         return Ok(HybridSearchEngine::with_fixed_time(config, time));
@@ -29,16 +29,14 @@ pub(crate) fn engine(config: Config) -> anyhow::Result<HybridSearchEngine> {
 }
 
 #[cfg(feature = "evaluation")]
-fn configured_time(
-    value: Result<String, std::env::VarError>,
-) -> anyhow::Result<Option<DateTime<Utc>>> {
+fn configured_time(value: Result<String, std::env::VarError>) -> anyhow::Result<Option<Timestamp>> {
     use anyhow::Context;
     match value {
         Ok(value) => {
             let seconds = value
                 .parse::<i64>()
                 .context("invalid LOOMEM_EVALUATION_TIME_UNIX integer")?;
-            Ok(Some(DateTime::from_timestamp(seconds, 0).context(
+            Ok(Some(Timestamp::from_second(seconds).context(
                 "LOOMEM_EVALUATION_TIME_UNIX outside supported date range",
             )?))
         }
@@ -57,7 +55,7 @@ mod tests {
             configured_time(Ok("1792432800".into()))
                 .unwrap()
                 .unwrap()
-                .timestamp(),
+                .as_second(),
             1_792_432_800
         );
         assert_eq!(

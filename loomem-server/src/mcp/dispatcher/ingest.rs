@@ -11,7 +11,7 @@ struct SystemClock;
 
 impl Clock for SystemClock {
     fn timestamp(&self) -> i64 {
-        crate::evaluation_clock::now().timestamp()
+        crate::evaluation_clock::now().as_second()
     }
 }
 
@@ -168,9 +168,9 @@ fn prepare<'a>(
     let args: IngestArgs = serde_json::from_value(args)
         .map_err(|_| JsonRpcError::invalid_params("Invalid ingest arguments"))?;
     if let Some(date) = args.conversation_date.as_deref() {
-        let parsed = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        let parsed = jiff::civil::Date::strptime("%Y-%m-%d", date)
             .map_err(|_| JsonRpcError::invalid_params("conversation_date must be YYYY-MM-DD"))?;
-        if parsed.format("%Y-%m-%d").to_string() != date {
+        if parsed.strftime("%Y-%m-%d").to_string() != date {
             return Err(JsonRpcError::invalid_params(
                 "conversation_date must be YYYY-MM-DD",
             ));
@@ -360,9 +360,9 @@ fn fact_meta(context: &IngestContext<'_>, fact: &ExtractedFact) -> ExtractionMet
         *value = context.state.pii_filter.redact_for_sink(value);
     }
     meta.event_date = meta.event_date.filter(|date| {
-        chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        jiff::civil::Date::strptime("%Y-%m-%d", date)
             .ok()
-            .is_some_and(|parsed| parsed.format("%Y-%m-%d").to_string() == *date)
+            .is_some_and(|parsed| parsed.strftime("%Y-%m-%d").to_string() == *date)
     });
     meta
 }

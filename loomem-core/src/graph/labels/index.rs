@@ -47,8 +47,6 @@ impl GraphStore {
 // upsert independently applies strict nullable midnight semantics to owned ingest.
 fn legacy_input_event_date(chunk: &Chunk) -> Option<i64> {
     let raw = chunk.extraction_meta.as_ref()?.event_date.as_deref()?;
-    chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
-        .ok()?
-        .and_hms_opt(12, 0, 0)
-        .map(|date| date.and_utc().timestamp())
+    let date = jiff::civil::Date::strptime("%Y-%m-%d", raw).ok()?;
+    crate::temporal::utc_timestamp(date, 12)
 }
