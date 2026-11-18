@@ -736,10 +736,7 @@ impl Scheduler {
                 return;
             }
 
-            let date = jiff::Timestamp::now()
-                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
-                .strftime("%Y-%m-%d-%H%M%S")
-                .to_string();
+            let date = crate::date_resolver::format_now_utc("%Y-%m-%d-%H%M%S");
             let dest = backup_dir.join(format!("checkpoint-{}", date));
 
             match storage.create_checkpoint(&dest) {
@@ -959,8 +956,9 @@ fn checkpoint_iso_week(name: &str) -> Option<(i32, u32)> {
     let year: i16 = parts.next()?.parse().ok()?;
     let month: i8 = parts.next()?.parse().ok()?;
     let day: i8 = parts.next()?.parse().ok()?;
-    let date = jiff::civil::Date::new(year, month, day).ok()?;
-    let week = date.iso_week_date();
+    let week = jiff::civil::Date::new(year, month, day)
+        .ok()?
+        .iso_week_date();
     Some((i32::from(week.year()), u32::try_from(week.week()).ok()?))
 }
 

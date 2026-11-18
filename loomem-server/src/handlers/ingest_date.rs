@@ -2,6 +2,17 @@
 use jiff::{civil::Date, Timestamp};
 use loomem_core::storage::{is_ingest_fact_shape, is_ingest_fragment, is_ingest_source, Chunk};
 
+fn recorded_date(timestamp: u64) -> Option<String> {
+    i64::try_from(timestamp)
+        .ok()
+        .and_then(|timestamp| Timestamp::from_second(timestamp).ok())
+        .map(|timestamp| {
+            crate::temporal::utc_date(timestamp)
+                .strftime("%Y-%m-%d")
+                .to_string()
+        })
+}
+
 /// Date prefix contents (without brackets), or `None` for unchanged legacy rendering.
 /// Only recognized server-owned source/fact/fragment provenance enables these
 /// labels; a fragment renders like its source (`observed:` or `recorded:`,
@@ -26,15 +37,7 @@ pub(crate) fn new_ingest_date_prefix(chunk: &Chunk) -> Option<String> {
     if let Some(date) = observed {
         return Some(format!("observed:{date}"));
     }
-    let recorded = i64::try_from(chunk.timestamp)
-        .ok()
-        .and_then(|timestamp| Timestamp::from_second(timestamp).ok())
-        .map(|timestamp| {
-            crate::temporal::utc_date(timestamp)
-                .strftime("%Y-%m-%d")
-                .to_string()
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    let recorded = recorded_date(chunk.timestamp).unwrap_or_else(|| "unknown".to_string());
     Some(format!("recorded:{recorded}"))
 }
 

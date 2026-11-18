@@ -473,11 +473,8 @@ fn relative_interval(query: &str, reference: Timestamp) -> Option<(i64, i64)> {
         return None;
     }
     let days = relative_days(amount, &unit)?;
-    let hours = days.checked_mul(24)?;
-    let target = reference
-        .checked_sub(SignedDuration::from_hours(hours))
-        .ok()?;
-    day_interval(target)
+    let duration = SignedDuration::from_hours(days.checked_mul(24)?);
+    day_interval(reference.checked_sub(duration).ok()?)
 }
 
 fn relative_values(captures: &regex::Captures<'_>) -> Option<(i64, String)> {
@@ -499,8 +496,7 @@ fn relative_days(amount: i64, unit: &str) -> Option<i64> {
 fn day_interval(target: Timestamp) -> Option<(i64, i64)> {
     let date = crate::temporal::utc_date(target);
     let start = crate::temporal::utc_timestamp(date, 0)?;
-    let end = start.checked_add(86_399)?;
-    Some((start, end))
+    Some((start, start.checked_add(86_399)?))
 }
 
 fn relative_regex() -> Option<&'static Regex> {

@@ -5,7 +5,7 @@
 //! Pure Rust, zero LLM cost. Supports Polish and English.
 
 use jiff::civil::{Date, Weekday};
-use jiff::{SignedDuration, Span};
+use jiff::{SignedDuration, Span, Timestamp};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -16,6 +16,25 @@ fn date_from_ymd(year: impl Into<i32>, month: u32, day: u32) -> Option<Date> {
         i8::try_from(day).ok()?,
     )
     .ok()
+}
+
+/// Convert an unsigned Unix timestamp to a UTC date without truncating it.
+pub(crate) fn date_from_unix(timestamp: u64) -> Option<Date> {
+    i64::try_from(timestamp)
+        .ok()
+        .and_then(|timestamp| Timestamp::from_second(timestamp).ok())
+        .map(crate::temporal::utc_date)
+}
+
+pub(crate) fn format_now_utc(format: &str) -> String {
+    Timestamp::now()
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .strftime(format)
+        .to_string()
+}
+
+pub(crate) fn today_iso() -> String {
+    format_now_utc("%Y-%m-%d")
 }
 
 fn subtract_days(date: Date, days: i64) -> Option<Date> {
@@ -178,6 +197,47 @@ fn resolve_month_day(month: u32, day: u32, anchor: Date) -> Option<Date> {
     date_from_ymd(anchor.year().checked_sub(1)?, month, day)
 }
 
+fn resolve_ymd(s: &str, regex: &Regex, order: [usize; 3]) -> Option<Option<Date>> {
+    let caps = regex.captures(s)?;
+    let year: i32 = caps.get(order[0])?.as_str().parse().ok()?;
+    let month: u32 = caps.get(order[1])?.as_str().parse().ok()?;
+    let day: u32 = caps.get(order[2])?.as_str().parse().ok()?;
+    Some(date_from_ymd(year, month, day))
+}
+
+fn resolve_named_date(
+    caps: regex::Captures<'_>,
+    month_parser: fn(&str) -> Option<u32>,
+    month_index: usize,
+    day_index: usize,
+    year_index: usize,
+    anchor: Date,
+) -> Option<Date> {
+    let month = month_parser(caps.get(month_index)?.as_str())?;
+    let day: u32 = caps.get(day_index)?.as_str().parse().ok()?;
+    if let Some(year) = caps.get(year_index) {
+        let year: i32 = year.as_str().parse().ok()?;
+        return date_from_ymd(year, month, day);
+    }
+    resolve_month_day(month, day, anchor)
+}
+
+fn resolve_absolute_date(s: &str, anchor: Date) -> Option<Option<Date>> {
+    resolve_ymd(s, &RE_ISO, [1, 2, 3])
+        .or_else(|| resolve_ymd(s, &RE_DOTTED, [3, 2, 1]))
+        .or_else(|| resolve_ymd(s, &RE_SLASHED, [1, 2, 3]))
+        .or_else(|| {
+            RE_POLISH_DATE
+                .captures(s)
+                .map(|caps| resolve_named_date(caps, parse_polish_month, 2, 1, 3, anchor))
+        })
+        .or_else(|| {
+            RE_ENGLISH_DATE_ALT
+                .captures(s)
+                .map(|caps| resolve_named_date(caps, parse_english_month, 1, 2, 3, anchor))
+        })
+}
+
 // ── Public API ──────────────────────────────────────────────────────
 
 /// Resolve a human-relative temporal reference to an absolute date.
@@ -191,52 +251,8 @@ pub fn resolve_date(raw: &str, anchor: Date) -> Option<Date> {
     let normalized = raw.trim().to_lowercase();
     let s = normalized.as_str();
 
-    // ── Absolute dates ──
-
-    // ISO: 2026-03-15
-    if let Some(caps) = RE_ISO.captures(s) {
-        let y: i32 = caps[1].parse().ok()?;
-        let m: u32 = caps[2].parse().ok()?;
-        let d: u32 = caps[3].parse().ok()?;
-        return date_from_ymd(y, m, d);
-    }
-
-    // Dotted: 15.03.2026
-    if let Some(caps) = RE_DOTTED.captures(s) {
-        let d: u32 = caps[1].parse().ok()?;
-        let m: u32 = caps[2].parse().ok()?;
-        let y: i32 = caps[3].parse().ok()?;
-        return date_from_ymd(y, m, d);
-    }
-
-    // Slashed (LongMemEval): "2023/12/15" or "2023/12/15 (Fri) 14:30"
-    if let Some(caps) = RE_SLASHED.captures(s) {
-        let y: i32 = caps[1].parse().ok()?;
-        let m: u32 = caps[2].parse().ok()?;
-        let d: u32 = caps[3].parse().ok()?;
-        return date_from_ymd(y, m, d);
-    }
-
-    // Polish named: "15 marca 2026" or "15 marca"
-    if let Some(caps) = RE_POLISH_DATE.captures(s) {
-        let d: u32 = caps[1].parse().ok()?;
-        let m = parse_polish_month(&caps[2])?;
-        if let Some(year_str) = caps.get(3) {
-            let y: i32 = year_str.as_str().parse().ok()?;
-            return date_from_ymd(y, m, d);
-        }
-        return resolve_month_day(m, d, anchor);
-    }
-
-    // English: "March 15, 2026" or "March 15"
-    if let Some(caps) = RE_ENGLISH_DATE_ALT.captures(s) {
-        let m = parse_english_month(&caps[1])?;
-        let d: u32 = caps[2].parse().ok()?;
-        if let Some(year_str) = caps.get(3) {
-            let y: i32 = year_str.as_str().parse().ok()?;
-            return date_from_ymd(y, m, d);
-        }
-        return resolve_month_day(m, d, anchor);
+    if let Some(date) = resolve_absolute_date(s, anchor) {
+        return date;
     }
 
     // ── Simple relative ──

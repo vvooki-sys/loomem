@@ -266,10 +266,7 @@ fn parse_structured_response(
         .filter(|o| o.obs_type.to_lowercase() == "event")
         .find_map(|o| o.event_at_raw.clone());
 
-    let anchor_date = i64::try_from(anchor_timestamp)
-        .ok()
-        .and_then(|timestamp| jiff::Timestamp::from_second(timestamp).ok())
-        .map(crate::temporal::utc_date)
+    let anchor_date = date_resolver::date_from_unix(anchor_timestamp)
         .unwrap_or_else(|| crate::temporal::utc_date(jiff::Timestamp::now()));
 
     let resolved_event_date = event_at_raw

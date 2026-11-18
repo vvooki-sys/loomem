@@ -356,21 +356,24 @@ fn strict_explicit_date_filter(payload: &SearchRequest) -> Result<Option<DateFil
     Ok(Some(DateFilter::Range(start, end)))
 }
 
+fn strict_date_only(value: &str, end: bool) -> Result<i64, AppError> {
+    let date = Date::strptime("%Y-%m-%d", value).map_err(|_| invalid_explicit_date())?;
+    if date.to_string() != value {
+        return Err(invalid_explicit_date());
+    }
+    let hour = if end { 23 } else { 0 };
+    let seconds = crate::temporal::utc_timestamp(date, hour).ok_or_else(invalid_explicit_date)?;
+    if end {
+        Ok(seconds + 59 * 60 + 59)
+    } else {
+        Ok(seconds)
+    }
+}
+
 fn strict_bound(value: Option<&str>, end: bool) -> Result<i64, AppError> {
     let value = value.unwrap_or(if end { "9999-12-31" } else { "1970-01-01" });
     let parsed = if value.len() == 10 {
-        let date = Date::strptime("%Y-%m-%d", value).map_err(|_| invalid_explicit_date())?;
-        if date.to_string() != value {
-            return Err(invalid_explicit_date());
-        }
-        let hour = if end { 23 } else { 0 };
-        let seconds =
-            crate::temporal::utc_timestamp(date, hour).ok_or_else(invalid_explicit_date)?;
-        if end {
-            seconds + 59 * 60 + 59
-        } else {
-            seconds
-        }
+        strict_date_only(value, end)?
     } else {
         value
             .parse::<Timestamp>()

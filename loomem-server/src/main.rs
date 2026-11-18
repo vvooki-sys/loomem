@@ -2435,11 +2435,8 @@ mod tests {
     async fn t7_backfill_encrypt_noop_provider_returns_400() {
         let (app, _state) = make_test_app();
         // Use today's date to ensure a valid token format.
-        let today = crate::temporal::utc_date(jiff::Timestamp::now())
-            .strftime("%Y%m%d")
-            .to_string();
-        let token = format!("snap-{today}-prod-aabb1234");
-        let body = serde_json::json!({ "snapshot_token": token });
+        let today = handlers::backfill_encrypt::compact_today();
+        let body = serde_json::json!({ "snapshot_token": format!("snap-{today}-prod-aabb1234") });
         let req = Request::builder()
             .method(Method::POST)
             .uri("/v1/admin/backfill/encrypt-at-rest")
@@ -2483,9 +2480,7 @@ mod tests {
                 source: KeyScope::Private,
             }],
         };
-        let today = crate::temporal::utc_date(jiff::Timestamp::now())
-            .strftime("%Y%m%d")
-            .to_string();
+        let today = handlers::backfill_encrypt::compact_today();
         let req_body = handlers::backfill_encrypt::BackfillEncryptRequest {
             snapshot_token: format!("snap-{today}-prod-aabb1234"),
             batch_size: 200,

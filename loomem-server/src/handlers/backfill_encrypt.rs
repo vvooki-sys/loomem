@@ -137,6 +137,13 @@ fn check_instance_and_hex(token: &str, instance: &str, hex_id: &str) -> Result<(
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// POST /v1/admin/backfill/encrypt-at-rest
+#[cfg(test)]
+pub(crate) fn compact_today() -> String {
+    crate::temporal::utc_date(Timestamp::now())
+        .strftime("%Y%m%d")
+        .to_string()
+}
+
 pub async fn encrypt_at_rest_backfill_handler(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
