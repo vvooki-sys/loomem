@@ -4,6 +4,8 @@ use jiff::{
     Timestamp, ZonedDateTime,
 };
 
+pub(crate) use crate::date_resolver::{now_unix_seconds, unix_seconds_to_u64};
+
 pub(crate) fn utc_date(timestamp: Timestamp) -> Date {
     timestamp.to_zoned_datetime(TimeZone::UTC).date()
 }

@@ -444,7 +444,7 @@ mod tests {
 
         let base_ts: u64 = 1_746_100_000;
         let mut deleted_chunk = make_chunk("deleted-ref", stream, base_ts, None);
-        deleted_chunk.deleted_at = Some(Timestamp::now().as_second() as u64);
+        deleted_chunk.deleted_at = Some(crate::temporal::now_unix_seconds());
         state
             .store
             .store_chunk(&deleted_chunk)

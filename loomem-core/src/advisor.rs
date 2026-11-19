@@ -133,7 +133,7 @@ fn detect_search_ignore(
     stores: &[StoreEvent],
     feedback_chunk_ids: &std::collections::HashSet<String>,
 ) -> Vec<AdvisoryItem> {
-    let now = jiff::Timestamp::now().as_second() as u64;
+    let now = crate::temporal::now_unix_seconds();
     let mut advisories = Vec::new();
 
     // Search with top-1 score > 0.5 but no feedback → SearchIgnored
@@ -192,7 +192,7 @@ fn detect_search_ignore(
 // ---- ECA-10: Stale facts detector ----
 
 fn detect_stale_facts(store: &RocksDbStore, stream_id: &str, stale_days: u64) -> Vec<AdvisoryItem> {
-    let now = jiff::Timestamp::now().as_second() as u64;
+    let now = crate::temporal::now_unix_seconds();
     let stale_threshold = now.saturating_sub(stale_days * 86400);
     let mut advisories = Vec::new();
 
@@ -374,7 +374,7 @@ pub fn detect_advisories_with_config(
     max_advisories: usize,
 ) -> Result<Vec<AdvisoryItem>> {
     let mut all_advisories: Vec<AdvisoryItem> = Vec::new();
-    let now = jiff::Timestamp::now().as_second() as u64;
+    let now = crate::temporal::now_unix_seconds();
 
     // Read events
     let (searches, stores_list) = read_events(events_dir, stream_id);
@@ -542,7 +542,7 @@ pub struct OscillationAlert {
 /// Record a decay adjustment for oscillation tracking.
 /// Stores under `advisory:decay_history:{stream_id}:{timestamp}`.
 fn record_decay_adjustment(store: &RocksDbStore, stream_id: &str, adjustment: f64) {
-    let now = jiff::Timestamp::now().as_second() as u64;
+    let now = crate::temporal::now_unix_seconds();
     let key = format!("advisory:decay_history:{}:{}", stream_id, now);
     if let Err(e) = store.put(key.as_bytes(), &adjustment.to_le_bytes()) {
         warn!("Failed to record decay adjustment: {}", e);
@@ -555,7 +555,7 @@ fn record_decay_adjustment(store: &RocksDbStore, stream_id: &str, adjustment: f6
 /// If there are 3 or more direction changes (positive → negative or vice versa),
 /// returns an OscillationAlert with a recommended freeze value (midpoint).
 pub fn detect_oscillation(store: &RocksDbStore, stream_id: &str) -> Option<OscillationAlert> {
-    let now = jiff::Timestamp::now().as_second() as u64;
+    let now = crate::temporal::now_unix_seconds();
     let window_secs = 21 * 86400u64;
     let window_start = now.saturating_sub(window_secs);
 
@@ -627,7 +627,7 @@ pub fn track_advisory_outcome(
     advisory_id: &str,
     followed: bool,
 ) -> Result<()> {
-    let now = jiff::Timestamp::now().as_second() as u64;
+    let now = crate::temporal::now_unix_seconds();
     let outcome = AdvisoryOutcome {
         advisory_id: advisory_id.to_string(),
         followed,
@@ -784,7 +784,7 @@ pub fn generate_actionable_advisories(
     stream_id: &str,
 ) -> Result<Vec<AdvisoryItem>> {
     let mut items = Vec::new();
-    let now = jiff::Timestamp::now().as_second() as u64;
+    let now = crate::temporal::now_unix_seconds();
 
     let summary = crate::stats_aggregator::StatsAggregator::get_summary(store, stream_id)?;
 

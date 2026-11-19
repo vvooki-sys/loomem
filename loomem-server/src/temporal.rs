@@ -1,5 +1,7 @@
 use jiff::{civil::Date, civil::Time, tz::TimeZone, Timestamp, ZonedDateTime};
 
+pub(crate) use crate::handlers::date_filter::{now_unix_seconds, unix_seconds_to_i64};
+
 pub(crate) fn utc_date(timestamp: Timestamp) -> Date {
     timestamp.to_zoned_datetime(TimeZone::UTC).date()
 }

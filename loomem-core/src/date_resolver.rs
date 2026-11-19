@@ -26,6 +26,15 @@ pub(crate) fn date_from_unix(timestamp: u64) -> Option<Date> {
         .map(crate::temporal::utc_date)
 }
 
+pub(crate) fn now_unix_seconds() -> u64 {
+    unix_seconds_to_u64(Timestamp::now().as_second())
+}
+
+/// Preserve the legacy signed-to-unsigned Unix timestamp bit pattern.
+pub(crate) fn unix_seconds_to_u64(seconds: i64) -> u64 {
+    u64::from_le_bytes(seconds.to_le_bytes())
+}
+
 pub(crate) fn format_now_utc(format: &str) -> String {
     Timestamp::now()
         .to_zoned_datetime(jiff::tz::TimeZone::UTC)

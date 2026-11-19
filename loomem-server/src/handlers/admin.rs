@@ -693,10 +693,8 @@ pub(crate) fn chunk_to_memory_item(
         .map(|m| format!("{:?}", m.fact_type).to_lowercase());
     let version = chunk.version;
     let confidence = chunk.score;
-    // Pre-existing decay-age computation relocated verbatim from the list
-    // mapping — `as` casts kept byte-identical on purpose.
-    let age_days =
-        (jiff::Timestamp::now().as_second() as u64).saturating_sub(chunk.timestamp) / 86400;
+    // Pre-existing decay-age computation with bit-preserving timestamp conversion.
+    let age_days = crate::temporal::now_unix_seconds().saturating_sub(chunk.timestamp) / 86400;
     let decay = 1.0 - (-0.01 * age_days as f64).exp();
 
     serde_json::json!({
@@ -1672,7 +1670,7 @@ fn build_extracted_fact_chunk(
     // Relocated antipattern: `as u64` cast (pre-existing in original fn body).
     // jiff::Timestamp::now().as_second() returns i64 which is always >= 0 at this
     // point in history. Documented per CLAUDE.md §2 — see cycles/52-close.md §11 Findings.
-    let ts = jiff::Timestamp::now().as_second() as u64;
+    let ts = crate::temporal::now_unix_seconds();
     let extraction_meta = fact.to_extraction_meta(Some(src_chunk.id.clone()), ke_model);
     loomem_core::storage::Chunk {
         id,

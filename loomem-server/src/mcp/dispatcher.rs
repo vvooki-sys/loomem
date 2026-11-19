@@ -455,7 +455,7 @@ async fn tool_store(
         .map(|m| state.pii_filter.sanitize_json(m));
 
     let id = uuid::Uuid::new_v4().to_string();
-    let timestamp = Timestamp::now().as_second() as u64;
+    let timestamp = crate::temporal::now_unix_seconds();
     let stream = stream_id.to_string();
     let subject = args.subject.unwrap_or_else(|| "user".into());
     let source = args.source.unwrap_or_else(|| "mcp".into());

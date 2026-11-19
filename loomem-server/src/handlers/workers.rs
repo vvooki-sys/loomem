@@ -253,7 +253,7 @@ pub async fn admin_streams_stats_handler(
 }
 
 fn epoch_to_rfc3339(secs: u64) -> String {
-    Timestamp::from_second(secs as i64)
+    Timestamp::from_second(crate::temporal::unix_seconds_to_i64(secs))
         .ok()
         .map(crate::temporal::to_rfc3339)
         .unwrap_or_else(|| String::from("1970-01-01T00:00:00+00:00"))

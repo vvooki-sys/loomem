@@ -633,7 +633,7 @@ pub async fn consolidate(
                         let valid_from = e
                             .resolved_event_date
                             .and_then(|date| crate::temporal::utc_timestamp(date, 12))
-                            .map(|timestamp| timestamp as u64)
+                            .map(crate::temporal::unix_seconds_to_u64)
                             .or_else(|| sub_group.iter().map(|c| c.timestamp).min());
                         (
                             e.content.clone(),

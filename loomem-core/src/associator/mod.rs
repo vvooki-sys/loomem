@@ -59,7 +59,7 @@ pub enum AssociationHealth {
 /// If some are below threshold, returns Degraded with the count.
 /// Otherwise returns Healthy.
 pub fn check_association_health(store: &RocksDbStore, stream_id: &str) -> AssociationHealth {
-    let now_hour = jiff::Timestamp::now().as_second() as u64 / 3600;
+    let now_hour = crate::temporal::now_unix_seconds() / 3600;
     let hours_in_7_days: u64 = 168;
     let min_hour = now_hour.saturating_sub(hours_in_7_days);
     let threshold = 0.35;
@@ -125,7 +125,7 @@ pub fn check_association_health(store: &RocksDbStore, stream_id: &str) -> Associ
 /// Record the mean Sₑ score for the current hour.
 /// Called after association computation to track quality over time.
 pub fn record_mean_se_score(store: &RocksDbStore, stream_id: &str, mean_se: f64) {
-    let now_hour = jiff::Timestamp::now().as_second() as u64 / 3600;
+    let now_hour = crate::temporal::now_unix_seconds() / 3600;
     let key = format!("stats:{}:mean_se_score:{}", stream_id, now_hour);
     if let Err(e) = store.put(key.as_bytes(), &mean_se.to_le_bytes()) {
         warn!("Failed to record mean Se score: {}", e);

@@ -625,7 +625,7 @@ fn now_secs() -> u64 {
 
 fn parse_date(date_str: &str) -> Option<u64> {
     let date = jiff::civil::Date::strptime("%Y-%m-%d", date_str).ok()?;
-    crate::temporal::utc_timestamp(date, 0).map(|timestamp| timestamp as u64)
+    crate::temporal::utc_timestamp(date, 0).map(crate::temporal::unix_seconds_to_u64)
 }
 
 #[cfg(test)]

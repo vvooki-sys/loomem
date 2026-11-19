@@ -100,7 +100,7 @@ pub fn emit_drop_count() -> u64 {
 /// silently dropped (/150b Gap 6).
 pub fn emit(tx: &EventSender, event: MemoryEvent) {
     let entry = EventEntry {
-        timestamp: jiff::Timestamp::now().as_second() as u64,
+        timestamp: crate::temporal::now_unix_seconds(),
         event,
     };
     if tx.send(entry).is_err() {

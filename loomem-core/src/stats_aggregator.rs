@@ -374,7 +374,7 @@ impl StatsAggregator {
         hours: usize,
     ) -> Result<Vec<(u64, f64)>> {
         let prefix = format!("stats:{}:{}:", stream_id, metric);
-        let now_hour = jiff::Timestamp::now().as_second() as u64 / 3600;
+        let now_hour = crate::temporal::now_unix_seconds() / 3600;
         let min_hour = now_hour.saturating_sub(hours as u64);
 
         let mut series: Vec<(u64, f64)> = Vec::new();
@@ -468,7 +468,7 @@ impl StatsAggregator {
         store: &RocksDbStore,
         stream_id: &str,
     ) -> Result<FreshnessCurve> {
-        let now = jiff::Timestamp::now().as_second() as u64;
+        let now = crate::temporal::now_unix_seconds();
         let mut curve = FreshnessCurve::default();
 
         // Scan chunks for this stream and bucket by age
@@ -601,7 +601,7 @@ impl StatsAggregator {
         store.put(sum_key.as_bytes(), &new_sum.to_le_bytes())?;
 
         // Write current MRR to the standard metric key
-        let now_hour = jiff::Timestamp::now().as_second() as u64 / 3600;
+        let now_hour = crate::temporal::now_unix_seconds() / 3600;
         let mrr_key = format!("stats:{}:mrr:{}", stream_id, now_hour);
         store.put(mrr_key.as_bytes(), &new_mrr.to_le_bytes())?;
 
@@ -639,7 +639,7 @@ impl StatsAggregator {
             };
         }
 
-        let now = jiff::Timestamp::now().as_second() as u64;
+        let now = crate::temporal::now_unix_seconds();
         let thirty_days_secs = 30 * 86400u64;
 
         let mut recalled_count = 0usize;
@@ -708,7 +708,7 @@ pub struct MemoryProfile {
 impl MemoryProfile {
     /// Compute a memory profile for a stream.
     pub fn compute(store: &RocksDbStore, events_dir: &Path, stream_id: &str) -> Result<Self> {
-        let now = jiff::Timestamp::now().as_second() as u64;
+        let now = crate::temporal::now_unix_seconds();
         let seven_days = 7 * 86400u64;
         let window_start = now.saturating_sub(seven_days);
 

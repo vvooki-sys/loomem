@@ -936,7 +936,7 @@ impl RocksDbStore {
     ) -> Result<bool> {
         let _guard = self.lock_lifecycle()?;
         if let Some(mut chunk) = self.get_chunk(id)? {
-            let now = jiff::Timestamp::now().as_second() as u64;
+            let now = crate::temporal::now_unix_seconds();
 
             // Check cooldown (max 1 boost per cooldown period per chunk)
             if let Some(last) = chunk.last_implicit_boost {

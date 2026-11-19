@@ -4,6 +4,15 @@ use std::sync::LazyLock;
 
 use super::types::DateFilter;
 
+pub(crate) fn now_unix_seconds() -> u64 {
+    u64::from_le_bytes(Timestamp::now().as_second().to_le_bytes())
+}
+
+/// Preserve the legacy unsigned-to-signed Unix timestamp bit pattern.
+pub(crate) fn unix_seconds_to_i64(seconds: u64) -> i64 {
+    i64::from_le_bytes(seconds.to_le_bytes())
+}
+
 static RE_ISO_DATE: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(r"\b(\d{4})-(\d{2})-(\d{2})\b").ok());
 static RE_DOTTED_DATE: LazyLock<Option<Regex>> =
