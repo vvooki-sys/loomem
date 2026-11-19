@@ -62,7 +62,7 @@ subtle = "2.6"
 zeroize = "1.8"
 
 # Utilities
-chrono = { version = "0.4", features = ["serde"] }
+jiff = { version = "1.0.0", default-features = false, features = ["std"] }
 blake3 = "1"
 unicode-normalization = "0.1"
 uuid = { version = "1.11", features = ["v4", "serde"] }

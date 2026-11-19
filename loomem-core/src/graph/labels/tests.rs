@@ -502,12 +502,8 @@ fn legacy_explicit_event_date_survives_reindex_instead_of_becoming_recorded_time
         .reindex_extraction_if_current(&target, &mut index)
         .unwrap();
     index.commit().unwrap();
-    let event_noon = chrono::NaiveDate::from_ymd_opt(2020, 2, 3)
-        .unwrap()
-        .and_hms_opt(12, 0, 0)
-        .unwrap()
-        .and_utc()
-        .timestamp();
+    let event_noon =
+        crate::temporal::utc_timestamp(jiff::civil::Date::new(2020, 2, 3).unwrap(), 12).unwrap();
     let hits = index
         .search_with_date_range("", event_noon, event_noon, Some("test"), 10)
         .unwrap();

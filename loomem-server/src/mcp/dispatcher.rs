@@ -10,7 +10,7 @@ use ingest::tool_ingest;
 
 use axum::extract::State;
 use axum::Json;
-use chrono::Utc;
+use jiff::{civil::Date, Timestamp};
 use loomem_core::feedback::{ApplyRatingArgs, FeedbackService, RatingOutcome};
 use loomem_core::manifest::{classify_stream, StreamKind};
 use loomem_core::source_tag::SourceTag;
@@ -335,14 +335,11 @@ fn classify_fact_type(content: &str) -> loomem_core::storage::FactType {
 /// `None` (timeless fact, LLM failure, gate off) falls back to the ingest
 /// timestamp; pre-1970 dates cannot be represented in the `u64` field and
 /// fall back too.
-fn event_date_routing(
-    event_date: Option<chrono::NaiveDate>,
-    timestamp: u64,
-) -> (Option<String>, u64) {
-    let iso = event_date.map(|d| d.format("%Y-%m-%d").to_string());
+fn event_date_routing(event_date: Option<Date>, timestamp: u64) -> (Option<String>, u64) {
+    let iso = event_date.map(|d| d.strftime("%Y-%m-%d").to_string());
     let unix = event_date
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
-        .and_then(|dt| u64::try_from(dt.and_utc().timestamp()).ok());
+        .and_then(|date| crate::temporal::utc_timestamp(date, 0))
+        .and_then(|timestamp| u64::try_from(timestamp).ok());
     (iso, unix.unwrap_or(timestamp))
 }
 
@@ -362,7 +359,9 @@ async fn store_extraction_meta(
     let probe_enabled =
         state.config.knowledge_extraction.enabled && loomem_core::event_date::extraction_enabled();
     let event_date = if probe_enabled {
-        let anchor_date = Utc::now().format("%Y-%m-%d").to_string();
+        let anchor_date = crate::temporal::utc_date(Timestamp::now())
+            .strftime("%Y-%m-%d")
+            .to_string();
         loomem_core::event_date::extract_event_date(
             &state.http_client,
             &state.config.llm,
@@ -456,7 +455,7 @@ async fn tool_store(
         .map(|m| state.pii_filter.sanitize_json(m));
 
     let id = uuid::Uuid::new_v4().to_string();
-    let timestamp = Utc::now().timestamp() as u64;
+    let timestamp = crate::temporal::now_unix_seconds();
     let stream = stream_id.to_string();
     let subject = args.subject.unwrap_or_else(|| "user".into());
     let source = args.source.unwrap_or_else(|| "mcp".into());
@@ -1187,7 +1186,7 @@ async fn tool_stats(
     let _args: StatsArgs = serde_json::from_value(args).unwrap_or(StatsArgs { stream: None });
 
     let opts = loomem_core::stream_stats::ComputeOpts {
-        now: u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(0),
+        now: u64::try_from(Timestamp::now().as_second()).unwrap_or(0),
         min_chunks_to_consolidate: u64::try_from(
             state.config.worker.consolidation.min_chunks_to_consolidate,
         )
@@ -1793,7 +1792,7 @@ mod tests {
     /// — exactly the pair `tool_store` writes into the chunk literal.
     #[test]
     fn ac1_event_date_routing_maps_date_to_valid_from() {
-        let date = chrono::NaiveDate::from_ymd_opt(1992, 12, 1).expect("valid date");
+        let date = Date::new(1992, 12, 1).expect("valid date");
         let (iso, valid_from) = event_date_routing(Some(date), 1_750_000_000);
         assert_eq!(iso.as_deref(), Some("1992-12-01"));
         // 1992-12-01 00:00:00 UTC
@@ -1815,7 +1814,7 @@ mod tests {
     /// still records the date for provenance).
     #[test]
     fn ac1_event_date_routing_pre_1970_falls_back() {
-        let date = chrono::NaiveDate::from_ymd_opt(1956, 6, 15).expect("valid date");
+        let date = Date::new(1956, 6, 15).expect("valid date");
         let (iso, valid_from) = event_date_routing(Some(date), 1_750_000_000);
         assert_eq!(iso.as_deref(), Some("1956-06-15"));
         assert_eq!(valid_from, 1_750_000_000);
@@ -2784,7 +2783,7 @@ async fn tool_feedback(
         return Ok(ToolResult::error(format!("validation failed: {e}")));
     }
 
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = Timestamp::now().as_millisecond();
     let event_id = uuid::Uuid::new_v4().to_string();
     let agent_id = auth
         .user_id

@@ -49,6 +49,24 @@ fn e6_reference_normalization_binds_only_semantic_cache() {
 }
 
 #[test]
+fn reference_time_normalization_preserves_rfc3339_bytes_and_cache_anchor() {
+    let (_app, state) = make_test_app();
+    let mut config = state.config.search.clone();
+    config.operation.enabled = true;
+    let payload = request(OperationPolicy::E6, Some("2026-10-19T12:00:00.120+02:00"));
+    let operation = prepare(&config, &payload, 10, None).unwrap();
+    let reference = operation.reference_time.unwrap();
+    assert_eq!(
+        crate::temporal::to_rfc3339(reference),
+        "2026-10-19T10:00:00.120+00:00"
+    );
+    assert_eq!(
+        operation.cache_identity(&resolve_date(&payload, &operation)),
+        Some("e6-semantic-evidence-v2-temporal-veto-v1|Some(2026-10-19T10:00:00.120Z)".into())
+    );
+}
+
+#[test]
 fn e6_obeys_common_operation_gate() {
     let (_app, state) = make_test_app();
     let payload = request(OperationPolicy::E6, None);

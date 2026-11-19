@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use axum::extract::{Query, State};
 use axum::Json;
-use chrono::SecondsFormat;
+use jiff::Timestamp;
 
 use super::AppError;
 use crate::auth;
@@ -172,8 +172,9 @@ fn epoch_to_rfc3339(secs: u64) -> String {
     // i64 cast: u64 fits in i64 for any timestamp in 0..=i64::MAX range.
     // The conversion is safe for all plausible timestamps (year < 292278994).
     let secs_i64 = i64::try_from(secs).unwrap_or(i64::MAX); // truncation: year >292M = use MAX
-    chrono::DateTime::<chrono::Utc>::from_timestamp(secs_i64, 0)
-        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+    Timestamp::from_second(secs_i64)
+        .ok()
+        .map(|timestamp| format!("{timestamp:.0}"))
         .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }
 
@@ -182,6 +183,12 @@ fn epoch_to_rfc3339(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn epoch_rfc3339_preserves_seconds_z_and_fallback() {
+        assert_eq!(epoch_to_rfc3339(1_700_000_000), "2023-11-14T22:13:20Z");
+        assert_eq!(epoch_to_rfc3339(u64::MAX), "1970-01-01T00:00:00Z");
+    }
 
     // ── Unit: sort comparator ────────────────────────────────────────────
 
@@ -437,7 +444,7 @@ mod tests {
 
         let base_ts: u64 = 1_746_100_000;
         let mut deleted_chunk = make_chunk("deleted-ref", stream, base_ts, None);
-        deleted_chunk.deleted_at = Some(chrono::Utc::now().timestamp() as u64);
+        deleted_chunk.deleted_at = Some(crate::temporal::now_unix_seconds());
         state
             .store
             .store_chunk(&deleted_chunk)

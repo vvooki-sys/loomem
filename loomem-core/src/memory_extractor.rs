@@ -550,7 +550,7 @@ pub async fn extract_memories(
     extraction_config: &KnowledgeExtractionConfig,
     conversation_text: &str,
 ) -> Result<ExtractionOutcome, ExtractionError> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = crate::date_resolver::today_iso();
     extract_knowledge(
         client,
         llm_config,

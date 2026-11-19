@@ -1,7 +1,6 @@
 //! One bounded semantic evidence-selection call, with exact input on any failure.
 use std::time::Duration;
 
-use chrono::DateTime;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -25,9 +24,12 @@ pub fn build_request(
     prepared: &[EvidenceRecord],
     model: &str,
 ) -> Value {
-    let reference_time = reference_time
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.to_rfc3339());
+    let reference_time = reference_time.and_then(|value| {
+        let timestamp = value.parse::<jiff::Timestamp>().ok()?;
+        let pieces = jiff::fmt::temporal::Pieces::parse(value).ok()?;
+        let offset = pieces.offset()?.to_numeric_offset();
+        Some(crate::temporal::to_rfc3339_with_offset(timestamp, offset))
+    });
     let mut data = json!({"query": query, "records": prepared});
     if let Some(reference_time) = reference_time {
         data["reference_time"] = json!(reference_time);

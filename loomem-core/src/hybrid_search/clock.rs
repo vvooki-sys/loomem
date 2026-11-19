@@ -1,5 +1,5 @@
 //! Injectable scoring time, isolated from operation reference dates.
-use chrono::Utc;
+use jiff::Timestamp;
 use tracing::debug;
 
 use super::HybridSearchEngine;
@@ -10,15 +10,15 @@ pub(super) enum SearchClock {
     #[default]
     System,
     #[cfg(feature = "evaluation")]
-    Fixed(chrono::DateTime<Utc>),
+    Fixed(Timestamp),
 }
 
 impl SearchClock {
     fn timestamp(&self) -> i64 {
         match self {
-            Self::System => Utc::now().timestamp(),
+            Self::System => Timestamp::now().as_second(),
             #[cfg(feature = "evaluation")]
-            Self::Fixed(time) => time.timestamp(),
+            Self::Fixed(time) => time.as_second(),
         }
     }
 }
@@ -26,7 +26,7 @@ impl SearchClock {
 impl HybridSearchEngine {
     /// Freeze scoring time for reproducible evaluation; decay remains enabled.
     #[cfg(feature = "evaluation")]
-    pub fn with_fixed_time(config: crate::config::Config, time: chrono::DateTime<Utc>) -> Self {
+    pub fn with_fixed_time(config: crate::config::Config, time: Timestamp) -> Self {
         Self {
             config,
             clock: SearchClock::Fixed(time),
@@ -69,11 +69,11 @@ mod tests {
 
     #[test]
     fn fixed_clock_keeps_decay_enabled_and_identical_across_engines() {
-        let time = chrono::DateTime::from_timestamp(1_792_430_400, 0).unwrap();
+        let time = Timestamp::from_second(1_792_430_400).unwrap();
         let config = crate::hybrid_search::tests::test_config();
         let first = HybridSearchEngine::with_fixed_time(config.clone(), time);
         let second = HybridSearchEngine::with_fixed_time(config.clone(), time);
-        let yesterday = time.timestamp() - 86_400;
+        let yesterday = time.as_second() - 86_400;
         let expected = (-config.search.decay.l0_lambda).exp();
         for _ in 0..3 {
             let decay = first.compute_time_decay(yesterday, 0, &config.search.decay);
@@ -85,7 +85,7 @@ mod tests {
             assert!(decay < 1.0);
         }
         assert_eq!(
-            first.compute_time_decay(time.timestamp(), 0, &config.search.decay),
+            first.compute_time_decay(time.as_second(), 0, &config.search.decay),
             1.0
         );
     }

@@ -49,7 +49,7 @@ pub fn dream_discover(
     stream_id: &str,
 ) -> Result<DreamReport> {
     let start = std::time::Instant::now();
-    let now = chrono::Utc::now().timestamp() as u64;
+    let now = crate::temporal::now_unix_seconds();
 
     // 1. Get all centroids and pick one chunk per cluster (up to 10)
     let centroids = get_all_centroids(store)?;

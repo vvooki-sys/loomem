@@ -20,7 +20,7 @@
 //!   staleness hazard (see /90 cache-key-by-model lesson) without hits.
 
 use anyhow::Result;
-use chrono::{Datelike, NaiveDate};
+use jiff::civil::Date;
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
@@ -66,7 +66,7 @@ struct EventDateResponse {
 }
 
 /// Probe `content` for an absolute event date. Returns the parsed
-/// `NaiveDate` on success, `None` for timeless facts, LLM failures, or
+/// `Date` on success, `None` for timeless facts, LLM failures, or
 /// missing API key. Anchor date is used to resolve relative expressions
 /// like "yesterday" — pass today's ISO date for live-ingest paths.
 ///
@@ -79,7 +79,7 @@ pub async fn extract_event_date(
     model: &str,
     content: &str,
     anchor_date: &str,
-) -> Option<NaiveDate> {
+) -> Option<Date> {
     if content.trim().len() < 8 {
         return None;
     }
@@ -102,7 +102,7 @@ async fn call_llm(
     model: &str,
     system_prompt: &str,
     content: &str,
-) -> Result<Option<NaiveDate>> {
+) -> Result<Option<Date>> {
     let body = serde_json::json!({
         "model": model,
         "messages": [
@@ -162,8 +162,8 @@ async fn call_llm(
 
 /// Parse `YYYY-MM-DD` and clamp to a plausible year range. Defends against
 /// LLM hallucinations like `0001-01-01` or `9999-12-31`.
-fn parse_and_validate(s: &str) -> Option<NaiveDate> {
-    let date = NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()?;
+fn parse_and_validate(s: &str) -> Option<Date> {
+    let date = Date::strptime("%Y-%m-%d", s.trim()).ok()?;
     if !(1900..=2100).contains(&date.year()) {
         debug!(
             "extract_event_date: rejecting out-of-range year {}",
@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn parse_and_validate_accepts_recent_iso_date() {
         let d = parse_and_validate("1992-12-01").unwrap();
-        assert_eq!(d.format("%Y-%m-%d").to_string(), "1992-12-01");
+        assert_eq!(d.strftime("%Y-%m-%d").to_string(), "1992-12-01");
     }
 
     #[test]
@@ -199,6 +199,22 @@ mod tests {
         assert!(parse_and_validate("not a date").is_none());
         assert!(parse_and_validate("").is_none());
         assert!(parse_and_validate("2026-13-45").is_none());
+        assert!(parse_and_validate("2026-02-29").is_none());
+    }
+
+    #[test]
+    fn parse_and_validate_preserves_leap_days_and_year_boundaries() {
+        assert_eq!(
+            parse_and_validate("2024-02-29")
+                .unwrap()
+                .strftime("%Y-%m-%d")
+                .to_string(),
+            "2024-02-29"
+        );
+        assert!(parse_and_validate("1900-01-01").is_some());
+        assert!(parse_and_validate("2100-12-31").is_some());
+        assert!(parse_and_validate("1899-12-31").is_none());
+        assert!(parse_and_validate("2101-01-01").is_none());
     }
 
     #[test]

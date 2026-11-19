@@ -13,6 +13,7 @@ mod oauth;
 pub mod rate_limiter;
 mod resource_guards;
 mod spa;
+mod temporal;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -2434,9 +2435,8 @@ mod tests {
     async fn t7_backfill_encrypt_noop_provider_returns_400() {
         let (app, _state) = make_test_app();
         // Use today's date to ensure a valid token format.
-        let today = chrono::Utc::now().format("%Y%m%d").to_string();
-        let token = format!("snap-{today}-prod-aabb1234");
-        let body = serde_json::json!({ "snapshot_token": token });
+        let today = handlers::backfill_encrypt::compact_today();
+        let body = serde_json::json!({ "snapshot_token": format!("snap-{today}-prod-aabb1234") });
         let req = Request::builder()
             .method(Method::POST)
             .uri("/v1/admin/backfill/encrypt-at-rest")
@@ -2480,7 +2480,7 @@ mod tests {
                 source: KeyScope::Private,
             }],
         };
-        let today = chrono::Utc::now().format("%Y%m%d").to_string();
+        let today = handlers::backfill_encrypt::compact_today();
         let req_body = handlers::backfill_encrypt::BackfillEncryptRequest {
             snapshot_token: format!("snap-{today}-prod-aabb1234"),
             batch_size: 200,

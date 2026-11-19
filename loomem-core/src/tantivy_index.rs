@@ -1265,13 +1265,8 @@ impl TantivyIndex {
                 .extraction_meta
                 .as_ref()
                 .and_then(|m| m.event_date.as_ref())
-                .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-                .map(|d| {
-                    d.and_hms_opt(12, 0, 0)
-                        .expect("valid static HMS")
-                        .and_utc()
-                        .timestamp()
-                });
+                .and_then(|d| jiff::civil::Date::strptime("%Y-%m-%d", d).ok())
+                .and_then(|d| crate::temporal::utc_timestamp(d, 12));
 
             let doc = TextDocument {
                 id: chunk.id.clone(),

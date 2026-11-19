@@ -16,7 +16,7 @@ pub fn track_association_consumed(
     chunk_id: &str,
     mechanism: &str,
 ) -> Result<()> {
-    let now = chrono::Utc::now().timestamp() as u64;
+    let now = crate::temporal::now_unix_seconds();
     let key = format!("assoc:consumed:{}:{}", chunk_id, now);
     store.put(key.as_bytes(), mechanism.as_bytes())?;
     debug!(

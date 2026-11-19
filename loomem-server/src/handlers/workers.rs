@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
-use chrono::Utc;
+use jiff::Timestamp;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -248,13 +248,14 @@ pub async fn admin_streams_stats_handler(
     Ok(Json(StreamStatsResponse {
         streams,
         total_streams,
-        generated_at: Utc::now().to_rfc3339(),
+        generated_at: crate::temporal::to_rfc3339(Timestamp::now()),
     }))
 }
 
 fn epoch_to_rfc3339(secs: u64) -> String {
-    chrono::DateTime::<chrono::Utc>::from_timestamp(secs as i64, 0)
-        .map(|dt| dt.to_rfc3339())
+    Timestamp::from_second(crate::temporal::unix_seconds_to_i64(secs))
+        .ok()
+        .map(crate::temporal::to_rfc3339)
         .unwrap_or_else(|| String::from("1970-01-01T00:00:00+00:00"))
 }
 
@@ -266,6 +267,11 @@ mod tests {
     fn make_test_registry() -> loomem_core::workers_registry::WorkerRegistry {
         let cfg = loomem_core::scheduler::WorkerConfig::default();
         build_registry(&cfg, 86400, 3600)
+    }
+
+    #[test]
+    fn epoch_rfc3339_preserves_numeric_utc_suffix() {
+        assert_eq!(epoch_to_rfc3339(1_700_000_000), "2023-11-14T22:13:20+00:00");
     }
 
     #[test]

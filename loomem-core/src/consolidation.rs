@@ -203,7 +203,7 @@ struct Enrichment {
     memory_type: String,
     extraction_meta: ExtractionMeta,
     importance: Option<f64>,
-    resolved_event_date: Option<chrono::NaiveDate>,
+    resolved_event_date: Option<jiff::civil::Date>,
 }
 
 fn parse_structured_response(
@@ -266,9 +266,8 @@ fn parse_structured_response(
         .filter(|o| o.obs_type.to_lowercase() == "event")
         .find_map(|o| o.event_at_raw.clone());
 
-    let anchor_date = chrono::DateTime::from_timestamp(anchor_timestamp as i64, 0)
-        .map(|dt| dt.date_naive())
-        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let anchor_date = date_resolver::date_from_unix(anchor_timestamp)
+        .unwrap_or_else(|| crate::temporal::utc_date(jiff::Timestamp::now()));
 
     let resolved_event_date = event_at_raw
         .as_deref()
@@ -305,7 +304,7 @@ fn parse_structured_response(
     let extraction_meta = ExtractionMeta {
         fact_type: fact_type.clone(),
         subject: None,
-        event_date: resolved_event_date.map(|d| d.format("%Y-%m-%d").to_string()),
+        event_date: resolved_event_date.map(|d| d.strftime("%Y-%m-%d").to_string()),
         event_date_context: event_at_raw,
         supersedes: None,
         superseded_by: None,
@@ -633,8 +632,8 @@ pub async fn consolidate(
                     ) = if let Some(ref e) = enrichment {
                         let valid_from = e
                             .resolved_event_date
-                            .and_then(|d| d.and_hms_opt(12, 0, 0))
-                            .map(|dt| dt.and_utc().timestamp() as u64)
+                            .and_then(|date| crate::temporal::utc_timestamp(date, 12))
+                            .map(crate::temporal::unix_seconds_to_u64)
                             .or_else(|| sub_group.iter().map(|c| c.timestamp).min());
                         (
                             e.content.clone(),
@@ -802,9 +801,8 @@ pub async fn consolidate(
                         .extraction_meta
                         .as_ref()
                         .and_then(|m| m.event_date.as_ref())
-                        .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-                        .and_then(|d| d.and_hms_opt(12, 0, 0))
-                        .map(|dt| dt.and_utc().timestamp());
+                        .and_then(|d| jiff::civil::Date::strptime("%Y-%m-%d", d).ok())
+                        .and_then(|d| crate::temporal::utc_timestamp(d, 12));
 
                     let doc = TextDocument {
                         id: l1_id.clone(),

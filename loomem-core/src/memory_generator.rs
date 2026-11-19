@@ -271,7 +271,7 @@ pub async fn generate_memory_md(
         return Ok(MemoryProposal {
             proposal: "# MEMORY.md\n\nBrak danych do wygenerowania pamięci.".to_string(),
             chunk_count: 0,
-            generated_at: chrono::Utc::now().to_rfc3339(),
+            generated_at: crate::temporal::to_rfc3339(jiff::Timestamp::now()),
         });
     }
 
@@ -316,7 +316,7 @@ pub async fn generate_memory_md(
     Ok(MemoryProposal {
         proposal,
         chunk_count: candidates.len(),
-        generated_at: chrono::Utc::now().to_rfc3339(),
+        generated_at: crate::temporal::to_rfc3339(jiff::Timestamp::now()),
     })
 }
 

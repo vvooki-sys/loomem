@@ -53,12 +53,12 @@ pub struct FusionParams {
 }
 
 impl FusionParams {
-    /// Production defaults: `now = chrono::Utc::now().timestamp()`,
+    /// Production defaults: `now = jiff::Timestamp::now().as_second()`,
     /// `tau = 30 days`, `k = 60`.
     #[must_use]
     pub fn now_default() -> FusionParams {
         FusionParams {
-            now_ts: chrono::Utc::now().timestamp(),
+            now_ts: jiff::Timestamp::now().as_second(),
             recency_tau_days: recency::DEFAULT_TAU_DAYS,
             rrf_k: RRF_K,
         }

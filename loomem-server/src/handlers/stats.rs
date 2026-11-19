@@ -180,7 +180,7 @@ pub async fn stats_feedback_handler(
     axum::Extension(auth): axum::Extension<AuthContext>,
     Json(payload): Json<FeedbackRequest>,
 ) -> Result<Json<FeedbackResponse>, AppError> {
-    let now = chrono::Utc::now().timestamp() as u64;
+    let now = crate::temporal::now_unix_seconds();
 
     let record = FeedbackRecord {
         chunk_id: payload.chunk_id,

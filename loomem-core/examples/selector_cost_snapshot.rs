@@ -7,9 +7,12 @@ use serde_json::{json, Map, Value};
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let path = args.next().context("Database path required")?;
-    let date = args
-        .next()
-        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+    let date = args.next().unwrap_or_else(|| {
+        jiff::Timestamp::now()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .strftime("%Y-%m-%d")
+            .to_string()
+    });
     let options = Options::default();
     let families = DB::list_cf(&options, &path).context("List database column families")?;
     let db = DB::open_cf_for_read_only(&options, &path, families, false)

@@ -1,8 +1,18 @@
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
+use jiff::{civil::Date, SignedDuration, Timestamp};
 use regex::Regex;
 use std::sync::LazyLock;
 
 use super::types::DateFilter;
+
+/// Return current Unix seconds; `Timestamp::now()` is never negative.
+pub(crate) fn now_unix_seconds() -> u64 {
+    u64::from_le_bytes(Timestamp::now().as_second().to_le_bytes())
+}
+
+/// Intentional bit cast: preserve legacy unsigned-to-signed wrap-around.
+pub(crate) fn unix_seconds_to_i64(seconds: u64) -> i64 {
+    i64::from_le_bytes(seconds.to_le_bytes())
+}
 
 static RE_ISO_DATE: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(r"\b(\d{4})-(\d{2})-(\d{2})\b").ok());
@@ -36,7 +46,7 @@ static LEGACY_RE_POLISH_DATE: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(r"(\d{1,2})\s+(stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|września|października|listopada|grudnia)(?:\s+(\d{4}))?").ok()
 });
 
-fn parse_polish_month(month_name: &str) -> Option<u32> {
+fn parse_polish_month(month_name: &str) -> Option<i8> {
     match month_name.to_lowercase().as_str() {
         "stycznia" => Some(1),
         "lutego" => Some(2),
@@ -60,11 +70,11 @@ pub fn extract_date_filter(query: &str) -> (String, Option<DateFilter>) {
     let query_lower = query.to_lowercase();
     let now = crate::evaluation_clock::now();
     legacy_named_relative(&query_lower, now)
-        .or_else(|| legacy_absolute_date(&query_lower, now.year()))
+        .or_else(|| legacy_absolute_date(&query_lower, crate::temporal::utc_date(now).year()))
         .unwrap_or_else(|| (query.to_string(), None))
 }
 
-fn legacy_named_relative(query: &str, now: DateTime<Utc>) -> Option<(String, Option<DateFilter>)> {
+fn legacy_named_relative(query: &str, now: Timestamp) -> Option<(String, Option<DateFilter>)> {
     if query.contains("dzisiaj") || query.contains("dziś") {
         return legacy_today(query, now);
     }
@@ -80,8 +90,8 @@ fn legacy_named_relative(query: &str, now: DateTime<Utc>) -> Option<(String, Opt
     None
 }
 
-fn legacy_today(query: &str, now: DateTime<Utc>) -> Option<(String, Option<DateFilter>)> {
-    let (start, end) = day_bounds(now.date_naive())?;
+fn legacy_today(query: &str, now: Timestamp) -> Option<(String, Option<DateFilter>)> {
+    let (start, end) = day_bounds(crate::temporal::utc_date(now))?;
     let cleaned = query
         .replace("dzisiaj", "")
         .replace("dziś", "")
@@ -90,20 +100,20 @@ fn legacy_today(query: &str, now: DateTime<Utc>) -> Option<(String, Option<DateF
     Some((cleaned, Some(DateFilter::Range(start, end))))
 }
 
-fn legacy_yesterday(query: &str, now: DateTime<Utc>) -> Option<(String, Option<DateFilter>)> {
-    let target = now.checked_sub_signed(Duration::days(1))?;
-    let (start, end) = day_bounds(target.date_naive())?;
+fn legacy_yesterday(query: &str, now: Timestamp) -> Option<(String, Option<DateFilter>)> {
+    let target = subtract_days(now, 1)?;
+    let (start, end) = day_bounds(crate::temporal::utc_date(target))?;
     let cleaned = query.replace("wczoraj", "").trim().to_string();
     Some((cleaned, Some(DateFilter::Range(start, end))))
 }
 
 fn legacy_range(
     query: &str,
-    now: DateTime<Utc>,
+    now: Timestamp,
     days: i64,
     kind: &str,
 ) -> Option<(String, Option<DateFilter>)> {
-    let start = now.checked_sub_signed(Duration::days(days))?.timestamp();
+    let start = subtract_days(now, days)?.as_second();
     let cleaned = if kind == "week" {
         query
             .replace("ostatni tydzień", "")
@@ -115,11 +125,11 @@ fn legacy_range(
     };
     Some((
         cleaned.trim().to_string(),
-        Some(DateFilter::Range(start, now.timestamp())),
+        Some(DateFilter::Range(start, now.as_second())),
     ))
 }
 
-fn legacy_absolute_date(query: &str, default_year: i32) -> Option<(String, Option<DateFilter>)> {
+fn legacy_absolute_date(query: &str, default_year: i16) -> Option<(String, Option<DateFilter>)> {
     parse_numeric_date(query, &LEGACY_RE_ISO_DATE, true, false)
         .or_else(|| parse_numeric_date(query, &LEGACY_RE_DOTTED_DATE, false, false))
         .or_else(|| parse_polish_with(query, default_year, &LEGACY_RE_POLISH_DATE, false))
@@ -128,7 +138,7 @@ fn legacy_absolute_date(query: &str, default_year: i32) -> Option<(String, Optio
 /// Pure anchored equivalent used by deterministic replay requests.
 pub fn extract_date_filter_at(
     query: &str,
-    reference_time: DateTime<Utc>,
+    reference_time: Timestamp,
 ) -> (String, Option<DateFilter>) {
     let query_lower = query.to_lowercase();
     if anchored_marker_count(&query_lower) != 1 {
@@ -138,7 +148,12 @@ pub fn extract_date_filter_at(
         return result;
     }
     named_relative(&query_lower, reference_time)
-        .or_else(|| absolute_date(&query_lower, reference_time.year()))
+        .or_else(|| {
+            absolute_date(
+                &query_lower,
+                crate::temporal::utc_date(reference_time).year(),
+            )
+        })
         .unwrap_or_else(|| (query.to_string(), None))
 }
 
@@ -161,7 +176,7 @@ fn anchored_marker_count(query: &str) -> usize {
     .sum()
 }
 
-fn named_relative(query: &str, reference: DateTime<Utc>) -> Option<(String, Option<DateFilter>)> {
+fn named_relative(query: &str, reference: Timestamp) -> Option<(String, Option<DateFilter>)> {
     if let Some(result) = matched_day(query, reference, &RE_TODAY, 0) {
         return Some(result);
     }
@@ -174,35 +189,33 @@ fn named_relative(query: &str, reference: DateTime<Utc>) -> Option<(String, Opti
 
 fn matched_day(
     query: &str,
-    reference: DateTime<Utc>,
+    reference: Timestamp,
     pattern: &Option<Regex>,
     days_ago: i64,
 ) -> Option<(String, Option<DateFilter>)> {
     let pattern = pattern.as_ref()?;
     pattern.find(query)?;
-    let target = reference.checked_sub_signed(Duration::days(days_ago))?;
-    let (start, end) = day_bounds(target.date_naive())?;
+    let target = subtract_days(reference, days_ago)?;
+    let (start, end) = day_bounds(crate::temporal::utc_date(target))?;
     Some((clean(pattern, query), Some(DateFilter::Range(start, end))))
 }
 
 fn matched_range(
     query: &str,
-    reference: DateTime<Utc>,
+    reference: Timestamp,
     pattern: &Option<Regex>,
     days: i64,
 ) -> Option<(String, Option<DateFilter>)> {
     let pattern = pattern.as_ref()?;
     pattern.find(query)?;
-    let start = reference
-        .checked_sub_signed(Duration::days(days))?
-        .timestamp();
+    let start = subtract_days(reference, days)?.as_second();
     Some((
         clean(pattern, query),
-        Some(DateFilter::Range(start, reference.timestamp())),
+        Some(DateFilter::Range(start, reference.as_second())),
     ))
 }
 
-fn absolute_date(query: &str, default_year: i32) -> Option<(String, Option<DateFilter>)> {
+fn absolute_date(query: &str, default_year: i16) -> Option<(String, Option<DateFilter>)> {
     parse_numeric_date(query, &RE_ISO_DATE, true, true)
         .or_else(|| parse_numeric_date(query, &RE_DOTTED_DATE, false, true))
         .or_else(|| parse_polish_date(query, default_year))
@@ -220,12 +233,12 @@ fn parse_numeric_date(
     matched_date(
         query,
         pattern,
-        NaiveDate::from_ymd_opt(year, month, day)?,
+        Date::new(year, month, day).ok()?,
         all_matches,
     )
 }
 
-fn numeric_parts(capture: &regex::Captures<'_>, year_first: bool) -> Option<(i32, u32, u32)> {
+fn numeric_parts(capture: &regex::Captures<'_>, year_first: bool) -> Option<(i16, i8, i8)> {
     if year_first {
         parse_year_month_day(capture)
     } else {
@@ -233,27 +246,27 @@ fn numeric_parts(capture: &regex::Captures<'_>, year_first: bool) -> Option<(i32
     }
 }
 
-fn parse_year_month_day(capture: &regex::Captures<'_>) -> Option<(i32, u32, u32)> {
+fn parse_year_month_day(capture: &regex::Captures<'_>) -> Option<(i16, i8, i8)> {
     let year = capture.get(1)?.as_str().parse().ok()?;
     let month = capture.get(2)?.as_str().parse().ok()?;
     let day = capture.get(3)?.as_str().parse().ok()?;
     Some((year, month, day))
 }
 
-fn parse_day_month_year(capture: &regex::Captures<'_>) -> Option<(i32, u32, u32)> {
+fn parse_day_month_year(capture: &regex::Captures<'_>) -> Option<(i16, i8, i8)> {
     let day = capture.get(1)?.as_str().parse().ok()?;
     let month = capture.get(2)?.as_str().parse().ok()?;
     let year = capture.get(3)?.as_str().parse().ok()?;
     Some((year, month, day))
 }
 
-fn parse_polish_date(query: &str, default_year: i32) -> Option<(String, Option<DateFilter>)> {
+fn parse_polish_date(query: &str, default_year: i16) -> Option<(String, Option<DateFilter>)> {
     parse_polish_with(query, default_year, &RE_POLISH_DATE, true)
 }
 
 fn parse_polish_with(
     query: &str,
-    default_year: i32,
+    default_year: i16,
     configured: &Option<Regex>,
     all_matches: bool,
 ) -> Option<(String, Option<DateFilter>)> {
@@ -268,7 +281,7 @@ fn parse_polish_with(
     matched_date(
         query,
         pattern,
-        NaiveDate::from_ymd_opt(year, month, day)?,
+        Date::new(year, month, day).ok()?,
         all_matches,
     )
 }
@@ -276,7 +289,7 @@ fn parse_polish_with(
 fn matched_date(
     query: &str,
     pattern: &Regex,
-    date: NaiveDate,
+    date: Date,
     all_matches: bool,
 ) -> Option<(String, Option<DateFilter>)> {
     let (start, end) = day_bounds(date)?;
@@ -288,17 +301,23 @@ fn matched_date(
     Some((cleaned, Some(DateFilter::Range(start, end))))
 }
 
-fn day_bounds(date: NaiveDate) -> Option<(i64, i64)> {
-    let start = date.and_hms_opt(0, 0, 0)?.and_utc().timestamp();
-    let end = date.and_hms_opt(23, 59, 59)?.and_utc().timestamp();
+fn day_bounds(date: Date) -> Option<(i64, i64)> {
+    let start = crate::temporal::utc_timestamp(date, 0)?;
+    let end = crate::temporal::utc_timestamp(date, 23)? + 59 * 60 + 59;
     Some((start, end))
+}
+
+fn subtract_days(timestamp: Timestamp, days: i64) -> Option<Timestamp> {
+    timestamp
+        .checked_sub(SignedDuration::from_hours(days.checked_mul(24)?))
+        .ok()
 }
 
 fn clean(pattern: &Regex, query: &str) -> String {
     pattern.replace_all(query, "").trim().to_string()
 }
 
-fn relative_numeric(query: &str, reference: DateTime<Utc>) -> Option<(String, Option<DateFilter>)> {
+fn relative_numeric(query: &str, reference: Timestamp) -> Option<(String, Option<DateFilter>)> {
     if let Some(pattern) = RE_PAST.as_ref() {
         if let Some(captures) = pattern.captures(query) {
             return relative_range(query, reference, &captures, pattern);
@@ -317,31 +336,29 @@ fn relative_numeric(query: &str, reference: DateTime<Utc>) -> Option<(String, Op
 
 fn relative_day(
     query: &str,
-    reference: DateTime<Utc>,
+    reference: Timestamp,
     captures: &regex::Captures<'_>,
     pattern: &Regex,
 ) -> Option<(String, Option<DateFilter>)> {
     let days = relative_days(captures)?;
-    let target = reference.checked_sub_signed(Duration::days(days))?;
-    let (start, end) = day_bounds(target.date_naive())?;
+    let target = subtract_days(reference, days)?;
+    let (start, end) = day_bounds(crate::temporal::utc_date(target))?;
     let cleaned = clean(pattern, query);
     Some((cleaned, Some(DateFilter::Range(start, end))))
 }
 
 fn relative_range(
     query: &str,
-    reference: DateTime<Utc>,
+    reference: Timestamp,
     captures: &regex::Captures<'_>,
     pattern: &Regex,
 ) -> Option<(String, Option<DateFilter>)> {
     let days = relative_days(captures)?;
-    let start = reference
-        .checked_sub_signed(Duration::days(days))?
-        .timestamp();
+    let start = subtract_days(reference, days)?.as_second();
     let cleaned = clean(pattern, query);
     Some((
         cleaned,
-        Some(DateFilter::Range(start, reference.timestamp())),
+        Some(DateFilter::Range(start, reference.as_second())),
     ))
 }
 
@@ -379,8 +396,9 @@ mod tests {
         assert!(filter.is_some());
         if let Some(DateFilter::Range(start, end)) = filter {
             assert_eq!(end - start, 86399);
-            use chrono::DateTime;
-            let date = DateTime::from_timestamp(start, 0).expect("start is a valid unix timestamp");
+            let date = crate::temporal::utc_date(
+                Timestamp::from_second(start).expect("start is a valid unix timestamp"),
+            );
             assert_eq!(date.day(), 23);
             assert_eq!(date.month(), 2);
             assert_eq!(date.year(), 2026);
@@ -423,17 +441,17 @@ mod tests {
         assert!(filter.is_some());
         if let Some(DateFilter::Range(start, end)) = filter {
             assert_eq!(end - start, 86399);
-            use chrono::DateTime;
-            let date = DateTime::from_timestamp(start, 0).expect("start is a valid unix timestamp");
+            let date = crate::temporal::utc_date(
+                Timestamp::from_second(start).expect("start is a valid unix timestamp"),
+            );
             assert_eq!(date.day(), 23);
             assert_eq!(date.month(), 2);
             assert_eq!(date.year(), 2026);
         }
     }
 
-    fn anchor() -> DateTime<Utc> {
-        use chrono::TimeZone;
-        Utc.with_ymd_and_hms(2026, 10, 19, 12, 0, 0).unwrap()
+    fn anchor() -> Timestamp {
+        Timestamp::from_second(1_792_411_200).unwrap()
     }
 
     #[test]
@@ -524,11 +542,10 @@ mod tests {
 
     #[test]
     fn leap_day_and_year_boundary_are_exact() {
-        use chrono::TimeZone;
         let leap = extract_date_filter_at("event 2024-02-29", anchor());
         let year = extract_date_filter_at(
             "event yesterday",
-            Utc.with_ymd_and_hms(2026, 1, 1, 0, 30, 0).unwrap(),
+            Timestamp::from_second(1_767_227_400).unwrap(),
         );
         assert_eq!(
             leap.1,

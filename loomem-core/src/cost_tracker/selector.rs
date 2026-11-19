@@ -48,7 +48,9 @@ impl<'a> SelectorAccounting<'a> {
     /// Reserve the full model context and the provider output ceiling.
     /// Unknown models and disabled persistence fail closed before dispatch.
     pub fn reserve(self, model: &str) -> Result<SelectorReservation<'a>> {
-        let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let date = crate::temporal::utc_date(jiff::Timestamp::now())
+            .strftime("%Y-%m-%d")
+            .to_string();
         self.reserve_on_day(model, &date)
     }
 

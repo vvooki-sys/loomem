@@ -13,7 +13,7 @@ use std::sync::{
 };
 
 use axum::{extract::State, http::StatusCode, Extension, Json};
-use chrono::{NaiveDate, Utc};
+use jiff::{civil::Date, Timestamp};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -61,14 +61,17 @@ fn default_batch_size() -> usize {
 ///
 /// Returns `Ok(())` on success, `Err(String)` with a human-readable message
 /// on failure.
-pub fn validate_snapshot_token(token: &str, today: NaiveDate) -> Result<(), String> {
+pub fn validate_snapshot_token(token: &str, today: Date) -> Result<(), String> {
     let date_part = parse_token_structure(token)?;
 
     // Date staleness check: parse YYYYMMDD and compare to today.
-    let token_date = NaiveDate::parse_from_str(date_part, "%Y%m%d")
-        .map_err(|e| format!("snapshot_token date parse error: {e}"))?;
+    let token_date = Date::strptime("%Y%m%d", date_part)
+        .map_err(|_| "snapshot_token date parse error: input is out of range".to_string())?;
 
-    let age_days = (today - token_date).num_days();
+    let age_days = today
+        .since(token_date)
+        .map_err(|e| format!("snapshot_token date range error: {e}"))?
+        .get_days();
     if !(0..=7).contains(&age_days) {
         return Err(format!(
             "snapshot_token date {date_part} is {age_days} days from today \
@@ -134,6 +137,13 @@ fn check_instance_and_hex(token: &str, instance: &str, hex_id: &str) -> Result<(
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// POST /v1/admin/backfill/encrypt-at-rest
+#[cfg(test)]
+pub(crate) fn compact_today() -> String {
+    crate::temporal::utc_date(Timestamp::now())
+        .strftime("%Y%m%d")
+        .to_string()
+}
+
 pub async fn encrypt_at_rest_backfill_handler(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
@@ -145,7 +155,7 @@ pub async fn encrypt_at_rest_backfill_handler(
     }
 
     // 2. Token validation (400).
-    let today = Utc::now().date_naive();
+    let today = crate::temporal::utc_date(Timestamp::now());
     if let Err(msg) = validate_snapshot_token(&req.snapshot_token, today) {
         return Ok((StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))));
     }
@@ -263,24 +273,23 @@ use anyhow::Context as _;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
 
     // ── T6 — validate_snapshot_token unit tests ───────────────────────────────
 
-    fn today() -> NaiveDate {
-        NaiveDate::from_ymd_opt(2026, 6, 10).expect("valid date")
+    fn today() -> Date {
+        Date::new(2026, 6, 10).expect("valid date")
     }
 
-    fn yesterday() -> NaiveDate {
-        NaiveDate::from_ymd_opt(2026, 6, 9).expect("valid date")
+    fn yesterday() -> Date {
+        Date::new(2026, 6, 9).expect("valid date")
     }
 
-    fn eight_days_ago() -> NaiveDate {
-        NaiveDate::from_ymd_opt(2026, 6, 2).expect("valid date")
+    fn eight_days_ago() -> Date {
+        Date::new(2026, 6, 2).expect("valid date")
     }
 
-    fn seven_days_ago() -> NaiveDate {
-        NaiveDate::from_ymd_opt(2026, 6, 3).expect("valid date")
+    fn seven_days_ago() -> Date {
+        Date::new(2026, 6, 3).expect("valid date")
     }
 
     #[test]
@@ -323,6 +332,16 @@ mod tests {
         let err =
             validate_snapshot_token("snap-2026061X-prod-aabb", today()).expect_err("must fail");
         assert!(err.contains("8 digits") || err.contains("date"), "{err}");
+    }
+
+    #[test]
+    fn t6_invalid_calendar_day_preserves_error_message() {
+        let err = validate_snapshot_token("snap-20260230-prod-aabb1234", today())
+            .expect_err("invalid calendar day must fail");
+        assert_eq!(
+            err,
+            "snapshot_token date parse error: input is out of range"
+        );
     }
 
     #[test]

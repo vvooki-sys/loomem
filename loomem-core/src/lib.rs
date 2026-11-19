@@ -52,6 +52,7 @@ pub mod stats_aggregator;
 pub mod storage;
 pub mod stream_stats;
 pub mod tantivy_index;
+mod temporal;
 pub mod vector_search;
 pub mod workers_registry;
 

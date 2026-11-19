@@ -1,7 +1,7 @@
 pub(crate) mod graph;
 pub(crate) mod sanitize;
 use axum::{extract::State, http::StatusCode, Json};
-use chrono::Utc;
+use jiff::{civil::Date, Timestamp};
 use loomem_core::intent_log::OpType;
 use loomem_core::source_tag::SourceTag;
 use loomem_core::storage::{persist_chunk_with_index, Chunk, PersistChunkArgs};
@@ -117,13 +117,8 @@ pub async fn persist_chunk(
         .extraction_meta
         .as_ref()
         .and_then(|m| m.event_date.as_ref())
-        .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-        .map(|d| {
-            d.and_hms_opt(12, 0, 0)
-                .expect("valid static HMS")
-                .and_utc()
-                .timestamp()
-        });
+        .and_then(|d| Date::strptime("%Y-%m-%d", d).ok())
+        .and_then(|date| crate::temporal::utc_timestamp(date, 12));
 
     // Build TextDocument for Tantivy
     let doc = TextDocument {
@@ -197,10 +192,12 @@ pub async fn persist_chunk(
             .unwrap_or("unknown");
         let audit_dir = std::path::Path::new("memory/audit");
         let _ = std::fs::create_dir_all(audit_dir);
-        let date_str = Utc::now().format("%Y-%m-%d").to_string();
+        let date_str = crate::temporal::utc_date(Timestamp::now())
+            .strftime("%Y-%m-%d")
+            .to_string();
         let audit_path = audit_dir.join(format!("{}.jsonl", date_str));
         let audit_line = json!({
-            "ts": Utc::now().to_rfc3339(),
+            "ts": crate::temporal::to_rfc3339(Timestamp::now()),
             "op": "store",
             "ns": ns_name,
             "stream": stream,
@@ -339,7 +336,7 @@ pub async fn store_handler(
     Json(payload): Json<StoreRequest>,
 ) -> Result<Json<StoreResponse>, AppError> {
     let id = uuid::Uuid::new_v4().to_string();
-    let timestamp = Utc::now().timestamp();
+    let timestamp = Timestamp::now().as_second();
 
     let user_id = payload.user_id.unwrap_or_else(|| "default".to_string());
     let app_id = payload.app_id.unwrap_or_else(|| "default".to_string());

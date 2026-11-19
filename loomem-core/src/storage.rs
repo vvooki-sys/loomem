@@ -124,11 +124,8 @@ impl ExtractionMeta {
     #[must_use]
     pub fn event_date_unix(&self) -> Option<u64> {
         let raw = self.event_date.as_deref()?;
-        let ts = chrono::NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d")
-            .ok()?
-            .and_hms_opt(0, 0, 0)?
-            .and_utc()
-            .timestamp();
+        let date = jiff::civil::Date::strptime("%Y-%m-%d", raw.trim()).ok()?;
+        let ts = crate::temporal::utc_timestamp(date, 0)?;
         u64::try_from(ts).ok()
     }
 }
@@ -939,7 +936,7 @@ impl RocksDbStore {
     ) -> Result<bool> {
         let _guard = self.lock_lifecycle()?;
         if let Some(mut chunk) = self.get_chunk(id)? {
-            let now = chrono::Utc::now().timestamp() as u64;
+            let now = crate::temporal::now_unix_seconds();
 
             // Check cooldown (max 1 boost per cooldown period per chunk)
             if let Some(last) = chunk.last_implicit_boost {

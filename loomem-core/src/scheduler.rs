@@ -736,7 +736,7 @@ impl Scheduler {
                 return;
             }
 
-            let date = chrono::Utc::now().format("%Y-%m-%d-%H%M%S").to_string();
+            let date = crate::date_resolver::format_now_utc("%Y-%m-%d-%H%M%S");
             let dest = backup_dir.join(format!("checkpoint-{}", date));
 
             match storage.create_checkpoint(&dest) {
@@ -951,15 +951,15 @@ fn apply_retention_policy(backup_dir: &std::path::Path, max_daily: usize) {
 /// Parses a checkpoint directory name and returns its ISO (year, week) pair.
 /// Expected format: `checkpoint-YYYY-MM-DD-HHMMSS`.
 fn checkpoint_iso_week(name: &str) -> Option<(i32, u32)> {
-    use chrono::Datelike as _;
     let date_str = name.strip_prefix("checkpoint-")?;
     let mut parts = date_str.splitn(4, '-');
-    let year: i32 = parts.next()?.parse().ok()?;
-    let month: u32 = parts.next()?.parse().ok()?;
-    let day: u32 = parts.next()?.parse().ok()?;
-    let d = chrono::NaiveDate::from_ymd_opt(year, month, day)?;
-    let w = d.iso_week();
-    Some((w.year(), w.week()))
+    let year: i16 = parts.next()?.parse().ok()?;
+    let month: i8 = parts.next()?.parse().ok()?;
+    let day: i8 = parts.next()?.parse().ok()?;
+    let week = jiff::civil::Date::new(year, month, day)
+        .ok()?
+        .iso_week_date();
+    Some((i32::from(week.year()), u32::try_from(week.week()).ok()?))
 }
 
 #[cfg(test)]
