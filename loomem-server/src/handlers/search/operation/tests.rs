@@ -238,3 +238,33 @@ fn rerank_is_deterministic_and_nonmutating() {
         .iter()
         .all(|item| originals.get(&item.id) == Some(&&item.content)));
 }
+
+mod chrono_date_sentinel_golden {
+    use super::*;
+
+    #[test]
+    fn strict_default_upper_bound_still_resolves() {
+        assert_eq!(
+            strict_bound(None, true).map_err(|error| format!("{error:?}")),
+            Ok(253_402_300_799)
+        );
+    }
+
+    #[test]
+    fn end_of_day_9999_12_31_still_resolves() {
+        assert_eq!(end_of_day("9999-12-31"), Some(253_402_300_799));
+    }
+
+    #[test]
+    fn one_sided_strict_explicit_date_filter_uses_upper_sentinel() {
+        let payload: SearchRequest = serde_json::from_value(serde_json::json!({
+            "query": "future events",
+            "date_from": "2026-01-01"
+        }))
+        .unwrap();
+        assert_eq!(
+            strict_explicit_date_filter(&payload).map_err(|error| format!("{error:?}")),
+            Ok(Some(DateFilter::Range(1_767_225_600, 253_402_300_799)))
+        );
+    }
+}

@@ -11,12 +11,11 @@ pub(crate) fn utc_date(timestamp: Timestamp) -> Date {
 }
 
 pub(crate) fn utc_timestamp(date: Date, hour: i8) -> Option<i64> {
-    let time = Time::new(hour, 0, 0, 0).ok()?;
-    let zoned = date
-        .to_datetime(time)
-        .to_zoned_datetime(TimeZone::UTC)
-        .ok()?;
-    Some(zoned.timestamp().as_second())
+    let hour = i64::from(Time::new(hour, 0, 0, 0).ok()?.hour());
+    let epoch = Date::new(1970, 1, 1).ok()?;
+    let days = i64::from(date.since(epoch).ok()?.get_days());
+    days.checked_mul(86_400)?
+        .checked_add(hour.checked_mul(3_600)?)
 }
 
 /// Match chrono's `to_rfc3339()` for UTC: AutoSi precision and `+00:00`.

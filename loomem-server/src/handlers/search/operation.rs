@@ -358,7 +358,7 @@ fn strict_explicit_date_filter(payload: &SearchRequest) -> Result<Option<DateFil
 
 fn strict_date_only(value: &str, end: bool) -> Result<i64, AppError> {
     let date = Date::strptime("%Y-%m-%d", value).map_err(|_| invalid_explicit_date())?;
-    if date.to_string() != value {
+    if date.to_string() != value || !(1970..=9999).contains(&date.year()) {
         return Err(invalid_explicit_date());
     }
     let hour = if end { 23 } else { 0 };
@@ -372,19 +372,16 @@ fn strict_date_only(value: &str, end: bool) -> Result<i64, AppError> {
 
 fn strict_bound(value: Option<&str>, end: bool) -> Result<i64, AppError> {
     let value = value.unwrap_or(if end { "9999-12-31" } else { "1970-01-01" });
-    let parsed = if value.len() == 10 {
-        strict_date_only(value, end)?
-    } else {
-        value
-            .parse::<Timestamp>()
-            .map_err(|_| invalid_explicit_date())?
-            .as_second()
-    };
-    let timestamp = Timestamp::from_second(parsed).map_err(|_| invalid_explicit_date())?;
+    if value.len() == 10 {
+        return strict_date_only(value, end);
+    }
+    let timestamp = value
+        .parse::<Timestamp>()
+        .map_err(|_| invalid_explicit_date())?;
     if !(1970..=9999).contains(&crate::temporal::utc_date(timestamp).year()) {
         return Err(invalid_explicit_date());
     }
-    Ok(parsed)
+    Ok(timestamp.as_second())
 }
 
 fn invalid_explicit_date() -> AppError {

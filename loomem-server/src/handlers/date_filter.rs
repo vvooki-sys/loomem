@@ -4,11 +4,12 @@ use std::sync::LazyLock;
 
 use super::types::DateFilter;
 
+/// Return current Unix seconds; `Timestamp::now()` is never negative.
 pub(crate) fn now_unix_seconds() -> u64 {
     u64::from_le_bytes(Timestamp::now().as_second().to_le_bytes())
 }
 
-/// Preserve the legacy unsigned-to-signed Unix timestamp bit pattern.
+/// Intentional bit cast: preserve legacy unsigned-to-signed wrap-around.
 pub(crate) fn unix_seconds_to_i64(seconds: u64) -> i64 {
     i64::from_le_bytes(seconds.to_le_bytes())
 }
