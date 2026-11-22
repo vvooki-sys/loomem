@@ -149,8 +149,11 @@ pub async fn context_pack_handler(
                     }) {
                         let line_tokens = estimate_tokens(&line);
                         if section_tokens + line_tokens > section_budget {
+                            // Skip the oversized hit, don't end the section: hits
+                            // are score-ordered, so one big top hit must not
+                            // shadow the smaller ones that still fit.
                             sections_truncated.push("relevant".to_string());
-                            break;
+                            continue;
                         }
                         sources.push(ContextSource {
                             chunk_id: r.id.clone(),
@@ -199,8 +202,10 @@ pub async fn context_pack_handler(
                     let line = super::ingest_date::context_line(chunk, chunk.timestamp as i64);
                     let line_tokens = estimate_tokens(&line);
                     if section_tokens + line_tokens > section_budget {
+                        // Same as "relevant": newest-first order, so an oversized
+                        // newest chunk must not hide the older ones that fit.
                         sections_truncated.push(section.clone());
-                        break;
+                        continue;
                     }
                     sources.push(ContextSource {
                         chunk_id: chunk.id.clone(),
@@ -222,6 +227,9 @@ pub async fn context_pack_handler(
         }
     }
 
+    // A section pushes its name once per skipped hit; those pushes are
+    // consecutive, so this collapses them to one entry per section.
+    sections_truncated.dedup();
     let context = context_parts.join("\n");
     let final_tokens = estimate_tokens(&context);
 
@@ -321,6 +329,175 @@ mod tests {
             None,
             true,
         )
+    }
+
+    /// Store a chunk and index it in Tantivy so the `relevant` section can
+    /// rank it. The `recent` section reads the store directly and needs only
+    /// `store_chunk`.
+    async fn seed_indexed_chunk(state: &Arc<AppState>, chunk: &Chunk) {
+        state.store.store_chunk(chunk).expect("store fixture");
+        let mut index = state.tantivy.lock().await;
+        index
+            .upsert_document(loomem_core::tantivy_index::TextDocument {
+                id: chunk.id.clone(),
+                content: chunk.content.clone(),
+                user_id: "default".into(),
+                app_id: "default".into(),
+                level: chunk.level,
+                timestamp: i64::try_from(chunk.timestamp).expect("fixture timestamp"),
+                stream: chunk.stream.clone(),
+                entities: None,
+                relations: None,
+                event_date: None,
+                source_agent: None,
+            })
+            .expect("index fixture");
+        index.commit().expect("commit fixture");
+    }
+
+    /// Budget packing: an oversized top-ranked hit must be skipped, not treated
+    /// as the end of the section. Two 1000-word chunks outrank the short
+    /// answer under BM25 (checked explicitly), yet the answer is the only hit
+    /// that fits a 50-token `relevant` budget. Pre-fix the loop `break`s on the
+    /// first oversized hit and the section comes back empty.
+    #[tokio::test]
+    async fn memory_context_relevant_skips_oversized_ranked_hits() {
+        let (_app, state) = crate::tests::make_test_app();
+        for id in ["oversized-a", "oversized-b"] {
+            seed_indexed_chunk(
+                &state,
+                &make_chunk(id, "stream_A", &"budget ".repeat(1000), 1_700_000_001),
+            )
+            .await;
+        }
+        seed_indexed_chunk(
+            &state,
+            &make_chunk(
+                "answer",
+                "stream_A",
+                "budget approved amount is forty two",
+                1_700_000_000,
+            ),
+        )
+        .await;
+        let ranked = state
+            .tantivy
+            .lock()
+            .await
+            .search_with_stream("budget", "stream_A", 10)
+            .expect("rank fixtures");
+        assert_eq!(ranked.len(), 3);
+        assert_eq!(ranked[2].id, "answer", "oversized records must rank first");
+        let response = context_pack_handler(
+            State(state),
+            axum::Extension(admin_auth_for("stream_A")),
+            Json(ContextPackRequest {
+                query: Some("budget".into()),
+                stream: Some("stream_A".into()),
+                budget_tokens: Some(100),
+                sections: Some(vec!["relevant".into()]),
+                format: Some("markdown".into()),
+            }),
+        )
+        .await
+        .expect("context pack")
+        .0;
+        assert!(response.context.contains("forty two"), "{response:?}");
+        assert_eq!(response.sources.len(), 1);
+        assert_eq!(response.sources[0].chunk_id, "answer");
+        assert_eq!(response.sections_truncated, vec!["relevant"]);
+        assert!(response.token_count <= 100);
+    }
+
+    /// Same invariant for `recent`: the two newest chunks are oversized, the
+    /// older short one fits. Two oversized hits in a row also pin the
+    /// `sections_truncated` dedup — the section is reported once, not per hit.
+    #[tokio::test]
+    async fn memory_context_recent_skips_oversized_newer_records() {
+        let (_app, state) = crate::tests::make_test_app();
+        for (id, timestamp) in [
+            ("oversized-a", 1_700_000_001),
+            ("oversized-b", 1_700_000_002),
+        ] {
+            state
+                .store
+                .store_chunk(&make_chunk(
+                    id,
+                    "stream_A",
+                    &"discussion ".repeat(1000),
+                    timestamp,
+                ))
+                .expect("store oversized recent fixture");
+        }
+        state
+            .store
+            .store_chunk(&make_chunk(
+                "answer",
+                "stream_A",
+                "The approved amount is forty two",
+                1_700_000_000,
+            ))
+            .expect("store answer fixture");
+        let response = context_pack_handler(
+            State(state),
+            axum::Extension(admin_auth_for("stream_A")),
+            Json(ContextPackRequest {
+                query: None,
+                stream: Some("stream_A".into()),
+                budget_tokens: Some(100),
+                sections: Some(vec!["recent".into()]),
+                format: Some("markdown".into()),
+            }),
+        )
+        .await
+        .expect("context pack")
+        .0;
+        assert!(response.context.contains("forty two"), "{response:?}");
+        assert_eq!(response.sources.len(), 1);
+        assert_eq!(response.sources[0].chunk_id, "answer");
+        assert_eq!(response.sections_truncated, vec!["recent"]);
+        assert!(response.token_count <= 100);
+    }
+
+    /// Control case: when every hit fits, nothing is skipped, nothing is
+    /// reported as truncated and the hits are packed in rank order — the
+    /// skip-instead-of-break change must not touch this path.
+    #[tokio::test]
+    async fn memory_context_recent_packs_everything_that_fits() {
+        let (_app, state) = crate::tests::make_test_app();
+        for (id, timestamp) in [("r1", 1_700_000_001), ("r2", 1_700_000_002)] {
+            state
+                .store
+                .store_chunk(&make_chunk(
+                    id,
+                    "stream_A",
+                    "short note that fits",
+                    timestamp,
+                ))
+                .expect("store recent fixture");
+        }
+        let response = context_pack_handler(
+            State(state),
+            axum::Extension(admin_auth_for("stream_A")),
+            Json(ContextPackRequest {
+                query: None,
+                stream: Some("stream_A".into()),
+                budget_tokens: Some(4000),
+                sections: Some(vec!["recent".into()]),
+                format: Some("markdown".into()),
+            }),
+        )
+        .await
+        .expect("context pack")
+        .0;
+        let ids: Vec<&str> = response
+            .sources
+            .iter()
+            .map(|s| s.chunk_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["r2", "r1"], "newest first, all packed");
+        assert!(response.sections_truncated.is_empty(), "{response:?}");
+        assert_eq!(response.sections_included, vec!["recent"]);
     }
 
     /// Seed `state.store` with chunks in both streams and return the chunk ids
