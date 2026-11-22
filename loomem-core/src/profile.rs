@@ -286,6 +286,8 @@ pub async fn generate_profile(
     #[derive(Deserialize)]
     struct LlmChoice {
         message: LlmMessage,
+        #[serde(default)]
+        finish_reason: Option<String>,
     }
     #[derive(Deserialize)]
     struct LlmMessage {
@@ -297,9 +299,13 @@ pub async fn generate_profile(
         .await
         .context("Failed to parse profile LLM response")?;
 
-    let content = llm_resp
-        .choices
-        .first()
+    let choice = llm_resp.choices.first();
+    crate::llm_provider::ensure_not_truncated(
+        choice.and_then(|c| c.finish_reason.as_deref()),
+        &profile_config.model,
+        crate::llm_provider::completion_limit_of(&request_body),
+    )?;
+    let content = choice
         .map(|c| c.message.content.clone())
         .unwrap_or_default();
 

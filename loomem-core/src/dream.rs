@@ -355,6 +355,8 @@ pub async fn dream_run(
         #[derive(Deserialize)]
         struct Choice {
             message: Msg,
+            #[serde(default)]
+            finish_reason: Option<String>,
         }
         #[derive(Deserialize)]
         struct Msg {
@@ -383,9 +385,18 @@ pub async fn dream_run(
             );
         }
 
-        let content = resp
-            .choices
-            .first()
+        let choice = resp.choices.first();
+        if let Err(e) = crate::llm_provider::ensure_not_truncated(
+            choice.and_then(|c| c.finish_reason.as_deref()),
+            &dream_config.model,
+            crate::llm_provider::completion_limit_of(&request_body),
+        ) {
+            warn!("Dream LLM reply rejected: {e}");
+            crate::llm_failures::global()
+                .record(crate::llm_failures::LlmFailureKind::Consolidation);
+            continue;
+        }
+        let content = choice
             .map(|c| c.message.content.clone())
             .unwrap_or_default();
         let json_str = content

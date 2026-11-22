@@ -316,6 +316,11 @@ impl CompletionRequest {
             reasoning_effort: provider.chat.reasoning_effort.clone(),
         }
     }
+
+    /// The output cap this body carries, for the truncation error.
+    fn limit(&self) -> u32 {
+        self.max_tokens.or(self.max_completion_tokens).unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -333,6 +338,8 @@ struct CompletionResponse {
 #[derive(Debug, Deserialize)]
 struct Choice {
     message: MessageResponse,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -661,12 +668,17 @@ pub async fn compress(
                         .await
                         .context("Failed to parse completion response")?;
 
-                    let summary = body
+                    let choice = body
                         .choices
                         .into_iter()
                         .next()
-                        .map(|c| c.message.content)
                         .context("No completion data in response")?;
+                    llm_provider::ensure_not_truncated(
+                        choice.finish_reason.as_deref(),
+                        &config.compression_model,
+                        request_body.limit(),
+                    )?;
+                    let summary = choice.message.content;
 
                     let usage = body.usage.unwrap_or(Usage {
                         prompt_tokens: 0,
@@ -800,12 +812,17 @@ pub async fn reflect(
         .await
         .context("Failed to parse reflect response")?;
 
-    let content = body
+    let choice = body
         .choices
         .into_iter()
         .next()
-        .map(|c| c.message.content)
         .context("No reflect response")?;
+    llm_provider::ensure_not_truncated(
+        choice.finish_reason.as_deref(),
+        &config.compression_model,
+        request_body.limit(),
+    )?;
+    let content = choice.message.content;
 
     let usage = body.usage.unwrap_or(Usage {
         prompt_tokens: 0,
@@ -1041,6 +1058,47 @@ mod tests {
             named_provider("ollama", None).active_key_env_hint(),
             "OPENAI_API_KEY"
         );
+    }
+
+    async fn reflect_against(reply: &str) -> Result<(serde_json::Value, Usage)> {
+        let (base_url, server) = crate::test_http::serve_once("200 OK", reply, None).await;
+        let mut cfg = named_provider("mock", None);
+        cfg.providers.get_mut("mock").unwrap().base_url = base_url;
+        let result = tokio::time::timeout(
+            crate::test_http::DEADLINE,
+            reflect(
+                &Client::new(),
+                &cfg,
+                &[("id".to_string(), "content".to_string())],
+            ),
+        )
+        .await
+        .expect("reflect did not finish in time");
+        crate::test_http::finish(server).await;
+        result
+    }
+
+    /// A reply cut at the output cap is an error naming reason, model and
+    /// limit; a reply that stopped normally is used as before.
+    #[tokio::test]
+    async fn reflect_rejects_a_truncated_reply_and_accepts_a_stopped_one() {
+        let err = reflect_against(
+            r#"{"choices":[{"finish_reason":"length","message":{"content":"{\"contradictions\":["}}]}"#,
+        )
+        .await
+        .expect_err("truncated reply must fail");
+        let shown = format!("{err:#}");
+        assert!(shown.contains("finish_reason=length"), "{shown}");
+        assert!(shown.contains("model=gpt-4o-mini"), "{shown}");
+        assert!(shown.contains("completion token limit=2000"), "{shown}");
+
+        let (value, usage) = reflect_against(
+            r#"{"choices":[{"finish_reason":"stop","message":{"content":"{\"ok\":true}"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#,
+        )
+        .await
+        .expect("stopped reply is used");
+        assert_eq!(value, serde_json::json!({"ok": true}));
+        assert_eq!(usage.completion_tokens, 2);
     }
 
     #[tokio::test]

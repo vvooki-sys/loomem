@@ -84,6 +84,11 @@ pub async fn rerank(
 
             // Parse OpenAI response → extract content
             let parsed: serde_json::Value = serde_json::from_str(&text)?;
+            crate::llm_provider::ensure_choice_not_truncated(
+                &parsed,
+                &config.compression_model,
+                crate::llm_provider::completion_limit_of(&body),
+            )?;
             let content = parsed["choices"][0]["message"]["content"]
                 .as_str()
                 .unwrap_or("{}");

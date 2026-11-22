@@ -61,6 +61,14 @@ pub async fn decompose(client: &reqwest::Client, config: &LlmConfig, query: &str
                 Ok(v) => v,
                 Err(_) => return vec![query.to_string()],
             };
+            if let Err(e) = crate::llm_provider::ensure_choice_not_truncated(
+                &parsed,
+                &config.compression_model,
+                crate::llm_provider::completion_limit_of(&body),
+            ) {
+                warn!("Multi-query reply rejected: {e}");
+                return vec![query.to_string()];
+            }
             let content = parsed["choices"][0]["message"]["content"]
                 .as_str()
                 .unwrap_or("{}");

@@ -138,6 +138,11 @@ pub async fn extract_entities_llm(
 
                     let parsed: serde_json::Value = serde_json::from_str(&text)
                         .context("Failed to parse LLM NER response JSON")?;
+                    crate::llm_provider::ensure_choice_not_truncated(
+                        &parsed,
+                        model,
+                        crate::llm_provider::completion_limit_of(&body),
+                    )?;
 
                     let usage = &parsed["usage"];
                     let input_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0);

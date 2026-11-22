@@ -10,12 +10,14 @@
 //! request options, and its key falls back to the legacy fields.
 
 mod capabilities;
+mod reply;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
 pub use capabilities::{completion_limit_of, ChatCapabilities, CompletionLimit, REASONING_EFFORTS};
+pub use reply::{ensure_choice_not_truncated, ensure_not_truncated, TruncatedCompletion};
 
 /// Name of the built-in provider used when `llm.providers` has no such entry.
 pub const BUILTIN_OPENAI: &str = "openai";

@@ -80,6 +80,11 @@ impl CompletionRequest {
             reasoning_effort: provider.chat.reasoning_effort.clone(),
         }
     }
+
+    /// The output cap this body carries, for the truncation error.
+    fn limit(&self) -> u32 {
+        self.max_tokens.or(self.max_completion_tokens).unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -96,6 +101,8 @@ struct CompletionResponse {
 #[derive(Debug, Deserialize)]
 struct Choice {
     message: MessageResponse,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -244,12 +251,17 @@ async fn llm_format_memory(
         .await
         .context("Failed to parse LLM response")?;
 
-    let formatted = body
+    let choice = body
         .choices
         .into_iter()
         .next()
-        .map(|c| c.message.content)
         .context("No completion data in response")?;
+    crate::llm_provider::ensure_not_truncated(
+        choice.finish_reason.as_deref(),
+        model,
+        request_body.limit(),
+    )?;
+    let formatted = choice.message.content;
 
     debug!("LLM formatted memory into {} chars", formatted.len());
     Ok(formatted)

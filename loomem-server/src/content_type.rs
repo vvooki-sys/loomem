@@ -54,6 +54,8 @@ struct ChatResponse {
 #[derive(Deserialize)]
 struct ChatChoice {
     message: ChatMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 #[derive(Deserialize)]
 struct ChatMessage {
@@ -115,12 +117,13 @@ impl ContentTypeClassifier for HttpContentTypeClassifier {
                 .json()
                 .await
                 .context("Failed to parse content-type LLM response")?;
-            let label = parsed
-                .choices
-                .into_iter()
-                .next()
-                .map(|c| c.message.content)
-                .unwrap_or_default();
+            let choice = parsed.choices.into_iter().next();
+            loomem_core::llm_provider::ensure_not_truncated(
+                choice.as_ref().and_then(|c| c.finish_reason.as_deref()),
+                &model,
+                loomem_core::llm_provider::completion_limit_of(&request_body),
+            )?;
+            let label = choice.map(|c| c.message.content).unwrap_or_default();
             // Unrecognized label degrades to `other` (the band stays low either
             // way; do not fail the classification on a chatty model).
             Ok(ContentType::parse(&label).unwrap_or(ContentType::Other))
