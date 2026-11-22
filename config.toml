@@ -144,9 +144,9 @@ enabled = true  # Phase 3: enabled
 # and then these steps fail (memory_store and search still work). A provider
 # entry without api_key_env (local Ollama) needs no key.
 provider = "openai"
-# Legacy OpenAI key fields: read by embedding_provider = "openai", by the
-# built-in "openai" provider, and as the fallback of the [llm.providers.openai]
-# entry below when its own env var is unset.
+# Legacy OpenAI key fields: read by embedding_provider = "openai" and by the
+# built-in "openai" provider. A [llm.providers.openai] entry never reads
+# api_key_env; only an inline api_key here is its fallback.
 # api_key = ""  # DO NOT hardcode — use OPENAI_API_KEY env var
 api_key_env = "OPENAI_API_KEY"
 
@@ -197,8 +197,9 @@ tcp_keepalive_secs = 30       # TCP keep-alive probe interval for pooled connect
 #   completion_tokens_floor = 0    # raise any per-call output cap below this value (0 = unchanged)
 #   reasoning_effort = "low"       # none | minimal | low | medium | high | xhigh | max
 
-# The entry named "openai" refines the built-in provider; its key falls back
-# to api_key / api_key_env above. Options per the Chat Completions reference
+# The entry named "openai" refines the built-in provider: its api_key_env
+# wins, and only the inline `api_key` above is a fallback (the legacy
+# api_key_env is never read for it). Options per the Chat Completions reference
 # (developers.openai.com/api/reference, "Create chat completion") and the
 # gpt-6-luna model page (developers.openai.com/api/docs/models/gpt-6-luna),
 # both accessed 2026-11-22.

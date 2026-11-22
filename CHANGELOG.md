@@ -16,8 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `0` = unchanged) and `reasoning_effort` (`none`, `minimal`, `low`, `medium`,
   `high`, `xhigh`, `max`). An entry with none set sends exactly the request
   the built-in provider sends, byte for byte. An entry named `openai` refines
-  the built-in provider: its own `api_key_env` wins and the legacy
-  `llm.api_key` / `llm.api_key_env` are the fallback.
+  the built-in provider: its own `api_key_env` wins, and only the inline
+  `llm.api_key` is a fallback — the legacy `llm.api_key_env` is never read
+  for the entry, so an `openai` entry pointed at a proxy with its own, unset
+  env var fails closed instead of sending the real OpenAI key there.
 - `gpt-6-luna` is priced in the cost tracker and the evidence selector
   (0.10 USD/1M input, 0.50 USD/1M output; developers.openai.com/api/docs/pricing,
   2026-11-22). Cached input (0.01) is not tracked separately: the whole prompt
@@ -51,8 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you edit it. To move to the new default: set
   `compression_model = "gpt-6-luna"`, remove any per-feature
   `model = "gpt-4.1-mini"` lines, and add the `[llm.providers.openai]` entry
-  from the shipped `config.toml`. To stay on OpenAI's older models, change
-  nothing before 2027-01-14. Docker/Railway images keep `OPENAI_API_KEY` for
+  from the shipped `config.toml`. Once the entry exists, its `api_key_env`
+  takes precedence over an inline `llm.api_key`; the inline key remains the
+  fallback. To stay on OpenAI's older models, change nothing before
+  2027-01-14. Docker/Railway images keep `OPENAI_API_KEY` for
   both completions and embeddings.
 - The startup fail-closed check and the `/health` field `llm_key_present`
   follow the active `llm.provider`, not the legacy OpenAI key. A named
@@ -73,7 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   $0 to the run cost, as the cost tracker already recorded it.
 - The evidence selector (`[search.operation]`, off by default) stays
   OpenAI-only (`service_tier`, `json_schema`, `seed`); with `gpt-6-luna` it
-  prices calls from the new table.
+  prices calls from the new table. Its request does not go through the
+  per-provider options: it still sends `temperature: 0` and
+  `max_completion_tokens: 1024` and no `reasoning_effort` (follow-up).
 - When the active provider cannot be resolved, `memory_ingest` returns
   "Extraction failed: LLM provider unavailable. No facts stored." (before:
   "API key unavailable"). `ExtractionError::NoApiKey` is replaced by

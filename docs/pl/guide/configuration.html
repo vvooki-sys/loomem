@@ -591,7 +591,7 @@ omit_temperature = true
 <tr>
 <td><code>api_key_env</code></td>
 <td>string</td>
-<td>Starsze pole klucza: używane przez <code>embedding_provider = "openai"</code>, przez wbudowanego dostawcę <code>"openai"</code> oraz jako zapas wpisu <code>[llm.providers.openai]</code>, gdy jego własny <code>api_key_env</code> nie jest ustawiony</td>
+<td>Starsze pole klucza: używane przez <code>embedding_provider = "openai"</code> i przez wbudowanego dostawcę <code>"openai"</code>. Wpis <code>[llm.providers.openai]</code> nigdy go nie czyta; jego jedynym zapasem jest wpisany wprost <code>api_key</code></td>
 </tr>
 <tr>
 <td><code>embedding_model</code></td>
@@ -636,7 +636,7 @@ omit_temperature = true
 </code></pre>
 <p>Aby korzystać z API zamiast lokalnych embeddingów, ustaw <code>embedding_provider = "openai"</code> i <code>embedding_dim = 1536</code>, wyeksportuj <code>OPENAI_API_KEY</code> i przelicz embeddingi.</p>
 <h3 id="llmprovidersname">[llm.providers.&lt;name&gt;]</h3>
-<p>Nazwani dostawcy generowania tekstu zgodni z OpenAI. <code>provider</code> wybiera jednego po nazwie; embeddingi nie są objęte tym ustawieniem (kierują się <code>embedding_provider</code>). Wpis o nazwie <code>openai</code> doprecyzowuje wbudowanego dostawcę: jego <code>api_key_env</code> ma pierwszeństwo, a starsze pola <code>llm.api_key</code> / <code>llm.api_key_env</code> są zapasem. Konfiguracja bez tego wpisu (każda instalacja utworzona przed przejściem na <code>gpt-6-luna</code>) zachowuje wbudowanego dostawcę i wysyła dokładnie te same żądania co wcześniej.</p>
+<p>Nazwani dostawcy generowania tekstu zgodni z OpenAI. <code>provider</code> wybiera jednego po nazwie; embeddingi nie są objęte tym ustawieniem (kierują się <code>embedding_provider</code>). Wpis o nazwie <code>openai</code> doprecyzowuje wbudowanego dostawcę: jego <code>api_key_env</code> ma pierwszeństwo, a jedynym zapasem jest wpisany wprost <code>llm.api_key</code> — starsze <code>llm.api_key_env</code> nie jest dla tego wpisu czytane, więc wpis z własną, nieustawioną zmienną odmawia uruchomienia zamiast wysłać klucz OpenAI gdzie indziej. Konfiguracja bez tego wpisu (każda instalacja utworzona przed przejściem na <code>gpt-6-luna</code>) zachowuje wbudowanego dostawcę i wysyła dokładnie te same żądania co wcześniej.</p>
 <pre><code class="language-toml">[llm.providers.openai]
 base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
@@ -698,7 +698,7 @@ omit_temperature = true
 </table>
 <p>Wpis bez żadnej z czterech opcji żądania wysyła dokładnie to samo żądanie co wbudowany dostawca.</p>
 <p>Kontrola przy starcie i pole <code>llm_key_present</code> w <code>/health</code> kierują się aktywnym dostawcą: z dostarczaną konfiguracją serwer odmawia uruchomienia bez <code>OPENAI_API_KEY</code>, gdy włączone są <code>entity_extraction</code>, <code>knowledge_extraction</code> lub <code>dream</code> (chyba że ustawiono <code>LOOMEM_ALLOW_KEYLESS=1</code>), a komunikat błędu podaje zmienną środowiskową aktywnego dostawcy. Dostawca bez <code>api_key_env</code> (lokalna Ollama) jest traktowany jak obecny klucz i uruchamia się bez <code>LOOMEM_ALLOW_KEYLESS</code>.</p>
-<p><strong>Istniejące instalacje.</strong> Instalator nigdy nie nadpisuje <code>config.toml</code>, więc nic się nie zmienia, dopóki go nie edytujesz. Aby przejść na nowy domyślny model: ustaw <code>compression_model = "gpt-6-luna"</code>, usuń wszystkie wiersze <code>model = "gpt-4.1-mini"</code> w sekcjach poszczególnych funkcji i dodaj powyższą tabelę <code>[llm.providers.openai]</code>. Aby zostać przy starym modelu: nic nie trzeba robić przed 2027-01-14, kiedy OpenAI wycofuje <code>gpt-4.1-mini</code>.</p>
+<p><strong>Istniejące instalacje.</strong> Instalator nigdy nie nadpisuje <code>config.toml</code>, więc nic się nie zmienia, dopóki go nie edytujesz. Aby przejść na nowy domyślny model: ustaw <code>compression_model = "gpt-6-luna"</code>, usuń wszystkie wiersze <code>model = "gpt-4.1-mini"</code> w sekcjach poszczególnych funkcji i dodaj powyższą tabelę <code>[llm.providers.openai]</code> (gdy już istnieje, jej <code>api_key_env</code> ma pierwszeństwo przed wpisanym wprost <code>llm.api_key</code>, który pozostaje zapasem). Aby zostać przy starym modelu: nic nie trzeba robić przed 2027-01-14, kiedy OpenAI wycofuje <code>gpt-4.1-mini</code>.</p>
 <hr/>
 <h2 id="server">[server]</h2>
 <pre><code class="language-toml">[server]

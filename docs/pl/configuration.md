@@ -319,7 +319,7 @@ omit_temperature = true
 |----|----|----|
 | `provider` | string | Dostawca generowania tekstu dla każdego etapu opartego na LLM: nazwa wpisu [`[llm.providers.<name>]`](#llmprovidersname) lub wbudowany `"openai"` (`https://api.openai.com/v1`), gdy wpis o tej nazwie nie istnieje |
 | `embedding_provider` | string | `"local"` (ONNX na urządzeniu, bez klucza API) lub `"openai"`. Brak w starszej konfiguracji → traktowany jako `"openai"` |
-| `api_key_env` | string | Starsze pole klucza: używane przez `embedding_provider = "openai"`, przez wbudowanego dostawcę `"openai"` oraz jako zapas wpisu `[llm.providers.openai]`, gdy jego własny `api_key_env` nie jest ustawiony |
+| `api_key_env` | string | Starsze pole klucza: używane przez `embedding_provider = "openai"` i przez wbudowanego dostawcę `"openai"`. Wpis `[llm.providers.openai]` nigdy go nie czyta; jego jedynym zapasem jest wpisany wprost `api_key` |
 | `embedding_model` | string | Nazwa modelu embeddingów przy `embedding_provider = "openai"` |
 | `embedding_model_path` | string? | Katalog z `model.onnx` i `tokenizer.json` dla lokalnych embeddingów. Brak ustawienia → `~/.loomem/models/multilingual-e5-small` |
 | `embedding_dim` | int | Wymiar wektora embeddingu — **musi odpowiadać aktywnemu modelowi** |
@@ -355,7 +355,7 @@ Aby korzystać z API zamiast lokalnych embeddingów, ustaw `embedding_provider =
 
 ### \[llm.providers.\<name\>\]
 
-Nazwani dostawcy generowania tekstu zgodni z OpenAI. `provider` wybiera jednego po nazwie; embeddingi nie są objęte tym ustawieniem (kierują się `embedding_provider`). Wpis o nazwie `openai` doprecyzowuje wbudowanego dostawcę: jego `api_key_env` ma pierwszeństwo, a starsze pola `llm.api_key` / `llm.api_key_env` są zapasem. Konfiguracja bez tego wpisu (każda instalacja utworzona przed przejściem na `gpt-6-luna`) zachowuje wbudowanego dostawcę i wysyła dokładnie te same żądania co wcześniej.
+Nazwani dostawcy generowania tekstu zgodni z OpenAI. `provider` wybiera jednego po nazwie; embeddingi nie są objęte tym ustawieniem (kierują się `embedding_provider`). Wpis o nazwie `openai` doprecyzowuje wbudowanego dostawcę: jego `api_key_env` ma pierwszeństwo, a jedynym zapasem jest wpisany wprost `llm.api_key` — starsze `llm.api_key_env` nie jest dla tego wpisu czytane, więc wpis z własną, nieustawioną zmienną odmawia uruchomienia zamiast wysłać klucz OpenAI gdzie indziej. Konfiguracja bez tego wpisu (każda instalacja utworzona przed przejściem na `gpt-6-luna`) zachowuje wbudowanego dostawcę i wysyła dokładnie te same żądania co wcześniej.
 
 ``` toml
 [llm.providers.openai]
@@ -383,7 +383,7 @@ Wpis bez żadnej z czterech opcji żądania wysyła dokładnie to samo żądanie
 
 Kontrola przy starcie i pole `llm_key_present` w `/health` kierują się aktywnym dostawcą: z dostarczaną konfiguracją serwer odmawia uruchomienia bez `OPENAI_API_KEY`, gdy włączone są `entity_extraction`, `knowledge_extraction` lub `dream` (chyba że ustawiono `LOOMEM_ALLOW_KEYLESS=1`), a komunikat błędu podaje zmienną środowiskową aktywnego dostawcy. Dostawca bez `api_key_env` (lokalna Ollama) jest traktowany jak obecny klucz i uruchamia się bez `LOOMEM_ALLOW_KEYLESS`.
 
-**Istniejące instalacje.** Instalator nigdy nie nadpisuje `config.toml`, więc nic się nie zmienia, dopóki go nie edytujesz. Aby przejść na nowy domyślny model: ustaw `compression_model = "gpt-6-luna"`, usuń wszystkie wiersze `model = "gpt-4.1-mini"` w sekcjach poszczególnych funkcji i dodaj powyższą tabelę `[llm.providers.openai]`. Aby zostać przy starym modelu: nic nie trzeba robić przed 2027-01-14, kiedy OpenAI wycofuje `gpt-4.1-mini`.
+**Istniejące instalacje.** Instalator nigdy nie nadpisuje `config.toml`, więc nic się nie zmienia, dopóki go nie edytujesz. Aby przejść na nowy domyślny model: ustaw `compression_model = "gpt-6-luna"`, usuń wszystkie wiersze `model = "gpt-4.1-mini"` w sekcjach poszczególnych funkcji i dodaj powyższą tabelę `[llm.providers.openai]` (gdy już istnieje, jej `api_key_env` ma pierwszeństwo przed wpisanym wprost `llm.api_key`, który pozostaje zapasem). Aby zostać przy starym modelu: nic nie trzeba robić przed 2027-01-14, kiedy OpenAI wycofuje `gpt-4.1-mini`.
 
 ------------------------------------------------------------------------
 

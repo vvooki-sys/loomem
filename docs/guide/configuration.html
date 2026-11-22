@@ -652,7 +652,7 @@ omit_temperature = true
 <tr>
 <td><code>api_key_env</code></td>
 <td>string</td>
-<td>Legacy key field: read by <code>embedding_provider = "openai"</code>, by the built-in <code>"openai"</code> provider, and as the fallback of the <code>[llm.providers.openai]</code> entry when its own <code>api_key_env</code> is unset</td>
+<td>Legacy key field: read by <code>embedding_provider = "openai"</code> and by the built-in <code>"openai"</code> provider. A <code>[llm.providers.openai]</code> entry never reads it; only an inline <code>api_key</code> is that entry's fallback</td>
 </tr>
 <tr>
 <td><code>embedding_model</code></td>
@@ -719,8 +719,10 @@ switch providers/models on an existing database, re-embed it:</p>
 <h3 id="llmprovidersname">[llm.providers.&lt;name&gt;]</h3>
 <p>Named OpenAI-compatible completion providers. <code>provider</code> picks one by name;
 embeddings are not affected (they follow <code>embedding_provider</code>). The entry named
-<code>openai</code> refines the built-in provider: its <code>api_key_env</code> wins, and the legacy
-top-level <code>llm.api_key</code> / <code>llm.api_key_env</code> are the fallback. A config without
+<code>openai</code> refines the built-in provider: its <code>api_key_env</code> wins, and only the
+inline top-level <code>llm.api_key</code> is a fallback — the legacy <code>llm.api_key_env</code> is
+never read for the entry, so an entry with its own, unset env var fails closed
+instead of sending the OpenAI key elsewhere. A config without
 this entry (every installation created before the switch to <code>gpt-6-luna</code>) keeps
 the built-in provider and sends exactly the requests it sent before.</p>
 <pre><code class="language-toml">[llm.providers.openai]
@@ -792,7 +794,9 @@ present and starts without <code>LOOMEM_ALLOW_KEYLESS</code>.</p>
 <p><strong>Existing installations.</strong> The installer never overwrites <code>config.toml</code>, so
 nothing changes until you edit it. To switch to the new default: set
 <code>compression_model = "gpt-6-luna"</code>, remove any per-feature <code>model = "gpt-4.1-mini"</code>
-lines, and add the <code>[llm.providers.openai]</code> table above. To stay on the old model:
+lines, and add the <code>[llm.providers.openai]</code> table above (once it exists, its
+<code>api_key_env</code> takes precedence over an inline <code>llm.api_key</code>, which stays the
+fallback). To stay on the old model:
 nothing to do before 2027-01-14, when OpenAI retires <code>gpt-4.1-mini</code>.</p>
 <hr />
 <h2 id="server">[server]</h2>
