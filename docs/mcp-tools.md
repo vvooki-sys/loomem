@@ -210,7 +210,7 @@ If another dream run already holds the stream, the tool replies with the plain t
 **When to call:**
 - After a long, productive session
 - When the user asks to "clean up" or "consolidate" memory
-- The engine also runs it on its own: once a day by default (see `[dream]` schedule keys) and after 50 new chunks on a private stream
+- The engine also runs it on its own: with the shipped `config.toml`, once a day (`[dream]` schedule keys) and after 50 new chunks on a private stream
 
 ---
 
