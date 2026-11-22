@@ -557,6 +557,7 @@ async fn main() -> Result<()> {
             &config.worker,
             config.retention.hard_purge_interval_secs,
             3600,
+            config.dream.schedule_interval_secs,
         );
 
         let scheduler = loomem_core::scheduler::Scheduler::new(
@@ -574,7 +575,8 @@ async fn main() -> Result<()> {
             local_embedder.clone(),
             event_tx.clone(),
             workers_registry.clone(),
-        );
+        )
+        .with_embedding_queue(embedding_queue.clone());
 
         let handle = tokio::spawn(async move {
             scheduler.run().await;
@@ -604,6 +606,7 @@ async fn main() -> Result<()> {
             &config.worker,
             config.retention.hard_purge_interval_secs,
             3600,
+            config.dream.schedule_interval_secs,
         )
     };
 
@@ -1036,6 +1039,14 @@ fn protected_routes(p: &RouteParams) -> Router<Arc<AppState>> {
             post(handlers::reprocess_legacy_handler),
         )
         .route("/v1/dream", post(handlers::dream_handler))
+        .route(
+            "/v1/dream/schedule",
+            get(handlers::dream_schedule_get_handler).put(handlers::dream_schedule_put_handler),
+        )
+        .route(
+            "/v1/dream/schedule/run",
+            post(handlers::dream_schedule_run_handler),
+        )
         .route("/v1/context-pack", post(handlers::context_pack_handler))
         .route(
             "/api/memories/{id}",
@@ -1362,6 +1373,7 @@ mod tests {
             &loomem_core::scheduler::WorkerConfig::default(),
             86400,
             3600,
+            config.dream.schedule_interval_secs,
         );
 
         let state = Arc::new(AppState {
@@ -1604,6 +1616,210 @@ mod tests {
             workers.iter().any(|w| w["name"] == "consolidation"),
             "consolidation worker missing from status response"
         );
+    }
+
+    // ── Dream schedule HTTP tests (feat/dream-schedule) ─────────────────
+
+    fn dream_schedule_req(method: Method, uri: &str, body: Option<&str>) -> Request<Body> {
+        let mut b = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, "Bearer admin-token");
+        if body.is_some() {
+            b = b.header(header::CONTENT_TYPE, "application/json");
+        }
+        b.body(body.map_or_else(Body::empty, |s| Body::from(s.to_string())))
+            .unwrap()
+    }
+
+    /// GET on a fresh store reports the config defaults, `source = config`,
+    /// and no run data.
+    #[tokio::test]
+    async fn dream_schedule_get_returns_config_defaults() {
+        let (app, state) = make_test_app();
+        let (status, body) = send(
+            app,
+            dream_schedule_req(Method::GET, "/v1/dream/schedule", None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(v["dream_enabled"], serde_json::json!(false));
+        assert_eq!(v["scheduler_enabled"], serde_json::json!(false));
+        assert_eq!(
+            v["enabled"],
+            serde_json::json!(state.config.dream.schedule_enabled)
+        );
+        assert_eq!(
+            v["interval_secs"],
+            serde_json::json!(state.config.dream.schedule_interval_secs)
+        );
+        assert_eq!(v["source"], serde_json::json!("config"));
+        assert_eq!(
+            v["poll_secs"],
+            serde_json::json!(loomem_core::scheduler::DREAM_POLL_SECS)
+        );
+        assert_eq!(v["queued"], serde_json::json!(false));
+        assert!(v["last_run_at"].is_null(), "{v}");
+        assert!(v["next_run_at"].is_null(), "{v}");
+        assert!(v["run_requested_at"].is_null(), "{v}");
+        assert!(v["last_result"].is_null(), "{v}");
+    }
+
+    /// PUT persists the override; a following GET reads it back with
+    /// `source = override` and a `next_run_at` anchored by the PUT.
+    #[tokio::test]
+    async fn dream_schedule_put_round_trips_and_anchors() {
+        let (app, state) = make_test_app();
+        let (status, body) = send(
+            app.clone(),
+            dream_schedule_req(
+                Method::PUT,
+                "/v1/dream/schedule",
+                Some(r#"{"enabled": false, "interval_secs": 43200}"#),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(v["enabled"], serde_json::json!(false));
+        assert_eq!(v["interval_secs"], serde_json::json!(43200));
+        assert_eq!(v["source"], serde_json::json!("override"));
+        // Disabled: no next run even though the row is anchored.
+        assert!(v["next_run_at"].is_null(), "{v}");
+
+        let row = loomem_core::dream_schedule::load(&state.store).expect("row");
+        assert_eq!(row.enabled, Some(false));
+        assert_eq!(row.interval_secs, Some(43200));
+        let anchor = row.anchor_at.expect("PUT anchors a row without a base");
+
+        let (status, body) = send(
+            app,
+            dream_schedule_req(
+                Method::PUT,
+                "/v1/dream/schedule",
+                Some(r#"{"enabled": true, "interval_secs": 7200}"#),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(v["next_run_at"], serde_json::json!(anchor + 7200));
+    }
+
+    #[tokio::test]
+    async fn dream_schedule_put_rejects_out_of_range_interval() {
+        let (app, state) = make_test_app();
+        for body in [
+            r#"{"enabled": true, "interval_secs": 3599}"#,
+            r#"{"enabled": true, "interval_secs": 2592001}"#,
+        ] {
+            let (status, resp) = send(
+                app.clone(),
+                dream_schedule_req(Method::PUT, "/v1/dream/schedule", Some(body)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            let v: serde_json::Value = serde_json::from_slice(&resp).expect("valid JSON");
+            assert!(v["error"].as_str().unwrap_or("").contains("interval_secs"));
+        }
+        // Nothing was written.
+        let row = loomem_core::dream_schedule::load(&state.store).expect("row");
+        assert_eq!(
+            row,
+            loomem_core::dream_schedule::DreamScheduleRow::default()
+        );
+    }
+
+    /// POST run → 202, `queued = true`, and `run_requested_at` persisted so
+    /// the scheduler picks it up at its next poll.
+    #[tokio::test]
+    async fn dream_schedule_run_queues_when_dream_and_scheduler_enabled() {
+        let mut config = test_config();
+        config.dream.enabled = true;
+        config.scheduler.enabled = true;
+        let (app, state) = make_test_app_cfg(config);
+        let (status, body) = send(
+            app,
+            dream_schedule_req(Method::POST, "/v1/dream/schedule/run", None),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::ACCEPTED,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(v["queued"], serde_json::json!(true));
+        assert!(v["run_requested_at"].is_u64(), "{v}");
+
+        let row = loomem_core::dream_schedule::load(&state.store).expect("row");
+        assert!(row.run_requested_at.is_some());
+        assert_eq!(
+            row.run_requested_at.map(serde_json::Value::from),
+            Some(v["run_requested_at"].clone())
+        );
+    }
+
+    /// The test config has `dream.enabled = false` and the scheduler off:
+    /// queuing is refused with 409 and no row is written.
+    #[tokio::test]
+    async fn dream_schedule_run_conflicts_when_dream_disabled() {
+        let (app, state) = make_test_app();
+        let (status, body) = send(
+            app,
+            dream_schedule_req(Method::POST, "/v1/dream/schedule/run", None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert!(
+            v["error"].as_str().unwrap_or("").contains("disabled"),
+            "{v}"
+        );
+        let row = loomem_core::dream_schedule::load(&state.store).expect("row");
+        assert!(row.run_requested_at.is_none());
+    }
+
+    /// Dream enabled but scheduler off → 409 as well (nobody would execute it).
+    #[tokio::test]
+    async fn dream_schedule_run_conflicts_when_scheduler_disabled() {
+        let mut config = test_config();
+        config.dream.enabled = true;
+        let (app, _state) = make_test_app_cfg(config);
+        let (status, body) = send(
+            app,
+            dream_schedule_req(Method::POST, "/v1/dream/schedule/run", None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert!(
+            v["error"].as_str().unwrap_or("").contains("Scheduler"),
+            "{v}"
+        );
+    }
+
+    /// Without any bearer the auth middleware rejects the admin endpoints
+    /// before the handler runs (401). The 403 path for a non-admin bearer is
+    /// covered at handler level in `handlers::dream_schedule::tests`.
+    #[tokio::test]
+    async fn dream_schedule_requires_auth() {
+        let (app, _state) = make_test_app();
+        for (method, uri) in [
+            (Method::GET, "/v1/dream/schedule"),
+            (Method::PUT, "/v1/dream/schedule"),
+            (Method::POST, "/v1/dream/schedule/run"),
+        ] {
+            let req = Request::builder()
+                .method(method.clone())
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap();
+            let (status, _body) = send(app.clone(), req).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri}");
+        }
     }
 
     // ── Bench HTTP handler tests (cycle/128) ─────────────────────────

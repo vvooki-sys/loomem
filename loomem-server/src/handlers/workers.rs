@@ -265,14 +265,14 @@ mod tests {
 
     fn make_test_registry() -> loomem_core::workers_registry::WorkerRegistry {
         let cfg = loomem_core::scheduler::WorkerConfig::default();
-        build_registry(&cfg, 86400, 3600)
+        build_registry(&cfg, 86400, 3600, 86400)
     }
 
     #[test]
     fn build_registry_has_correct_worker_count() {
         let reg = make_test_registry();
         assert_eq!(reg.len(), KNOWN_WORKERS.len());
-        assert_eq!(reg.len(), 7);
+        assert_eq!(reg.len(), 8);
     }
 
     #[test]
@@ -357,6 +357,7 @@ mod tests {
             "clustering",
             "purge",
             "stats",
+            "dream",
         ] {
             assert!(
                 KNOWN_WORKERS.contains(name),

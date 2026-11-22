@@ -44,6 +44,20 @@ pub struct DreamConfig {
     /// back-to-back.
     #[serde(default = "default_auto_cooldown_secs")]
     pub auto_cooldown_secs: u64,
+    /// Periodic dream pass over all active streams, driven by the scheduler
+    /// (`scheduler.rs::tick_dream`). Needs `enabled = true` and
+    /// `[scheduler] enabled = true`. Overridable at runtime through
+    /// `PUT /v1/dream/schedule` (see `dream_schedule`).
+    #[serde(default = "default_schedule_enabled")]
+    pub schedule_enabled: bool,
+    /// Seconds between two scheduled passes (default once a day). Bounded to
+    /// 1 h ..= 30 d by `Config::validate` and by the HTTP handler.
+    #[serde(default = "default_schedule_interval_secs")]
+    pub schedule_interval_secs: u64,
+    /// The whole scheduled pass (all streams) is aborted after this many
+    /// seconds.
+    #[serde(default = "default_schedule_timeout_secs")]
+    pub schedule_timeout_secs: u64,
 }
 
 /// Default auto-trigger threshold: `0` (disabled), so auto-triggering is strictly
@@ -61,6 +75,22 @@ fn default_auto_cooldown_secs() -> u64 {
     900
 }
 
+/// Scheduled passes are on by default: the owner requirement (2026-11-22) is
+/// that dream is not on-demand only. `[dream] enabled` stays the master switch.
+fn default_schedule_enabled() -> bool {
+    true
+}
+
+/// Default scheduled interval: once per 24 h.
+fn default_schedule_interval_secs() -> u64 {
+    86_400
+}
+
+/// Default budget for one whole scheduled pass: 1 h.
+fn default_schedule_timeout_secs() -> u64 {
+    3_600
+}
+
 impl Default for DreamConfig {
     fn default() -> Self {
         Self {
@@ -71,6 +101,9 @@ impl Default for DreamConfig {
             cost_cap_usd_per_run: 0.10,
             auto_trigger_threshold: default_auto_trigger_threshold(),
             auto_cooldown_secs: default_auto_cooldown_secs(),
+            schedule_enabled: default_schedule_enabled(),
+            schedule_interval_secs: default_schedule_interval_secs(),
+            schedule_timeout_secs: default_schedule_timeout_secs(),
         }
     }
 }

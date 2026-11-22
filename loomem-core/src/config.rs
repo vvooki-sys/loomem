@@ -389,7 +389,24 @@ impl Config {
             .validate(self.llm.embedding_provider == "local")
     }
 
+    /// `[dream] schedule_*` bounds. Checked even when the dream worker is
+    /// off so a later `enabled = true` cannot surface a bad interval.
+    fn validate_dream_schedule(&self) -> Result<()> {
+        anyhow::ensure!(
+            crate::dream_schedule::interval_in_bounds(self.dream.schedule_interval_secs),
+            "dream.schedule_interval_secs must be between {} and {} (1 h .. 30 d)",
+            crate::dream_schedule::MIN_INTERVAL_SECS,
+            crate::dream_schedule::MAX_INTERVAL_SECS
+        );
+        anyhow::ensure!(
+            self.dream.schedule_timeout_secs >= 60,
+            "dream.schedule_timeout_secs must be at least 60"
+        );
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<()> {
+        self.validate_dream_schedule()?;
         // Storage validation
         anyhow::ensure!(
             self.storage.rocksdb.max_open_files > 0,

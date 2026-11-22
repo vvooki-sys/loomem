@@ -10,6 +10,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config::Config;
+use crate::dream_pass::{self, ScheduledPass};
+use crate::dream_schedule;
+use crate::embedding_queue::EmbeddingQueue;
+
+/// How often the scheduler re-reads the dream schedule row to decide whether
+/// a scheduled or manually queued pass is due. Surfaced to clients as
+/// `poll_secs` on `/v1/dream/schedule`.
+pub const DREAM_POLL_SECS: u64 = 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchedulerConfig {
@@ -96,6 +104,9 @@ pub struct Scheduler {
     local_embedder: Option<Arc<LocalEmbedder>>,
     event_tx: Option<EventSender>,
     pub workers: WorkerRegistry,
+    /// Set with [`Scheduler::with_embedding_queue`]; merged dream chunks are
+    /// enqueued here for vectors. `None` disables embedding of dream output.
+    embedding_queue: Option<EmbeddingQueue>,
 
     // Task guards
     consolidation_running: Arc<AtomicBool>,
@@ -105,6 +116,7 @@ pub struct Scheduler {
     clustering_running: Arc<AtomicBool>,
     purge_running: Arc<AtomicBool>,
     stats_running: Arc<AtomicBool>,
+    dream_running: Arc<AtomicBool>,
 
     // Failure tracking
     consolidation_failures: Arc<AtomicU64>,
@@ -144,6 +156,7 @@ impl Scheduler {
             local_embedder,
             event_tx,
             workers,
+            embedding_queue: None,
             consolidation_running: Arc::new(AtomicBool::new(false)),
             decay_running: Arc::new(AtomicBool::new(false)),
             compaction_running: Arc::new(AtomicBool::new(false)),
@@ -151,10 +164,18 @@ impl Scheduler {
             clustering_running: Arc::new(AtomicBool::new(false)),
             purge_running: Arc::new(AtomicBool::new(false)),
             stats_running: Arc::new(AtomicBool::new(false)),
+            dream_running: Arc::new(AtomicBool::new(false)),
             consolidation_failures: Arc::new(AtomicU64::new(0)),
             decay_failures: Arc::new(AtomicU64::new(0)),
             compaction_failures: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Hand the shared embedding queue to the scheduled dream pass. Kept out
+    /// of `new` so the constructor's argument list does not grow further.
+    pub fn with_embedding_queue(mut self, embedding_queue: Option<EmbeddingQueue>) -> Self {
+        self.embedding_queue = embedding_queue;
+        self
     }
 
     /// Recover orphaned chunks with in_progress=true on startup
@@ -203,6 +224,10 @@ impl Scheduler {
 
         let stats_interval: u64 = 3600; // hourly stats aggregation
 
+        // The dream schedule lives in a storage row; poll it instead of
+        // deriving a ticker period from config.
+        let dream_poll_enabled = self.config.dream.enabled;
+
         let mut consolidation_ticker = interval(Duration::from_secs(consolidation_interval));
         let mut decay_ticker = interval(Duration::from_secs(decay_interval));
         let mut compaction_ticker = interval(Duration::from_secs(compaction_interval));
@@ -214,6 +239,7 @@ impl Scheduler {
         let mut clustering_ticker = interval(Duration::from_secs(clustering_interval));
         let mut purge_ticker = interval(Duration::from_secs(purge_interval));
         let mut stats_ticker = interval(Duration::from_secs(stats_interval));
+        let mut dream_ticker = interval(Duration::from_secs(DREAM_POLL_SECS));
 
         // Skip first tick (immediate)
         consolidation_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -223,6 +249,7 @@ impl Scheduler {
         clustering_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         purge_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         stats_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        dream_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         // Run initial clustering on startup if enabled and no clusters exist
         if clustering_enabled {
@@ -238,6 +265,7 @@ impl Scheduler {
                 _ = clustering_ticker.tick(), if clustering_enabled => self.tick_clustering(),
                 _ = purge_ticker.tick() => self.tick_purge(),
                 _ = stats_ticker.tick() => self.tick_stats(),
+                _ = dream_ticker.tick(), if dream_poll_enabled => self.tick_dream(),
                 _ = shutdown_rx.recv() => {
                     info!("Scheduler received shutdown signal");
                     break;
@@ -259,6 +287,7 @@ impl Scheduler {
             "clustering" => self.tick_clustering(),
             "purge" => self.tick_purge(),
             "stats" => self.tick_stats(),
+            "dream" => self.tick_dream(),
             _ => anyhow::bail!("Unknown scheduler worker: {name}"),
         }
         Ok(())
@@ -346,6 +375,67 @@ impl Scheduler {
         self.spawn_stats_task();
     }
 
+    /// Poll the persisted dream schedule and start a pass when it is due.
+    /// Only this ticker executes dream passes, so a scheduled and a manually
+    /// queued pass never overlap.
+    fn tick_dream(&self) {
+        if self.is_paused("dream") {
+            return;
+        }
+        if self.dream_running.load(Ordering::SeqCst) {
+            warn!("Dream pass already running, skipping tick");
+            return;
+        }
+        let row = match dream_schedule::load(&self.storage) {
+            Ok(row) => row,
+            Err(e) => {
+                error!("Dream schedule: cannot read schedule row: {e:#}");
+                return;
+            }
+        };
+        let eff = dream_schedule::effective(&row, &self.config.dream);
+        let now = now_epoch();
+        if dream_schedule::is_due(&row, &eff, now) {
+            let trigger = if row.run_requested_at.is_some() {
+                "manual"
+            } else {
+                "schedule"
+            };
+            self.spawn_dream_task(trigger);
+        } else if row.anchor_at.is_none() && row.last_run_at.is_none() {
+            // First poll ever: anchor so the first run lands one interval
+            // from now instead of firing on every restart.
+            let anchored = dream_schedule::DreamScheduleRow {
+                anchor_at: Some(now),
+                ..row
+            };
+            if let Err(e) = dream_schedule::save(&self.storage, &anchored) {
+                error!("Dream schedule: cannot anchor schedule row: {e:#}");
+            }
+        }
+    }
+
+    fn spawn_dream_task(&self, trigger: &'static str) {
+        let pass = ScheduledPass {
+            store: self.storage.clone(),
+            tantivy: self.tantivy.clone(),
+            client: self.llm_client.clone(),
+            llm_config: self.config.llm.clone(),
+            dream_config: self.config.dream.clone(),
+            pii_filter: self.pii_filter.clone(),
+            cost_tracker: self.cost_tracker.clone(),
+            intent_log: self.intent_log.clone(),
+            embedding_queue: self.embedding_queue.clone(),
+            workers: self.workers.clone(),
+        };
+        let running = self.dream_running.clone();
+        running.store(true, Ordering::SeqCst);
+        tokio::spawn(async move {
+            dream_pass::run_scheduled_pass(pass, trigger).await;
+            running.store(false, Ordering::SeqCst);
+        });
+    }
+
     async fn wait_for_running_tasks_to_complete(&self) {
         info!("Waiting for running tasks to complete...");
         loop {
@@ -355,7 +445,8 @@ impl Scheduler {
                 && !self.backup_running.load(Ordering::SeqCst)
                 && !self.clustering_running.load(Ordering::SeqCst)
                 && !self.purge_running.load(Ordering::SeqCst)
-                && !self.stats_running.load(Ordering::SeqCst);
+                && !self.stats_running.load(Ordering::SeqCst)
+                && !self.dream_running.load(Ordering::SeqCst);
 
             if all_stopped {
                 info!("All tasks stopped gracefully");

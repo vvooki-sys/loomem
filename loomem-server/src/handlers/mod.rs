@@ -8,6 +8,7 @@ pub mod context;
 pub mod dashboard;
 pub mod date_filter;
 pub mod delete;
+pub mod dream_schedule;
 pub mod encryption;
 pub mod feedback;
 pub mod graph_repair;
@@ -46,6 +47,9 @@ pub use bench::{admin_bench_history_handler, admin_bench_run_handler};
 pub use co_occur::co_occur_handler;
 pub use context::context_pack_handler;
 pub use dashboard::{dashboard_memory_handler, memory_chain_handler};
+pub use dream_schedule::{
+    dream_schedule_get_handler, dream_schedule_put_handler, dream_schedule_run_handler,
+};
 pub use encryption::encryption_status_handler;
 pub use feedback::feedback_handler;
 pub use graph_repair::graph_entity_stream_repair_handler;
@@ -71,6 +75,8 @@ pub enum AppError {
     BadRequest(String),
     Forbidden(String),
     NotFound(String),
+    /// HTTP 409 Conflict (e.g. queuing a dream pass while the worker is off).
+    Conflict(String),
     /// HTTP 413 Payload Too Large (e.g. feedback batch exceeds size cap).
     PayloadTooLarge(String),
 }
@@ -84,6 +90,7 @@ impl std::fmt::Display for AppError {
             AppError::BadRequest(message)
             | AppError::Forbidden(message)
             | AppError::NotFound(message)
+            | AppError::Conflict(message)
             | AppError::PayloadTooLarge(message) => f.write_str(message),
         }
     }
@@ -120,6 +127,13 @@ impl IntoResponse for AppError {
                 .into_response(),
             AppError::NotFound(message) => (
                 StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": message
+                })),
+            )
+                .into_response(),
+            AppError::Conflict(message) => (
+                StatusCode::CONFLICT,
                 Json(json!({
                     "error": message
                 })),

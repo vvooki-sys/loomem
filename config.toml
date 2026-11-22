@@ -421,18 +421,26 @@ max_iterations = 100
 min_serendipity = 0.1
 max_associations = 3
 
-# Dream: on-demand consolidation (merge facts per subject, resolve contradictions).
-# Triggered manually via the memory_dream MCP tool or POST /v1/dream — NOT
-# auto-scheduled (scheduler.rs has no dream ticker; see [worker.*] for the
-# workers that do run on a timer).
+# Dream: consolidation (merge facts per subject, resolve contradictions).
+# Three ways to run it:
+#   - scheduled: the scheduler polls the persisted schedule every 60 s and runs
+#     one pass over ALL active streams when it is due (schedule_* below; the
+#     dashboard Settings page / PUT /v1/dream/schedule override these at runtime,
+#     POST /v1/dream/schedule/run queues a pass for the next poll). Needs
+#     enabled = true here and [scheduler] enabled = true.
+#   - count-based: auto_trigger_threshold new chunks on a private stream.
+#   - manual: the memory_dream MCP tool or POST /v1/dream (one stream).
 [dream]
 enabled = true
 batch_size = 50                   # chunks per run
 min_group_size = 2                # min chunks per subject to trigger merge
 # model = "gpt-6-luna"  # unset: inherits [llm] compression_model
-cost_cap_usd_per_run = 0.10      # safety: stop if exceeded
+cost_cap_usd_per_run = 0.10      # safety: stop if exceeded (per stream, per run)
 auto_trigger_threshold = 50      # fire a dream run after N new chunks per stream (0 = off, private streams only)
 auto_cooldown_secs = 900         # min 15 min between auto-runs on the same stream (debounces bulk imports)
+schedule_enabled = true          # periodic dream pass over all active streams (needs enabled = true)
+schedule_interval_secs = 86400   # default once a day; 3600..2592000 (1 h..30 d); editable at runtime via PUT /v1/dream/schedule
+schedule_timeout_secs = 3600     # the whole pass (all streams) is aborted after this many seconds (min 60)
 
 # Cycle/112: POST /v1/feedback — agent-supplied chunk ratings (write-only in v1).
 [feedback]
