@@ -3,10 +3,9 @@
 # Refuses the commit if fmt or clippy are not clean.
 # Scope matches CI: workspace default features (not --all-features).
 #
-# Versioned copy. To activate locally:
+# Versioned copy. To activate locally (works from the main checkout and
+# from linked worktrees):
 #   scripts/install-hooks.sh
-# or manually:
-#   ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
 
 set -euo pipefail
 
