@@ -3,9 +3,9 @@ use super::{ExtractionError, KnowledgeExtractionConfig};
 pub(super) fn validated_chunk_size(
     config: &KnowledgeExtractionConfig,
 ) -> Result<usize, ExtractionError> {
-    if config.max_facts_per_transcript == 0 {
+    if config.max_facts_per_chunk == 0 {
         return Err(ExtractionError::InvalidConfig(
-            "max_facts_per_transcript must be positive",
+            "max_facts_per_chunk must be positive",
         ));
     }
     if config.max_tokens == 0 {

@@ -158,13 +158,13 @@ async fn split_enabled_without_truncation_adds_no_calls() {
 // ---- input chunking -------------------------------------------------------
 
 /// `input_chunk_tokens` splits at line boundaries into N calls; facts are
-/// concatenated in transcript order and the cap applies to the union.
+/// concatenated in transcript order and the cap applies per chunk.
 #[tokio::test]
 async fn input_chunking_makes_line_aligned_calls_and_merges_under_cap() {
     // 4 tokens ≈ 16 chars: two 8-char lines ("l1 aaaa\n") fit per chunk.
     let config = KnowledgeExtractionConfig {
         input_chunk_tokens: 4,
-        max_facts_per_transcript: 3,
+        max_facts_per_chunk: 3,
         ..KnowledgeExtractionConfig::default()
     };
     let chat = ScriptedChat::new(vec![complete(&["A", "B"]), complete(&["C", "D"])]);
@@ -175,7 +175,7 @@ async fn input_chunking_makes_line_aligned_calls_and_merges_under_cap() {
         chat.chunk_texts(),
         ["l1 aaaa\nl2 bbbb\n", "l3 cccc\nl4 dddd"]
     );
-    assert_eq!(contents(&outcome.facts), ["A", "B", "C"]);
+    assert_eq!(contents(&outcome.facts), ["A", "B", "C", "D"]);
     assert_eq!(outcome.chunks_attempted, 2);
     assert_eq!(outcome.chunks_completed, 2);
     assert!(outcome.failures.is_empty());
@@ -366,15 +366,158 @@ fn config_without_new_keys_keeps_legacy_values() {
     assert!(parsed.split_on_truncation);
 }
 
-/// The shipped config.toml spells the controls out at their legacy values.
+/// The shipped config.toml carries the chunked-extraction defaults decided
+/// on 2026-11-22 (owner decision, no A/B; the validation pilot measures
+/// them) under the per-chunk cap key.
 #[test]
-fn shipped_config_toml_keeps_controls_off() {
+fn shipped_config_toml_enables_chunked_extraction() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
     let content = std::fs::read_to_string(path).unwrap();
     let table: toml::Table = toml::from_str(&content).unwrap();
+    assert!(
+        table["knowledge_extraction"]
+            .get("max_facts_per_transcript")
+            .is_none(),
+        "the shipped config uses the per-chunk key"
+    );
     let section: KnowledgeExtractionConfig =
         table["knowledge_extraction"].clone().try_into().unwrap();
-    assert_eq!(section.max_tokens, 2000);
-    assert_eq!(section.input_chunk_tokens, 0);
-    assert!(!section.split_on_truncation);
+    assert_eq!(section.max_tokens, 16384);
+    assert_eq!(section.input_chunk_tokens, 4000);
+    assert!(section.split_on_truncation);
+    assert_eq!(section.max_facts_per_chunk, 20);
+}
+
+// ---- chunked defaults with a per-chunk cap --------------------------------
+
+/// A transcript under `input_chunk_tokens` is one chunk: the request the
+/// provider receives is byte-identical to the legacy single-call pipeline
+/// (`input_chunk_tokens = 0`), so the new defaults change nothing for short
+/// transcripts.
+#[tokio::test]
+async fn short_transcript_request_is_byte_identical_to_legacy_single_call() {
+    let legacy = KnowledgeExtractionConfig {
+        model: "gpt-6-luna".to_string(),
+        input_chunk_tokens: 0,
+        split_on_truncation: false,
+        ..KnowledgeExtractionConfig::default()
+    };
+    let chunked = KnowledgeExtractionConfig {
+        input_chunk_tokens: 4000,
+        split_on_truncation: true,
+        ..legacy.clone()
+    };
+    // ~2 000 chars ≈ 500 tokens, well under the 4 000-token chunk.
+    let transcript =
+        "user: We ship the beta on Friday.\nassistant: Noted, Friday it is.\n".repeat(30);
+    let legacy_chat = ScriptedChat::new(vec![complete(&["A"])]);
+    let chunked_chat = ScriptedChat::new(vec![complete(&["A"])]);
+    extract_knowledge_with(&legacy_chat, &legacy, &transcript, "2026-11-22")
+        .await
+        .unwrap();
+    extract_knowledge_with(&chunked_chat, &chunked, &transcript, "2026-11-22")
+        .await
+        .unwrap();
+    assert_eq!(legacy_chat.requests().len(), 1);
+    assert_eq!(chunked_chat.requests().len(), 1);
+    let legacy_bytes = serde_json::to_vec(&legacy_chat.requests()[0]).unwrap();
+    let chunked_bytes = serde_json::to_vec(&chunked_chat.requests()[0]).unwrap();
+    assert_eq!(chunked_bytes, legacy_bytes);
+}
+
+/// A long transcript is split into chunks and every chunk keeps its own
+/// cap: three chunks returning 20 facts each yield 60, not the former
+/// transcript-wide 20.
+#[tokio::test]
+async fn long_transcript_keeps_facts_beyond_the_former_transcript_cap() {
+    // 4 tokens ≈ 16 chars: two 8-char lines per chunk, six lines → 3 chunks.
+    let config = KnowledgeExtractionConfig {
+        input_chunk_tokens: 4,
+        split_on_truncation: true,
+        max_facts_per_chunk: 20,
+        ..KnowledgeExtractionConfig::default()
+    };
+    let transcript = "l1 aaaa\nl2 bbbb\nl3 cccc\nl4 dddd\nl5 eeee\nl6 ffff";
+    let twenty =
+        |prefix: &str| -> Vec<String> { (1..=20).map(|n| format!("{prefix}{n}")).collect() };
+    let replies = ["a", "b", "c"]
+        .iter()
+        .map(|p| {
+            let facts = twenty(p);
+            complete(&facts.iter().map(String::as_str).collect::<Vec<_>>())
+        })
+        .collect();
+    let chat = ScriptedChat::new(replies);
+    let outcome = extract_knowledge_with(&chat, &config, transcript, "2026-11-22")
+        .await
+        .unwrap();
+    assert_eq!(chat.requests().len(), 3);
+    assert_eq!(outcome.input_chunks_total, 3);
+    assert_eq!(outcome.input_chunks_processed, 3);
+    assert_eq!(outcome.facts.len(), 60);
+    assert_eq!(outcome.facts[0].content, "a1");
+    assert_eq!(outcome.facts[20].content, "b1");
+    assert_eq!(outcome.facts[59].content, "c20");
+    assert_eq!(outcome.discarded_facts, 0);
+    assert!(
+        outcome.fact_limit_reached,
+        "each chunk returned exactly its cap"
+    );
+    assert!(outcome.failures.is_empty());
+}
+
+/// An operator's pre-2026-11-22 config (`max_facts_per_transcript = 20`,
+/// `input_chunk_tokens = 0`) parses through the alias and behaves exactly as
+/// before: one call per transcript, the prompt names the same cap, and a
+/// reply over the cap is truncated to 20 with the excess counted.
+#[tokio::test]
+async fn legacy_transcript_cap_config_keeps_its_behavior() {
+    let legacy = r#"
+        enabled = true
+        model = "gpt-4.1-mini"
+        max_transcript_tokens = 20000
+        dedup_cosine_threshold = 0.92
+        contradiction_check = true
+        contradiction_cosine_min = 0.5
+        max_facts_per_transcript = 20
+        max_tokens = 2000
+        input_chunk_tokens = 0
+        split_on_truncation = false
+    "#;
+    let config: KnowledgeExtractionConfig = toml::from_str(legacy).unwrap();
+    assert_eq!(config.max_facts_per_chunk, 20);
+    assert!(build_extraction_prompt(&config, "2026-11-22")
+        .contains("Maximum 20 facts per conversation"));
+
+    let facts: Vec<String> = (1..=25).map(|n| format!("f{n}")).collect();
+    let chat = ScriptedChat::new(vec![complete(
+        &facts.iter().map(String::as_str).collect::<Vec<_>>(),
+    )]);
+    let outcome = extract_knowledge_with(&chat, &config, FOUR_LINES, "2026-11-22")
+        .await
+        .unwrap();
+    assert_eq!(chat.requests().len(), 1, "one call per transcript");
+    assert_eq!(chat.requests()[0]["max_tokens"], 2000);
+    assert_eq!(outcome.facts.len(), 20);
+    assert_eq!(outcome.facts[19].content, "f20");
+    assert_eq!(outcome.discarded_facts, 5);
+    assert!(outcome.fact_limit_reached);
+    assert_eq!(outcome.input_chunks_total, 1);
+    assert_eq!(outcome.input_chunks_processed, 1);
+}
+
+/// Both spellings name one field: a config carrying both is rejected rather
+/// than silently picking one.
+#[test]
+fn both_fact_cap_keys_are_rejected() {
+    let both = r#"
+        enabled = true
+        max_transcript_tokens = 20000
+        dedup_cosine_threshold = 0.92
+        contradiction_check = true
+        contradiction_cosine_min = 0.5
+        max_facts_per_transcript = 20
+        max_facts_per_chunk = 20
+    "#;
+    assert!(toml::from_str::<KnowledgeExtractionConfig>(both).is_err());
 }

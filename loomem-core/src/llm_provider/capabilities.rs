@@ -14,8 +14,12 @@ use serde_json::{json, Value};
 
 /// `reasoning_effort` values the Chat Completions API documents
 /// (developers.openai.com/api/reference, "Create chat completion",
-/// accessed 2026-11-22). Which subset a model accepts is the provider's
-/// business; the config check only rejects values outside this list.
+/// accessed 2026-11-22). The list is the union over the API, not what any
+/// one model accepts: a model may reject part of it with a 400 — gpt-6-luna
+/// takes `none`, `low`, `medium`, `high`, `xhigh` and rejects `minimal`
+/// (API response, 2026-11-22). Other OpenAI-compatible providers may accept
+/// other subsets, so the list is deliberately not narrowed to one model; the
+/// config check only rejects values outside it.
 pub const REASONING_EFFORTS: &[&str] =
     &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 

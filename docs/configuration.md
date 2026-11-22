@@ -276,7 +276,7 @@ api_key_env = "OPENAI_API_KEY"
 max_completion_tokens = true
 reasoning_effort = "low"
 omit_temperature = true
-# completion_tokens_floor = 2000  # set after smoke test
+completion_tokens_floor = 2000  # reasoning tokens share the small per-call caps (smoke test, 2026-11-22)
 ```
 
 | Key | Type | Description |
@@ -349,7 +349,7 @@ api_key_env = "OPENAI_API_KEY"
 max_completion_tokens = true
 reasoning_effort = "low"
 omit_temperature = true
-# completion_tokens_floor = 2000  # set after smoke test
+completion_tokens_floor = 2000  # reasoning tokens share the small per-call caps (smoke test, 2026-11-22)
 
 # [llm.providers.ollama]
 # base_url = "http://localhost:11434/v1"   # no api_key_env: requests carry no key
@@ -361,10 +361,12 @@ omit_temperature = true
 | `api_key_env` | string? | — | Environment variable holding the key. Omitted → no key: requests carry no `Authorization` header (Ollama, vLLM, a gateway) |
 | `omit_temperature` | bool | false | Drop `temperature` from every chat request |
 | `max_completion_tokens` | bool | false | Send the output cap as `max_completion_tokens` instead of the deprecated `max_tokens` |
-| `completion_tokens_floor` | int | 0 | Raise any per-call output cap below this value to it (`0` = unchanged) |
-| `reasoning_effort` | string? | — | One of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; added to every chat request when set |
+| `completion_tokens_floor` | int | 0 | Raise any per-call output cap below this value to it (`0` = unchanged). The shipped `openai` entry sets `2000`: at `reasoning_effort = "low"` the NER batch (cap 1000) and the LLM rerank (cap 100) returned `finish_reason: "length"` with empty content, and with the floor at 2000 both completed (smoke test, 2026-11-22). The cap is a limit, not a spend; knowledge extraction has its own cap above the floor, so the floor never touches it |
+| `reasoning_effort` | string? | — | One of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; added to every chat request when set. The list is the union of values the Chat Completions reference documents, and a model may reject part of it with a 400 — `gpt-6-luna` accepts `none`, `low`, `medium`, `high`, `xhigh` and rejects `minimal` (API response, 2026-11-22). The config check rejects only values outside the list; the model's own answer is the final word |
 
 An entry with none of the four request options set sends exactly the request the built-in provider sends.
+
+For `gpt-6-luna` the shipped entry's `omit_temperature` and `max_completion_tokens` are required, not optional: the API rejects a `temperature` other than 1 and `max_tokens`, each with a 400 (smoke test, 2026-11-22).
 
 The startup check and the `/health` field `llm_key_present` follow the active
 provider: with the shipped config the server refuses to start without
@@ -481,21 +483,22 @@ max_transcript_tokens = 20000
 dedup_cosine_threshold = 0.92
 contradiction_check = true
 contradiction_cosine_min = 0.5
-max_facts_per_transcript = 20
-max_tokens = 2000
-input_chunk_tokens = 0
-split_on_truncation = false
+max_facts_per_chunk = 20
+max_tokens = 16384
+input_chunk_tokens = 4000
+split_on_truncation = true
 ```
 
 Controls the `memory_ingest` LLM pipeline.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `max_tokens` | int | 2000 | Completion cap per extraction call. A reply that hits it (`finish_reason: "length"`) is rejected, never partially admitted |
-| `input_chunk_tokens` | int | 0 | Input budget per extraction call (4 chars ≈ 1 token). `0` keeps the legacy pipeline: one call per transcript up to `max_transcript_tokens`. Any other value splits the transcript at line boundaries into chunks of at most `min(input_chunk_tokens, max_transcript_tokens)` tokens, one call each |
-| `split_on_truncation` | bool | false | When `true`, a chunk whose completion was truncated is re-extracted as two line-aligned halves (depth 2, at most 4 extra calls per chunk). When `false`, the truncated chunk is rejected and reported, with no retry |
+| `max_facts_per_chunk` | int | 20 | Cap on admitted facts per transcript chunk (one planned input chunk, including its split retries), applied after the confidence filter; the prompt's "Maximum N facts per conversation" rule carries the same number per call. Every chunk is processed: a chunk's excess is counted in `discarded_facts` and never stops later chunks. Replaces `max_facts_per_transcript`, a cap on the whole transcript that stopped input processing once reached, so a long transcript lost everything past 20 facts. The old key is still accepted as an alias; a config with both keys is rejected |
+| `max_tokens` | int | 16384 | Completion cap per extraction call, sent as `max_completion_tokens` through the `openai` entry (reasoning tokens share it). A reply that hits it (`finish_reason: "length"`) is rejected, never partially admitted |
+| `input_chunk_tokens` | int | 4000 | Input budget per extraction call (4 chars ≈ 1 token): the transcript is split at line boundaries into chunks of at most `min(input_chunk_tokens, max_transcript_tokens)` tokens, one call each. `0` = one call per transcript up to `max_transcript_tokens` (the legacy pipeline), overlapping windows above it |
+| `split_on_truncation` | bool | true | A chunk whose completion was truncated is re-extracted as two line-aligned halves (depth 2, at most 4 extra calls per chunk). `false` rejects and reports the truncated chunk, with no retry |
 
-The three keys are additive: with the defaults above, extraction issues exactly the calls it did before they existed. A truncated reply is never admitted in either mode; a completion that ends with `finish_reason = "length"` is an explicit error on every chat path, not only in extraction.
+These are the shipped defaults since 2026-11-22 (an owner decision, deliberately without an A/B — the validation pilot is the measurement). Before, extraction was one call per transcript up to 20K tokens, with a 2000-token completion cap and 20 facts per transcript. The code defaults for a config that omits these keys stay at the legacy values (`20` / `2000` / `0` / `false`), so an older config behaves as before; with `input_chunk_tokens = 0` and `max_facts_per_transcript = 20` the whole transcript is one chunk and the per-chunk cap is the former cap, fact for fact. The one visible change for such a config: a transcript over `max_transcript_tokens`, which the legacy path processes as overlapping windows, now gets the cap per window. A truncated reply is never admitted in either mode; a completion that ends with `finish_reason = "length"` is an explicit error on every chat path, not only in extraction.
 
 ---
 
@@ -534,14 +537,14 @@ Validation at startup: `max_fragment_tokens` must be positive, and with `embeddi
 [entity_extraction]
 enabled = true
 # model = "gpt-6-luna"  # unset: inherits [llm] compression_model
-batch_size = 20
+batch_size = 10
 flush_interval_secs = 3
 queue_capacity = 200
 confidence_threshold = 0.7
 max_tokens_per_batch = 2000
 ```
 
-Async LLM NER for entities not in the dictionary.
+Async LLM NER for entities not in the dictionary. `batch_size` is 10 since 2026-11-22 (was 20): with `reasoning_effort = "low"` a 14–15 chunk batch used 1696 of its 2000 output tokens, and 10 leaves headroom for the reasoning tokens that share the cap.
 
 ---
 

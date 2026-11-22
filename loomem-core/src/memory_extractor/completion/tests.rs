@@ -42,7 +42,7 @@ const FOUR_LINES: &str = "l1 aaaa\nl2 bbbb\nl3 cccc\nl4 dddd";
 fn two_chunk_config(cap: usize) -> KnowledgeExtractionConfig {
     KnowledgeExtractionConfig {
         input_chunk_tokens: 4,
-        max_facts_per_transcript: cap,
+        max_facts_per_chunk: cap,
         ..KnowledgeExtractionConfig::default()
     }
 }
@@ -55,10 +55,11 @@ fn contents(outcome: &ExtractionOutcome) -> Vec<&str> {
         .collect()
 }
 
+/// Every chunk returning exactly its cap sets the flag without any loss.
 #[tokio::test]
-async fn exact_cap_on_last_input_chunk_has_no_observed_loss() {
+async fn exact_per_chunk_cap_has_no_observed_loss() {
     let chat = ScriptedChat::new(vec![reply("stop", &["A"]), reply("stop", &["B"])]);
-    let outcome = extract_knowledge_with(&chat, &two_chunk_config(2), FOUR_LINES, "2026-10-26")
+    let outcome = extract_knowledge_with(&chat, &two_chunk_config(1), FOUR_LINES, "2026-10-26")
         .await
         .unwrap();
     assert_eq!(contents(&outcome), ["A", "B"]);
@@ -69,35 +70,39 @@ async fn exact_cap_on_last_input_chunk_has_no_observed_loss() {
     assert_eq!(chat.remaining(), 0);
 }
 
+/// A chunk's excess over its own cap is counted; the other chunk's facts
+/// are untouched.
 #[tokio::test]
-async fn excess_facts_on_last_input_chunk_are_counted() {
+async fn excess_facts_on_one_input_chunk_are_counted() {
     let chat = ScriptedChat::new(vec![reply("stop", &["A"]), reply("stop", &["B", "C", "D"])]);
     let outcome = extract_knowledge_with(&chat, &two_chunk_config(2), FOUR_LINES, "2026-10-26")
         .await
         .unwrap();
-    assert_eq!(contents(&outcome), ["A", "B"]);
+    assert_eq!(contents(&outcome), ["A", "B", "C"]);
     assert_eq!(outcome.input_chunks_processed, outcome.input_chunks_total);
     assert!(outcome.fact_limit_reached);
-    assert_eq!(outcome.discarded_facts, 2);
+    assert_eq!(outcome.discarded_facts, 1);
     assert_eq!(chat.remaining(), 0);
 }
 
+/// The cap is per chunk: a chunk that fills it does not stop the chunks
+/// after it, and each later chunk gets its own cap.
 #[tokio::test]
-async fn cap_before_later_input_preserves_stop_and_exposes_missing_coverage() {
-    let chat = ScriptedChat::new(vec![reply("stop", &["A", "B"]), reply("stop", &["C"])]);
+async fn cap_on_one_chunk_does_not_stop_later_chunks() {
+    let chat = ScriptedChat::new(vec![
+        reply("stop", &["A", "B", "X"]),
+        reply("stop", &["C", "D"]),
+    ]);
     let outcome = extract_knowledge_with(&chat, &two_chunk_config(2), FOUR_LINES, "2026-10-26")
         .await
         .unwrap();
-    assert_eq!(contents(&outcome), ["A", "B"]);
+    assert_eq!(contents(&outcome), ["A", "B", "C", "D"]);
     assert_eq!(outcome.input_chunks_total, 2);
-    assert_eq!(outcome.input_chunks_processed, 1);
-    assert_eq!(outcome.chunks_attempted, 1);
+    assert_eq!(outcome.input_chunks_processed, 2);
+    assert_eq!(outcome.chunks_attempted, 2);
     assert!(outcome.fact_limit_reached);
-    assert_eq!(
-        outcome.discarded_facts, 0,
-        "unread input has no known fact count"
-    );
-    assert_eq!(chat.remaining(), 1, "the cap must not issue extra calls");
+    assert_eq!(outcome.discarded_facts, 1, "only the first chunk's excess");
+    assert_eq!(chat.remaining(), 0, "every planned chunk is extracted");
 }
 
 #[tokio::test]

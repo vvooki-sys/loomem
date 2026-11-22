@@ -99,6 +99,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unpriced model and returned the original results.
 - An unpriced model now logs "Unknown model for cost tracking" once per model,
   not on every call.
+- Chunked knowledge extraction is the shipped default (owner decision
+  2026-11-22, deliberately without an A/B — the validation pilot is the
+  measurement). `[knowledge_extraction]` in the shipped `config.toml` now
+  sets `max_facts_per_chunk = 20`, `max_tokens = 16384` (sent as
+  `max_completion_tokens` through the `openai` entry; reasoning tokens share
+  it), `input_chunk_tokens = 4000` and `split_on_truncation = true`.
+  Before: one call per transcript up to 20K tokens, a 2000-token completion
+  cap and 20 facts per transcript. `max_facts_per_chunk` replaces
+  `max_facts_per_transcript` and caps the admitted facts per transcript
+  chunk (one planned input chunk, including its split retries), applied
+  after the confidence filter; the prompt's "Maximum N facts per
+  conversation" rule carries the same number per call. Every chunk is
+  processed: a chunk's excess is counted in `discarded_facts` and never
+  stops later chunks. Before, the cap was transcript-wide and stopped input
+  processing once reached, so a long transcript lost everything past 20
+  facts. Old configs are unchanged: the code defaults for omitted keys stay
+  at the legacy values (20 / 2000 / 0 / false), `max_facts_per_transcript`
+  is still accepted as an alias (a config with both keys is rejected), and
+  with `input_chunk_tokens = 0` the transcript is one chunk, where the
+  per-chunk cap is the former cap, fact for fact. The one visible change
+  for such a config: a transcript over `max_transcript_tokens` on the
+  legacy overlapping-window path now gets the cap per window.
+- The shipped `[llm.providers.openai]` entry sets
+  `completion_tokens_floor = 2000`. Smoke test on the real API (2026-11-22,
+  `reasoning_effort = "low"`): the NER batch (cap 1000) and the LLM rerank
+  (cap 100) returned `finish_reason = "length"` with empty content; with
+  the floor at 2000 both completed (NER, 15 chunks: 1696/2000 tokens, 235
+  of them reasoning; rerank: 171). The cap is a limit, not a spend.
+  Knowledge extraction has its own cap above the floor, so the floor never
+  touches it. The same test showed that `gpt-6-luna` rejects a
+  `temperature` other than 1 and `max_tokens`, each with a 400, so the
+  entry's `omit_temperature` and `max_completion_tokens` are required for
+  it, not optional.
+- `[entity_extraction] batch_size` in the shipped `config.toml` is 10 (was
+  20): with `reasoning_effort = "low"` a 14–15 chunk batch used 1696 of
+  its 2000 output tokens, and 10 leaves headroom for the reasoning tokens
+  that share the cap.
+- "Async rerank failed (non-blocking)" is logged at WARN (was DEBUG), so a
+  truncated rerank is visible at the default log level.
+
+### Fixed
+
+- The embedding queue worker never spins on a zero batch size or flush
+  interval: both are clamped to 1 before the loop uses them. With `0` the
+  collect loop broke before awaiting the channel and the deadline was
+  always past, so the worker spun without receiving work or the shutdown
+  signal. The server builds the queue from `EmbeddingQueueConfig::default()`
+  (50 / 5 s), so this is defense in depth for callers that construct the
+  config themselves.
+- The shipped `config.toml` and the configuration docs say that `gpt-6-luna`
+  rejects `reasoning_effort = "minimal"` with a 400 (API response,
+  2026-11-22). The config check still accepts the full API list (`none`,
+  `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) on purpose: it is the
+  union of the documented values, other OpenAI-compatible providers may
+  accept other subsets, and the model's own answer is the final word.
 
 ## [0.5.4] - 2026-10-27
 

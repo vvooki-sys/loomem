@@ -798,7 +798,7 @@ pub async fn search_handler(
                         .await;
                     }
                     Err(e) => {
-                        tracing::debug!("Async rerank failed (non-blocking): {}", e);
+                        tracing::warn!("Async rerank failed (non-blocking): {}", e);
                     }
                 }
             });

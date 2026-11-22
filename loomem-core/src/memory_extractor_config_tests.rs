@@ -13,12 +13,12 @@ async fn invalid_extraction_budgets_fail_before_provider_call() {
     for (tokens, facts, completion_tokens, field) in [
         (0, 20, 2000, "max_transcript_tokens"),
         (usize::MAX, 20, 2000, "max_transcript_tokens"),
-        (20_000, 0, 2000, "max_facts_per_transcript"),
+        (20_000, 0, 2000, "max_facts_per_chunk"),
         (20_000, 20, 0, "max_tokens"),
     ] {
         let config = KnowledgeExtractionConfig {
             max_transcript_tokens: tokens,
-            max_facts_per_transcript: facts,
+            max_facts_per_chunk: facts,
             max_tokens: completion_tokens,
             ..KnowledgeExtractionConfig::default()
         };
@@ -45,7 +45,7 @@ fn extraction_prompt_uses_configured_fact_cap_in_all_variants() {
             }]),
         ] {
             let config = KnowledgeExtractionConfig {
-                max_facts_per_transcript: cap,
+                max_facts_per_chunk: cap,
                 topics,
                 ..KnowledgeExtractionConfig::default()
             };

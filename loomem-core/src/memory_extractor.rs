@@ -42,7 +42,22 @@ pub struct KnowledgeExtractionConfig {
     pub dedup_cosine_threshold: f64,
     pub contradiction_check: bool,
     pub contradiction_cosine_min: f64,
-    pub max_facts_per_transcript: usize,
+    /// Cap on admitted facts per transcript chunk (one planned input chunk,
+    /// including its split retries), applied after the confidence filter;
+    /// the prompt's "Maximum N facts per conversation" rule carries the same
+    /// number, so the model and the filter agree per call. Every chunk is
+    /// processed; the excess of one chunk is counted in
+    /// `ExtractionOutcome::discarded_facts` and never stops later chunks.
+    /// Before 2026-11-22 this was `max_facts_per_transcript`, a cap on the
+    /// whole transcript that stopped input processing once reached; the old
+    /// key is still accepted as an alias. With `input_chunk_tokens = 0` and
+    /// a transcript within `max_transcript_tokens` (one chunk) the two are
+    /// the same cap.
+    #[serde(
+        default = "default_max_facts_per_chunk",
+        alias = "max_facts_per_transcript"
+    )]
+    pub max_facts_per_chunk: usize,
     /// /157 S1 (AC-7): completion cap for each extraction request. Was a
     /// hardcoded `2000` in the request body; serde default keeps a config
     /// without this field producing a byte-identical request.
@@ -74,6 +89,13 @@ fn default_extraction_max_tokens() -> u32 {
     2000
 }
 
+/// Serde default for configs that omit the key: the pre-2026-11-22 cap, so
+/// an old config keeps its behavior. The shipped `config.toml` spells the
+/// product value out.
+fn default_max_facts_per_chunk() -> usize {
+    20
+}
+
 impl Default for KnowledgeExtractionConfig {
     fn default() -> Self {
         Self {
@@ -83,7 +105,7 @@ impl Default for KnowledgeExtractionConfig {
             dedup_cosine_threshold: 0.92,
             contradiction_check: true,
             contradiction_cosine_min: 0.5,
-            max_facts_per_transcript: 20,
+            max_facts_per_chunk: default_max_facts_per_chunk(),
             max_tokens: default_extraction_max_tokens(),
             input_chunk_tokens: 0,
             split_on_truncation: false,
@@ -135,7 +157,7 @@ pub fn build_extraction_prompt(
     config: &KnowledgeExtractionConfig,
     conversation_date: &str,
 ) -> String {
-    let max_facts = config.max_facts_per_transcript;
+    let max_facts = config.max_facts_per_chunk;
     let topics = match config.topics.as_ref() {
         Some(t) if !t.is_empty() => t,
         _ => {
@@ -454,6 +476,7 @@ pub async fn extract_knowledge_with(
     // (transport degradation — cross-reference the per-chunk body_len log) from
     // "facts present but all filtered below the confidence threshold".
     let mut raw_facts_seen = 0usize;
+    let max_facts = extraction_config.max_facts_per_chunk;
 
     for (i, chunk_text) in chunks.iter().enumerate() {
         debug!(
@@ -467,13 +490,12 @@ pub async fn extract_knowledge_with(
             extract_chunk_with_split(chat, extraction_config, &system_prompt, i, chunk_text).await;
         outcome.record_input_chunk(&run);
         raw_facts_seen += run.facts.len();
-        let before = outcome.facts.len();
-        outcome
-            .facts
-            .extend(run.facts.into_iter().filter(|f| f.confidence >= 0.5));
+        let admitted = outcome.admit_chunk_facts(
+            run.facts.into_iter().filter(|f| f.confidence >= 0.5),
+            max_facts,
+        );
         debug!(
-            "Extracted {} facts (filtered by confidence >= 0.5)",
-            outcome.facts.len() - before
+            "Extracted {admitted} facts (filtered by confidence >= 0.5, capped at {max_facts} per chunk)"
         );
         for failure in run.failures {
             warn!(
@@ -486,11 +508,6 @@ pub async fn extract_knowledge_with(
             // /157 S3: counted for llm_failures_recent in status payloads.
             crate::llm_failures::global().record(crate::llm_failures::LlmFailureKind::Extraction);
             outcome.failures.push(failure);
-        }
-
-        // Respect extraction cap
-        if outcome.apply_fact_limit(extraction_config.max_facts_per_transcript) {
-            break;
         }
     }
 
