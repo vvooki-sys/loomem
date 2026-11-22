@@ -140,6 +140,25 @@ async fn disabled_missing_key_and_successful_empty_extraction_are_distinct() {
 }
 
 #[tokio::test]
+async fn unknown_provider_is_reported_with_its_own_error_code() {
+    assert_eq!(
+        error_code(&ExtractionError::Provider(ProviderError::Unknown(
+            "nope".into()
+        ))),
+        "unknown_provider"
+    );
+    let state = configured(|config| config.llm.provider = "nope".into());
+    let result = tool_ingest(&state, args("user: A source."), "receipt", None)
+        .await
+        .unwrap();
+    assert_eq!(receipt(&result)["status"], "failed");
+    assert_eq!(receipt(&result)["error_code"], "unknown_provider");
+    assert_eq!(receipt(&result)["outcome"]["calls_attempted"], 0);
+    assert!(receipt(&result)["outcome"]["input_chunks_total"].is_null());
+    assert_eq!(result.is_error, Some(true));
+}
+
+#[tokio::test]
 async fn all_failed_calls_preserve_error_and_unknown_input_counts() {
     let (_, state) = fixture(20000);
     let chat = Chat::sequence(vec![Err(anyhow::anyhow!("synthetic transport failure"))]);
@@ -415,6 +434,12 @@ fn projection_rejects_unbound_source_without_reading_storage() {
     assert!(ExpectedFact::capture(&context, &candidate).is_none());
 }
 
+/// Tripwire, on purpose: `fixtures/complete.json` is the shared golden
+/// receipt. Any new field on `ExtractionMeta`, `Chunk` or the projection
+/// changes the serialized receipt, so it must be added to the fixture *and*
+/// to `ExpectedFact` in the same change — a silent drift between what the
+/// engine stores and what the harness reconstructs is exactly what this
+/// test exists to catch.
 #[tokio::test]
 async fn actual_serialized_receipts_match_shared_golden_fixture() {
     let state = configured(|config| {

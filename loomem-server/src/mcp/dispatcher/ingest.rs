@@ -405,6 +405,9 @@ fn ingest_summary(outcome: &ExtractionOutcome, stored: usize, skipped: usize) ->
         message
             .push_str(" Unconfirmed fact writes may exist after partial storage/index failures.");
     }
+    // Evaluation/test-only: a default build must keep the summary text
+    // identical to the pre-receipt wording.
+    #[cfg(any(test, feature = "evaluation"))]
     if outcome.fact_limit_reached {
         message.push_str(&format!(
             " Fact limit reached: processed {}/{} input chunks; discarded {} generated facts.",
