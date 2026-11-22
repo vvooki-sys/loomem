@@ -671,6 +671,11 @@ batch_size = 50
 min_group_size = 2
 # model = "gpt-6-luna"  # brak: dziedziczy compression_model z [llm]
 cost_cap_usd_per_run = 0.10
+auto_trigger_threshold = 50
+auto_cooldown_secs = 900
+schedule_enabled = true
+schedule_interval_secs = 86400
+schedule_timeout_secs = 3600
 ```
 
 | Klucz | Typ | Opis |
@@ -678,6 +683,13 @@ cost_cap_usd_per_run = 0.10
 | `batch_size` | int | Liczba fragmentów na przebieg dream |
 | `min_group_size` | int | Minimalna liczba fragmentów tematu do połączenia |
 | `cost_cap_usd_per_run` | f64 | Limit bezpieczeństwa na sesję dream |
+| `auto_trigger_threshold` | int | Uruchom dream po tylu nowych chunkach w strumieniu prywatnym (`0` = wyłączone; domyślnie w kodzie `0`, dostarczany `config.toml` ustawia `50`) |
+| `auto_cooldown_secs` | int | Minimalna liczba sekund między automatycznymi uruchomieniami w tym samym strumieniu (domyślnie `900`) |
+| `schedule_enabled` | bool | Uruchamiaj cykliczny przebieg dream dla każdego aktywnego strumienia (domyślnie `true`) |
+| `schedule_interval_secs` | int | Liczba sekund między zaplanowanymi przebiegami (domyślnie `86400`, czyli doba; dozwolony zakres `3600` do `2592000`) |
+| `schedule_timeout_secs` | int | Cały zaplanowany przebieg (wszystkie strumienie) jest przerywany po tylu sekundach (domyślnie `3600`, minimum `60`) |
+
+Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia, także współdzielonych, i wymaga jednocześnie `[dream] enabled = true` oraz `[scheduler] enabled = true`. Administrator może nadpisać `enabled` i interwał w trakcie działania z poziomu strony Ustawienia w dashboardzie (lub przez `PUT /v1/dream/schedule`); nadpisanie jest zapisywane w bazie silnika i przetrwa restart, a `schedule_enabled` i `schedule_interval_secs` pozostają wartościami zapasowymi, gdy nic nie nadpisano. Ręczne `memory_dream` / `POST /v1/dream` i automatyczne uruchomienie po progu chunków działają niezależnie od harmonogramu.
 
 ------------------------------------------------------------------------
 

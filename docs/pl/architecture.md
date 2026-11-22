@@ -481,10 +481,14 @@ Wyszukuje chunki miękko usunięte, dla których minął okres odzyskiwania. Kol
 
 | Ustawienie | Domyślnie |
 |----|----|
+| Zaplanowany przebieg | Domyślnie co 24 godziny (`dream.schedule_interval_secs`), dla wszystkich aktywnych strumieni |
 | Automatyczne uruchomienie | 50 nowych chunków na strumień prywatny, z 15-minutową przerwą między uruchomieniami |
+| Ręcznie | `memory_dream` lub `POST /v1/dream` |
 | Rozmiar partii | 50 chunków |
 | Minimalny rozmiar grupy | 2 |
 | Limit kosztu | 0,10 USD / uruchomienie |
+
+Dream ma trzy wyzwalacze. Scheduler sprawdza harmonogram co 60 sekund, więc „Uruchom teraz” z dashboardu startuje w ciągu minuty. Zaplanowany przebieg obejmuje wszystkie aktywne strumienie, także współdzielone, ponieważ harmonogram może zmieniać tylko administrator, co zastępuje kontrolę uprawnień administratora, jaką `memory_dream` stosuje do strumieni współdzielonych. Harmonogram wymaga jednocześnie `[dream] enabled` i `[scheduler] enabled`.
 
 ------------------------------------------------------------------------
 

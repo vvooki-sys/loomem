@@ -381,6 +381,50 @@ Uruchom konsolidację dream w bieżącym strumieniu.
 
 Analiza jakości pamięci jest dostępna przez narzędzie `memory_reflect` MCP.
 
+<span id="get-v1dreamschedule"></span>
+
+### GET /v1/dream/schedule
+
+Bieżący harmonogram dream i wynik ostatniego przebiegu. Tylko administrator.
+
+``` json
+{
+  "dream_enabled": true,
+  "scheduler_enabled": true,
+  "enabled": true,
+  "interval_secs": 86400,
+  "source": "config",
+  "last_run_at": 1763851200,
+  "next_run_at": 1763937600,
+  "run_requested_at": null,
+  "poll_secs": 60,
+  "queued": false,
+  "last_result": null
+}
+```
+
+Znaczniki czasu to sekundy epoki, `null` gdy nieznane. `source` to `"config"`, gdy wartości pochodzą z `[dream]`, a `"override"`, gdy zmienił je administrator. `last_result` podsumowuje ostatni zaplanowany lub ręczny przebieg (`started_at`, `finished_at`, `streams_total`, `streams_failed`, `chunks_processed`, `facts_merged`, `contradictions_resolved`, `cost_usd`, `cost_cap_reached`, `trigger`). Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia.
+
+<span id="put-v1dreamschedule"></span>
+
+### PUT /v1/dream/schedule
+
+Nadpisz harmonogram w trakcie działania. Tylko administrator. Nadpisanie jest zapisywane w bazie silnika i przetrwa restart.
+
+``` json
+{ "enabled": true, "interval_secs": 86400 }
+```
+
+Zwraca `200` z tym samym ciałem co `GET /v1/dream/schedule`. `interval_secs` musi mieścić się w przedziale od 3600 do 2592000 (od 1 godziny do 30 dni); inna wartość zwraca `400`.
+
+<span id="post-v1dreamschedulerun"></span>
+
+### POST /v1/dream/schedule/run
+
+Zakolejkuj teraz przebieg dream dla wszystkich aktywnych strumieni. Tylko administrator. Scheduler podejmie go przy najbliższym sprawdzeniu (w ciągu 60 sekund).
+
+Zwraca `202` z tym samym ciałem co `GET /v1/dream/schedule` i `"queued": true`. Zwraca `409` z `{"error": "..."}`, gdy `[dream]` lub `[scheduler]` jest wyłączone w konfiguracji.
+
 <span id="post-v1boost"></span>
 
 ### POST /v1/boost

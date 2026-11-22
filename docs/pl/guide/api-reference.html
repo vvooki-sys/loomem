@@ -559,6 +559,31 @@ a:hover{text-decoration:underline}
 }
 </code></pre>
 <p>Analiza jakości pamięci jest dostępna przez narzędzie <code>memory_reflect</code> MCP.</p>
+<h3 id="get-v1dreamschedule">GET /v1/dream/schedule</h3>
+<p>Bieżący harmonogram dream i wynik ostatniego przebiegu. Tylko administrator.</p>
+<pre><code class="language-json">{
+  "dream_enabled": true,
+  "scheduler_enabled": true,
+  "enabled": true,
+  "interval_secs": 86400,
+  "source": "config",
+  "last_run_at": 1763851200,
+  "next_run_at": 1763937600,
+  "run_requested_at": null,
+  "poll_secs": 60,
+  "queued": false,
+  "last_result": null
+}
+</code></pre>
+<p>Znaczniki czasu to sekundy epoki, <code>null</code> gdy nieznane. <code>source</code> to <code>"config"</code>, gdy wartości pochodzą z <code>[dream]</code>, a <code>"override"</code>, gdy zmienił je administrator. <code>last_result</code> podsumowuje ostatni zaplanowany lub ręczny przebieg (<code>started_at</code>, <code>finished_at</code>, <code>streams_total</code>, <code>streams_failed</code>, <code>chunks_processed</code>, <code>facts_merged</code>, <code>contradictions_resolved</code>, <code>cost_usd</code>, <code>cost_cap_reached</code>, <code>trigger</code>). Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia.</p>
+<h3 id="put-v1dreamschedule">PUT /v1/dream/schedule</h3>
+<p>Nadpisz harmonogram w trakcie działania. Tylko administrator. Nadpisanie jest zapisywane w bazie silnika i przetrwa restart.</p>
+<pre><code class="language-json">{ "enabled": true, "interval_secs": 86400 }
+</code></pre>
+<p>Zwraca <code>200</code> z tym samym ciałem co <code>GET /v1/dream/schedule</code>. <code>interval_secs</code> musi mieścić się w przedziale od 3600 do 2592000 (od 1 godziny do 30 dni); inna wartość zwraca <code>400</code>.</p>
+<h3 id="post-v1dreamschedulerun">POST /v1/dream/schedule/run</h3>
+<p>Zakolejkuj teraz przebieg dream dla wszystkich aktywnych strumieni. Tylko administrator. Scheduler podejmie go przy najbliższym sprawdzeniu (w ciągu 60 sekund).</p>
+<p>Zwraca <code>202</code> z tym samym ciałem co <code>GET /v1/dream/schedule</code> i <code>"queued": true</code>. Zwraca <code>409</code> z <code>{"error": "..."}</code>, gdy <code>[dream]</code> lub <code>[scheduler]</code> jest wyłączone w konfiguracji.</p>
 <h3 id="post-v1boost">POST /v1/boost</h3>
 <p>Zwiększ ważność fragmentu do 1,5.</p>
 <pre><code class="language-json">{ "id": "abc-123" }
