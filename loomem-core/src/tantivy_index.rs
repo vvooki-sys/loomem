@@ -1,4 +1,6 @@
 mod lifecycle;
+#[cfg(any(test, feature = "evaluation"))]
+pub mod readiness;
 mod temporal;
 pub use temporal::event_timestamp_for_chunk;
 

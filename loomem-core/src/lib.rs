@@ -22,6 +22,8 @@ pub mod entity_extraction_queue;
 pub mod entity_extractor;
 #[cfg(feature = "evaluation")]
 pub mod evaluation_evidence;
+#[cfg(any(test, feature = "evaluation"))]
+pub mod evaluation_readiness;
 pub mod evaluation_url;
 pub mod event_date;
 pub mod event_log;

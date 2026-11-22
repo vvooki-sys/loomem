@@ -11,10 +11,12 @@ use tracing::{debug, warn};
 use crate::config::LlmConfig;
 
 mod chunking;
+mod completion;
 mod config_validation;
 mod http;
 mod reply;
 use chunking::extract_chunk_with_split;
+pub use completion::ExtractionOutcome;
 use config_validation::transcript_chunks;
 pub use http::HttpExtractionChat;
 
@@ -381,23 +383,6 @@ impl ExtractionError {
     }
 }
 
-/// Result of an (at least partially) successful extraction run (/157 S1).
-#[derive(Debug, Default)]
-pub struct ExtractionOutcome {
-    pub facts: Vec<ExtractedFact>,
-    /// Per-chunk failures when other chunks still succeeded (partial
-    /// success). Empty on full success; all-chunks-failed is
-    /// [`ExtractionError::AllChunksFailed`] instead.
-    pub failures: Vec<ChunkFailure>,
-    /// Extraction calls issued (transcript chunks plus any split retries).
-    pub chunks_attempted: usize,
-    /// Calls that returned a complete, parseable reply.
-    pub chunks_completed: usize,
-    /// Calls whose completion was truncated (`finish_reason: length`),
-    /// whether or not a split retry recovered them.
-    pub chunks_truncated: usize,
-}
-
 /// Build the chat-completion request body for one transcript chunk.
 /// `max_tokens` comes from [`KnowledgeExtractionConfig::max_tokens`] (AC-7).
 ///
@@ -463,7 +448,7 @@ pub async fn extract_knowledge_with(
     let chunks = transcript_chunks(extraction_config, conversation_text)?;
     let system_prompt = build_extraction_prompt(extraction_config, conversation_date);
 
-    let mut outcome = ExtractionOutcome::default();
+    let mut outcome = ExtractionOutcome::for_input_chunks(chunks.len());
     // Raw facts parsed across all chunks, before the confidence filter below.
     // Lets the empty-extraction log distinguish "no facts in the response body"
     // (transport degradation — cross-reference the per-chunk body_len log) from
@@ -480,9 +465,7 @@ pub async fn extract_knowledge_with(
 
         let run =
             extract_chunk_with_split(chat, extraction_config, &system_prompt, i, chunk_text).await;
-        outcome.chunks_attempted += run.calls_attempted;
-        outcome.chunks_completed += run.calls_completed;
-        outcome.chunks_truncated += run.calls_truncated;
+        outcome.record_input_chunk(&run);
         raw_facts_seen += run.facts.len();
         let before = outcome.facts.len();
         outcome
@@ -506,10 +489,7 @@ pub async fn extract_knowledge_with(
         }
 
         // Respect extraction cap
-        if outcome.facts.len() >= extraction_config.max_facts_per_transcript {
-            outcome
-                .facts
-                .truncate(extraction_config.max_facts_per_transcript);
+        if outcome.apply_fact_limit(extraction_config.max_facts_per_transcript) {
             break;
         }
     }
