@@ -144,9 +144,9 @@ enabled = true  # Phase 3: enabled
 # and then these steps fail (memory_store and search still work). A provider
 # entry without api_key_env (local Ollama) needs no key.
 provider = "openai"
-# Legacy OpenAI key fields: read by embedding_provider = "openai", by the
-# built-in "openai" provider, and as the fallback of the [llm.providers.openai]
-# entry below when its own env var is unset.
+# Legacy OpenAI key fields: read by embedding_provider = "openai" and by the
+# built-in "openai" provider. A [llm.providers.openai] entry never reads
+# api_key_env; only an inline api_key here is its fallback.
 # api_key = ""  # DO NOT hardcode — use OPENAI_API_KEY env var
 api_key_env = "OPENAI_API_KEY"
 

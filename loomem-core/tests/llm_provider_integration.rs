@@ -72,30 +72,62 @@ fn old_openai_config_loads_and_resolves_builtin_provider() -> Result<()> {
     Ok(())
 }
 
-/// The shipped config refines the built-in provider with an `openai` entry;
-/// a key kept in the legacy inline field still resolves, with the entry's
-/// request options. `MISSING_ENV` stands in for an unset `OPENAI_API_KEY`
-/// so the test never reads the real variable.
-#[test]
-fn shipped_openai_entry_resolves_legacy_inline_key_with_options() -> Result<()> {
-    let content = config_with(
-        "openai",
-        "api_key_env = \"OPENAI_API_KEY\"\napi_key = \"sk-test-inline\"",
-        "",
-    );
-    // The entry's `api_key_env` is the last occurrence (the top-level one
-    // comes first); point it at a variable that is never set.
+/// Point the shipped `[llm.providers.openai]` entry's `api_key_env` (the last
+/// occurrence; the top-level one comes first) at a variable that is never set.
+fn entry_env_never_set(content: String) -> String {
     let needle = "api_key_env = \"OPENAI_API_KEY\"";
     let last = content.rfind(needle).expect("entry api_key_env present");
     assert!(
         last > content.find(needle).unwrap(),
         "entry env var not found"
     );
-    let content = format!(
+    format!(
         "{}api_key_env = \"{MISSING_ENV}\"{}",
         &content[..last],
         &content[last + needle.len()..]
+    )
+}
+
+/// Fail-closed through `Config::load`: with the shipped entry's own env var
+/// unset and no inline key, resolution fails naming that env var — the
+/// legacy `llm.api_key_env` (`OPENAI_API_KEY`, possibly set on the machine
+/// running the tests) is never consulted for the entry.
+#[test]
+fn shipped_openai_entry_without_its_env_var_fails_closed() -> Result<()> {
+    let content = entry_env_never_set(config_with(
+        "openai",
+        "api_key_env = \"OPENAI_API_KEY\"",
+        "",
+    ));
+    let cfg = load(&content)?;
+    assert_eq!(cfg.llm.providers.len(), 1);
+    assert_eq!(
+        cfg.llm.active_provider().unwrap_err(),
+        ProviderError::MissingKey {
+            provider: "openai".into(),
+            env: MISSING_ENV.into(),
+        }
     );
+    assert!(!cfg.llm.completions_key_present());
+    assert_eq!(cfg.llm.active_key_env_hint(), MISSING_ENV);
+    assert!(cfg
+        .llm
+        .provider_summary()
+        .ends_with(&format!("auth=env:{MISSING_ENV} (missing)")));
+    Ok(())
+}
+
+/// The shipped config refines the built-in provider with an `openai` entry;
+/// a key kept in the legacy inline field still resolves, with the entry's
+/// request options. `MISSING_ENV` stands in for an unset `OPENAI_API_KEY`
+/// so the test never reads the real variable.
+#[test]
+fn shipped_openai_entry_resolves_legacy_inline_key_with_options() -> Result<()> {
+    let content = entry_env_never_set(config_with(
+        "openai",
+        "api_key_env = \"OPENAI_API_KEY\"\napi_key = \"sk-test-inline\"",
+        "",
+    ));
     let cfg = load(&content)?;
     assert_eq!(cfg.llm.providers.len(), 1);
     let active = cfg.llm.active_provider()?;
