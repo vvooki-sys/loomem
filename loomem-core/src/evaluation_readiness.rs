@@ -59,26 +59,9 @@ pub fn probe_expected_records_with_metadata(
     let documents = index.probe_expected_documents(expected)?;
     let mut records = Vec::with_capacity(expected.len());
     for (item, document) in expected.iter().zip(documents) {
-        let chunk = match store.get_chunk_scoped(item.id, item.stream)? {
-            Some(chunk) if chunk.deleted_at.is_none() => {
-                if !metadata_matches(item, &chunk) {
-                    ChunkReadiness::MetadataMismatch
-                } else if chunk.content == item.content {
-                    ChunkReadiness::Active
-                } else {
-                    ChunkReadiness::ContentMismatch
-                }
-            }
-            _ => ChunkReadiness::Unavailable,
-        };
+        let chunk = chunk_readiness(store, item, &metadata_matches)?;
         let vector = if chunk == ChunkReadiness::Active {
-            match store.get_embedding(item.id)? {
-                None => VectorReadiness::Missing,
-                Some(v) if v.len() == dimension && v.iter().all(|x| x.is_finite()) => {
-                    VectorReadiness::Valid
-                }
-                Some(_) => VectorReadiness::Invalid,
-            }
+            vector_readiness(store, item.id, dimension)?
         } else {
             VectorReadiness::Unavailable
         };
@@ -95,6 +78,39 @@ pub fn probe_expected_records_with_metadata(
             && r.document == DocumentReadiness::Current
     });
     Ok(ReadinessReport { ready, records })
+}
+
+/// One stored chunk against its expectation: present and live, same bytes,
+/// and provenance accepted by the caller's pure check.
+fn chunk_readiness(
+    store: &RocksDbStore,
+    item: &ExpectedDocument<'_>,
+    metadata_matches: &impl Fn(&ExpectedDocument<'_>, &crate::storage::Chunk) -> bool,
+) -> Result<ChunkReadiness> {
+    Ok(match store.get_chunk_scoped(item.id, item.stream)? {
+        Some(chunk) if chunk.deleted_at.is_none() => {
+            if !metadata_matches(item, &chunk) {
+                ChunkReadiness::MetadataMismatch
+            } else if chunk.content == item.content {
+                ChunkReadiness::Active
+            } else {
+                ChunkReadiness::ContentMismatch
+            }
+        }
+        _ => ChunkReadiness::Unavailable,
+    })
+}
+
+/// The stored embedding of an active chunk: present, of the configured
+/// dimension and finite in every component.
+fn vector_readiness(store: &RocksDbStore, id: &str, dimension: usize) -> Result<VectorReadiness> {
+    Ok(match store.get_embedding(id)? {
+        None => VectorReadiness::Missing,
+        Some(v) if v.len() == dimension && v.iter().all(|x| x.is_finite()) => {
+            VectorReadiness::Valid
+        }
+        Some(_) => VectorReadiness::Invalid,
+    })
 }
 
 #[cfg(test)]
