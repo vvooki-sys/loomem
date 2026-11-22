@@ -24,6 +24,7 @@ class SublimitTests(unittest.TestCase):
         self.max_usd = self.sheet.max_usd(self.bound, "p1")
         self.clock = itertools.count(1_700_000_000).__next__
         os.environ["PAID_TEST_KEY"] = "fixture-only-key"
+        self.addCleanup(os.environ.pop, "PAID_TEST_KEY", None)
 
     def open(self, name="campaign", **overrides):
         self.campaign = make_campaign(Path(self.directory.name) / name, self.sheet, **overrides)

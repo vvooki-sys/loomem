@@ -19,7 +19,8 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from budget import BudgetError
-from paid_call_journal import ModelDrift, canonical_bytes, request_id, sha256_hex
+from paid_call_journal import LETTERS, ModelDrift, canonical_bytes, reconcile, request_id, sha256_hex
+from paid_campaign import CampaignError
 from paid_price_sheet import PriceUnknown
 
 PROFILE_KEYS = frozenset({"model", "reasoning_effort", "max_completion_tokens"})
@@ -146,6 +147,12 @@ class Transport:
         self.key_env = key_env
         self.opener = opener or build_opener(ProxyHandler({}), _NoRedirect())
 
+    @classmethod
+    def from_campaign(cls, campaign, opener=None):
+        """The provider pinned in campaign.json: base_url, api_key_env and the single allowed host."""
+        provider = campaign.spec["provider"]
+        return cls(provider["base_url"], provider["api_key_env"], {provider["allowed_host"]}, opener)
+
     def __call__(self, body, timeout_s):
         key = os.environ.get(self.key_env)
         if not key:
@@ -246,12 +253,35 @@ def actual_cost(sheet, model, usage, max_usd):
 
 
 # -- the paid call -------------------------------------------------------
+def _admit(campaign, transport, letter, stage):
+    """Refusals that must happen before any reservation: letter, stage, mode, host, credential."""
+    if letter not in LETTERS:
+        raise CampaignError(f"unknown letter {letter!r}")
+    if stage not in campaign.spec["profiles"]:
+        raise CampaignError(f"unknown stage {stage!r}")
+    host = getattr(transport, "host", None)
+    if not isinstance(host, str) or not host:
+        raise WireError("transport must declare its host")
+    if host not in LOOPBACK_HOSTS:  # a loopback never costs money: dry-run and tests
+        campaign.require_paid_mode()
+        allowed = campaign.spec["provider"]["allowed_host"]
+        if host != allowed:
+            raise WireError(f"transport host {host!r} is not the campaign's allowed host {allowed!r}")
+    key_env = campaign.spec["provider"]["api_key_env"]
+    if key_env not in os.environ:  # presence only; the value is never read here
+        raise WireError(f"missing credential in {key_env}: refused before any reservation")
+
+
 def paid_completion(campaign, journal, sheet, *, letter, stage, binding, messages, response_format,
                     transport, bound, acknowledged=frozenset(), clock=time.time):
     state = journal.state
     blocking = state.blocking(acknowledged)
     if blocking:
         raise RunStopped(f"unsettled or uncertain requests block new calls: {blocking[:3]}")
+    # The ledger and the journal must agree before any replay or reservation:
+    # a crash between journal.settled and ledger.settle shows up here, not as a replay.
+    reconcile(campaign.ledger.totals(), state)
+    _admit(campaign, transport, letter, stage)
     profile = campaign.profile(stage)
     wire = build_wire(profile, messages, response_format)
     check_wire(wire, bound, sheet, campaign.policy)
@@ -272,7 +302,7 @@ def paid_completion(campaign, journal, sheet, *, letter, stage, binding, message
                     "r_tokens": bound.r_tokens, "o_tokens": bound.o_tokens, "max_usd": str(max_usd),
                     "wire_sha256": wire_sha, "wire_bytes": len(body), "ledger_token": token}, wire)
     timeout_s = campaign.spec["timeout_s"]
-    journal.sent(rid, clock(), timeout_s, getattr(transport, "host", "injected"))
+    journal.sent(rid, clock(), timeout_s, transport.host)
     started = clock()
     try:
         status, headers, raw = transport(body, timeout_s)
@@ -329,7 +359,13 @@ def _settle_exchange(campaign, journal, sheet, ex, clock):
 
 
 def _replayed(campaign, journal, rid, replay, max_usd):
-    """Identical frozen input already settled: no transport, no new reservation."""
+    """Identical frozen input already settled: no transport, no new reservation.
+
+    Only reachable after ``reconcile`` passed in ``paid_completion``: a crash
+    between ``journal.settled`` and ``ledger.settle`` leaves the reservation
+    open in the ledger, which reconcile reports as a mismatch instead of
+    letting this replay hide an unsettled charge.
+    """
     settled, response = replay
     token = journal.state.intents[rid]["ledger_token"]
     campaign.ledger.verify_reservation(token, rid, str(max_usd))

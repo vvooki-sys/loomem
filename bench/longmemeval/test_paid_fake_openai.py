@@ -24,6 +24,7 @@ def wire_for(system="S", user=None, profile="diagnostic"):
 class FakeOpenAITests(unittest.TestCase):
     def setUp(self):
         os.environ["PAID_TEST_KEY"] = "t"
+        self.addCleanup(os.environ.pop, "PAID_TEST_KEY", None)
 
     def post(self, fake, wire=None, timeout=5):
         transport = Transport(fake.url, "PAID_TEST_KEY", {"127.0.0.1"})
@@ -37,7 +38,8 @@ class FakeOpenAITests(unittest.TestCase):
 
     def test_every_scenario_is_covered(self):
         self.assertEqual(set(SCENARIOS), {"ok", "empty_facts", "length", "http500", "timeout", "model_drift",
-                                          "missing_usage", "malformed_json", "bad_request_400", "usage_over_bound"})
+                                          "missing_usage", "malformed_json", "bad_request_400", "usage_over_bound",
+                                          "redirect"})
 
     def test_ok(self):
         status, headers, body = self.run_scenario("ok")
@@ -68,6 +70,10 @@ class FakeOpenAITests(unittest.TestCase):
     def test_timeout_raises_transport_error(self):
         with self.assertRaises(TransportError):
             self.run_scenario("timeout")
+
+    def test_redirect_is_refused_by_the_transport(self):
+        with self.assertRaises(WireError):  # _NoRedirect: a 302 is never followed
+            self.run_scenario("redirect")
 
     def test_model_drift(self):
         _, _, body = self.run_scenario("model_drift")

@@ -74,12 +74,15 @@ class CreateCampaignTests(unittest.TestCase):
         self.assertEqual(json.loads((self.target / "campaign.json").read_text())["campaign_id"],
                          campaign.campaign_id)
 
-    def test_campaign_id_is_derived_from_the_spec(self):
+    def test_campaign_id_is_unique_per_creation(self):
+        # Plan §9: a recreated register must never alias a lost one. The same spec
+        # created twice gets a fresh nonce, hence different campaign_ids (and request_ids).
         first = make_campaign(self.root / "a")
         second = make_campaign(self.root / "b")
-        self.assertEqual(first.campaign_id, second.campaign_id)
-        third = make_campaign(self.root / "c", created_at="2026-11-23T00:00:00Z")
-        self.assertNotEqual(first.campaign_id, third.campaign_id)
+        self.assertNotEqual(first.campaign_id, second.campaign_id)
+        self.assertNotEqual(first.spec["nonce"], second.spec["nonce"])
+        with self.assertRaises(CampaignError):
+            make_campaign(self.root / "c", nonce="supplied")
 
 
 class OpenCampaignTests(unittest.TestCase):

@@ -217,7 +217,10 @@ class CallJournal:
         for file in sorted(self.calls.glob("*.json")):
             if file.name.startswith("."):
                 continue
-            rid, suffix = file.name[:-5].rsplit(".", 1)
+            stem = file.name[:-5]
+            if "." not in stem:
+                raise JournalError(f"unexpected journal file {file.name}")
+            rid, suffix = stem.rsplit(".", 1)
             if suffix == "intent":
                 state.intents[rid] = _read(file)
             elif suffix == "sent":

@@ -131,22 +131,34 @@ def ok_body(model="gpt-6-luna", text="Synthetic answer.", prompt=100, completion
 
 
 class FakeTransport:
-    """Records every call; replies from a FIFO queue of (status, headers, body) or raises."""
-    host = "fake"
+    """Records every call; replies from a FIFO queue of (status, headers, body) or raises.
 
-    def __init__(self, replies=None, journal_dir=None):
+    With ``journal_dir`` it probes, at call time, whether the request's
+    ``<rid>.sent.json`` exists (``saw_sent``) and whether ``budget.json`` holds
+    a reservation for that rid (``saw_reserved``). ``host`` is loopback so a
+    paid-mode test campaign admits it without a real provider.
+    """
+    host = "127.0.0.1"
+
+    def __init__(self, replies=None, journal_dir=None, host=None):
         self.replies = list(replies or [])
         self.calls = []
         self.journal_dir = Path(journal_dir) if journal_dir else None
         self.saw_sent = []
+        self.saw_reserved = []
+        if host is not None:
+            self.host = host
 
     def __call__(self, body, timeout_s):
         self.calls.append((body, timeout_s))
         if self.journal_dir is not None:
             wire_sha = sha256_bytes(body)
-            sent = [p for p in (self.journal_dir / "calls").glob("*.sent.json")
-                    if json.loads(p.with_name(p.name.replace(".sent.", ".intent.")).read_text())["wire_sha256"] == wire_sha]
-            self.saw_sent.append(bool(sent))
+            intents = {p.name.split(".")[0]: json.loads(p.read_text())
+                       for p in (self.journal_dir / "calls").glob("*.intent.json")}
+            rids = [rid for rid, intent in intents.items() if intent["wire_sha256"] == wire_sha]
+            self.saw_sent.append(any((self.journal_dir / "calls" / f"{rid}.sent.json").exists() for rid in rids))
+            ledger = json.loads((self.journal_dir / "budget.json").read_text())["requests"]
+            self.saw_reserved.append(any(rid in ledger and ledger[rid]["actual_usd"] is None for rid in rids))
         if not self.replies:
             raise AssertionError("fake transport called without a queued reply")
         reply = self.replies.pop(0)

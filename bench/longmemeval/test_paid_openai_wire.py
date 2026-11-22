@@ -8,8 +8,8 @@ import tempfile
 import unittest
 
 from budget import BudgetExceeded
-from paid_call_journal import CallJournal, ModelDrift
-from paid_campaign import SublimitExceeded
+from paid_call_journal import CallJournal, JournalError, ModelDrift
+from paid_campaign import CampaignError, SublimitExceeded
 from paid_fake_openai import FakeOpenAI
 from paid_openai_wire import (BoundBreach, Rejected4xx, RunStopped, Transport, TransportError, WireError,
                               actual_cost, build_wire, check_wire, paid_completion, parse_completion)
@@ -129,6 +129,7 @@ class PaidCompletionTests(unittest.TestCase):
         self.bound = self.sheet.stage_profile("diagnostic", SOURCES_BYTES_MAX, True)
         self.clock = itertools.count(1_700_000_000).__next__
         os.environ["PAID_TEST_KEY"] = "fixture-only-key"
+        self.addCleanup(os.environ.pop, "PAID_TEST_KEY", None)
         self.open(make_campaign(self.directory.name, self.sheet))
 
     def open(self, campaign):
@@ -152,7 +153,8 @@ class PaidCompletionTests(unittest.TestCase):
     def test_reservation_before_http(self):
         transport = FakeTransport([ok()], journal_dir=self.campaign.directory)
         done = self.call(transport)
-        self.assertEqual(transport.saw_sent, [True])
+        # At call time the reservation is already durable in budget.json and sent.json is on disk.
+        self.assertEqual((transport.saw_reserved, transport.saw_sent), ([True], [True]))
         totals = self.campaign.ledger.totals()
         self.assertEqual((totals["request_count"], totals["pending_count"], totals["spent_usd"]),
                          (1, 0, Decimal("0.000015")))
@@ -261,6 +263,65 @@ class PaidCompletionTests(unittest.TestCase):
         self.assertEqual((again.request_id, again.replayed, again.text), (first.request_id, True, first.text))
         self.assertEqual(len(transport.calls), 1)
         self.assertEqual(self.campaign.ledger.totals()["request_count"], 1)
+
+    def nothing_reserved(self, transport):
+        self.assertEqual((transport.calls, self.campaign.ledger.totals()["request_count"],
+                          sorted(self.calls.glob("*.intent.json"))), ([], 0, []))
+
+    def test_missing_credential_refuses_before_any_reservation(self):
+        del os.environ["PAID_TEST_KEY"]
+        transport = FakeTransport([ok()])
+        with self.assertRaisesRegex(WireError, "missing credential"):
+            self.call(transport)
+        self.nothing_reserved(transport)
+
+    def test_dry_run_campaign_admits_only_loopback_transports(self):
+        self.open(make_campaign(self.directory.name + "/dry", self.sheet, mode="dry_run",
+                                provider={"base_url": "https://api.openai.com/v1", "api_key_env": "PAID_TEST_KEY",
+                                          "allowed_host": "api.openai.com"}))
+        remote = FakeTransport([ok()], host="api.openai.com")
+        with self.assertRaisesRegex(CampaignError, "dry_run"):
+            self.call(remote)
+        self.nothing_reserved(remote)
+        self.assertEqual(self.call(FakeTransport([ok()])).outcome, "ok")  # loopback never costs money
+
+    def test_transport_host_must_match_the_campaign_provider(self):
+        self.open(make_campaign(self.directory.name + "/host", self.sheet,
+                                provider={"base_url": "https://api.openai.com/v1", "api_key_env": "PAID_TEST_KEY",
+                                          "allowed_host": "api.openai.com"}))
+        other = FakeTransport([ok()], host="evil.example")
+        with self.assertRaisesRegex(WireError, "allowed host"):
+            self.call(other)
+        self.nothing_reserved(other)
+        self.assertEqual(Transport.from_campaign(self.campaign).host, "api.openai.com")
+        with self.assertRaises(WireError):
+            self.call(FakeTransport([ok()], host=""))
+
+    def test_unknown_letter_or_stage_is_a_campaign_error(self):
+        transport = FakeTransport([ok()])
+        with self.assertRaises(CampaignError):
+            self.call(transport, letter="X")
+        with self.assertRaises(CampaignError):
+            paid_completion(self.campaign, self.journal, self.sheet, letter="F", stage="nope", binding=binding(),
+                            messages=messages(), response_format=None, transport=transport, bound=self.bound)
+        self.nothing_reserved(transport)
+
+    def test_redirect_is_uncertain(self):
+        with FakeOpenAI({"default": "redirect"}, model_by_role={"default": "gpt-6-luna"}) as fake:
+            transport = Transport(fake.url, "PAID_TEST_KEY", {"127.0.0.1"})
+            with self.assertRaises(RunStopped):
+                self.call(transport)
+        [rid] = self.journal.state.uncertain
+        self.assertEqual(json.loads((self.calls / f"{rid}.uncertain.json").read_text())["error_type"], "WireError")
+        self.assertEqual(self.campaign.ledger.totals()["pending_count"], 1)
+
+    def test_settled_journal_with_open_ledger_reservation_is_not_replayed(self):
+        first = self.call(FakeTransport([ok()]))
+        state = json.loads((self.campaign.directory / "budget.json").read_text())
+        state["requests"][first.request_id]["actual_usd"] = None  # crash between journal.settled and ledger.settle
+        (self.campaign.directory / "budget.json").write_text(json.dumps(state))
+        with self.assertRaisesRegex(JournalError, "mismatch"):
+            self.call(FakeTransport([ok()]))
 
 
 if __name__ == "__main__":

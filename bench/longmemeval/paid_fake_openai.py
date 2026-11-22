@@ -18,7 +18,7 @@ import socket
 import threading
 
 SCENARIOS = ("ok", "empty_facts", "length", "http500", "timeout", "model_drift",
-             "missing_usage", "malformed_json", "bad_request_400", "usage_over_bound")
+             "missing_usage", "malformed_json", "bad_request_400", "usage_over_bound", "redirect")
 PATH = "/v1/chat/completions"
 
 
@@ -155,6 +155,8 @@ class FakeOpenAI:
             return None
         if scenario == "malformed_json":
             return _send_raw(handler, 200, b'{"choices": [')
+        if scenario == "redirect":  # a compliant client must refuse to follow it
+            return _send_raw(handler, 302, b"", {"Location": "http://127.0.0.1:9/v1/chat/completions"})
         system, user = wire["messages"][0]["content"], wire["messages"][1]["content"]
         content = "" if scenario == "length" else content_for(role, user, scenario)
         model = self.model_by_role.get(role, wire["model"])

@@ -31,6 +31,7 @@ class ResumeTests(unittest.TestCase):
         self.bound = self.sheet.stage_profile("diagnostic", SOURCES_BYTES_MAX, True)
         self.clock = itertools.count(1_700_000_000).__next__
         os.environ["PAID_TEST_KEY"] = "fixture-only-key"
+        self.addCleanup(os.environ.pop, "PAID_TEST_KEY", None)
         self.campaign = make_campaign(self.directory.name, self.sheet)
         self.journal = CallJournal(self.campaign.directory)
         self.calls = Path(self.campaign.directory) / "calls"

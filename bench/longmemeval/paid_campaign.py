@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
+import secrets
 import socket
 import time
 
@@ -135,6 +136,8 @@ class Campaign:
         return self.spec["bound_policy"]
 
     def profile(self, stage):
+        if stage not in self.spec["profiles"]:
+            raise CampaignError(f"unknown stage {stage!r}")
         return dict(self.spec["profiles"][stage])
 
     def require_paid_mode(self):
@@ -171,14 +174,18 @@ class Campaign:
 def create_campaign(directory, spec, sheet=None):
     """Create-only: an existing directory is a refusal (no reset of a campaign)."""
     directory = Path(directory)
-    if "campaign_id" in spec:
-        raise CampaignError("campaign_id is derived, not supplied")
+    if "campaign_id" in spec or "nonce" in spec:
+        raise CampaignError("campaign_id and nonce are derived, not supplied")
     validate_spec(spec, sheet)
     try:
         directory.mkdir(parents=True, exist_ok=False)
     except FileExistsError as exc:
         raise CampaignError(f"campaign directory exists: {directory}") from exc
-    full = {**spec, "campaign_id": sha256_hex(canonical_bytes(spec))}
+    # A fresh nonce per creation: an identical spec recreated elsewhere (a
+    # "recreated register", forbidden by plan §9) gets different campaign_id and
+    # request_ids, so nothing from the lost campaign can be mistaken for a replay.
+    stamped = {**spec, "nonce": secrets.token_hex(16)}
+    full = {**stamped, "campaign_id": sha256_hex(canonical_bytes(stamped))}
     write_create_only(directory / "campaign.json", full)
     ledger = BudgetLedger(directory / "budget.json", str(Decimal(str(spec["limit_usd"]))))
     return Campaign(directory, full, ledger)
@@ -191,8 +198,8 @@ def open_campaign(directory, sheet=None):
         spec = json.loads(path.read_text())
     except (OSError, ValueError) as exc:
         raise CampaignError(f"campaign registry unreadable: {path}") from exc
-    if not isinstance(spec, dict) or "campaign_id" not in spec:
-        raise CampaignError("campaign registry lacks campaign_id")
+    if not isinstance(spec, dict) or "campaign_id" not in spec or "nonce" not in spec:
+        raise CampaignError("campaign registry lacks campaign_id or nonce")
     expected = sha256_hex(canonical_bytes({k: v for k, v in spec.items() if k != "campaign_id"}))
     if spec["campaign_id"] != expected:
         raise CampaignError("campaign registry was modified after creation")
