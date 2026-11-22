@@ -619,6 +619,31 @@ a:hover{text-decoration:underline}
 }
 </code></pre>
 <p>Memory quality analysis is available via the <code>memory_reflect</code> MCP tool.</p>
+<h3 id="get-v1dreamschedule">GET /v1/dream/schedule</h3>
+<p>Current dream schedule and the result of the last pass. Admin only.</p>
+<pre><code class="language-json">{
+  &quot;dream_enabled&quot;: true,
+  &quot;scheduler_enabled&quot;: true,
+  &quot;enabled&quot;: true,
+  &quot;interval_secs&quot;: 86400,
+  &quot;source&quot;: &quot;config&quot;,
+  &quot;last_run_at&quot;: 1763851200,
+  &quot;next_run_at&quot;: 1763937600,
+  &quot;run_requested_at&quot;: null,
+  &quot;poll_secs&quot;: 60,
+  &quot;queued&quot;: false,
+  &quot;last_result&quot;: null
+}
+</code></pre>
+<p>Timestamps are epoch seconds, <code>null</code> when unknown. <code>source</code> is <code>&quot;config&quot;</code> when the values come from <code>[dream]</code> and <code>&quot;override&quot;</code> when an admin changed them. <code>last_result</code> summarizes the last scheduled or manual pass (<code>started_at</code>, <code>finished_at</code>, <code>streams_total</code>, <code>streams_failed</code>, <code>chunks_processed</code>, <code>facts_merged</code>, <code>contradictions_resolved</code>, <code>cost_usd</code>, <code>cost_cap_reached</code>, <code>trigger</code>). The scheduled pass runs a dream over every active stream.</p>
+<h3 id="put-v1dreamschedule">PUT /v1/dream/schedule</h3>
+<p>Override the schedule at runtime. Admin only. The override is stored in the engine's database and survives restarts.</p>
+<pre><code class="language-json">{ &quot;enabled&quot;: true, &quot;interval_secs&quot;: 86400 }
+</code></pre>
+<p>Returns <code>200</code> with the same body as <code>GET /v1/dream/schedule</code>. <code>interval_secs</code> must be between 3600 and 2592000 (1 hour to 30 days); anything else returns <code>400</code>.</p>
+<h3 id="post-v1dreamschedulerun">POST /v1/dream/schedule/run</h3>
+<p>Queue a dream pass over all active streams now. Admin only. The scheduler picks it up at its next poll (within 60 seconds).</p>
+<p>Returns <code>202</code> with the same body as <code>GET /v1/dream/schedule</code> and <code>&quot;queued&quot;: true</code>. Returns <code>409</code> with <code>{&quot;error&quot;: &quot;...&quot;}</code> when <code>[dream]</code> or <code>[scheduler]</code> is disabled in config.</p>
 <h3 id="post-v1boost">POST /v1/boost</h3>
 <p>Boost a chunk's importance to 1.5.</p>
 <pre><code class="language-json">{ &quot;id&quot;: &quot;abc-123&quot; }

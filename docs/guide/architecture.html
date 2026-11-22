@@ -818,8 +818,16 @@ score    = fusion_score * decay
 </thead>
 <tbody>
 <tr>
+<td>Scheduled pass</td>
+<td>Every 24 hours by default (<code>dream.schedule_interval_secs</code>), over all active streams</td>
+</tr>
+<tr>
 <td>Auto-trigger</td>
 <td>50 newly persisted chunks per private stream, with a 15-minute cooldown</td>
+</tr>
+<tr>
+<td>Manual</td>
+<td><code>memory_dream</code> or <code>POST /v1/dream</code></td>
 </tr>
 <tr>
 <td>Batch size</td>
@@ -835,6 +843,7 @@ score    = fusion_score * decay
 </tr>
 </tbody>
 </table>
+<p>Dream has three triggers. The scheduler polls the schedule every 60 seconds, so a &quot;Run now&quot; from the dashboard starts within a minute. The scheduled pass covers all active streams, shared ones included, because only an admin can change the schedule, which stands in for the admin check <code>memory_dream</code> applies to shared streams. The schedule needs both <code>[dream] enabled</code> and <code>[scheduler] enabled</code>.</p>
 <hr />
 <h2 id="authentication">Authentication</h2>
 <p>Loomem is single-user: one API key controls access to the whole instance.</p>

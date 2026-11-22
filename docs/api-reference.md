@@ -339,6 +339,44 @@ Trigger dream consolidation on current stream.
 
 Memory quality analysis is available via the `memory_reflect` MCP tool.
 
+### GET /v1/dream/schedule
+
+Current dream schedule and the result of the last pass. Admin only.
+
+```json
+{
+  "dream_enabled": true,
+  "scheduler_enabled": true,
+  "enabled": true,
+  "interval_secs": 86400,
+  "source": "config",
+  "last_run_at": 1763851200,
+  "next_run_at": 1763937600,
+  "run_requested_at": null,
+  "poll_secs": 60,
+  "queued": false,
+  "last_result": null
+}
+```
+
+Timestamps are epoch seconds, `null` when unknown. `source` is `"config"` when the values come from `[dream]` and `"override"` when an admin changed them. `last_result` summarizes the last scheduled or manual pass (`started_at`, `finished_at`, `streams_total`, `streams_failed`, `chunks_processed`, `facts_merged`, `contradictions_resolved`, `cost_usd`, `cost_cap_reached`, `trigger`). The scheduled pass runs a dream over every active stream.
+
+### PUT /v1/dream/schedule
+
+Override the schedule at runtime. Admin only. The override is stored in the engine's database and survives restarts.
+
+```json
+{ "enabled": true, "interval_secs": 86400 }
+```
+
+Returns `200` with the same body as `GET /v1/dream/schedule`. `interval_secs` must be between 3600 and 2592000 (1 hour to 30 days); anything else returns `400`.
+
+### POST /v1/dream/schedule/run
+
+Queue a dream pass over all active streams now. Admin only. The scheduler picks it up at its next poll (within 60 seconds).
+
+Returns `202` with the same body as `GET /v1/dream/schedule` and `"queued": true`. Returns `409` with `{"error": "..."}` when `[dream]` or `[scheduler]` is disabled in config.
+
 ### POST /v1/boost
 
 Boost a chunk's importance to 1.5.

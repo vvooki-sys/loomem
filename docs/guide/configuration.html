@@ -1138,6 +1138,11 @@ batch_size = 50
 min_group_size = 2
 # model = &quot;gpt-6-luna&quot;  # unset: inherits [llm] compression_model
 cost_cap_usd_per_run = 0.10
+auto_trigger_threshold = 50
+auto_cooldown_secs = 900
+schedule_enabled = true
+schedule_interval_secs = 86400
+schedule_timeout_secs = 3600
 </code></pre>
 <table>
 <thead>
@@ -1163,8 +1168,34 @@ cost_cap_usd_per_run = 0.10
 <td>f64</td>
 <td>Safety cap per dream session</td>
 </tr>
+<tr>
+<td><code>auto_trigger_threshold</code></td>
+<td>int</td>
+<td>Fire a dream run after this many new chunks on a private stream (<code>0</code> = off; the code default is <code>0</code>, the shipped <code>config.toml</code> sets <code>50</code>)</td>
+</tr>
+<tr>
+<td><code>auto_cooldown_secs</code></td>
+<td>int</td>
+<td>Minimum seconds between automatic runs on the same stream (default <code>900</code>)</td>
+</tr>
+<tr>
+<td><code>schedule_enabled</code></td>
+<td>bool</td>
+<td>Run a periodic dream pass over every active stream (default <code>true</code>)</td>
+</tr>
+<tr>
+<td><code>schedule_interval_secs</code></td>
+<td>int</td>
+<td>Seconds between scheduled passes (default <code>86400</code>, one day; allowed range <code>3600</code> to <code>2592000</code>)</td>
+</tr>
+<tr>
+<td><code>schedule_timeout_secs</code></td>
+<td>int</td>
+<td>The whole scheduled pass (all streams) is aborted after this many seconds (default <code>3600</code>, minimum <code>60</code>)</td>
+</tr>
 </tbody>
 </table>
+<p>The scheduled pass runs a dream over every active stream, shared streams included, and needs both <code>[dream] enabled = true</code> and <code>[scheduler] enabled = true</code>. An admin can override <code>enabled</code> and the interval at runtime from the dashboard Settings page (or <code>PUT /v1/dream/schedule</code>); the override is stored in the engine's database and survives restarts, while <code>schedule_enabled</code> and <code>schedule_interval_secs</code> stay the fallback when nothing is overridden. Manual <code>memory_dream</code> / <code>POST /v1/dream</code> and the count-based auto-trigger work independently of the schedule.</p>
 <hr />
 <h2 id="memory_generator">[memory_generator]</h2>
 <pre><code class="language-toml">[memory_generator]

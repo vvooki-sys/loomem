@@ -640,6 +640,11 @@ batch_size = 50
 min_group_size = 2
 # model = "gpt-6-luna"  # unset: inherits [llm] compression_model
 cost_cap_usd_per_run = 0.10
+auto_trigger_threshold = 50
+auto_cooldown_secs = 900
+schedule_enabled = true
+schedule_interval_secs = 86400
+schedule_timeout_secs = 3600
 ```
 
 | Key | Type | Description |
@@ -647,6 +652,13 @@ cost_cap_usd_per_run = 0.10
 | `batch_size` | int | Chunks per dream run |
 | `min_group_size` | int | Min chunks per subject to merge |
 | `cost_cap_usd_per_run` | f64 | Safety cap per dream session |
+| `auto_trigger_threshold` | int | Fire a dream run after this many new chunks on a private stream (`0` = off; the code default is `0`, the shipped `config.toml` sets `50`) |
+| `auto_cooldown_secs` | int | Minimum seconds between automatic runs on the same stream (default `900`) |
+| `schedule_enabled` | bool | Run a periodic dream pass over every active stream (default `true`) |
+| `schedule_interval_secs` | int | Seconds between scheduled passes (default `86400`, one day; allowed range `3600` to `2592000`) |
+| `schedule_timeout_secs` | int | The whole scheduled pass (all streams) is aborted after this many seconds (default `3600`, minimum `60`) |
+
+The scheduled pass runs a dream over every active stream, shared streams included, and needs both `[dream] enabled = true` and `[scheduler] enabled = true`. An admin can override `enabled` and the interval at runtime from the dashboard Settings page (or `PUT /v1/dream/schedule`); the override is stored in the engine's database and survives restarts, while `schedule_enabled` and `schedule_interval_secs` stay the fallback when nothing is overridden. Manual `memory_dream` / `POST /v1/dream` and the count-based auto-trigger work independently of the schedule.
 
 ---
 

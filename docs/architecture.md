@@ -417,10 +417,14 @@ Scans for soft-deleted chunks past their recovery window. Purge pipeline: graph 
 
 | Setting | Default |
 |---------|---------|
+| Scheduled pass | Every 24 hours by default (`dream.schedule_interval_secs`), over all active streams |
 | Auto-trigger | 50 newly persisted chunks per private stream, with a 15-minute cooldown |
+| Manual | `memory_dream` or `POST /v1/dream` |
 | Batch size | 50 chunks |
 | Min group size | 2 |
 | Cost cap | $0.10 / run |
+
+Dream has three triggers. The scheduler polls the schedule every 60 seconds, so a "Run now" from the dashboard starts within a minute. The scheduled pass covers all active streams, shared ones included, because only an admin can change the schedule, which stands in for the admin check `memory_dream` applies to shared streams. The schedule needs both `[dream] enabled` and `[scheduler] enabled`.
 
 ---
 
