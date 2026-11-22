@@ -25,6 +25,10 @@ use loomem_core::storage::Chunk;
 /// result so a partial write is never silent.
 pub(super) struct FragmentReport {
     pub stored: usize,
+    /// IDs returned by successful persistence calls; never inferred from counts.
+    /// Evaluation-only: a default build carries no receipt (option B).
+    #[cfg(any(test, feature = "evaluation"))]
+    pub fragment_ids: Vec<String>,
     pub failed: usize,
     /// Fragments not written because the sink would have rewritten their
     /// text (no exact byte range could describe the stored bytes).
@@ -38,6 +42,8 @@ impl FragmentReport {
     fn empty() -> Self {
         Self {
             stored: 0,
+            #[cfg(any(test, feature = "evaluation"))]
+            fragment_ids: Vec::new(),
             failed: 0,
             skipped: 0,
             segmentation_error: None,
@@ -145,7 +151,13 @@ async fn write_fragments(
             .persist(context.state, fragment_chunk(&aligned, &template))
             .await
         {
-            Ok(_) => report.stored += 1,
+            Ok(id) => {
+                report.stored += 1;
+                #[cfg(any(test, feature = "evaluation"))]
+                report.fragment_ids.push(id);
+                #[cfg(not(any(test, feature = "evaluation")))]
+                let _ = id;
+            }
             Err(error) => {
                 tracing::warn!(id = %fragment.id, error = ?error, "fragment write failed");
                 report.failed += 1;
@@ -182,7 +194,7 @@ pub(super) fn align_to_sink(
 
 fn segment(context: &IngestContext<'_>, source: &Chunk) -> Result<Vec<SourceFragment>, String> {
     let cfg = &context.state.config.fragments;
-    let counter = token_counter(context)?;
+    let counter = token_counter(context.state)?;
     let canonical = CanonicalSource {
         id: source.id.clone(),
         text: source.content.clone(),
@@ -195,15 +207,15 @@ fn segment(context: &IngestContext<'_>, source: &Chunk) -> Result<Vec<SourceFrag
 /// tokenizer and is only available when that model is loaded — there is no
 /// silent fallback to an approximation, because the budget would then no
 /// longer be the embedder's.
-fn token_counter<'a>(context: &'a IngestContext<'_>) -> Result<Box<dyn TokenCounter + 'a>, String> {
-    let cfg = &context.state.config.fragments;
+pub(super) fn token_counter(state: &crate::AppState) -> Result<Box<dyn TokenCounter + '_>, String> {
+    let cfg = &state.config.fragments;
     if cfg.token_counter != TokenCounterKind::Embedder {
         return cfg
             .token_counter
             .counter()
             .map_err(|error| error.to_string());
     }
-    let embedder = context.state.local_embedder.as_deref().ok_or_else(|| {
+    let embedder = state.local_embedder.as_deref().ok_or_else(|| {
         "embedder tokenizer unavailable (no local embedding model loaded)".to_string()
     })?;
     let counter = embedder
@@ -214,10 +226,95 @@ fn token_counter<'a>(context: &'a IngestContext<'_>) -> Result<Box<dyn TokenCoun
 
 /// Append the fragment sentence to the tool text. Existing sentences stay
 /// byte-identical; nothing is appended when fragments were not attempted.
-pub(super) fn append_report(mut result: ToolResult, report: Option<&FragmentReport>) -> ToolResult {
+pub(super) fn append_report(
+    mut result: ToolResult,
+    source_id: &str,
+    report: Option<&FragmentReport>,
+) -> ToolResult {
+    #[cfg(any(test, feature = "evaluation"))]
+    insert_receipt(&mut result, source_id, report);
+    #[cfg(not(any(test, feature = "evaluation")))]
+    let _ = source_id;
     if let (Some(report), Some(block)) = (report, result.content.first_mut()) {
         block.text.push(' ');
         block.text.push_str(&report.sentence());
     }
     result
+}
+
+/// Evaluation-only `ingest_receipt` (option B): compiled out of a default
+/// build, so `memory_ingest` responses there stay byte-identical.
+#[cfg(any(test, feature = "evaluation"))]
+fn insert_receipt(result: &mut ToolResult, source_id: &str, report: Option<&FragmentReport>) {
+    let (ids, stored, failed, skipped, status) = match report {
+        Some(report) => (
+            report.fragment_ids.as_slice(),
+            report.stored,
+            report.failed,
+            report.skipped,
+            if report.segmentation_error.is_some() {
+                "not_segmented"
+            } else {
+                "complete"
+            },
+        ),
+        None => (&[][..], 0, 0, 0, "disabled"),
+    };
+    super::extraction_receipt::insert(
+        result,
+        "ingest_receipt",
+        serde_json::json!({
+            "version": 1, "scope": "source_and_fragments",
+            "status": if status == "not_segmented" || failed > 0 || skipped > 0 { "partial" } else { "complete" },
+            "source_id": source_id, "fragment_ids": ids,
+            "fragments": {"stored": stored, "failed": failed, "skipped": skipped,
+                "segmentation_status": status}
+        }),
+    );
+}
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::super::{fixtures, prepare, store_source, FixedClock, RealPersistence};
+    use super::*;
+
+    #[tokio::test]
+    async fn skipped_slice_is_not_in_receipt_even_with_sparse_ids() {
+        let (_, state) = fixtures::fixture(20000);
+        let context = prepare(
+            &state,
+            fixtures::args("user: synthetic text"),
+            "receipt",
+            None,
+            &FixedClock,
+        )
+        .unwrap();
+        let source = store_source(&context, &RealPersistence).await.unwrap();
+        let make_fragment = |index, text: &str| SourceFragment {
+            id: format!("{}:f{index}", source.id),
+            source_id: source.id.clone(),
+            index,
+            byte_start: 0,
+            byte_end: text.len(),
+            turn_index: index,
+            role: None,
+            conversation_date: None,
+            text: text.into(),
+        };
+        let input = vec![
+            make_fragment(0, "user: safe"),
+            make_fragment(1, "user: synthetic-person@example.invalid"),
+            make_fragment(2, "user: also safe"),
+        ];
+        let report = write_fragments(&context, &source, input, &RealPersistence).await;
+        assert_eq!(report.skipped, 1);
+        assert_eq!(
+            report.fragment_ids,
+            [format!("{}:f0", source.id), format!("{}:f2", source.id)]
+        );
+        let result = append_report(ToolResult::text("source"), &source.id, Some(&report));
+        let receipt = &result.structured_content.unwrap()["ingest_receipt"];
+        assert_eq!(receipt["status"], "partial");
+        assert_eq!(receipt["fragments"]["skipped"], 1);
+    }
 }

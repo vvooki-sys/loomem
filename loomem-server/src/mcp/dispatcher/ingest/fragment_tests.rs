@@ -511,6 +511,16 @@ async fn fragment_write_failure_is_reported_and_facts_are_still_extracted() {
     let records = chunks(&state, STREAM);
     assert_eq!(by_kind(&records, "source").len(), 1);
     assert_eq!(by_kind(&records, "fragment").len(), 2);
+    let receipt = &result.structured_content.as_ref().unwrap()["ingest_receipt"];
+    let source_id = &by_kind(&records, "source")[0].id;
+    assert_eq!(receipt["source_id"], *source_id);
+    assert_eq!(
+        receipt["fragment_ids"],
+        serde_json::json!([fragment_id(source_id, 0), fragment_id(source_id, 2)])
+    );
+    assert_eq!(receipt["status"], "partial");
+    assert_eq!(receipt["fragments"]["failed"], 1);
+
     assert_eq!(by_kind(&records, "fact").len(), 1);
     assert!(result.content[0].text.contains("stored 1, skipped 0."));
     assert!(result.content[0]
@@ -575,4 +585,44 @@ async fn deleting_the_source_tombstones_every_fragment_everywhere() {
     assert!(fragment_ids
         .iter()
         .all(|id| repaired.iter().any(|chunk| &chunk.id == id)));
+}
+
+#[tokio::test]
+async fn source_only_receipt_and_legacy_serialization() {
+    assert!(serde_json::to_value(ToolResult::text("legacy"))
+        .unwrap()
+        .get("structuredContent")
+        .is_none());
+    let (_, state) = crate::tests::make_test_app();
+    let result = tool_ingest(&state, args(TRANSCRIPT), STREAM, None)
+        .await
+        .unwrap();
+    let serialized = serde_json::to_value(&result).unwrap();
+    let receipt = &serialized["structuredContent"]["ingest_receipt"];
+    assert_eq!(receipt["scope"], "source_and_fragments");
+    assert_eq!(receipt["fragment_ids"], serde_json::json!([]));
+    assert_eq!(receipt["fragments"]["segmentation_status"], "disabled");
+    assert_eq!(receipt["source_id"], chunks(&state, STREAM)[0].id);
+    assert!(!receipt.to_string().contains(TRANSCRIPT));
+}
+
+#[tokio::test]
+async fn source_write_failure_has_no_confirmed_receipt() {
+    let (_, state) = enabled(ProvenanceRole::Claim);
+    let sink = FailWrite {
+        fail_at: 1,
+        writes: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let result = tool_ingest_with_sink(
+        &Chat::facts(vec![]),
+        &sink,
+        &state,
+        args(TRANSCRIPT),
+        STREAM,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.is_error, Some(true));
+    assert!(result.structured_content.is_none());
 }

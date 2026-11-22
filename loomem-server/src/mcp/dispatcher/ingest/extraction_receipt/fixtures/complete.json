@@ -1,0 +1,96 @@
+{
+  "extraction_receipt": {
+    "version": 1,
+    "scope": "generated_facts",
+    "evidence": "pre_persistence_expected_records_v1",
+    "source_id": "00000000-0000-4000-8000-000000000001",
+    "status": "complete",
+    "error_code": null,
+    "outcome": {
+      "input_chunks_total": 1,
+      "input_chunks_processed": 1,
+      "calls_attempted": 1,
+      "calls_completed": 1,
+      "calls_truncated": 0,
+      "failed_attempts": 0,
+      "fact_limit_reached": false,
+      "discarded_facts": 0,
+      "accepted_facts": 1
+    },
+    "persistence": {
+      "stored": 1,
+      "failed": 0,
+      "identity_mismatches": 0,
+      "invalid_expectations": 0
+    },
+    "facts": [
+      {
+        "accepted_ordinal": 0,
+        "id": "00000000-0000-4000-8000-000000000002",
+        "allocated_id": "00000000-0000-4000-8000-000000000002",
+        "expected": {
+          "content": "The user prefers quiet accommodation.",
+          "level": 1,
+          "score": 1.0,
+          "timestamp": 1792432800,
+          "updated_at": 1792432800,
+          "consolidated": false,
+          "source_ids": [
+            "00000000-0000-4000-8000-000000000001"
+          ],
+          "metadata": {
+            "_loomem_ingest": {
+              "version": 1,
+              "kind": "fact",
+              "conversation_date": "2024-03-20"
+            }
+          },
+          "extraction_meta": {
+            "fact_type": "preference_or_decision",
+            "subject": "accommodation",
+            "event_date": null,
+            "event_date_context": null,
+            "supersedes": null,
+            "superseded_by": null,
+            "confidence": 0.9,
+            "extracted_from": "00000000-0000-4000-8000-000000000001",
+            "extraction_model": "receipt-fixture-model",
+            "original_content": null,
+            "topic": null,
+            "attributed_to": "user"
+          },
+          "source": {
+            "agent": "mcp-ingest"
+          },
+          "trust_level": "a2",
+          "provenance_role": "Claim",
+          "persistent": true,
+          "importance": 2.0,
+          "memory_type": "static",
+          "valid_from": null,
+          "valid_until": null,
+          "is_latest": true,
+          "superseded_by": null,
+          "supersedes_id": null,
+          "dormant": false,
+          "in_progress": false,
+          "deleted_at": null,
+          "fragment": null
+        }
+      }
+    ]
+  },
+  "ingest_receipt": {
+    "version": 1,
+    "scope": "source_and_fragments",
+    "status": "complete",
+    "source_id": "00000000-0000-4000-8000-000000000001",
+    "fragment_ids": [],
+    "fragments": {
+      "stored": 0,
+      "failed": 0,
+      "skipped": 0,
+      "segmentation_status": "disabled"
+    }
+  }
+}

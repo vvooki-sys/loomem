@@ -238,6 +238,8 @@ pub struct ToolCallParams {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
     pub content: Vec<ContentBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
@@ -258,6 +260,7 @@ impl ToolResult {
                 text: s.into(),
             }],
             is_error: None,
+            structured_content: None,
         }
     }
 
@@ -268,6 +271,7 @@ impl ToolResult {
                 text: s.into(),
             }],
             is_error: Some(true),
+            structured_content: None,
         }
     }
 }

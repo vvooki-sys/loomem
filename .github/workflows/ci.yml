@@ -81,6 +81,11 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace -- -D warnings
 
+      # The evaluation feature compiles extra server/core code that the
+      # default gate never sees; keep it warning-free too.
+      - name: cargo clippy (evaluation feature)
+        run: cargo clippy -p loomem-server --features evaluation -- -D warnings
+
   fmt:
     needs: scope
     if: needs.scope.outputs.scope == 'full'
