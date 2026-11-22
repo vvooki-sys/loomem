@@ -7,17 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.5] - 2026-11-22
-
-Everything on `main` since v0.5.4: every LLM chat call goes through the active
-`llm.provider`, `gpt-6-luna` is the default chat model with per-provider
-request options, chunked knowledge extraction is the shipped default, two
-ingest/context fixes, the evaluation readiness endpoints behind a cargo
-feature, the MSRV and dependency round (tract 0.23, aes-gcm 0.11, rocksdb
-0.25, Vite 8, Tailwind 4) and the Polish website. Existing databases and
-configurations load unchanged; the new defaults apply to the shipped
-`config.toml` only (see Changed).
-
 ### Added
 
 - Scheduled dream: a periodic dream pass over every active stream, once a day
@@ -37,6 +26,20 @@ configurations load unchanged; the new defaults apply to the shipped
   Upgrade note: the code default of `schedule_enabled` is `false`, so a config
   written before this key existed stays on-demand; the shipped `config.toml`
   sets it to `true`, which turns the daily pass on for new installs.
+
+## [0.5.5] - 2026-11-22
+
+Everything on `main` since v0.5.4: every LLM chat call goes through the active
+`llm.provider`, `gpt-6-luna` is the default chat model with per-provider
+request options, chunked knowledge extraction is the shipped default, two
+ingest/context fixes, the evaluation readiness endpoints behind a cargo
+feature, the MSRV and dependency round (tract 0.23, aes-gcm 0.11, rocksdb
+0.25, Vite 8, Tailwind 4) and the Polish website. Existing databases and
+configurations load unchanged; the new defaults apply to the shipped
+`config.toml` only (see Changed).
+
+### Added
+
 - Per-provider chat request options on `[llm.providers.<name>]`, all off by
   default: `omit_temperature` (drop `temperature`), `max_completion_tokens`
   (send the output cap as `max_completion_tokens` instead of the deprecated
