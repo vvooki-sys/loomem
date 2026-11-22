@@ -1081,7 +1081,7 @@ schedule_timeout_secs = 3600
 <tr>
 <td><code>schedule_enabled</code></td>
 <td>bool</td>
-<td>Uruchamiaj cykliczny przebieg dream dla każdego aktywnego strumienia (domyślnie <code>true</code>)</td>
+<td>Uruchamiaj cykliczny przebieg dream dla każdego aktywnego strumienia. Domyślnie w kodzie <code>false</code> (konfiguracja sprzed tego klucza pozostaje na żądanie); dostarczany <code>config.toml</code> ustawia <code>true</code></td>
 </tr>
 <tr>
 <td><code>schedule_interval_secs</code></td>
@@ -1091,11 +1091,11 @@ schedule_timeout_secs = 3600
 <tr>
 <td><code>schedule_timeout_secs</code></td>
 <td>int</td>
-<td>Cały zaplanowany przebieg (wszystkie strumienie) jest przerywany po tylu sekundach (domyślnie <code>3600</code>, minimum <code>60</code>)</td>
+<td>Miękki termin dla całego zaplanowanego przebiegu: po tylu sekundach nie startuje żaden nowy strumień, a strumień w toku kończy się normalnie (domyślnie <code>3600</code>, minimum <code>60</code>)</td>
 </tr>
 </tbody>
 </table>
-<p>Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia, także współdzielonych, i wymaga jednocześnie <code>[dream] enabled = true</code> oraz <code>[scheduler] enabled = true</code>. Administrator może nadpisać <code>enabled</code> i interwał w trakcie działania z poziomu strony Ustawienia w dashboardzie (lub przez <code>PUT /v1/dream/schedule</code>); nadpisanie jest zapisywane w bazie silnika i przetrwa restart, a <code>schedule_enabled</code> i <code>schedule_interval_secs</code> pozostają wartościami zapasowymi, gdy nic nie nadpisano. Ręczne <code>memory_dream</code> / <code>POST /v1/dream</code> i automatyczne uruchomienie po progu chunków działają niezależnie od harmonogramu.</p>
+<p>Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia, także współdzielonych, i wymaga jednocześnie <code>[dream] enabled = true</code> oraz <code>[scheduler] enabled = true</code>. Harmonogram jest ustawieniem całej instancji jednoużytkownikowego silnika, więc jeden przebieg obejmuje wszystkie strumienie. Strona Ustawienia w dashboardzie (lub <code>PUT /v1/dream/schedule</code>) może nadpisać <code>enabled</code> i interwał w trakcie działania; nadpisanie jest zapisywane w bazie silnika i przetrwa restart, a <code>schedule_enabled</code> i <code>schedule_interval_secs</code> pozostają wartościami zapasowymi, gdy nic nie nadpisano. Włączenie harmonogramu po jego wyłączeniu ustawia następny przebieg o jeden interwał od tej chwili, bez nadrabiania zaległego przebiegu. Wszystkie punkty wejścia dream (harmonogram, automatyczne uruchomienie, <code>memory_dream</code>, <code>POST /v1/dream</code>) wzajemnie się wykluczają w obrębie strumienia: uruchomienie na strumieniu, który już jest przetwarzany, wraca natychmiast z <code>skipped_busy: true</code>. Ręczne <code>memory_dream</code> / <code>POST /v1/dream</code> i automatyczne uruchomienie po progu chunków działają niezależnie od harmonogramu.</p>
 <hr/>
 <h2 id="memory_generator">[memory_generator]</h2>
 <pre><code class="language-toml">[memory_generator]

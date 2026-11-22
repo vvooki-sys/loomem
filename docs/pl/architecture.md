@@ -488,7 +488,7 @@ Wyszukuje chunki miękko usunięte, dla których minął okres odzyskiwania. Kol
 | Minimalny rozmiar grupy | 2 |
 | Limit kosztu | 0,10 USD / uruchomienie |
 
-Dream ma trzy wyzwalacze. Scheduler sprawdza harmonogram co 60 sekund, więc „Uruchom teraz” z dashboardu startuje w ciągu minuty. Zaplanowany przebieg obejmuje wszystkie aktywne strumienie, także współdzielone, ponieważ harmonogram może zmieniać tylko administrator, co zastępuje kontrolę uprawnień administratora, jaką `memory_dream` stosuje do strumieni współdzielonych. Harmonogram wymaga jednocześnie `[dream] enabled` i `[scheduler] enabled`.
+Dream ma trzy wyzwalacze. Scheduler sprawdza harmonogram co 60 sekund, więc „Uruchom teraz” z dashboardu startuje w ciągu minuty. Zaplanowany przebieg obejmuje wszystkie aktywne strumienie, także współdzielone: harmonogram jest ustawieniem całej instancji jednoużytkownikowego silnika, a właściciel konfigurujący instancję jest też właścicielem strumienia współdzielonego. Harmonogram wymaga jednocześnie `[dream] enabled` i `[scheduler] enabled` i jest włączony w dostarczanym `config.toml` (domyślnie w kodzie jest wyłączony). Trzy punkty wejścia wzajemnie się wykluczają w obrębie strumienia: uruchomienie na zajętym strumieniu wraca natychmiast z `skipped_busy: true`.
 
 ------------------------------------------------------------------------
 

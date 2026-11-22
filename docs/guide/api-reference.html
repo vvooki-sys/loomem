@@ -618,6 +618,7 @@ a:hover{text-decoration:underline}
   &quot;duration_ms&quot;: 3200
 }
 </code></pre>
+<p>If another dream entry point already holds the stream, the call returns at once with <code>&quot;skipped_busy&quot;: true</code> and does nothing.</p>
 <p>Memory quality analysis is available via the <code>memory_reflect</code> MCP tool.</p>
 <h3 id="get-v1dreamschedule">GET /v1/dream/schedule</h3>
 <p>Current dream schedule and the result of the last pass. Admin only.</p>
@@ -632,18 +633,31 @@ a:hover{text-decoration:underline}
   &quot;run_requested_at&quot;: null,
   &quot;poll_secs&quot;: 60,
   &quot;queued&quot;: false,
-  &quot;last_result&quot;: null
+  &quot;paused&quot;: false,
+  &quot;last_result&quot;: {
+    &quot;started_at&quot;: 1763851200,
+    &quot;finished_at&quot;: 1763851460,
+    &quot;streams_total&quot;: 3,
+    &quot;streams_failed&quot;: 0,
+    &quot;chunks_processed&quot;: 120,
+    &quot;facts_merged&quot;: 14,
+    &quot;contradictions_resolved&quot;: 2,
+    &quot;cost_usd&quot;: 0.11,
+    &quot;cost_cap_reached&quot;: 0,
+    &quot;trigger&quot;: &quot;schedule&quot;,
+    &quot;status&quot;: &quot;ok&quot;
+  }
 }
 </code></pre>
-<p>Timestamps are epoch seconds, <code>null</code> when unknown. <code>source</code> is <code>&quot;config&quot;</code> when the values come from <code>[dream]</code> and <code>&quot;override&quot;</code> when an admin changed them. <code>last_result</code> summarizes the last scheduled or manual pass (<code>started_at</code>, <code>finished_at</code>, <code>streams_total</code>, <code>streams_failed</code>, <code>chunks_processed</code>, <code>facts_merged</code>, <code>contradictions_resolved</code>, <code>cost_usd</code>, <code>cost_cap_reached</code>, <code>trigger</code>). The scheduled pass runs a dream over every active stream.</p>
+<p>Timestamps are epoch seconds, <code>null</code> when unknown. <code>source</code> is <code>&quot;config&quot;</code> when the values come from <code>[dream]</code> and <code>&quot;override&quot;</code> when an admin changed them. <code>paused</code> is <code>true</code> while the <code>dream</code> worker is paused via <code>/admin/workers</code>. <code>last_result</code> summarizes the last scheduled or manual pass: <code>trigger</code> is <code>&quot;schedule&quot;</code> or <code>&quot;manual&quot;</code>, <code>cost_cap_reached</code> counts streams that hit <code>cost_cap_usd_per_run</code>, and <code>status</code> is <code>&quot;ok&quot;</code>, <code>&quot;deadline&quot;</code> (the soft deadline <code>schedule_timeout_secs</code> stopped the pass before every stream was visited) or <code>&quot;failed&quot;</code> (the pass could not run, for example the stream list could not be read). The scheduled pass runs a dream over every active stream.</p>
 <h3 id="put-v1dreamschedule">PUT /v1/dream/schedule</h3>
 <p>Override the schedule at runtime. Admin only. The override is stored in the engine's database and survives restarts.</p>
 <pre><code class="language-json">{ &quot;enabled&quot;: true, &quot;interval_secs&quot;: 86400 }
 </code></pre>
-<p>Returns <code>200</code> with the same body as <code>GET /v1/dream/schedule</code>. <code>interval_secs</code> must be between 3600 and 2592000 (1 hour to 30 days); anything else returns <code>400</code>.</p>
+<p>Returns <code>200</code> with the same body as <code>GET /v1/dream/schedule</code>. <code>interval_secs</code> must be between 3600 and 2592000 (1 hour to 30 days); anything else returns <code>400</code>. Enabling the schedule after it was off anchors the next run one interval from that moment (no catch-up pass).</p>
 <h3 id="post-v1dreamschedulerun">POST /v1/dream/schedule/run</h3>
 <p>Queue a dream pass over all active streams now. Admin only. The scheduler picks it up at its next poll (within 60 seconds).</p>
-<p>Returns <code>202</code> with the same body as <code>GET /v1/dream/schedule</code> and <code>&quot;queued&quot;: true</code>. Returns <code>409</code> with <code>{&quot;error&quot;: &quot;...&quot;}</code> when <code>[dream]</code> or <code>[scheduler]</code> is disabled in config.</p>
+<p>Returns <code>202</code> with the same body as <code>GET /v1/dream/schedule</code> and <code>&quot;queued&quot;: true</code>. Returns <code>409</code> with <code>{&quot;error&quot;: &quot;...&quot;}</code> when <code>[dream]</code> or <code>[scheduler]</code> is disabled in config, or when the <code>dream</code> worker is paused (nobody would run the request).</p>
 <h3 id="post-v1boost">POST /v1/boost</h3>
 <p>Boost a chunk's importance to 1.5.</p>
 <pre><code class="language-json">{ &quot;id&quot;: &quot;abc-123&quot; }
@@ -728,6 +742,7 @@ a:hover{text-decoration:underline}
 }
 </code></pre>
 <p>Pause state does not survive server restart — workers resume automatically on startup.</p>
+<p>The response also lists each worker, including <code>dream</code>. For <code>dream</code>, <code>interval_secs</code> is the config value of <code>schedule_interval_secs</code>; the live schedule, including a dashboard override, is in <code>GET /v1/dream/schedule</code>.</p>
 <hr />
 <h2 id="mcp-endpoint">MCP endpoint</h2>
 <h3 id="post-mcp">POST /mcp</h3>

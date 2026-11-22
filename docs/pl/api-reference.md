@@ -379,6 +379,8 @@ Uruchom konsolidację dream w bieżącym strumieniu.
 }
 ```
 
+Jeśli inny punkt wejścia dream już zajmuje strumień, wywołanie wraca natychmiast z `"skipped_busy": true` i nic nie robi.
+
 Analiza jakości pamięci jest dostępna przez narzędzie `memory_reflect` MCP.
 
 <span id="get-v1dreamschedule"></span>
@@ -399,11 +401,24 @@ Bieżący harmonogram dream i wynik ostatniego przebiegu. Tylko administrator.
   "run_requested_at": null,
   "poll_secs": 60,
   "queued": false,
-  "last_result": null
+  "paused": false,
+  "last_result": {
+    "started_at": 1763851200,
+    "finished_at": 1763851460,
+    "streams_total": 3,
+    "streams_failed": 0,
+    "chunks_processed": 120,
+    "facts_merged": 14,
+    "contradictions_resolved": 2,
+    "cost_usd": 0.11,
+    "cost_cap_reached": 0,
+    "trigger": "schedule",
+    "status": "ok"
+  }
 }
 ```
 
-Znaczniki czasu to sekundy epoki, `null` gdy nieznane. `source` to `"config"`, gdy wartości pochodzą z `[dream]`, a `"override"`, gdy zmienił je administrator. `last_result` podsumowuje ostatni zaplanowany lub ręczny przebieg (`started_at`, `finished_at`, `streams_total`, `streams_failed`, `chunks_processed`, `facts_merged`, `contradictions_resolved`, `cost_usd`, `cost_cap_reached`, `trigger`). Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia.
+Znaczniki czasu to sekundy epoki, `null` gdy nieznane. `source` to `"config"`, gdy wartości pochodzą z `[dream]`, a `"override"`, gdy zmienił je administrator. `paused` ma wartość `true`, gdy proces `dream` jest wstrzymany przez `/admin/workers`. `last_result` podsumowuje ostatni zaplanowany lub ręczny przebieg: `trigger` to `"schedule"` lub `"manual"`, `cost_cap_reached` liczy strumienie, które osiągnęły `cost_cap_usd_per_run`, a `status` to `"ok"`, `"deadline"` (miękki termin `schedule_timeout_secs` przerwał przebieg przed odwiedzeniem wszystkich strumieni) lub `"failed"` (przebieg nie mógł się wykonać, np. nie udało się odczytać listy strumieni). Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia.
 
 <span id="put-v1dreamschedule"></span>
 
@@ -415,7 +430,7 @@ Nadpisz harmonogram w trakcie działania. Tylko administrator. Nadpisanie jest z
 { "enabled": true, "interval_secs": 86400 }
 ```
 
-Zwraca `200` z tym samym ciałem co `GET /v1/dream/schedule`. `interval_secs` musi mieścić się w przedziale od 3600 do 2592000 (od 1 godziny do 30 dni); inna wartość zwraca `400`.
+Zwraca `200` z tym samym ciałem co `GET /v1/dream/schedule`. `interval_secs` musi mieścić się w przedziale od 3600 do 2592000 (od 1 godziny do 30 dni); inna wartość zwraca `400`. Włączenie harmonogramu po jego wyłączeniu ustawia następny przebieg o jeden interwał od tej chwili (bez nadrabiania zaległego przebiegu).
 
 <span id="post-v1dreamschedulerun"></span>
 
@@ -423,7 +438,7 @@ Zwraca `200` z tym samym ciałem co `GET /v1/dream/schedule`. `interval_secs` mu
 
 Zakolejkuj teraz przebieg dream dla wszystkich aktywnych strumieni. Tylko administrator. Scheduler podejmie go przy najbliższym sprawdzeniu (w ciągu 60 sekund).
 
-Zwraca `202` z tym samym ciałem co `GET /v1/dream/schedule` i `"queued": true`. Zwraca `409` z `{"error": "..."}`, gdy `[dream]` lub `[scheduler]` jest wyłączone w konfiguracji.
+Zwraca `202` z tym samym ciałem co `GET /v1/dream/schedule` i `"queued": true`. Zwraca `409` z `{"error": "..."}`, gdy `[dream]` lub `[scheduler]` jest wyłączone w konfiguracji albo gdy proces `dream` jest wstrzymany (nikt nie wykonałby żądania).
 
 <span id="post-v1boost"></span>
 
@@ -597,6 +612,8 @@ Sprawdź, czy procesy są wstrzymane.
 ```
 
 Stan wstrzymania nie jest zachowywany po restarcie serwera — procesy uruchamiają się automatycznie przy starcie.
+
+Odpowiedź zawiera też listę procesów, w tym `dream`. Dla `dream` pole `interval_secs` to wartość konfiguracyjna `schedule_interval_secs`; aktualny harmonogram, także nadpisany w dashboardzie, jest w `GET /v1/dream/schedule`.
 
 ------------------------------------------------------------------------
 

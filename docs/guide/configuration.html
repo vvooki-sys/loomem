@@ -1181,7 +1181,7 @@ schedule_timeout_secs = 3600
 <tr>
 <td><code>schedule_enabled</code></td>
 <td>bool</td>
-<td>Run a periodic dream pass over every active stream (default <code>true</code>)</td>
+<td>Run a periodic dream pass over every active stream. Code default <code>false</code> (a config written before this key existed stays on-demand); the shipped <code>config.toml</code> sets <code>true</code></td>
 </tr>
 <tr>
 <td><code>schedule_interval_secs</code></td>
@@ -1191,11 +1191,11 @@ schedule_timeout_secs = 3600
 <tr>
 <td><code>schedule_timeout_secs</code></td>
 <td>int</td>
-<td>The whole scheduled pass (all streams) is aborted after this many seconds (default <code>3600</code>, minimum <code>60</code>)</td>
+<td>Soft deadline for the whole scheduled pass: no new stream is started after this many seconds, and the stream in progress finishes (default <code>3600</code>, minimum <code>60</code>)</td>
 </tr>
 </tbody>
 </table>
-<p>The scheduled pass runs a dream over every active stream, shared streams included, and needs both <code>[dream] enabled = true</code> and <code>[scheduler] enabled = true</code>. An admin can override <code>enabled</code> and the interval at runtime from the dashboard Settings page (or <code>PUT /v1/dream/schedule</code>); the override is stored in the engine's database and survives restarts, while <code>schedule_enabled</code> and <code>schedule_interval_secs</code> stay the fallback when nothing is overridden. Manual <code>memory_dream</code> / <code>POST /v1/dream</code> and the count-based auto-trigger work independently of the schedule.</p>
+<p>The scheduled pass runs a dream over every active stream, shared streams included, and needs both <code>[dream] enabled = true</code> and <code>[scheduler] enabled = true</code>. The schedule is an instance-wide setting of a single-user engine, so one pass covers every stream. The dashboard Settings page (or <code>PUT /v1/dream/schedule</code>) can override <code>enabled</code> and the interval at runtime; the override is stored in the engine's database and survives restarts, while <code>schedule_enabled</code> and <code>schedule_interval_secs</code> stay the fallback when nothing is overridden. Enabling the schedule after it was off anchors the next run one interval from that moment, with no catch-up pass. All dream entry points (schedule, auto-trigger, <code>memory_dream</code>, <code>POST /v1/dream</code>) are mutually exclusive per stream: a run on a stream that is already being dreamed returns at once with <code>skipped_busy: true</code>. Manual <code>memory_dream</code> / <code>POST /v1/dream</code> and the count-based auto-trigger work independently of the schedule.</p>
 <hr />
 <h2 id="memory_generator">[memory_generator]</h2>
 <pre><code class="language-toml">[memory_generator]

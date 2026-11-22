@@ -25,15 +25,16 @@ configurations load unchanged; the new defaults apply to the shipped
   override is stored in the engine's database and survives restarts). New
   endpoints `GET` and `PUT /v1/dream/schedule` and `POST
   /v1/dream/schedule/run` (admin only), and new `[dream]` keys
-  `schedule_enabled` (`true`), `schedule_interval_secs` (`86400`, allowed
-  `3600` to `2592000`) and `schedule_timeout_secs` (`3600`, minimum `60`).
-  It needs both `[dream] enabled` and `[scheduler] enabled`; manual
-  `memory_dream` / `POST /v1/dream` and the count-based auto-trigger are
-  unchanged. Upgrade note: `schedule_enabled` defaults to `true`, so an
-  existing config with `[dream] enabled = true` starts a daily pass after
-  upgrading (capped per stream by `cost_cap_usd_per_run`); set
-  `schedule_enabled = false` or switch it off in the dashboard to keep dream
-  on-demand only.
+  `schedule_enabled`, `schedule_interval_secs` (`86400`, allowed `3600` to
+  `2592000`) and `schedule_timeout_secs` (`3600`, minimum `60`, a soft
+  deadline: no new stream starts after it and the stream in progress
+  finishes). It needs both `[dream] enabled` and `[scheduler] enabled`; manual
+  `memory_dream` / `POST /v1/dream` and the count-based auto-trigger still
+  work, and all entry points are mutually exclusive per stream (a run on a
+  busy stream returns at once with `skipped_busy: true`).
+  Upgrade note: the code default of `schedule_enabled` is `false`, so a config
+  written before this key existed stays on-demand; the shipped `config.toml`
+  sets it to `true`, which turns the daily pass on for new installs.
 - Per-provider chat request options on `[llm.providers.<name>]`, all off by
   default: `omit_temperature` (drop `temperature`), `max_completion_tokens`
   (send the output cap as `max_completion_tokens` instead of the deprecated

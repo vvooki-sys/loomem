@@ -337,6 +337,8 @@ Trigger dream consolidation on current stream.
 }
 ```
 
+If another dream entry point already holds the stream, the call returns at once with `"skipped_busy": true` and does nothing.
+
 Memory quality analysis is available via the `memory_reflect` MCP tool.
 
 ### GET /v1/dream/schedule
@@ -355,11 +357,24 @@ Current dream schedule and the result of the last pass. Admin only.
   "run_requested_at": null,
   "poll_secs": 60,
   "queued": false,
-  "last_result": null
+  "paused": false,
+  "last_result": {
+    "started_at": 1763851200,
+    "finished_at": 1763851460,
+    "streams_total": 3,
+    "streams_failed": 0,
+    "chunks_processed": 120,
+    "facts_merged": 14,
+    "contradictions_resolved": 2,
+    "cost_usd": 0.11,
+    "cost_cap_reached": 0,
+    "trigger": "schedule",
+    "status": "ok"
+  }
 }
 ```
 
-Timestamps are epoch seconds, `null` when unknown. `source` is `"config"` when the values come from `[dream]` and `"override"` when an admin changed them. `last_result` summarizes the last scheduled or manual pass (`started_at`, `finished_at`, `streams_total`, `streams_failed`, `chunks_processed`, `facts_merged`, `contradictions_resolved`, `cost_usd`, `cost_cap_reached`, `trigger`). The scheduled pass runs a dream over every active stream.
+Timestamps are epoch seconds, `null` when unknown. `source` is `"config"` when the values come from `[dream]` and `"override"` when an admin changed them. `paused` is `true` while the `dream` worker is paused via `/admin/workers`. `last_result` summarizes the last scheduled or manual pass: `trigger` is `"schedule"` or `"manual"`, `cost_cap_reached` counts streams that hit `cost_cap_usd_per_run`, and `status` is `"ok"`, `"deadline"` (the soft deadline `schedule_timeout_secs` stopped the pass before every stream was visited) or `"failed"` (the pass could not run, for example the stream list could not be read). The scheduled pass runs a dream over every active stream.
 
 ### PUT /v1/dream/schedule
 
@@ -369,13 +384,13 @@ Override the schedule at runtime. Admin only. The override is stored in the engi
 { "enabled": true, "interval_secs": 86400 }
 ```
 
-Returns `200` with the same body as `GET /v1/dream/schedule`. `interval_secs` must be between 3600 and 2592000 (1 hour to 30 days); anything else returns `400`.
+Returns `200` with the same body as `GET /v1/dream/schedule`. `interval_secs` must be between 3600 and 2592000 (1 hour to 30 days); anything else returns `400`. Enabling the schedule after it was off anchors the next run one interval from that moment (no catch-up pass).
 
 ### POST /v1/dream/schedule/run
 
 Queue a dream pass over all active streams now. Admin only. The scheduler picks it up at its next poll (within 60 seconds).
 
-Returns `202` with the same body as `GET /v1/dream/schedule` and `"queued": true`. Returns `409` with `{"error": "..."}` when `[dream]` or `[scheduler]` is disabled in config.
+Returns `202` with the same body as `GET /v1/dream/schedule` and `"queued": true`. Returns `409` with `{"error": "..."}` when `[dream]` or `[scheduler]` is disabled in config, or when the `dream` worker is paused (nobody would run the request).
 
 ### POST /v1/boost
 
@@ -515,6 +530,8 @@ Check if workers are paused.
 ```
 
 Pause state does not survive server restart — workers resume automatically on startup.
+
+The response also lists each worker, including `dream`. For `dream`, `interval_secs` is the config value of `schedule_interval_secs`; the live schedule, including a dashboard override, is in `GET /v1/dream/schedule`.
 
 ---
 
