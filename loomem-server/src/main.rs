@@ -4,6 +4,8 @@ mod content_type;
 mod deferred;
 mod entity_worker;
 mod evaluation_clock;
+#[cfg(feature = "evaluation")]
+mod evaluation_readiness;
 mod evidence;
 mod handlers;
 mod local_embedding;
@@ -968,7 +970,10 @@ pub(crate) fn build_routes(p: RouteParams) -> Router<Arc<AppState>> {
 /// into thematic sub-builders would relocate, not reduce, the count.
 /// Source: CLAUDE.md §1 carve-out paragraph (cycle/79).
 fn protected_routes(p: &RouteParams) -> Router<Arc<AppState>> {
-    Router::new()
+    let routes = Router::new();
+    #[cfg(feature = "evaluation")]
+    let routes = routes.merge(evaluation_readiness::routes(&p.auth_config));
+    routes
         .route("/v1/store", post(handlers::store_handler))
         .route("/v1/search", post(handlers::search_handler))
         .route("/v1/ambient", post(handlers::ambient_handler))
@@ -1278,6 +1283,28 @@ mod tests {
             err.to_string().contains("server.auth_token_env"),
             "got: {err}"
         );
+    }
+
+    /// The evaluation readiness routes must not exist in a default build:
+    /// the route literal is compiled out together with the module.
+    #[cfg(not(feature = "evaluation"))]
+    #[tokio::test]
+    async fn evaluation_readiness_absent_in_default_build() {
+        use tower::ServiceExt;
+        let (app, _) = make_test_app();
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/evaluation/readiness")
+                    .header("authorization", "Bearer admin-token")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
     }
 
     /// Build a fully-wired axum app + state for HTTP-level integration tests.

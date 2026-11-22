@@ -7,6 +7,8 @@ mod evidence_suffix_tests;
 mod ingest;
 use dream::tool_dream;
 use ingest::tool_ingest;
+#[cfg(feature = "evaluation")]
+pub(crate) use ingest::{expected_bytes, ExpectedFact};
 
 use axum::extract::State;
 use axum::Json;

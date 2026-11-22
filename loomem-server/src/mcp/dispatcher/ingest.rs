@@ -105,7 +105,11 @@ pub(super) async fn tool_ingest(
     };
     let report = fragments::store(&context, &source, &RealPersistence).await;
     let result = extract_with_configured_chat(&context).await?;
-    Ok(fragments::append_report(result, report.as_ref()))
+    Ok(fragments::append_report(
+        result,
+        &source.id,
+        report.as_ref(),
+    ))
 }
 
 async fn extract_with_configured_chat(
@@ -113,19 +117,31 @@ async fn extract_with_configured_chat(
 ) -> Result<ToolResult, JsonRpcError> {
     let state = context.state;
     if !state.config.knowledge_extraction.enabled {
-        return Ok(ToolResult::text(format!(
+        let result = ToolResult::text(format!(
             "Stored source transcript (id: {}). Knowledge extraction disabled.",
             context.source_id
-        )));
+        ));
+        return Ok(extraction_receipt::unavailable(
+            result,
+            &context.source_id,
+            None,
+        ));
     }
     let provider = match state.config.llm.active_provider() {
         Ok(provider) => provider,
         Err(error) => {
             tracing::warn!("memory_ingest extraction skipped: {error}");
-            return Ok(ToolResult::error(with_source(
+            let result = ToolResult::error(with_source(
                 context,
                 "Extraction failed: LLM provider unavailable. No facts stored.",
-            )));
+            ));
+            return Ok(extraction_receipt::unavailable(
+                result,
+                &context.source_id,
+                Some(&loomem_core::memory_extractor::ExtractionError::Provider(
+                    error,
+                )),
+            ));
         }
     };
     let chat = loomem_core::memory_extractor::HttpExtractionChat::new(&state.http_client, provider);
@@ -159,7 +175,11 @@ pub(super) async fn tool_ingest_with_sink(
     };
     let report = fragments::store(&context, &source, sink).await;
     let result = extract(chat, sink, &context).await?;
-    Ok(fragments::append_report(result, report.as_ref()))
+    Ok(fragments::append_report(
+        result,
+        &source.id,
+        report.as_ref(),
+    ))
 }
 
 fn prepare<'a>(
@@ -245,24 +265,23 @@ async fn extract(
         Ok(outcome) => outcome,
         Err(error) => {
             let (status, reason) = error.status_and_reason();
-            return Ok(ToolResult::error(with_source(
+            let result = ToolResult::error(with_source(
                 context,
                 &format!("Extraction failed ({status}): {reason}. No facts stored."),
-            )));
+            ));
+            return Ok(extraction_receipt::unavailable(
+                result,
+                &context.source_id,
+                Some(&error),
+            ));
         }
     };
-    let mut stored = 0;
-    let mut skipped = 0;
-    for fact in &outcome.facts {
-        match sink.persist(context.state, fact_chunk(context, fact)).await {
-            Ok(_) => stored += 1,
-            Err(_) => skipped += 1,
-        }
-    }
-    Ok(ToolResult::text(with_source(
+    let writes = extraction_receipt::persist_facts(context, sink, &outcome).await;
+    let result = ToolResult::text(with_source(
         context,
-        &ingest_summary(&outcome, stored, skipped),
-    )))
+        &ingest_summary(&outcome, writes.stored, writes.failed),
+    ));
+    Ok(writes.attach(result, &context.source_id, &outcome))
 }
 
 fn with_source(context: &IngestContext<'_>, message: &str) -> String {
@@ -386,9 +405,23 @@ fn ingest_summary(outcome: &ExtractionOutcome, stored: usize, skipped: usize) ->
         message
             .push_str(" Unconfirmed fact writes may exist after partial storage/index failures.");
     }
+    if outcome.fact_limit_reached {
+        message.push_str(&format!(
+            " Fact limit reached: processed {}/{} input chunks; discarded {} generated facts.",
+            outcome.input_chunks_processed, outcome.input_chunks_total, outcome.discarded_facts
+        ));
+        if outcome.discarded_facts > 0
+            || outcome.input_chunks_processed < outcome.input_chunks_total
+        {
+            message.push_str(" Warning: extraction was capped; facts may be incomplete.");
+        }
+    }
     message
 }
 
+#[cfg(feature = "evaluation")]
+pub(crate) use extraction_receipt::ExpectedFact;
+mod extraction_receipt;
 mod fragments;
 
 #[cfg(test)]
@@ -399,3 +432,9 @@ mod fragment_tests;
 mod stage1_acceptance_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod completion_tests;
+
+#[cfg(any(test, feature = "evaluation"))]
+pub(crate) mod expected_bytes;
