@@ -217,7 +217,6 @@ class LocalEngineAdapterE1(LocalEngineAdapterV2):
         super().__init__(settings)
         if "_e1" not in settings:
             fail("E1 adapter requires settings from settings_from_e1")
-        self.fragment_counts = {}
         self.expected_ids_by_source = {}
         self.ingest_sources = {}
         self.sealed = False
@@ -269,7 +268,6 @@ class LocalEngineAdapterE1(LocalEngineAdapterV2):
         """Fresh work directory, E1 config and owned process (v1 steps, E1 config)."""
         self.close()
         self.session_id = None
-        self.fragment_counts = {}
         self.expected_ids_by_source = {}
         self.ingest_sources = {}
         self.sealed = False
@@ -362,7 +360,6 @@ class LocalEngineAdapterE1(LocalEngineAdapterV2):
                 "source_id": source_id, "content": arguments["content"],
                 "conversation_date": arguments.get("conversation_date"),
                 "fragment_ids": sorted(expected_ids - {source_id})}
-            self.fragment_counts[source_id] = len(expected_ids) - 1
             accepted.append(record["record_id"])
         return {"status": "complete", "accepted_ids": accepted}
 
@@ -376,6 +373,9 @@ class LocalEngineAdapterE1(LocalEngineAdapterV2):
     READY_DEADLINE_SECONDS = 45
     READY_SECONDS_PER_CHUNK = 0.5
     READY_POLL_SECONDS = 0.5
+
+    def ready_deadline_seconds(self, expected):
+        return self.READY_DEADLINE_SECONDS + self.READY_SECONDS_PER_CHUNK * expected
 
     def ready(self, payload):
         self.sealed = True
@@ -396,8 +396,7 @@ class LocalEngineAdapterE1(LocalEngineAdapterV2):
             if len(expected) > 1024 or len(json.dumps(request).encode()) > 2 * 1024 * 1024:
                 fail("Source exceeds evaluation readiness request limit")
             batches.append((request, expected))
-        deadline = (time.monotonic() + self.READY_DEADLINE_SECONDS
-                    + self.READY_SECONDS_PER_CHUNK * self.expected_chunks())
+        deadline = time.monotonic() + self.ready_deadline_seconds(self.expected_chunks())
         pending = batches
         while time.monotonic() < deadline:
             complete = True

@@ -1,6 +1,7 @@
 """E1 fragments-arm adapter tests against a fake MCP/HTTP transport; no engine."""
 import argparse
 import hashlib
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import tempfile
@@ -28,6 +29,20 @@ def proof(ids, scope):
             "dimension": 384, "ready": True,
             "records": [{"id": i, "chunk": "active", "vector": "valid", "document": "current"}
                         for i in ids]}
+
+
+@contextmanager
+def fake_clock(start=1000.0):
+    """Drive the runner's ``time.monotonic``/``time.sleep`` deterministically.
+
+    Readiness polling never touches the real clock in this suite: ``sleep``
+    only advances the fake clock, so deadline tests run in microseconds.
+    """
+    clock = {"now": start}
+    with patch.object(runner_local_e1.time, "monotonic", lambda: clock["now"]), \
+            patch.object(runner_local_e1.time, "sleep",
+                         lambda seconds: clock.__setitem__("now", clock["now"] + seconds)):
+        yield clock
 
 
 def question():
@@ -66,7 +81,7 @@ def fake_adapter(settings=None):
     adapter.settings = settings or {"capture_context": False, "top_k": 5,
                                     "_e1": {"provenance_role": "claim", "token_counter": "approx"}}
     adapter.process = SimpleNamespace(poll=lambda: None)
-    adapter.mapping, adapter.fragment_counts = {}, {}
+    adapter.mapping = {}
     adapter.expected_ids_by_source = {}
     adapter.ingest_sources, adapter.sealed = {}, False
     adapter.readiness_observations = {}
@@ -272,7 +287,6 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(mcp.calls[2][0]["params"]["arguments"]["conversation_date"], "2023-06-01")
         self.assertEqual(adapter.mapping, {SOURCE_A: records[0]["record_id"],
                                            SOURCE_B: records[1]["record_id"]})
-        self.assertEqual(adapter.fragment_counts, {SOURCE_A: 3, SOURCE_B: 1})
         self.assertEqual(adapter.expected_chunks(), 6)
         self.assertNotIn("GOLD", json.dumps(mcp.calls))
         self.assertNotIn("has_answer", json.dumps(mcp.calls))
@@ -308,7 +322,6 @@ class AdapterTests(unittest.TestCase):
     def test_identity_clears_expected_sets(self):
         adapter = fake_adapter()
         adapter.expected_ids_by_source = {SOURCE_A: frozenset([SOURCE_A])}
-        adapter.fragment_counts = {SOURCE_A: 0}
         adapter.mapping = {SOURCE_A: "a" * 64}
         adapter.counter = 0
         adapter.sealed = True
@@ -400,11 +413,12 @@ class AdapterTests(unittest.TestCase):
                 return proof([source_id, source_id + ":f0"], "x")
             return pending
         adapter.engine_request = engine_request
-        with patch.object(adapter, "READY_POLL_SECONDS", 0):
+        with fake_clock() as clock:
             result = adapter.ready(payload)
         self.assertTrue(result["ready"])
         self.assertEqual(len(result["records"]), 4)
         self.assertEqual(calls, [SOURCE_A, SOURCE_B, SOURCE_B])
+        self.assertEqual(clock["now"] - 1000.0, adapter.READY_POLL_SECONDS)
         self.assertEqual(adapter.readiness_observations[SOURCE_A]["attempts"], 1)
         self.assertEqual(adapter.readiness_observations[SOURCE_B]["attempts"], 2)
 
@@ -419,24 +433,87 @@ class AdapterTests(unittest.TestCase):
         pending["ready"] = False
         responses = iter([pending, proof([SOURCE_A, SOURCE_A + ":f0"], "x")])
         adapter.engine_request = lambda *args: next(responses)
-        self.assertTrue(adapter.ready(payload)["ready"])
+        with fake_clock():
+            self.assertTrue(adapter.ready(payload)["ready"])
         adapter.engine_request = lambda *args: {"ready": True, "pending_jobs": 0}
-        with self.assertRaises(ValidationError):
+        with fake_clock(), self.assertRaises(ValidationError):
             adapter.ready(payload)
         with patch.object(adapter, "engine_request", side_effect=OSError("404")):
-            with self.assertRaises(OSError):
+            with fake_clock(), self.assertRaises(OSError):
                 adapter.ready(payload)
         adapter.engine_request = lambda *args: pending
-        with (patch.object(adapter, "READY_DEADLINE_SECONDS", 0.001),
-              patch.object(adapter, "READY_SECONDS_PER_CHUNK", 0)):
-            with self.assertRaises(ValidationError):
-                adapter.ready(payload)
+        with fake_clock() as clock, self.assertRaises(ValidationError):
+            adapter.ready(payload)
+        # Two expected chunks (source + f0): 45 s floor plus 0.5 s each.
+        self.assertGreaterEqual(clock["now"] - 1000.0, 46.0)
+        self.assertLess(clock["now"] - 1000.0, 47.0)
+
+    def test_readiness_deadline_scales_with_expected_chunks(self):
+        adapter = fake_adapter()
+        adapter.mapping = {SOURCE_A: "r", SOURCE_B: "s"}
+        adapter.expected_ids_by_source = {
+            SOURCE_A: frozenset([SOURCE_A, *(SOURCE_A + ":f" + str(i) for i in range(300))]),
+            SOURCE_B: frozenset([SOURCE_B, *(SOURCE_B + ":f" + str(i) for i in range(358))])}
+        self.assertEqual(adapter.expected_chunks(), 660)
+        # Fixed expectations, not the constants the helper reads: 45 s floor plus
+        # 0.5 s per expected chunk. A regression to the flat E0 deadline fails here.
+        self.assertEqual(adapter.ready_deadline_seconds(660), 375.0)
+        self.assertEqual(adapter.ready_deadline_seconds(0), 45.0)
+
+    def large_corpus_adapter(self):
+        """Two ingested sources with 660 expected chunks, like a LongMemEval-S question."""
+        adapter = fake_adapter()
+        adapter.mcp_request = FakeMcp([ingest_text(SOURCE_A, 300), ingest_text(SOURCE_B, 358)])
+        records = session_records(question())
+        adapter.ingest({"records": records})
+        self.assertEqual(adapter.expected_chunks(), 660)
+        return adapter, {"scope": "x", "expected_ids": [r["record_id"] for r in records]}
+
+    def test_readiness_waits_past_the_flat_deadline_for_a_large_corpus(self):
+        """Indexing that completes after 45 s but before the scaled deadline is ready.
+
+        The fake clock drives both ``time.monotonic`` and ``time.sleep``: the
+        engine proves every record only once 100 s have elapsed, which the old
+        flat 45 s deadline would have declared a failure.
+        """
+        adapter, payload = self.large_corpus_adapter()
+        clock_ref = {}
+
+        def engine_request(path, request):
+            source = request["sources"][0]
+            full = proof([source["source_id"], *source["fragment_ids"]], "x")
+            if clock_ref["clock"]["now"] - 1000.0 < 100.0:
+                full["records"][-1]["vector"] = "missing"
+                full["ready"] = False
+            return full
+        adapter.engine_request = engine_request
+        with fake_clock() as clock:
+            clock_ref["clock"] = clock
+            ready = adapter.ready(payload)
+        self.assertTrue(ready["ready"])
+        self.assertEqual(len(ready["records"]), 660)
+        self.assertGreaterEqual(clock["now"] - 1000.0, 100.0)
+        self.assertLess(clock["now"] - 1000.0, 375.0)
+
+    def test_readiness_still_fails_at_the_scaled_deadline(self):
+        adapter, payload = self.large_corpus_adapter()
+
+        def engine_request(path, request):
+            source = request["sources"][0]
+            pending = proof([source["source_id"], *source["fragment_ids"]], "x")
+            pending["records"][-1]["vector"] = "missing"
+            pending["ready"] = False
+            return pending
+        adapter.engine_request = engine_request
+        with fake_clock(start=0.0) as clock, self.assertRaises(ValidationError):
+            adapter.ready(payload)
+        self.assertGreaterEqual(clock["now"], 375.0)
+        self.assertLess(clock["now"], 376.0)
 
     def test_search_maps_source_and_fragment_ids_and_rejections(self):
         adapter = fake_adapter()
         adapter.settings["capture_context"] = True
         adapter.mapping = {SOURCE_A: "a" * 64, SOURCE_B: "b" * 64}
-        adapter.fragment_counts = {SOURCE_A: 3, SOURCE_B: 1}
         adapter.expected_ids_by_source = {SOURCE_A: frozenset([SOURCE_A, SOURCE_A + ":f0",
             SOURCE_A + ":f1", SOURCE_A + ":f3"]), SOURCE_B: frozenset([SOURCE_B, SOURCE_B + ":f0"])}
         stages = [[SOURCE_A + ":f1", SOURCE_A, SOURCE_B + ":f0", SOURCE_A + ":f3"],
@@ -507,7 +584,7 @@ class DrivenAdapter(LocalEngineAdapterE1):
         self.settings = {"capture_context": True, "top_k": 5,
                          "_e1": {"provenance_role": "claim", "token_counter": "approx"}}
         self.process = SimpleNamespace(poll=lambda: None)
-        self.mapping, self.fragment_counts = {}, {}
+        self.mapping = {}
         self.expected_ids_by_source = {}
         self.ingest_sources, self.sealed = {}, False
         self.readiness_observations = {}
@@ -518,7 +595,7 @@ class DrivenAdapter(LocalEngineAdapterE1):
 
     def identity(self):
         self.calls.append("identity")
-        self.mapping, self.fragment_counts, self.session_id = {}, {}, None
+        self.mapping, self.session_id = {}, None
         self.expected_ids_by_source = {}
         self.ingest_sources, self.sealed = {}, False
         self.readiness_observations = {}

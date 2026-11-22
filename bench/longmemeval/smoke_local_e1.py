@@ -239,6 +239,7 @@ def run(args):
                 'configuration_hashing': 'sha256 of canonical parsed TOML JSON',
                 'adapter_sources_sha256': {name: sha256(Path(__file__).with_name(name + '.py'))
                     for name in ('runner', 'runner_local', 'runner_local_e1', 'runner_local_v2',
+                                 'ingest_receipt', 'readiness_proof', 'readiness_artifact',
                                  'representations', 'evidence_v2', 'qa_context', 'qa_context_v2',
                                  'stage_diagnostics', 'longmemeval_dates', 'validate')},
                 'network': 'macOS sandbox: outbound loopback only; Python DNS loopback only',
