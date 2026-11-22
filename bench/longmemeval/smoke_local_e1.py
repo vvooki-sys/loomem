@@ -156,8 +156,13 @@ def run_arm(settings, e1, row, output, binding):
         ingested = adapter.request('/ingest', {'records': records})
         assert ingested['accepted_ids'] == expected
         print(json.dumps({'arm': arm, 'stage': 'readiness'}), flush=True)
-        ready = adapter.request('/ready', {'expected_ids': expected})
-        assert ready['ready'] and ready['indexed_ids'] == expected
+        scope = canonical_hash([binding, row['question_id']])
+        ready = adapter.request('/ready', {'scope': scope, 'expected_ids': expected})
+        assert ready['ready']
+        if e1:
+            assert len(ready['records']) == adapter.expected_chunks()
+        else:
+            assert ready['indexed_ids'] == expected
         payload = {'query': row['question'], 'top_k': 5, 'trace': True,
                    'capture_context': True}
         print(json.dumps({'arm': arm, 'stage': 'retrieval'}), flush=True)
