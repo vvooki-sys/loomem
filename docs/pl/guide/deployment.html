@@ -147,7 +147,7 @@ curl http://localhost:3030/health
 </code></pre>
 <h3 id="local-embeddings-no-openai-dependency">Lokalne embeddingi (bez zależności od OpenAI)</h3>
 <p>W sekcji <code>[llm]</code> pliku <code>config.toml</code> ustaw <code>embedding_provider = "local"</code> — to wartość domyślna nowej instalacji. Używany jest runtime tract ONNX, napisany w czystym Ruście i bez natywnych zależności; nic nie opuszcza maszyny. Model pobiera się osobno (<code>./scripts/fetch-embedding-model.sh</code>); bez niego serwer odmawia uruchomienia (<code>refusing cloud fallback</code>), zamiast przejść na OpenAI.</p>
-<p>Uwaga: konsolidacja, ekstrakcja i dream korzystają z OpenAI completions (<code>gpt-4.1-mini</code>). Bez <code>OPENAI_API_KEY</code> serwer w domyślnej konfiguracji odmawia uruchomienia, chyba że ustawiono <code>LOOMEM_ALLOW_KEYLESS=1</code>; w takim trybie te operacje kończą się błędem (<code>memory_ingest</code> zwraca błąd braku klucza). Embeddingi i wyszukiwanie pozostają lokalne w obu przypadkach.</p>
+<p>Uwaga: konsolidacja, ekstrakcja i dream korzystają z OpenAI completions (<code>gpt-6-luna</code>). Bez <code>OPENAI_API_KEY</code> serwer w domyślnej konfiguracji odmawia uruchomienia, chyba że ustawiono <code>LOOMEM_ALLOW_KEYLESS=1</code>; w takim trybie te operacje kończą się błędem (<code>memory_ingest</code> zwraca błąd braku klucza). Embeddingi i wyszukiwanie pozostają lokalne w obu przypadkach.</p>
 <hr/>
 <h2 id="docker">Docker</h2>
 <h3 id="build">Budowanie</h3>

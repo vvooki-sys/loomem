@@ -648,7 +648,7 @@ score    = fusion_score * decay
 2. Group by stream (user isolation)
 3. <strong>Sub-group by topic similarity</strong> — greedy clustering on embeddings (cosine threshold). Prevents unrelated facts from merging into one L1 chunk.
 4. PII redaction (per sub-group)
-5. LLM compression (gpt-4.1-mini) — one call per sub-group
+5. LLM compression (gpt-6-luna) — one call per sub-group
 6. Create L1 chunk with <code>source_ids</code> linking back to L0
 7. Index in Tantivy + embedding queue
 8. Mark L0 as <code>consolidated: true</code></p>
@@ -732,7 +732,7 @@ score    = fusion_score * decay
 </tr>
 <tr>
 <td>Model</td>
-<td>gpt-4.1-mini</td>
+<td>gpt-6-luna</td>
 </tr>
 </tbody>
 </table>

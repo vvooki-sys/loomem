@@ -59,7 +59,7 @@ curl -X POST http://localhost:3030/v1/store \
 
 W sekcji `[llm]` pliku `config.toml` ustaw `embedding_provider = "local"` — to wartość domyślna nowej instalacji. Używany jest runtime tract ONNX, napisany w czystym Ruście i bez natywnych zależności; nic nie opuszcza maszyny. Model pobiera się osobno (`./scripts/fetch-embedding-model.sh`); bez niego serwer odmawia uruchomienia (`refusing cloud fallback`), zamiast przejść na OpenAI.
 
-Uwaga: konsolidacja, ekstrakcja i dream korzystają z OpenAI completions (`gpt-4.1-mini`). Bez `OPENAI_API_KEY` serwer w domyślnej konfiguracji odmawia uruchomienia, chyba że ustawiono `LOOMEM_ALLOW_KEYLESS=1`; w takim trybie te operacje kończą się błędem (`memory_ingest` zwraca błąd braku klucza). Embeddingi i wyszukiwanie pozostają lokalne w obu przypadkach.
+Uwaga: konsolidacja, ekstrakcja i dream korzystają z OpenAI completions (`gpt-6-luna`). Bez `OPENAI_API_KEY` serwer w domyślnej konfiguracji odmawia uruchomienia, chyba że ustawiono `LOOMEM_ALLOW_KEYLESS=1`; w takim trybie te operacje kończą się błędem (`memory_ingest` zwraca błąd braku klucza). Embeddingi i wyszukiwanie pozostają lokalne w obu przypadkach.
 
 ------------------------------------------------------------------------
 

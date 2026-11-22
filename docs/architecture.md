@@ -342,7 +342,7 @@ The scheduler orchestrates background jobs. All workers can be paused/resumed at
 2. Group by stream (user isolation)
 3. **Sub-group by topic similarity** — greedy clustering on embeddings (cosine threshold). Prevents unrelated facts from merging into one L1 chunk.
 4. PII redaction (per sub-group)
-5. LLM compression (gpt-4.1-mini) — one call per sub-group
+5. LLM compression (gpt-6-luna) — one call per sub-group
 6. Create L1 chunk with `source_ids` linking back to L0
 7. Index in Tantivy + embedding queue
 8. Mark L0 as `consolidated: true`
@@ -378,7 +378,7 @@ Cluster output feeds the associator (below); there is no separate storage tier f
 | Flush interval | 3 seconds |
 | Queue capacity | 200 |
 | Confidence threshold | 0.5 |
-| Model | gpt-4.1-mini |
+| Model | gpt-6-luna |
 
 Async LLM NER runs in background for entities not in the dictionary.
 

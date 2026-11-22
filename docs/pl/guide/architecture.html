@@ -587,7 +587,7 @@ score    = fusion_score * decay
 2. Grupowanie według strumienia (izolacja użytkownika)
 3. <strong>Podział na podgrupy według podobieństwa tematu</strong> — zachłanne klastrowanie embeddingów (próg kosinusowy). Zapobiega łączeniu niepowiązanych faktów w jednym chunku L1.
 4. Redakcja danych osobowych (dla każdej podgrupy)
-5. Kompresja przez LLM (gpt-4.1-mini) — jedno wywołanie na podgrupę
+5. Kompresja przez LLM (gpt-6-luna) — jedno wywołanie na podgrupę
 6. Utworzenie chunka L1 z <code>source_ids</code> wskazującymi na L0
 7. Indeksowanie w Tantivy i kolejka embeddingów
 8. Oznaczenie L0 jako <code>consolidated: true</code></p>
@@ -671,7 +671,7 @@ score    = fusion_score * decay
 </tr>
 <tr>
 <td>Model</td>
-<td>gpt-4.1-mini</td>
+<td>gpt-6-luna</td>
 </tr>
 </tbody>
 </table>
