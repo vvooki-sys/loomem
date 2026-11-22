@@ -29,7 +29,11 @@ configurations load unchanged; the new defaults apply to the shipped
   `3600` to `2592000`) and `schedule_timeout_secs` (`3600`, minimum `60`).
   It needs both `[dream] enabled` and `[scheduler] enabled`; manual
   `memory_dream` / `POST /v1/dream` and the count-based auto-trigger are
-  unchanged.
+  unchanged. Upgrade note: `schedule_enabled` defaults to `true`, so an
+  existing config with `[dream] enabled = true` starts a daily pass after
+  upgrading (capped per stream by `cost_cap_usd_per_run`); set
+  `schedule_enabled = false` or switch it off in the dashboard to keep dream
+  on-demand only.
 - Per-provider chat request options on `[llm.providers.<name>]`, all off by
   default: `omit_temperature` (drop `temperature`), `max_completion_tokens`
   (send the output cap as `max_completion_tokens` instead of the deprecated
