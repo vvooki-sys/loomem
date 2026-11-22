@@ -16,6 +16,9 @@ use crate::storage::{Chunk, RocksDbStore};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileConfig {
     pub enabled: bool,
+    /// Unset or empty: inherits `[llm] compression_model`
+    /// (see `Config::inherit_feature_models`).
+    #[serde(default)]
     pub model: String,
     pub max_chunks: usize,
     pub cache_ttl_secs: u64,
@@ -27,7 +30,7 @@ impl Default for ProfileConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            model: "gpt-4.1-mini".to_string(),
+            model: String::new(),
             max_chunks: 100,
             cache_ttl_secs: 3600,
             max_static_facts: 30,

@@ -212,7 +212,7 @@ impl CostTracker {
                 input_cost + output_cost
             }
             _ => {
-                warn!("Unknown model for cost tracking: {}", model);
+                warn_unknown_model_once(model);
                 0.0
             }
         };
@@ -423,6 +423,26 @@ impl CostBudgetStatus {
     }
 }
 
+/// A model without a known price (for example a local Ollama model) costs
+/// zero. Warn once per model and process, not on every call.
+/// Returns true when this call wrote the warning.
+fn warn_unknown_model_once(model: &str) -> bool {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let first = SEEN
+        .get_or_init(Default::default)
+        .lock()
+        .map(|mut seen| seen.insert(model.to_string()))
+        .unwrap_or(true);
+    if first {
+        warn!(
+            "Unknown model for cost tracking: {} (counted as $0; logged once)",
+            model
+        );
+    }
+    first
+}
+
 /// Check cost budget status for a stream based on today's token usage.
 ///
 /// Uses the CostTracker's daily cost data and the configured daily cap
@@ -551,5 +571,20 @@ mod tests {
         // Should exceed budget
         let result = tracker.check_budget();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn unknown_model_costs_zero_and_warns_once() {
+        let (_temp_dir, store) = create_test_store();
+        let tracker = CostTracker::new(store, CostConfig::default(), reqwest::Client::new());
+        tracker.record(1_000_000, 1_000_000, "qwen2.5:3b").unwrap();
+        tracker.record(1_000_000, 1_000_000, "qwen2.5:3b").unwrap();
+        let today = tracker.daily_summary();
+        assert_eq!(today.total_usd, 0.0);
+        assert_eq!(today.total_input_tokens, 2_000_000);
+        // The two record() calls above already used the one warning.
+        assert!(!warn_unknown_model_once("qwen2.5:3b"));
+        assert!(warn_unknown_model_once("cost-test-model-seen-once"));
+        assert!(!warn_unknown_model_once("cost-test-model-seen-once"));
     }
 }

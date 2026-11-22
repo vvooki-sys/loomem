@@ -238,7 +238,8 @@ fn ac6_config_without_manifest_section_uses_default() {
     // Input lacks `manifest` entirely — mirrors a config.toml without [manifest].
     let w: Wrapper = serde_json::from_str("{}").unwrap();
     assert!(!w.manifest.enabled);
-    assert_eq!(w.manifest.model, "gpt-4.1-mini");
+    // Empty = unset; `Config::inherit_feature_models` fills it from compression_model.
+    assert_eq!(w.manifest.model, "");
     assert_eq!(w.manifest.max_chunks, 100);
     assert_eq!(w.manifest.cache_ttl_secs, 3600);
     assert!(w.manifest.streams.is_empty());

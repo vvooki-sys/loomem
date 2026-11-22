@@ -32,6 +32,9 @@ pub struct ExtractionTopic {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeExtractionConfig {
     pub enabled: bool,
+    /// Unset or empty: inherits `[llm] compression_model`
+    /// (see `Config::inherit_feature_models`).
+    #[serde(default)]
     pub model: String,
     pub max_transcript_tokens: usize,
     pub dedup_cosine_threshold: f64,
@@ -73,7 +76,7 @@ impl Default for KnowledgeExtractionConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            model: "gpt-4.1-mini".to_string(),
+            model: String::new(),
             max_transcript_tokens: 20000,
             dedup_cosine_threshold: 0.92,
             contradiction_check: true,

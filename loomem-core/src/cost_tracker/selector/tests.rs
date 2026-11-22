@@ -66,13 +66,34 @@ fn unknown_invalid_usage_and_unsupported_models_preserve_reservations() {
         tracker: &tracker,
         stream_id: None,
     };
-    assert!(accounting.reserve("unpriced").is_err());
     let reservation = accounting.reserve("gpt-4.1").unwrap();
     let before = tracker.daily_summary();
     assert!(reservation.reconcile(&json!({"service_tier":"default","model":"gpt-4.1","usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1}})).is_err());
     assert_eq!(tracker.daily_summary().total_usd, before.total_usd);
     assert!(accounting.reserve("gpt-4.1").is_err());
     assert_eq!(tracker.daily_summary().selector_unknown_usage_calls, 1);
+}
+
+#[test]
+fn unpriced_model_costs_zero_and_writes_no_accounting() {
+    // The cap admits no priced reservation, but a free model needs none.
+    let (_temp, tracker) = tracker(0.000_001);
+    let accounting = SelectorAccounting {
+        tracker: &tracker,
+        stream_id: Some("streamA"),
+    };
+    assert!(accounting.reserve("gpt-4.1").is_err());
+    for model in ["qwen2.5:3b", "unpriced"] {
+        let reservation = accounting.reserve(model).unwrap();
+        // No usage, no service_tier, other model name: nothing to settle.
+        assert!(reservation.reconcile(&json!({"model": "other"})).is_ok());
+    }
+    let summary = tracker.daily_summary();
+    assert_eq!(summary.total_usd, 0.0);
+    assert_eq!(summary.selector_calls, 0);
+    assert_eq!(summary.selector_unknown_usage_calls, 0);
+    let pending = read_pending(&tracker, &pending_keys(Some("streamA"))).unwrap();
+    assert_eq!(pending, vec![0.0, 0.0]);
 }
 
 #[test]

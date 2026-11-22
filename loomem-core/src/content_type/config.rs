@@ -7,8 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Per-instance content-type classification config.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Per-instance content-type classification config. Default: disabled, model unset.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContentTypeConfig {
     /// Typing on/off (since /143 the LLM is the only classifier). When false,
     /// `classify_content` returns `None`: writes create no sidecar entry and
@@ -17,16 +17,10 @@ pub struct ContentTypeConfig {
     /// Model used for the LLM classification completion. Part of the cache key,
     /// so a model change invalidates previously cached classifications
     /// (wzorzec /90).
+    /// Unset or empty: inherits `[llm] compression_model`
+    /// (see `Config::inherit_feature_models`).
+    #[serde(default)]
     pub model: String,
-}
-
-impl Default for ContentTypeConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model: "gpt-4.1-mini".to_string(),
-        }
-    }
 }
 
 impl ContentTypeConfig {

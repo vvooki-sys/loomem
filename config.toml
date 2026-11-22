@@ -296,7 +296,7 @@ persist = true
 
 [knowledge_extraction]
 enabled = true               # Knowledge extraction pipeline: LLM extracts structured facts from conversations
-model = "gpt-4.1-mini"
+# model = "gpt-4.1-mini"  # unset: inherits [llm] compression_model
 max_transcript_tokens = 20000
 dedup_cosine_threshold = 0.92
 contradiction_check = true
@@ -308,7 +308,7 @@ split_on_truncation = false      # true = re-extract a truncated chunk as two li
 
 [entity_extraction]
 enabled = true               # Phase 4: entity linking for cross-session retrieval
-model = "gpt-4.1-mini"
+# model = "gpt-4.1-mini"  # unset: inherits [llm] compression_model
 batch_size = 20               # max chunks per LLM call
 flush_interval_secs = 3
 queue_capacity = 200
@@ -319,14 +319,14 @@ max_tokens_per_batch = 2000  # dynamic batching: stop adding chunks when token e
 enabled = true
 max_chunks = 200           # Top N chunks to consider (L1+ only)
 max_sections = 20          # Max topic sections in output
-model = "gpt-4.1-mini"     # Model for formatting (inherits from compression_model)
+# model = "gpt-4.1-mini"  # Model for formatting; unset: inherits [llm] compression_model
 
 # v2: Contradiction detection (Supermemory-inspired)
 [contradiction]
 enabled = true
 similarity_threshold = 0.70    # fast vector screen cutoff
 max_candidates = 5              # max similar chunks to check via LLM
-model = "gpt-4.1-mini"         # LLM for updates/extends/none classification
+# model = "gpt-4.1-mini"  # LLM for updates/extends/none classification; unset: inherits [llm] compression_model
 
 # v2: Conversation memory extraction
 [conversation_extraction]
@@ -340,7 +340,7 @@ max_extractions_per_request = 30
 # v2: User profile synthesis
 [profile]
 enabled = true
-model = "gpt-4.1-mini"
+# model = "gpt-4.1-mini"  # unset: inherits [llm] compression_model
 max_chunks = 100               # top N chunks to consider
 cache_ttl_secs = 3600          # 1 hour
 max_static_facts = 30
@@ -368,7 +368,7 @@ max_associations = 3
 enabled = true
 batch_size = 50                   # chunks per run
 min_group_size = 2                # min chunks per subject to trigger merge
-model = "gpt-4.1-mini"
+# model = "gpt-4.1-mini"  # unset: inherits [llm] compression_model
 cost_cap_usd_per_run = 0.10      # safety: stop if exceeded
 auto_trigger_threshold = 50      # fire a dream run after N new chunks per stream (0 = off, private streams only)
 auto_cooldown_secs = 900         # min 15 min between auto-runs on the same stream (debounces bulk imports)

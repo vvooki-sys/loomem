@@ -29,6 +29,9 @@ pub struct DreamConfig {
     pub enabled: bool,
     pub batch_size: usize,
     pub min_group_size: usize,
+    /// Unset or empty: inherits `[llm] compression_model`
+    /// (see `Config::inherit_feature_models`).
+    #[serde(default)]
     pub model: String,
     pub cost_cap_usd_per_run: f64,
     /// Count of newly-persisted chunks (per stream) that arms an automatic dream
@@ -64,7 +67,7 @@ impl Default for DreamConfig {
             enabled: false,
             batch_size: 50,
             min_group_size: 2,
-            model: "gpt-4.1-mini".to_string(),
+            model: String::new(),
             cost_cap_usd_per_run: 0.10,
             auto_trigger_threshold: default_auto_trigger_threshold(),
             auto_cooldown_secs: default_auto_cooldown_secs(),
