@@ -35,7 +35,8 @@ impl State {
 
 type ApplyHold = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
-/// Logged when revocation finds an apply section open; tests sequence on it.
+/// Logged when revocation finds an apply section or a durable write open
+/// (one line per job it must wait for); tests sequence on it.
 pub(crate) const REVOKE_DEFERRED_MARKER: &str = "LOOMEM_HOSTED_REVOKE_DEFERRED";
 
 pub(crate) struct WritePhase {
@@ -98,7 +99,12 @@ impl WritePhase {
             return false;
         };
         match state.phase {
-            Phase::Durable => false,
+            Phase::Durable => {
+                tracing::info!(
+                    "revocation deferred until the durable write finishes ({REVOKE_DEFERRED_MARKER})"
+                );
+                false
+            }
             Phase::Applying => {
                 state.revoke_requested = true;
                 tracing::info!(

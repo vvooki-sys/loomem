@@ -209,6 +209,13 @@ impl Scheduler {
         if let Err(e) = self.recover_orphaned().await {
             error!("Failed to recover orphaned chunks: {}", e);
         }
+        // A disabled dream worker never polls: record it so re-enabling later
+        // re-anchors the schedule instead of running a catch-up pass.
+        if let Err(e) =
+            dream_schedule::record_worker_state(&self.storage, self.config.dream.enabled)
+        {
+            error!("Dream schedule: cannot record worker state: {e:#}");
+        }
 
         let consolidation_interval = self.config.worker.consolidation.interval_secs;
         let decay_interval = self.config.worker.decay_worker.interval_secs;
@@ -412,14 +419,6 @@ impl Scheduler {
 
     /// Spawn the pass if no other is running; `false` when it lost the race.
     fn spawn_dream_task(&self, trigger: &'static str) -> bool {
-        let running = self.dream_running.clone();
-        if running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            warn!("Dream pass already running, not starting another");
-            return false;
-        }
         let pass = ScheduledPass {
             store: self.storage.clone(),
             tantivy: self.tantivy.clone(),
@@ -432,11 +431,7 @@ impl Scheduler {
             embedding_queue: self.embedding_queue.clone(),
             workers: self.workers.clone(),
         };
-        tokio::spawn(async move {
-            dream_pass::run_scheduled_pass(pass, trigger).await;
-            running.store(false, Ordering::SeqCst);
-        });
-        true
+        dream_pass::spawn_scheduled_pass(pass, self.dream_running.clone(), trigger)
     }
 
     async fn wait_for_running_tasks_to_complete(&self) {

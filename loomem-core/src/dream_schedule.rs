@@ -93,6 +93,10 @@ pub struct DreamPassSummary {
     /// Streams whose run hit the per-stream `cost_cap_usd_per_run`.
     #[serde(default)]
     pub cost_cap_reached: usize,
+    /// Streams skipped because another dream entry point (MCP tool, HTTP,
+    /// auto-trigger) was already dreaming them when the pass got there.
+    #[serde(default)]
+    pub streams_skipped_busy: usize,
     /// [`TRIGGER_SCHEDULE`] or [`TRIGGER_MANUAL`].
     #[serde(default)]
     pub trigger: String,
@@ -272,6 +276,17 @@ pub fn poll(store: &RocksDbStore, cfg: &DreamConfig, now: u64) -> Result<Decisio
         }
     })?;
     Ok(decision)
+}
+
+/// Called once when the scheduler starts. With the dream worker off in
+/// config the poll never runs, so the disabled state is recorded here; the
+/// first poll after `[dream] enabled` is turned back on (restart) then
+/// re-anchors instead of running a catch-up pass. No-op while enabled.
+pub fn record_worker_state(store: &RocksDbStore, dream_enabled: bool) -> Result<()> {
+    if dream_enabled {
+        return Ok(());
+    }
+    update(store, |row| row.last_seen_enabled = Some(false)).map(drop)
 }
 
 /// Apply an admin override (`PUT /v1/dream/schedule`). A disabled → enabled
@@ -581,6 +596,7 @@ mod tests {
                 contradictions_resolved: 1,
                 cost_usd: 0.01,
                 cost_cap_reached: 0,
+                streams_skipped_busy: 1,
                 trigger: TRIGGER_SCHEDULE.to_string(),
                 status: STATUS_OK.to_string(),
             }),
@@ -617,6 +633,40 @@ mod tests {
         );
         // A Run decision writes nothing: the pass marks the row itself.
         assert_eq!(load(&store)?, row);
+        Ok(())
+    }
+
+    #[test]
+    fn record_worker_state_marks_disabled_once_and_ignores_enabled() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let store = open_store(&tmp);
+        let c = cfg(true, 100);
+
+        // Enabled worker: nothing is written.
+        record_worker_state(&store, true)?;
+        assert_eq!(load(&store)?, DreamScheduleRow::default());
+
+        // Disabled worker: the transition is recorded...
+        record_worker_state(&store, false)?;
+        let row = load(&store)?;
+        assert_eq!(row.last_seen_enabled, Some(false));
+        assert_eq!(
+            DreamScheduleRow {
+                last_seen_enabled: None,
+                ..row.clone()
+            },
+            DreamScheduleRow::default(),
+            "only last_seen_enabled changed"
+        );
+
+        // ...and the next poll after re-enabling re-anchors, no catch-up run,
+        // even though a stale base far in the past exists.
+        update(&store, |r| r.last_run_at = Some(10))?;
+        assert!(matches!(poll(&store, &c, 50_000)?, Decision::Write(_)));
+        let row = load(&store)?;
+        assert_eq!(row.anchor_at, Some(50_000));
+        assert_eq!(row.last_seen_enabled, Some(true));
+        assert_eq!(poll(&store, &c, 50_050)?, Decision::Idle);
         Ok(())
     }
 

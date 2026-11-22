@@ -11,7 +11,7 @@
 //! call already carries its own 30 s timeout), so `dream_run` is never
 //! cancelled half-way through a merge.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -60,12 +60,17 @@ fn new_summary(trigger: &str, started_at: u64, streams_total: usize) -> DreamPas
         contradictions_resolved: 0,
         cost_usd: 0.0,
         cost_cap_reached: 0,
+        streams_skipped_busy: 0,
         trigger: trigger.to_string(),
         status: STATUS_OK.to_string(),
     }
 }
 
 fn accumulate(summary: &mut DreamPassSummary, result: &DreamResult) {
+    if result.skipped_busy {
+        summary.streams_skipped_busy += 1;
+        return;
+    }
     summary.chunks_processed += result.chunks_processed;
     summary.facts_merged += result.facts_merged;
     summary.contradictions_resolved += result.contradictions_resolved;
@@ -150,6 +155,28 @@ pub struct ScheduledPass {
     pub workers: WorkerRegistry,
 }
 
+/// Start the pass on the runtime if no other is running: the `running`
+/// flag is taken with `compare_exchange`, so of two concurrent callers only
+/// one spawns. Returns `false` for the loser.
+pub fn spawn_scheduled_pass(
+    pass: ScheduledPass,
+    running: Arc<AtomicBool>,
+    trigger: &'static str,
+) -> bool {
+    if running
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        warn!("Dream pass already running, not starting another");
+        return false;
+    }
+    tokio::spawn(async move {
+        run_scheduled_pass(pass, trigger).await;
+        running.store(false, Ordering::SeqCst);
+    });
+    true
+}
+
 /// Persist the start marker (`last_run_at = now`, manual request consumed).
 /// A pass may only start once this is durable: a crash mid-pass must not
 /// re-fire in a loop, and a queued request must not be served twice.
@@ -203,9 +230,10 @@ fn record_outcome(pass: &ScheduledPass, summary: DreamPassSummary) {
     info!(
         trigger = summary.trigger.as_str(),
         status = summary.status.as_str(),
-        "Dream pass finished: streams={} failed={} chunks={} merged={} contradictions={} cost=${:.4} cap_hits={}",
+        "Dream pass finished: streams={} failed={} skipped_busy={} chunks={} merged={} contradictions={} cost=${:.4} cap_hits={}",
         summary.streams_total,
         summary.streams_failed,
+        summary.streams_skipped_busy,
         summary.chunks_processed,
         summary.facts_merged,
         summary.contradictions_resolved,
@@ -289,6 +317,42 @@ mod tests {
     }
 
     #[test]
+    fn accumulate_counts_a_busy_stream_as_skipped_not_processed() {
+        let mut summary = new_summary(dream_schedule::TRIGGER_SCHEDULE, 1, 2);
+        accumulate(&mut summary, &DreamResult::skipped_busy("busy"));
+        assert_eq!(summary.streams_skipped_busy, 1);
+        assert_eq!(summary.chunks_processed, 0);
+        assert_eq!(summary.cost_cap_reached, 0);
+    }
+
+    /// Only the caller that flips `running` spawns; the flag is released
+    /// again once the (empty-store) pass has finished.
+    #[tokio::test]
+    async fn spawn_scheduled_pass_runs_once_per_running_flag() {
+        let tmp = TempDir::new().expect("tempdir");
+        let pass = scheduled_pass(&tmp);
+        let store = pass.store.clone();
+        let running = Arc::new(AtomicBool::new(true));
+        // The losing pass needs its own store: RocksDB locks the directory.
+        let other = TempDir::new().expect("tempdir for the losing pass");
+        assert!(
+            !spawn_scheduled_pass(scheduled_pass(&other), running.clone(), "manual"),
+            "a flag already set means another pass owns it"
+        );
+        running.store(false, Ordering::SeqCst);
+        assert!(spawn_scheduled_pass(pass, running.clone(), "manual"));
+        // Deterministic wait: the pass is a spawned task on this runtime and
+        // the store is empty, so it finishes as soon as it is polled.
+        while running.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+        assert!(dream_schedule::load(&store)
+            .expect("row")
+            .last_result
+            .is_some());
+    }
+
+    #[test]
     fn mark_started_sets_last_run_and_clears_request() -> Result<()> {
         let tmp = TempDir::new()?;
         let pass = scheduled_pass(&tmp);
@@ -320,6 +384,7 @@ mod tests {
         assert_eq!(result.status, STATUS_OK);
         assert_eq!(result.streams_total, 0);
         assert_eq!(result.streams_failed, 0);
+        assert_eq!(result.streams_skipped_busy, 0);
         assert_eq!(result.trigger, dream_schedule::TRIGGER_MANUAL);
         assert!(result.finished_at >= result.started_at);
 

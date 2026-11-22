@@ -307,6 +307,10 @@ fn maybe_trigger_auto_dream(state: &Arc<AppState>, stream: &str) {
         )
         .await
         {
+            Ok(r) if r.skipped_busy => tracing::info!(
+                "auto-dream skipped on '{}': another dream run is in progress on this stream",
+                stream
+            ),
             Ok(r) => tracing::info!(
                 "auto-dream done on '{}': {} facts merged, {} contradictions resolved, ${:.3}",
                 stream,

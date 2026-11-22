@@ -54,8 +54,10 @@ pub struct DreamConfig {
     /// 1 h ..= 30 d by `Config::validate` and by the HTTP handler.
     #[serde(default = "default_schedule_interval_secs")]
     pub schedule_interval_secs: u64,
-    /// The whole scheduled pass (all streams) is aborted after this many
-    /// seconds.
+    /// Soft deadline for one scheduled pass: once this many seconds have
+    /// elapsed no further stream is started; the stream in progress always
+    /// finishes (each LLM call has its own 30 s timeout). Nothing is
+    /// cancelled mid-merge.
     #[serde(default = "default_schedule_timeout_secs")]
     pub schedule_timeout_secs: u64,
 }
@@ -279,7 +281,7 @@ pub async fn dream_run(
     cost_tracker: &CostTracker,
     stream: &str,
 ) -> Result<DreamResult> {
-    let Some(_inflight) = crate::dream_inflight::try_acquire(stream) else {
+    let Some(_inflight) = crate::dream_inflight::try_acquire(store, stream) else {
         return Ok(DreamResult::skipped_busy(stream));
     };
     dream_run_exclusive(store, tantivy, client, run_ctx, cost_tracker, stream).await
