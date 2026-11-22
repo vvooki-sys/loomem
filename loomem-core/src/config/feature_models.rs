@@ -53,11 +53,9 @@ mod tests {
 
     #[test]
     fn shipped_config_features_inherit_compression_model() {
-        let content = shipped_config().replace(
-            r#"compression_model = "gpt-4.1-mini""#,
-            r#"compression_model = "qwen2.5:3b""#,
-        );
-        let mut cfg: Config = toml::from_str(&content).expect("parse config.toml");
+        let mut cfg: Config = toml::from_str(&shipped_config()).expect("parse config.toml");
+        // Set after parsing, so the test does not depend on the shipped literal.
+        cfg.llm.compression_model = "qwen2.5:3b".to_string();
         cfg.inherit_feature_models();
         assert_eq!(models(&cfg), ["qwen2.5:3b"; 8]);
     }

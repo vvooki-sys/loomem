@@ -31,25 +31,90 @@ fn load(content: &str) -> Result<Config> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("config.toml");
     std::fs::write(&path, content)?;
-    Config::load(&path)
+    // Flatten the context chain so a failing test shows the TOML error itself.
+    Config::load(&path).map_err(|e| anyhow::anyhow!("{e:#}"))
+}
+
+/// The shipped config without its `[llm.providers.openai]` entry: what a
+/// config written before the entry existed looks like (the entry runs from
+/// its header to the next blank line).
+fn without_openai_entry(content: &str) -> String {
+    // Anchored at a line start: the `[llm]` comments mention the header too.
+    let header = "\n[llm.providers.openai]\n";
+    let start = content
+        .find(header)
+        .expect("shipped config carries the openai entry")
+        + 1;
+    let end = content[start..]
+        .find("\n\n")
+        .map_or(content.len(), |i| start + i + 2);
+    format!("{}{}", &content[..start], &content[end..])
 }
 
 #[test]
 fn old_openai_config_loads_and_resolves_builtin_provider() -> Result<()> {
-    let cfg = load(&config_with(
+    let cfg = load(&without_openai_entry(&config_with(
         "openai",
         "api_key_env = \"OPENAI_API_KEY\"\napi_key = \"sk-test-inline\"",
         "",
-    ))?;
+    )))?;
     assert!(cfg.llm.providers.is_empty());
     let active = cfg.llm.active_provider()?;
     assert_eq!(active.name, "openai");
     assert_eq!(active.base_url, OPENAI_BASE_URL);
     assert_eq!(active.api_key.as_deref(), Some("sk-test-inline"));
-    // The legacy accessor used by today's call sites agrees.
+    // No request options: every chat body is sent exactly as before.
+    assert!(active.chat.is_default());
+    // The legacy accessor used by the embedding path agrees.
     assert_eq!(cfg.llm.get_api_key().as_deref(), Some("sk-test-inline"));
     assert!(cfg.llm.provider_summary().contains("auth=config:api_key"));
     assert!(!cfg.llm.provider_summary().contains("sk-test-inline"));
+    Ok(())
+}
+
+/// The shipped config refines the built-in provider with an `openai` entry;
+/// a key kept in the legacy inline field still resolves, with the entry's
+/// request options. `MISSING_ENV` stands in for an unset `OPENAI_API_KEY`
+/// so the test never reads the real variable.
+#[test]
+fn shipped_openai_entry_resolves_legacy_inline_key_with_options() -> Result<()> {
+    let content = config_with(
+        "openai",
+        "api_key_env = \"OPENAI_API_KEY\"\napi_key = \"sk-test-inline\"",
+        "",
+    );
+    // The entry's `api_key_env` is the last occurrence (the top-level one
+    // comes first); point it at a variable that is never set.
+    let needle = "api_key_env = \"OPENAI_API_KEY\"";
+    let last = content.rfind(needle).expect("entry api_key_env present");
+    assert!(
+        last > content.find(needle).unwrap(),
+        "entry env var not found"
+    );
+    let content = format!(
+        "{}api_key_env = \"{MISSING_ENV}\"{}",
+        &content[..last],
+        &content[last + needle.len()..]
+    );
+    let cfg = load(&content)?;
+    assert_eq!(cfg.llm.providers.len(), 1);
+    let active = cfg.llm.active_provider()?;
+    assert_eq!(active.name, "openai");
+    assert_eq!(active.base_url, OPENAI_BASE_URL);
+    assert_eq!(active.api_key.as_deref(), Some("sk-test-inline"));
+    assert!(active.chat.max_completion_tokens);
+    assert!(active.chat.omit_temperature);
+    assert_eq!(active.chat.reasoning_effort.as_deref(), Some("low"));
+    let body = active.chat_body(serde_json::json!({
+        "model": "m", "messages": [], "max_tokens": 100, "temperature": 0.0
+    }));
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "model": "m", "messages": [], "max_completion_tokens": 100, "reasoning_effort": "low"
+        })
+    );
+    assert!(cfg.llm.provider_summary().contains("auth=config:api_key"));
     Ok(())
 }
 

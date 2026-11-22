@@ -10,6 +10,10 @@ use tracing::{debug, warn};
 use crate::llm_failures::{global as llm_failures, LlmFailureKind};
 use crate::llm_provider::{self, LlmProviderConfig, ProviderError, ResolvedProvider};
 
+/// Chat model used when a config sets none: the shipped `config.toml`
+/// `compression_model`, which every per-feature `model` inherits.
+pub const DEFAULT_CHAT_MODEL: &str = "gpt-6-luna";
+
 /// Default embedding provider for configs that predate the
 /// `embedding_provider` field. Kept as "openai" so existing installations
 /// (whose config.toml has no such key) keep their current behavior; fresh
@@ -85,7 +89,7 @@ impl Default for LlmConfig {
             embedding_model: "text-embedding-3-small".to_string(),
             embedding_model_path: None,
             embedding_dim: 1536,
-            compression_model: "gpt-4o-mini".to_string(),
+            compression_model: DEFAULT_CHAT_MODEL.to_string(),
             timeout_secs: 30,
             fallback_to_regex: true,
             pool_max_idle_per_host: default_pool_max_idle_per_host(),
@@ -1047,6 +1051,17 @@ mod tests {
         assert!(!undefined.completions_key_present_with(|_| Some("k".to_string())));
     }
 
+    /// The code default and the shipped config name the same chat model, so
+    /// a config without `compression_model` behaves like the shipped one.
+    #[test]
+    fn shipped_config_compression_model_is_the_default_chat_model() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+        let content = std::fs::read_to_string(path).expect("read config.toml");
+        let shipped: crate::config::Config = toml::from_str(&content).expect("parse config.toml");
+        assert_eq!(shipped.llm.compression_model, DEFAULT_CHAT_MODEL);
+        assert_eq!(LlmConfig::default().compression_model, DEFAULT_CHAT_MODEL);
+    }
+
     #[test]
     fn active_key_env_hint_names_the_active_provider_env() {
         assert_eq!(LlmConfig::default().active_key_env_hint(), "OPENAI_API_KEY");
@@ -1089,7 +1104,10 @@ mod tests {
         .expect_err("truncated reply must fail");
         let shown = format!("{err:#}");
         assert!(shown.contains("finish_reason=length"), "{shown}");
-        assert!(shown.contains("model=gpt-4o-mini"), "{shown}");
+        assert!(
+            shown.contains(&format!("model={DEFAULT_CHAT_MODEL}")),
+            "{shown}"
+        );
         assert!(shown.contains("completion token limit=2000"), "{shown}");
 
         let (value, usage) = reflect_against(

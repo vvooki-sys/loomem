@@ -19,7 +19,7 @@ pub async fn embed(
         embedding_model: model.to_string(),
         embedding_model_path: None,
         embedding_dim: 1536,
-        compression_model: "gpt-4o-mini".to_string(),
+        compression_model: llm::DEFAULT_CHAT_MODEL.to_string(),
         timeout_secs: 30,
         fallback_to_regex: true,
         ..Default::default()

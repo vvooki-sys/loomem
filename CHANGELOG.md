@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Per-provider chat request options on `[llm.providers.<name>]`, all off by
+  default: `omit_temperature` (drop `temperature`), `max_completion_tokens`
+  (send the output cap as `max_completion_tokens` instead of the deprecated
+  `max_tokens`), `completion_tokens_floor` (raise any per-call cap below it;
+  `0` = unchanged) and `reasoning_effort` (`none`, `minimal`, `low`, `medium`,
+  `high`, `xhigh`, `max`). An entry with none set sends exactly the request
+  the built-in provider sends, byte for byte. An entry named `openai` refines
+  the built-in provider: its own `api_key_env` wins and the legacy
+  `llm.api_key` / `llm.api_key_env` are the fallback.
+- `gpt-6-luna` is priced in the cost tracker and the evidence selector
+  (0.10 USD/1M input, 0.50 USD/1M output; developers.openai.com/api/docs/pricing,
+  2026-11-22). Cached input (0.01) is not tracked separately: the whole prompt
+  is charged at the input price, an upper bound.
 - Compression, reflect, dream, profile, contradiction classification and
   rewrite, memory formatting, event-date extraction, reranking and multi-query
   decomposition now send their chat calls to the active `llm.provider`
@@ -26,6 +39,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The default chat model is `gpt-6-luna` (was `gpt-4.1-mini`, which OpenAI
+  retires on 2027-01-14), still through the built-in `openai` provider and
+  `OPENAI_API_KEY`. The shipped `config.toml` sets
+  `compression_model = "gpt-6-luna"` and adds an `[llm.providers.openai]`
+  entry with `max_completion_tokens = true`, `reasoning_effort = "low"` and
+  `omit_temperature = true`, which every chat call follows. The code default
+  (`LlmConfig::default()`) names the same model.
+  **Existing installations:** the installer never overwrites `config.toml`,
+  so an installed config keeps `gpt-4.1-mini` and the old request shape
+  until you edit it. To move to the new default: set
+  `compression_model = "gpt-6-luna"`, remove any per-feature
+  `model = "gpt-4.1-mini"` lines, and add the `[llm.providers.openai]` entry
+  from the shipped `config.toml`. To stay on OpenAI's older models, change
+  nothing before 2027-01-14. Docker/Railway images keep `OPENAI_API_KEY` for
+  both completions and embeddings.
+- The startup fail-closed check and the `/health` field `llm_key_present`
+  follow the active `llm.provider`, not the legacy OpenAI key. A named
+  provider with its own `api_key_env` is checked against that variable, and
+  the startup error names it; a provider without `api_key_env` (local
+  Ollama) counts as present, so it starts without `LOOMEM_ALLOW_KEYLESS=1`.
+- A chat completion with `finish_reason = "length"` is now an explicit error
+  on every chat path (compress, reflect, dream, profile, contradiction,
+  memory formatting, event-date extraction, reranking, multi-query, LLM NER,
+  content-type classification, manifest generation), naming the finish
+  reason, the model and the output cap that was sent. Before, these paths
+  parsed the cut content, which failed later or was admitted as a partial
+  result. Knowledge extraction and the evidence selector already rejected
+  such replies. This applies to `provider = "openai"` as well.
+- Dream and consolidation take their per-run cost from the shared price
+  table instead of a hardcoded 0.15/0.60 USD per 1M. Unchanged for
+  `gpt-4o-mini` and `gpt-4.1-mini`; a model without a known price now adds
+  $0 to the run cost, as the cost tracker already recorded it.
+- The evidence selector (`[search.operation]`, off by default) stays
+  OpenAI-only (`service_tier`, `json_schema`, `seed`); with `gpt-6-luna` it
+  prices calls from the new table.
 - When the active provider cannot be resolved, `memory_ingest` returns
   "Extraction failed: LLM provider unavailable. No facts stored." (before:
   "API key unavailable"). `ExtractionError::NoApiKey` is replaced by

@@ -767,9 +767,13 @@ mod tests {
         let content = std::fs::read_to_string(path).expect("read config.toml");
         let mut cfg: Config = toml::from_str(&content).expect("parse config.toml");
         // Force key resolution to fail deterministically: no config key and an
-        // env var that does not exist.
+        // env var that does not exist, for the legacy fields and for the
+        // shipped `[llm.providers.openai]` entry alike.
         cfg.llm.api_key = None;
         cfg.llm.api_key_env = "LOOMEM_TEST_ISSUE65_NO_SUCH_VAR".to_string();
+        for entry in cfg.llm.providers.values_mut() {
+            entry.api_key_env = Some("LOOMEM_TEST_ISSUE65_NO_SUCH_VAR".to_string());
+        }
         cfg.entity_extraction.enabled = true;
         cfg.knowledge_extraction.enabled = true;
         cfg.dream.enabled = false;
@@ -784,14 +788,35 @@ mod tests {
         assert!(cfg.llm_dependent_enabled_without_key().is_empty());
     }
 
+    /// The shipped config keeps `provider = "openai"` and refines the built-in
+    /// provider with an `[llm.providers.openai]` entry: same base URL and
+    /// key variable, plus the request options reasoning models need.
     #[test]
-    fn shipped_config_keeps_builtin_openai_provider() {
+    fn shipped_config_refines_builtin_openai_provider() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
         let content = std::fs::read_to_string(path).expect("read config.toml");
         let cfg: Config = toml::from_str(&content).expect("parse config.toml");
-        assert!(cfg.llm.providers.is_empty());
         assert_eq!(cfg.llm.provider, "openai");
+        assert_eq!(cfg.llm.providers.len(), 1);
+        let entry = &cfg.llm.providers["openai"];
+        assert_eq!(entry.base_url, crate::llm_provider::OPENAI_BASE_URL);
+        assert_eq!(entry.api_key_env.as_deref(), Some("OPENAI_API_KEY"));
+        assert!(entry.chat.max_completion_tokens);
+        assert!(entry.chat.omit_temperature);
+        assert_eq!(entry.chat.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(entry.chat.completion_tokens_floor, 0);
+        assert_eq!(cfg.llm.active_key_env_hint(), "OPENAI_API_KEY");
         cfg.validate().expect("shipped config validates");
+        // The legacy inline key still resolves through the entry (test fixtures
+        // and old configs keep their key there).
+        let mut inline = cfg;
+        inline.llm.api_key = Some("sk-test".to_string());
+        let active = inline
+            .llm
+            .active_provider()
+            .expect("inline legacy key resolves");
+        assert_eq!(active.base_url, crate::llm_provider::OPENAI_BASE_URL);
+        assert!(active.chat.max_completion_tokens);
     }
 
     #[test]
