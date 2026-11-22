@@ -354,10 +354,15 @@ max_transcript_tokens = 20000
 dedup_cosine_threshold = 0.92
 contradiction_check = true
 contradiction_cosine_min = 0.5   # Skip LLM judge if top-1 cosine < this
-max_facts_per_transcript = 20
-max_tokens = 2000                # Completion cap per extraction call; a reply that hits it (finish_reason "length") is rejected, never partially admitted
-input_chunk_tokens = 0           # 0 = one call per transcript up to max_transcript_tokens (legacy). >0 = split at line boundaries into chunks of at most min(this, max_transcript_tokens) tokens, one call each
-split_on_truncation = false      # true = re-extract a truncated chunk as two line-aligned halves (at most 4 extra calls per chunk, depth 2). false = reject and report, no retry
+# Chunked extraction defaults (owner decision 2026-11-22, deliberately
+# without an A/B — the validation pilot is the measurement). Before: one call
+# per transcript up to 20K tokens, a 2000-token completion cap and 20 facts
+# per transcript. An existing config that keeps the old values (and the old
+# key max_facts_per_transcript, still accepted as an alias) behaves as before.
+max_facts_per_chunk = 20         # Cap on admitted facts per transcript chunk (one call, plus its split retries). Was max_facts_per_transcript, a cap on the whole transcript that stopped extraction once reached; a short transcript is one chunk, so the two are the same cap there
+max_tokens = 16384               # Completion cap per extraction call, sent as max_completion_tokens through the openai entry (reasoning tokens share it); a reply that hits it (finish_reason "length") is rejected, never partially admitted
+input_chunk_tokens = 4000        # Split at line boundaries into chunks of at most min(this, max_transcript_tokens) tokens, one call each. 0 = one call per transcript up to max_transcript_tokens (legacy)
+split_on_truncation = true       # true = re-extract a truncated chunk as two line-aligned halves (at most 4 extra calls per chunk, depth 2). false = reject and report, no retry
 
 [entity_extraction]
 enabled = true               # Phase 4: entity linking for cross-session retrieval

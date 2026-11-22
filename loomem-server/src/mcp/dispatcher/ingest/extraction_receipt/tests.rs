@@ -300,7 +300,7 @@ async fn mismatched_returned_id_stays_diagnostic_and_never_rebinds_expectations(
 
 #[tokio::test]
 async fn final_exact_cap_is_complete_but_discarded_facts_are_partial() {
-    let state = configured(|config| config.knowledge_extraction.max_facts_per_transcript = 1);
+    let state = configured(|config| config.knowledge_extraction.max_facts_per_chunk = 1);
     for (facts, status, discarded) in [
         (vec![fact(None)], "complete", 0),
         (vec![fact(None), fact(None)], "partial", 1),
@@ -322,13 +322,20 @@ async fn final_exact_cap_is_complete_but_discarded_facts_are_partial() {
     }
 }
 
+/// The cap is per chunk: a chunk that overflows it is truncated and
+/// counted, and the chunks after it are still extracted.
 #[tokio::test]
-async fn early_cap_reports_unprocessed_original_chunks() {
+async fn per_chunk_cap_processes_every_original_chunk() {
     let state = configured(|config| {
         config.knowledge_extraction.input_chunk_tokens = 4;
-        config.knowledge_extraction.max_facts_per_transcript = 1;
+        config.knowledge_extraction.max_facts_per_chunk = 1;
     });
-    let chat = Chat::facts(vec![fact(None)]);
+    let mut second = fact(None);
+    second["content"] = json!("The user books a window seat.");
+    let chat = Chat::sequence(vec![
+        Ok(reply(vec![fact(None), fact(None)])),
+        Ok(reply(vec![second])),
+    ]);
     let result = tool_ingest_with(
         &chat,
         &state,
@@ -340,9 +347,11 @@ async fn early_cap_reports_unprocessed_original_chunks() {
     .unwrap();
     assert_eq!(receipt(&result)["status"], "partial");
     assert_eq!(receipt(&result)["outcome"]["input_chunks_total"], 2);
-    assert_eq!(receipt(&result)["outcome"]["input_chunks_processed"], 1);
-    assert_eq!(receipt(&result)["outcome"]["discarded_facts"], 0);
-    assert_eq!(chat.calls(), 1);
+    assert_eq!(receipt(&result)["outcome"]["input_chunks_processed"], 2);
+    assert_eq!(receipt(&result)["outcome"]["fact_limit_reached"], true);
+    assert_eq!(receipt(&result)["outcome"]["discarded_facts"], 1);
+    assert_eq!(receipt(&result)["outcome"]["accepted_facts"], 2);
+    assert_eq!(chat.calls(), 2);
 }
 
 #[tokio::test]
