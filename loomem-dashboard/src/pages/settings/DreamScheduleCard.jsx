@@ -28,11 +28,18 @@ export function fmtEpoch(sec) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// A missing `status` (older server) reads as "ok".
+function statusPrefix(status) {
+  if (status === "deadline") return "Stopped at deadline · ";
+  if (status === "failed") return "Failed · ";
+  return "";
+}
+
 function fmtLastResult(r) {
   if (!r) return null;
   const n = (v) => (typeof v === "number" ? v : 0);
   const cost = n(r.cost_usd).toFixed(3);
-  return `${n(r.facts_merged)} facts merged · ${n(r.contradictions_resolved)} contradictions · $${cost} · ${n(r.streams_total)} streams (${n(r.streams_failed)} failed)`;
+  return `${statusPrefix(r.status)}${n(r.facts_merged)} facts merged · ${n(r.contradictions_resolved)} contradictions · $${cost} · ${n(r.streams_total)} streams (${n(r.streams_failed)} failed)`;
 }
 
 function draftFrom(schedule) {
@@ -104,6 +111,8 @@ export default function DreamScheduleCard({ push }) {
 
   const dreamOff = schedule?.dream_enabled === false;
   const schedulerOff = schedule?.scheduler_enabled === false;
+  // Missing on an older server → not paused.
+  const paused = schedule?.paused === true;
   const dirty =
     schedule != null &&
     (draft.enabled !== (schedule.enabled === true) || draft.intervalSecs !== schedule.interval_secs);
@@ -146,6 +155,8 @@ export default function DreamScheduleCard({ push }) {
     statusLine = { tone: "warn", text: "Dream worker disabled in config" };
   } else if (schedulerOff) {
     statusLine = { tone: "warn", text: "Scheduler disabled in config" };
+  } else if (paused) {
+    statusLine = { tone: "warn", text: "Dream worker is paused" };
   }
 
   const lastResult = fmtLastResult(schedule?.last_result);
@@ -236,7 +247,7 @@ export default function DreamScheduleCard({ push }) {
         <button
           type="button"
           onClick={runNow}
-          disabled={schedule == null || dreamOff || schedulerOff || queued || queuing}
+          disabled={schedule == null || dreamOff || schedulerOff || paused || queued || queuing}
           className="px-3 py-1.5 rounded-full text-xs border border-(--border-strong) hover:bg-(--row-hover) disabled:opacity-50"
         >
           {queuing ? "Queuing…" : queued ? "Queued" : "Run now"}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // The Dream card is the only interactive thing on Settings: it renders the
@@ -185,6 +185,55 @@ describe("SettingsPage — Dream card", () => {
     expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
   });
 
+  it("says when the dream worker is paused and disables Run now", async () => {
+    api.getDreamSchedule.mockResolvedValue({ ...SCHEDULE, paused: true });
+    render(<SettingsPage userCtx={ADMIN} />);
+
+    expect(await screen.findByText("Dream worker is paused")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+    // Pause only blocks runs — the schedule itself stays editable.
+    expect(screen.getByRole("switch")).toBeEnabled();
+    expect(screen.getByRole("combobox")).toBeEnabled();
+  });
+
+  it("shows the paused 409 from Run now as an error toast", async () => {
+    api.runDreamScheduleNow.mockRejectedValue(new ApiError(409, "Dream worker is paused"));
+    render(<SettingsPage userCtx={ADMIN} />);
+    const runNow = await screen.findByRole("button", { name: "Run now" });
+    await waitFor(() => expect(runNow).toBeEnabled());
+
+    await userEvent.click(runNow);
+
+    expect(await screen.findByText("Dream worker is paused (409)")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["deadline", "Stopped at deadline · "],
+    ["failed", "Failed · "],
+  ])("prefixes the last-result line when status is %s", async (status, prefix) => {
+    api.getDreamSchedule.mockResolvedValue({
+      ...SCHEDULE,
+      last_result: { ...SCHEDULE.last_result, status },
+    });
+    render(<SettingsPage userCtx={ADMIN} />);
+
+    expect(
+      await screen.findByText(`${prefix}7 facts merged · 2 contradictions · $0.012 · 3 streams (1 failed)`),
+    ).toBeInTheDocument();
+  });
+
+  it("shows no prefix when status is ok", async () => {
+    api.getDreamSchedule.mockResolvedValue({
+      ...SCHEDULE,
+      last_result: { ...SCHEDULE.last_result, status: "ok" },
+    });
+    render(<SettingsPage userCtx={ADMIN} />);
+
+    expect(
+      await screen.findByText("7 facts merged · 2 contradictions · $0.012 · 3 streams (1 failed)"),
+    ).toBeInTheDocument();
+  });
+
   it("hides the Dream card from non-admins", async () => {
     render(<SettingsPage userCtx={MEMBER} />);
 
@@ -204,5 +253,64 @@ describe("SettingsPage — Dream card", () => {
     expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
     expect(screen.getByRole("switch")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+  });
+});
+
+describe("SettingsPage — queued polling", () => {
+  const QUEUED = { ...SCHEDULE, run_requested_at: 1763900000, queued: true };
+  const CONSUMED = { ...SCHEDULE, last_run_at: 1763900030, run_requested_at: null, queued: false };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Flushes the pending mock promises (and any timers due within `ms`).
+  const tick = (ms) => act(() => vi.advanceTimersByTimeAsync(ms));
+
+  it("re-GETs every 15 s while queued and stops once run_requested_at is null", async () => {
+    api.getDreamSchedule
+      .mockResolvedValueOnce(QUEUED)
+      .mockResolvedValueOnce(QUEUED)
+      .mockResolvedValue(CONSUMED);
+    render(<SettingsPage userCtx={ADMIN} />);
+
+    await tick(0);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Queued — runs within a minute")).toBeInTheDocument();
+
+    await tick(14_999);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(1);
+
+    await tick(1);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Queued — runs within a minute")).toBeInTheDocument();
+
+    await tick(15_000);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText("Queued — runs within a minute")).not.toBeInTheDocument();
+    expect(screen.getByText(localStamp(1763900030))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
+
+    // Polling has stopped: no further GETs.
+    await tick(60_000);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(3);
+  });
+
+  it("clears the polling interval on unmount", async () => {
+    api.getDreamSchedule.mockResolvedValue(QUEUED);
+    const { unmount } = render(<SettingsPage userCtx={ADMIN} />);
+
+    await tick(0);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(1);
+    await tick(15_000);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(2);
+
+    unmount();
+    await tick(60_000);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(2);
   });
 });
