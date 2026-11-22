@@ -628,7 +628,7 @@ api_key_env = &quot;OPENAI_API_KEY&quot;
 max_completion_tokens = true
 reasoning_effort = &quot;low&quot;
 omit_temperature = true
-# completion_tokens_floor = 2000  # set after smoke test
+completion_tokens_floor = 2000  # reasoning tokens share the small per-call caps (smoke test, 2026-11-22)
 </code></pre>
 <table>
 <thead>
@@ -731,7 +731,7 @@ api_key_env = &quot;OPENAI_API_KEY&quot;
 max_completion_tokens = true
 reasoning_effort = &quot;low&quot;
 omit_temperature = true
-# completion_tokens_floor = 2000  # set after smoke test
+completion_tokens_floor = 2000  # reasoning tokens share the small per-call caps (smoke test, 2026-11-22)
 
 # [llm.providers.ollama]
 # base_url = &quot;http://localhost:11434/v1&quot;   # no api_key_env: requests carry no key
@@ -774,17 +774,18 @@ omit_temperature = true
 <td><code>completion_tokens_floor</code></td>
 <td>int</td>
 <td>0</td>
-<td>Raise any per-call output cap below this value to it (<code>0</code> = unchanged)</td>
+<td>Raise any per-call output cap below this value to it (<code>0</code> = unchanged). The shipped <code>openai</code> entry sets <code>2000</code>: at <code>reasoning_effort = "low"</code> the NER batch (cap 1000) and the LLM rerank (cap 100) returned <code>finish_reason: "length"</code> with empty content, and with the floor at 2000 both completed (smoke test, 2026-11-22). The cap is a limit, not a spend; knowledge extraction has its own cap above the floor, so the floor never touches it</td>
 </tr>
 <tr>
 <td><code>reasoning_effort</code></td>
 <td>string?</td>
 <td>—</td>
-<td>One of <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>; added to every chat request when set</td>
+<td>One of <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>; added to every chat request when set. The list is the union of values the Chat Completions reference documents, and a model may reject part of it with a 400 — <code>gpt-6-luna</code> accepts <code>none</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code> and rejects <code>minimal</code> (API response, 2026-11-22). The config check rejects only values outside the list; the model's own answer is the final word</td>
 </tr>
 </tbody>
 </table>
 <p>An entry with none of the four request options set sends exactly the request the built-in provider sends.</p>
+<p>For <code>gpt-6-luna</code> the shipped entry's <code>omit_temperature</code> and <code>max_completion_tokens</code> are required, not optional: the API rejects a <code>temperature</code> other than 1 and <code>max_tokens</code>, each with a 400 (smoke test, 2026-11-22).</p>
 <p>The startup check and the <code>/health</code> field <code>llm_key_present</code> follow the active
 provider: with the shipped config the server refuses to start without
 <code>OPENAI_API_KEY</code> while <code>entity_extraction</code>, <code>knowledge_extraction</code> or <code>dream</code> are
@@ -915,10 +916,10 @@ max_transcript_tokens = 20000
 dedup_cosine_threshold = 0.92
 contradiction_check = true
 contradiction_cosine_min = 0.5
-max_facts_per_transcript = 20
-max_tokens = 2000
-input_chunk_tokens = 0
-split_on_truncation = false
+max_facts_per_chunk = 20
+max_tokens = 16384
+input_chunk_tokens = 4000
+split_on_truncation = true
 </code></pre>
 <p>Controls the <code>memory_ingest</code> LLM pipeline.</p>
 <table>
@@ -932,26 +933,32 @@ split_on_truncation = false
 </thead>
 <tbody>
 <tr>
+<td><code>max_facts_per_chunk</code></td>
+<td>int</td>
+<td>20</td>
+<td>Cap on admitted facts per transcript chunk (one planned input chunk, including its split retries), applied after the confidence filter; the prompt's "Maximum N facts per conversation" rule carries the same number per call. Every chunk is processed: a chunk's excess is counted in <code>discarded_facts</code> and never stops later chunks. Replaces <code>max_facts_per_transcript</code>, a cap on the whole transcript that stopped input processing once reached, so a long transcript lost everything past 20 facts. The old key is still accepted as an alias; a config with both keys is rejected</td>
+</tr>
+<tr>
 <td><code>max_tokens</code></td>
 <td>int</td>
-<td>2000</td>
-<td>Completion cap per extraction call. A reply that hits it (<code>finish_reason: "length"</code>) is rejected, never partially admitted</td>
+<td>16384</td>
+<td>Completion cap per extraction call, sent as <code>max_completion_tokens</code> through the <code>openai</code> entry (reasoning tokens share it). A reply that hits it (<code>finish_reason: "length"</code>) is rejected, never partially admitted</td>
 </tr>
 <tr>
 <td><code>input_chunk_tokens</code></td>
 <td>int</td>
-<td>0</td>
-<td>Input budget per extraction call (4 chars ≈ 1 token). <code>0</code> keeps the legacy pipeline: one call per transcript up to <code>max_transcript_tokens</code>. Any other value splits the transcript at line boundaries into chunks of at most <code>min(input_chunk_tokens, max_transcript_tokens)</code> tokens, one call each</td>
+<td>4000</td>
+<td>Input budget per extraction call (4 chars ≈ 1 token): the transcript is split at line boundaries into chunks of at most <code>min(input_chunk_tokens, max_transcript_tokens)</code> tokens, one call each. <code>0</code> = one call per transcript up to <code>max_transcript_tokens</code> (the legacy pipeline), overlapping windows above it</td>
 </tr>
 <tr>
 <td><code>split_on_truncation</code></td>
 <td>bool</td>
-<td>false</td>
-<td>When <code>true</code>, a chunk whose completion was truncated is re-extracted as two line-aligned halves (depth 2, at most 4 extra calls per chunk). When <code>false</code>, the truncated chunk is rejected and reported, with no retry</td>
+<td>true</td>
+<td>A chunk whose completion was truncated is re-extracted as two line-aligned halves (depth 2, at most 4 extra calls per chunk). <code>false</code> rejects and reports the truncated chunk, with no retry</td>
 </tr>
 </tbody>
 </table>
-<p>The three keys are additive: with the defaults above, extraction issues exactly the calls it did before they existed. A truncated reply is never admitted in either mode; a completion that ends with <code>finish_reason = "length"</code> is an explicit error on every chat path, not only in extraction.</p>
+<p>These are the shipped defaults since 2026-11-22 (an owner decision, deliberately without an A/B — the validation pilot is the measurement). Before, extraction was one call per transcript up to 20K tokens, with a 2000-token completion cap and 20 facts per transcript. The code defaults for a config that omits these keys stay at the legacy values (<code>20</code> / <code>2000</code> / <code>0</code> / <code>false</code>), so an older config behaves as before; with <code>input_chunk_tokens = 0</code> and <code>max_facts_per_transcript = 20</code> the whole transcript is one chunk and the per-chunk cap is the former cap, fact for fact. The one visible change for such a config: a transcript over <code>max_transcript_tokens</code>, which the legacy path processes as overlapping windows, now gets the cap per window. A truncated reply is never admitted in either mode; a completion that ends with <code>finish_reason = "length"</code> is an explicit error on every chat path, not only in extraction.</p>
 <hr />
 <h2 id="fragments">[fragments]</h2>
 <p><strong>Experimental, opt-in.</strong> Off by default; existing deployments and clients keep byte-identical behavior.</p>
@@ -1012,13 +1019,13 @@ token_counter = &quot;embedder&quot;
 <pre><code class="language-toml">[entity_extraction]
 enabled = true
 # model = &quot;gpt-6-luna&quot;  # unset: inherits [llm] compression_model
-batch_size = 20
+batch_size = 10
 flush_interval_secs = 3
 queue_capacity = 200
 confidence_threshold = 0.7
 max_tokens_per_batch = 2000
 </code></pre>
-<p>Async LLM NER for entities not in the dictionary.</p>
+<p>Async LLM NER for entities not in the dictionary. <code>batch_size</code> is 10 since 2026-11-22 (was 20): with <code>reasoning_effort = "low"</code> a 14–15 chunk batch used 1696 of its 2000 output tokens, and 10 leaves headroom for the reasoning tokens that share the cap.</p>
 <hr />
 <h2 id="contradiction">[contradiction]</h2>
 <pre><code class="language-toml">[contradiction]

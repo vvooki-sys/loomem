@@ -312,7 +312,7 @@ api_key_env = "OPENAI_API_KEY"
 max_completion_tokens = true
 reasoning_effort = "low"
 omit_temperature = true
-# completion_tokens_floor = 2000  # ustaw po teście dymnym
+completion_tokens_floor = 2000  # tokeny rozumowania mieszczą się w małych limitach na wywołanie (test dymny, 2026-11-22)
 ```
 
 | Klucz | Typ | Opis |
@@ -364,7 +364,7 @@ api_key_env = "OPENAI_API_KEY"
 max_completion_tokens = true
 reasoning_effort = "low"
 omit_temperature = true
-# completion_tokens_floor = 2000  # ustaw po teście dymnym
+completion_tokens_floor = 2000  # tokeny rozumowania mieszczą się w małych limitach na wywołanie (test dymny, 2026-11-22)
 
 # [llm.providers.ollama]
 # base_url = "http://localhost:11434/v1"   # bez api_key_env: żądania idą bez klucza
@@ -376,10 +376,12 @@ omit_temperature = true
 | `api_key_env` | string? | — | Zmienna środowiskowa z kluczem. Pominięta → bez klucza: żądania nie mają nagłówka `Authorization` (Ollama, vLLM, brama) |
 | `omit_temperature` | bool | false | Usuwa `temperature` z każdego żądania czatu |
 | `max_completion_tokens` | bool | false | Wysyła limit odpowiedzi jako `max_completion_tokens` zamiast wycofywanego `max_tokens` |
-| `completion_tokens_floor` | int | 0 | Podnosi do tej wartości każdy limit odpowiedzi na wywołanie, który jest od niej niższy (`0` = bez zmian) |
-| `reasoning_effort` | string? | — | Jedna z wartości `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; dodawana do każdego żądania czatu, gdy jest ustawiona |
+| `completion_tokens_floor` | int | 0 | Podnosi do tej wartości każdy limit odpowiedzi na wywołanie, który jest od niej niższy (`0` = bez zmian). Dostarczany wpis `openai` ustawia `2000`: przy `reasoning_effort = "low"` partia NER (limit 1000) i reranking LLM (limit 100) kończyły się `finish_reason: "length"` z pustą treścią, a z progiem 2000 oba wywołania się powiodły (test dymny, 2026-11-22). Limit to górna granica, nie wydatek; ekstrakcja wiedzy ma własny limit powyżej progu, więc próg jej nie dotyczy |
+| `reasoning_effort` | string? | — | Jedna z wartości `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; dodawana do każdego żądania czatu, gdy jest ustawiona. Lista to suma wartości opisanych w dokumentacji Chat Completions, a dany model może odrzucić część z nich kodem 400 — `gpt-6-luna` przyjmuje `none`, `low`, `medium`, `high`, `xhigh`, a `minimal` odrzuca (odpowiedź API, 2026-11-22). Kontrola konfiguracji odrzuca tylko wartości spoza listy; ostatnie słowo należy do modelu |
 
 Wpis bez żadnej z czterech opcji żądania wysyła dokładnie to samo żądanie co wbudowany dostawca.
+
+Dla `gpt-6-luna` opcje `omit_temperature` i `max_completion_tokens` z dostarczanego wpisu są wymagane, a nie opcjonalne: API odrzuca kodem 400 zarówno `temperature` inne niż 1, jak i `max_tokens` (test dymny, 2026-11-22).
 
 Kontrola przy starcie i pole `llm_key_present` w `/health` kierują się aktywnym dostawcą: z dostarczaną konfiguracją serwer odmawia uruchomienia bez `OPENAI_API_KEY`, gdy włączone są `entity_extraction`, `knowledge_extraction` lub `dream` (chyba że ustawiono `LOOMEM_ALLOW_KEYLESS=1`), a komunikat błędu podaje zmienną środowiskową aktywnego dostawcy. Dostawca bez `api_key_env` (lokalna Ollama) jest traktowany jak obecny klucz i uruchamia się bez `LOOMEM_ALLOW_KEYLESS`.
 
@@ -496,21 +498,22 @@ max_transcript_tokens = 20000
 dedup_cosine_threshold = 0.92
 contradiction_check = true
 contradiction_cosine_min = 0.5
-max_facts_per_transcript = 20
-max_tokens = 2000
-input_chunk_tokens = 0
-split_on_truncation = false
+max_facts_per_chunk = 20
+max_tokens = 16384
+input_chunk_tokens = 4000
+split_on_truncation = true
 ```
 
 Steruje procesem LLM `memory_ingest`.
 
 | Klucz | Typ | Domyślnie | Opis |
 |----|----|----|----|
-| `max_tokens` | int | 2000 | Limit odpowiedzi na wywołanie ekstrakcji. Odpowiedź, która go osiągnie (`finish_reason: "length"`), jest odrzucana; nigdy nie jest przyjmowana częściowo |
-| `input_chunk_tokens` | int | 0 | Limit wejścia dla jednego wywołania ekstrakcji (4 znaki ≈ 1 token). `0` zachowuje poprzedni proces: jedno wywołanie na transkrypcję do `max_transcript_tokens`. Inna wartość dzieli transkrypcję na granicach wierszy na fragmenty o maksymalnie `min(input_chunk_tokens, max_transcript_tokens)` tokenach i wykonuje jedno wywołanie dla każdego |
-| `split_on_truncation` | bool | false | Przy `true` fragment, którego odpowiedź została obcięta, jest ponownie przetwarzany jako dwie połowy rozdzielone na granicy wiersza (głębokość 2, maksymalnie 4 dodatkowe wywołania na fragment). Przy `false` obcięty fragment jest odrzucany i zgłaszany bez ponawiania |
+| `max_facts_per_chunk` | int | 20 | Limit przyjętych faktów na fragment transkrypcji (jeden zaplanowany fragment wejścia wraz z jego ponowieniami po podziale), stosowany po filtrze pewności; reguła promptu „Maximum N facts per conversation” niesie tę samą liczbę w każdym wywołaniu. Każdy fragment jest przetwarzany: nadwyżka jednego fragmentu jest liczona w `discarded_facts` i nigdy nie zatrzymuje kolejnych. Zastępuje `max_facts_per_transcript`, limit na całą transkrypcję, który po osiągnięciu zatrzymywał przetwarzanie wejścia, więc długa transkrypcja traciła wszystko poza pierwszymi 20 faktami. Stary klucz jest nadal przyjmowany jako alias; konfiguracja z oboma kluczami jest odrzucana |
+| `max_tokens` | int | 16384 | Limit odpowiedzi na wywołanie ekstrakcji, wysyłany przez wpis `openai` jako `max_completion_tokens` (tokeny rozumowania mieszczą się w nim). Odpowiedź, która go osiągnie (`finish_reason: "length"`), jest odrzucana; nigdy nie jest przyjmowana częściowo |
+| `input_chunk_tokens` | int | 4000 | Limit wejścia dla jednego wywołania ekstrakcji (4 znaki ≈ 1 token): transkrypcja jest dzielona na granicach wierszy na fragmenty o maksymalnie `min(input_chunk_tokens, max_transcript_tokens)` tokenach, po jednym wywołaniu na każdy. `0` = jedno wywołanie na transkrypcję do `max_transcript_tokens` (poprzedni proces), a powyżej tej wielkości nakładające się okna |
+| `split_on_truncation` | bool | true | Fragment, którego odpowiedź została obcięta, jest ponownie przetwarzany jako dwie połowy rozdzielone na granicy wiersza (głębokość 2, maksymalnie 4 dodatkowe wywołania na fragment). Przy `false` obcięty fragment jest odrzucany i zgłaszany bez ponawiania |
 
-Te trzy klucze są dodatkowymi ustawieniami: z powyższymi wartościami domyślnymi ekstrakcja wykonuje te same wywołania co przed ich wprowadzeniem. Obcięta odpowiedź nie jest przyjmowana w żadnym trybie; odpowiedź zakończona `finish_reason = "length"` jest jawnym błędem na każdej ścieżce czatu, nie tylko w ekstrakcji.
+Te wartości są domyślne w dostarczanej konfiguracji od 2026-11-22 (decyzja właściciela, celowo bez testu A/B — pomiarem jest pilotaż walidacyjny). Wcześniej ekstrakcja wykonywała jedno wywołanie na transkrypcję do 20 tys. tokenów, z limitem odpowiedzi 2000 tokenów i 20 faktami na transkrypcję. Wartości domyślne w kodzie dla konfiguracji pomijającej te klucze pozostają przy poprzednich (`20` / `2000` / `0` / `false`), więc starsza konfiguracja zachowuje się jak dotąd; przy `input_chunk_tokens = 0` i `max_facts_per_transcript = 20` cała transkrypcja jest jednym fragmentem, a limit na fragment jest dawnym limitem, fakt po fakcie. Jedyna widoczna zmiana dla takiej konfiguracji: transkrypcja dłuższa niż `max_transcript_tokens`, którą poprzedni proces przetwarza jako nakładające się okna, dostaje teraz limit na każde okno. Obcięta odpowiedź nie jest przyjmowana w żadnym trybie; odpowiedź zakończona `finish_reason = "length"` jest jawnym błędem na każdej ścieżce czatu, nie tylko w ekstrakcji.
 
 ------------------------------------------------------------------------
 
@@ -553,14 +556,14 @@ Walidacja przy uruchomieniu: `max_fragment_tokens` musi być dodatnie, a przy `e
 [entity_extraction]
 enabled = true
 # model = "gpt-6-luna"  # brak: dziedziczy compression_model z [llm]
-batch_size = 20
+batch_size = 10
 flush_interval_secs = 3
 queue_capacity = 200
 confidence_threshold = 0.7
 max_tokens_per_batch = 2000
 ```
 
-Asynchroniczne rozpoznawanie encji przez LLM dla encji spoza słownika.
+Asynchroniczne rozpoznawanie encji przez LLM dla encji spoza słownika. `batch_size` wynosi 10 od 2026-11-22 (było 20): przy `reasoning_effort = "low"` partia 14–15 fragmentów zużyła 1696 z 2000 tokenów odpowiedzi, a 10 zostawia zapas na tokeny rozumowania, które mieszczą się w tym samym limicie.
 
 ------------------------------------------------------------------------
 

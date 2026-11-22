@@ -567,7 +567,7 @@ api_key_env = "OPENAI_API_KEY"
 max_completion_tokens = true
 reasoning_effort = "low"
 omit_temperature = true
-# completion_tokens_floor = 2000  # ustaw po teście dymnym
+completion_tokens_floor = 2000  # tokeny rozumowania mieszczą się w małych limitach na wywołanie (test dymny, 2026-11-22)
 </code></pre>
 <table>
 <thead>
@@ -643,7 +643,7 @@ api_key_env = "OPENAI_API_KEY"
 max_completion_tokens = true
 reasoning_effort = "low"
 omit_temperature = true
-# completion_tokens_floor = 2000  # ustaw po teście dymnym
+completion_tokens_floor = 2000  # tokeny rozumowania mieszczą się w małych limitach na wywołanie (test dymny, 2026-11-22)
 
 # [llm.providers.ollama]
 # base_url = "http://localhost:11434/v1"   # bez api_key_env: żądania idą bez klucza
@@ -686,17 +686,18 @@ omit_temperature = true
 <td><code>completion_tokens_floor</code></td>
 <td>int</td>
 <td>0</td>
-<td>Podnosi do tej wartości każdy limit odpowiedzi na wywołanie, który jest od niej niższy (<code>0</code> = bez zmian)</td>
+<td>Podnosi do tej wartości każdy limit odpowiedzi na wywołanie, który jest od niej niższy (<code>0</code> = bez zmian). Dostarczany wpis <code>openai</code> ustawia <code>2000</code>: przy <code>reasoning_effort = "low"</code> partia NER (limit 1000) i reranking LLM (limit 100) kończyły się <code>finish_reason: "length"</code> z pustą treścią, a z progiem 2000 oba wywołania się powiodły (test dymny, 2026-11-22). Limit to górna granica, nie wydatek; ekstrakcja wiedzy ma własny limit powyżej progu, więc próg jej nie dotyczy</td>
 </tr>
 <tr>
 <td><code>reasoning_effort</code></td>
 <td>string?</td>
 <td>—</td>
-<td>Jedna z wartości <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>; dodawana do każdego żądania czatu, gdy jest ustawiona</td>
+<td>Jedna z wartości <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>; dodawana do każdego żądania czatu, gdy jest ustawiona. Lista to suma wartości opisanych w dokumentacji Chat Completions, a dany model może odrzucić część z nich kodem 400 — <code>gpt-6-luna</code> przyjmuje <code>none</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, a <code>minimal</code> odrzuca (odpowiedź API, 2026-11-22). Kontrola konfiguracji odrzuca tylko wartości spoza listy; ostatnie słowo należy do modelu</td>
 </tr>
 </tbody>
 </table>
 <p>Wpis bez żadnej z czterech opcji żądania wysyła dokładnie to samo żądanie co wbudowany dostawca.</p>
+<p>Dla <code>gpt-6-luna</code> opcje <code>omit_temperature</code> i <code>max_completion_tokens</code> z dostarczanego wpisu są wymagane, a nie opcjonalne: API odrzuca kodem 400 zarówno <code>temperature</code> inne niż 1, jak i <code>max_tokens</code> (test dymny, 2026-11-22).</p>
 <p>Kontrola przy starcie i pole <code>llm_key_present</code> w <code>/health</code> kierują się aktywnym dostawcą: z dostarczaną konfiguracją serwer odmawia uruchomienia bez <code>OPENAI_API_KEY</code>, gdy włączone są <code>entity_extraction</code>, <code>knowledge_extraction</code> lub <code>dream</code> (chyba że ustawiono <code>LOOMEM_ALLOW_KEYLESS=1</code>), a komunikat błędu podaje zmienną środowiskową aktywnego dostawcy. Dostawca bez <code>api_key_env</code> (lokalna Ollama) jest traktowany jak obecny klucz i uruchamia się bez <code>LOOMEM_ALLOW_KEYLESS</code>.</p>
 <p><strong>Istniejące instalacje.</strong> Instalator nigdy nie nadpisuje <code>config.toml</code>, więc nic się nie zmienia, dopóki go nie edytujesz. Aby przejść na nowy domyślny model: ustaw <code>compression_model = "gpt-6-luna"</code>, usuń wszystkie wiersze <code>model = "gpt-4.1-mini"</code> w sekcjach poszczególnych funkcji i dodaj powyższą tabelę <code>[llm.providers.openai]</code> (gdy już istnieje, jej <code>api_key_env</code> ma pierwszeństwo przed wpisanym wprost <code>llm.api_key</code>, który pozostaje zapasem). Aby zostać przy starym modelu: nic nie trzeba robić przed 2027-01-14, kiedy OpenAI wycofuje <code>gpt-4.1-mini</code>.</p>
 <hr/>
@@ -815,10 +816,10 @@ max_transcript_tokens = 20000
 dedup_cosine_threshold = 0.92
 contradiction_check = true
 contradiction_cosine_min = 0.5
-max_facts_per_transcript = 20
-max_tokens = 2000
-input_chunk_tokens = 0
-split_on_truncation = false
+max_facts_per_chunk = 20
+max_tokens = 16384
+input_chunk_tokens = 4000
+split_on_truncation = true
 </code></pre>
 <p>Steruje procesem LLM <code>memory_ingest</code>.</p>
 <table>
@@ -832,26 +833,32 @@ split_on_truncation = false
 </thead>
 <tbody>
 <tr>
+<td><code>max_facts_per_chunk</code></td>
+<td>int</td>
+<td>20</td>
+<td>Limit przyjętych faktów na fragment transkrypcji (jeden zaplanowany fragment wejścia wraz z jego ponowieniami po podziale), stosowany po filtrze pewności; reguła promptu „Maximum N facts per conversation” niesie tę samą liczbę w każdym wywołaniu. Każdy fragment jest przetwarzany: nadwyżka jednego fragmentu jest liczona w <code>discarded_facts</code> i nigdy nie zatrzymuje kolejnych. Zastępuje <code>max_facts_per_transcript</code>, limit na całą transkrypcję, który po osiągnięciu zatrzymywał przetwarzanie wejścia, więc długa transkrypcja traciła wszystko poza pierwszymi 20 faktami. Stary klucz jest nadal przyjmowany jako alias; konfiguracja z oboma kluczami jest odrzucana</td>
+</tr>
+<tr>
 <td><code>max_tokens</code></td>
 <td>int</td>
-<td>2000</td>
-<td>Limit odpowiedzi na wywołanie ekstrakcji. Odpowiedź, która go osiągnie (<code>finish_reason: "length"</code>), jest odrzucana; nigdy nie jest przyjmowana częściowo</td>
+<td>16384</td>
+<td>Limit odpowiedzi na wywołanie ekstrakcji, wysyłany przez wpis <code>openai</code> jako <code>max_completion_tokens</code> (tokeny rozumowania mieszczą się w nim). Odpowiedź, która go osiągnie (<code>finish_reason: "length"</code>), jest odrzucana; nigdy nie jest przyjmowana częściowo</td>
 </tr>
 <tr>
 <td><code>input_chunk_tokens</code></td>
 <td>int</td>
-<td>0</td>
-<td>Limit wejścia dla jednego wywołania ekstrakcji (4 znaki ≈ 1 token). <code>0</code> zachowuje poprzedni proces: jedno wywołanie na transkrypcję do <code>max_transcript_tokens</code>. Inna wartość dzieli transkrypcję na granicach wierszy na fragmenty o maksymalnie <code>min(input_chunk_tokens, max_transcript_tokens)</code> tokenach i wykonuje jedno wywołanie dla każdego</td>
+<td>4000</td>
+<td>Limit wejścia dla jednego wywołania ekstrakcji (4 znaki ≈ 1 token): transkrypcja jest dzielona na granicach wierszy na fragmenty o maksymalnie <code>min(input_chunk_tokens, max_transcript_tokens)</code> tokenach, po jednym wywołaniu na każdy. <code>0</code> = jedno wywołanie na transkrypcję do <code>max_transcript_tokens</code> (poprzedni proces), a powyżej tej wielkości nakładające się okna</td>
 </tr>
 <tr>
 <td><code>split_on_truncation</code></td>
 <td>bool</td>
-<td>false</td>
-<td>Przy <code>true</code> fragment, którego odpowiedź została obcięta, jest ponownie przetwarzany jako dwie połowy rozdzielone na granicy wiersza (głębokość 2, maksymalnie 4 dodatkowe wywołania na fragment). Przy <code>false</code> obcięty fragment jest odrzucany i zgłaszany bez ponawiania</td>
+<td>true</td>
+<td>Fragment, którego odpowiedź została obcięta, jest ponownie przetwarzany jako dwie połowy rozdzielone na granicy wiersza (głębokość 2, maksymalnie 4 dodatkowe wywołania na fragment). Przy <code>false</code> obcięty fragment jest odrzucany i zgłaszany bez ponawiania</td>
 </tr>
 </tbody>
 </table>
-<p>Te trzy klucze są dodatkowymi ustawieniami: z powyższymi wartościami domyślnymi ekstrakcja wykonuje te same wywołania co przed ich wprowadzeniem. Obcięta odpowiedź nie jest przyjmowana w żadnym trybie; odpowiedź zakończona <code>finish_reason = "length"</code> jest jawnym błędem na każdej ścieżce czatu, nie tylko w ekstrakcji.</p>
+<p>Te wartości są domyślne w dostarczanej konfiguracji od 2026-11-22 (decyzja właściciela, celowo bez testu A/B — pomiarem jest pilotaż walidacyjny). Wcześniej ekstrakcja wykonywała jedno wywołanie na transkrypcję do 20 tys. tokenów, z limitem odpowiedzi 2000 tokenów i 20 faktami na transkrypcję. Wartości domyślne w kodzie dla konfiguracji pomijającej te klucze pozostają przy poprzednich (<code>20</code> / <code>2000</code> / <code>0</code> / <code>false</code>), więc starsza konfiguracja zachowuje się jak dotąd; przy <code>input_chunk_tokens = 0</code> i <code>max_facts_per_transcript = 20</code> cała transkrypcja jest jednym fragmentem, a limit na fragment jest dawnym limitem, fakt po fakcie. Jedyna widoczna zmiana dla takiej konfiguracji: transkrypcja dłuższa niż <code>max_transcript_tokens</code>, którą poprzedni proces przetwarza jako nakładające się okna, dostaje teraz limit na każde okno. Obcięta odpowiedź nie jest przyjmowana w żadnym trybie; odpowiedź zakończona <code>finish_reason = "length"</code> jest jawnym błędem na każdej ścieżce czatu, nie tylko w ekstrakcji.</p>
 <hr/>
 <h2 id="fragments">[fragments]</h2>
 <p><strong>Eksperymentalne, wymaga włączenia.</strong> Domyślnie wyłączone; istniejące wdrożenia i klienci zachowują działanie identyczne bajt po bajcie.</p>
@@ -912,13 +919,13 @@ token_counter = "embedder"
 <pre><code class="language-toml">[entity_extraction]
 enabled = true
 # model = "gpt-6-luna"  # brak: dziedziczy compression_model z [llm]
-batch_size = 20
+batch_size = 10
 flush_interval_secs = 3
 queue_capacity = 200
 confidence_threshold = 0.7
 max_tokens_per_batch = 2000
 </code></pre>
-<p>Asynchroniczne rozpoznawanie encji przez LLM dla encji spoza słownika.</p>
+<p>Asynchroniczne rozpoznawanie encji przez LLM dla encji spoza słownika. <code>batch_size</code> wynosi 10 od 2026-11-22 (było 20): przy <code>reasoning_effort = "low"</code> partia 14–15 fragmentów zużyła 1696 z 2000 tokenów odpowiedzi, a 10 zostawia zapas na tokeny rozumowania, które mieszczą się w tym samym limicie.</p>
 <hr/>
 <h2 id="contradiction">[contradiction]</h2>
 <pre><code class="language-toml">[contradiction]
