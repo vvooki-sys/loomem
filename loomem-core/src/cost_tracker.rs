@@ -37,6 +37,24 @@ const CF_COSTS: &str = "costs";
 const EMBED_INPUT_PRICE: f64 = 0.02;
 const GPT4O_MINI_INPUT_PRICE: f64 = 0.15;
 const GPT4O_MINI_OUTPUT_PRICE: f64 = 0.60;
+// gpt-6-luna, standard tier, short context (≤272K input tokens):
+// developers.openai.com/api/docs/pricing, accessed 2026-11-22. The page also
+// lists cached input at 0.01 USD/1M; the tracker does not read
+// `usage.prompt_tokens_details.cached_tokens`, so the whole prompt is charged
+// at the input price (an upper bound).
+const GPT6_LUNA_INPUT_PRICE: f64 = 0.10;
+const GPT6_LUNA_OUTPUT_PRICE: f64 = 0.50;
+
+/// Standard chat prices in USD per 1M tokens as `(input, output)`, shared by
+/// the tracker, dream and consolidation. `None` for a model without a known
+/// price (counted as $0). Embedding models are priced separately.
+pub fn chat_prices(model: &str) -> Option<(f64, f64)> {
+    match model {
+        "gpt-4o-mini" | "gpt-4.1-mini" => Some((GPT4O_MINI_INPUT_PRICE, GPT4O_MINI_OUTPUT_PRICE)),
+        "gpt-6-luna" => Some((GPT6_LUNA_INPUT_PRICE, GPT6_LUNA_OUTPUT_PRICE)),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyCost {
@@ -205,16 +223,18 @@ impl CostTracker {
                 cost.embed_calls += 1;
                 (tokens_in as f64 / 1_000_000.0) * EMBED_INPUT_PRICE
             }
-            "gpt-4o-mini" | "gpt-4.1-mini" => {
-                cost.compress_calls += 1;
-                let input_cost = (tokens_in as f64 / 1_000_000.0) * GPT4O_MINI_INPUT_PRICE;
-                let output_cost = (tokens_out as f64 / 1_000_000.0) * GPT4O_MINI_OUTPUT_PRICE;
-                input_cost + output_cost
-            }
-            _ => {
-                warn_unknown_model_once(model);
-                0.0
-            }
+            m => match chat_prices(m) {
+                Some((input_price, output_price)) => {
+                    cost.compress_calls += 1;
+                    let input_cost = (tokens_in as f64 / 1_000_000.0) * input_price;
+                    let output_cost = (tokens_out as f64 / 1_000_000.0) * output_price;
+                    input_cost + output_cost
+                }
+                None => {
+                    warn_unknown_model_once(model);
+                    0.0
+                }
+            },
         };
 
         cost.total_usd += cost_usd;
@@ -571,6 +591,23 @@ mod tests {
         // Should exceed budget
         let result = tracker.check_budget();
         assert!(result.is_err());
+    }
+
+    /// 1M input + 1M output on gpt-6-luna = 0.10 + 0.50 USD; the shared
+    /// table prices the gpt-4 minis as before and knows nothing else.
+    #[test]
+    fn gpt6_luna_is_priced_and_shared_table_matches_tracker() {
+        let (_temp_dir, store) = create_test_store();
+        let tracker = CostTracker::new(store, CostConfig::default(), reqwest::Client::new());
+        tracker.record(1_000_000, 1_000_000, "gpt-6-luna").unwrap();
+        let today = tracker.daily_summary();
+        assert!((today.total_usd - 0.60).abs() < 1e-9, "{}", today.total_usd);
+        assert_eq!(today.compress_calls, 1);
+        assert_eq!(chat_prices("gpt-6-luna"), Some((0.10, 0.50)));
+        assert_eq!(chat_prices("gpt-4o-mini"), Some((0.15, 0.60)));
+        assert_eq!(chat_prices("gpt-4.1-mini"), Some((0.15, 0.60)));
+        assert_eq!(chat_prices("text-embedding-3-small"), None);
+        assert_eq!(chat_prices("qwen2.5:3b"), None);
     }
 
     #[test]

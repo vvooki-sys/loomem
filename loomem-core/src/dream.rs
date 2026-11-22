@@ -375,7 +375,11 @@ pub async fn dream_run(
 
         // Track cost
         if let Some(ref usage) = resp.usage {
-            let cost = (usage.prompt_tokens as f64 * 0.15 + usage.completion_tokens as f64 * 0.60)
+            // Same table as the tracker; an unpriced model counts as $0.
+            let (input_price, output_price) =
+                crate::cost_tracker::chat_prices(&dream_config.model).unwrap_or((0.0, 0.0));
+            let cost = (usage.prompt_tokens as f64 * input_price
+                + usage.completion_tokens as f64 * output_price)
                 / 1_000_000.0;
             total_cost += cost;
             let _ = cost_tracker.record(
