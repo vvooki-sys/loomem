@@ -235,7 +235,7 @@ Jeśli inny przebieg dream już zajmuje strumień, narzędzie zwraca zamiast teg
 
 - Po długiej, produktywnej sesji
 - Gdy użytkownik prosi o „uporządkowanie” lub „konsolidację” pamięci
-- Automatycznie po 30 minutach bezczynności
+- Silnik uruchamia go też sam: domyślnie raz na dobę (klucze harmonogramu w `[dream]`) i po 50 nowych chunkach w strumieniu prywatnym
 
 ------------------------------------------------------------------------
 

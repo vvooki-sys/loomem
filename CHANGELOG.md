@@ -30,8 +30,10 @@ configurations load unchanged; the new defaults apply to the shipped
   deadline: no new stream starts after it and the stream in progress
   finishes). It needs both `[dream] enabled` and `[scheduler] enabled`; manual
   `memory_dream` / `POST /v1/dream` and the count-based auto-trigger still
-  work, and all entry points are mutually exclusive per stream (a run on a
-  busy stream returns at once with `skipped_busy: true`).
+  work, and all entry points are mutually exclusive per store and stream (a
+  second run on a busy stream returns at once: `POST /v1/dream` reports
+  `skipped_busy: true`, `memory_dream` says it was skipped, the scheduled pass
+  counts it in `last_result.streams_skipped_busy`).
   Upgrade note: the code default of `schedule_enabled` is `false`, so a config
   written before this key existed stays on-demand; the shipped `config.toml`
   sets it to `true`, which turns the daily pass on for new installs.
