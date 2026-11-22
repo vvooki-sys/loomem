@@ -267,6 +267,10 @@ pub struct DreamRunContext<'a> {
 }
 
 /// Run dream consolidation on a single stream.
+///
+/// Every entry point (MCP, `POST /v1/dream`, auto-trigger, scheduled pass)
+/// comes through here, so a stream that is already dreaming returns a zeroed
+/// result at once instead of merging the same subjects twice.
 pub async fn dream_run(
     store: &RocksDbStore,
     tantivy: &tokio::sync::Mutex<TantivyIndex>,
@@ -278,6 +282,18 @@ pub async fn dream_run(
     let Some(_inflight) = crate::dream_inflight::try_acquire(stream) else {
         return Ok(DreamResult::skipped_busy(stream));
     };
+    dream_run_exclusive(store, tantivy, client, run_ctx, cost_tracker, stream).await
+}
+
+/// Body of [`dream_run`]; the caller holds the stream's in-flight guard.
+async fn dream_run_exclusive(
+    store: &RocksDbStore,
+    tantivy: &tokio::sync::Mutex<TantivyIndex>,
+    client: &Client,
+    run_ctx: DreamRunContext<'_>,
+    cost_tracker: &CostTracker,
+    stream: &str,
+) -> Result<DreamResult> {
     let llm_config = run_ctx.llm_config;
     let dream_config = run_ctx.dream_config;
 
