@@ -491,7 +491,7 @@ Liveness check. **No authentication required.**
 
 ### POST /admin/workers/pause
 
-Pause all background workers (consolidation, decay, compaction, backup, clustering, purge, stats). Useful for eval runs where you need a frozen database.
+Pause all background workers (consolidation, decay, compaction, backup, clustering, purge, stats, dream). Useful for eval runs where you need a frozen database.
 
 **Requires admin token.**
 

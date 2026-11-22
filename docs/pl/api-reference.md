@@ -569,7 +569,7 @@ Kontrola dostępności. **Uwierzytelnianie nie jest wymagane.**
 
 ### POST /admin/workers/pause
 
-Wstrzymaj wszystkie procesy działające w tle (konsolidację, wygaszanie, kompaktowanie, kopie zapasowe, grupowanie, usuwanie i statystyki). Przydatne podczas ewaluacji wymagających niezmiennej bazy danych.
+Wstrzymaj wszystkie procesy działające w tle (konsolidację, wygaszanie, kompaktowanie, kopie zapasowe, grupowanie, usuwanie, statystyki i dream). Przydatne podczas ewaluacji wymagających niezmiennej bazy danych.
 
 **Wymaga tokenu administratora.**
 
