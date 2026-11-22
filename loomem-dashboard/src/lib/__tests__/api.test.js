@@ -95,3 +95,76 @@ describe("401 → global logout", () => {
     window.removeEventListener("loomem:unauthorized", onEvent);
   });
 });
+
+describe("dream schedule helpers", () => {
+  const SHAPE = {
+    dream_enabled: true,
+    scheduler_enabled: true,
+    enabled: true,
+    interval_secs: 86400,
+    source: "config",
+    last_run_at: null,
+    next_run_at: null,
+    run_requested_at: null,
+    poll_secs: 60,
+    queued: false,
+    last_result: null,
+  };
+
+  it("getDreamSchedule GETs /v1/dream/schedule with the bearer token", async () => {
+    localStorage.setItem("loomem_api_key", "tok-admin");
+    global.fetch.mockResolvedValueOnce(res({ ok: true, status: 200, body: SHAPE }));
+
+    await expect(api.getDreamSchedule()).resolves.toEqual(SHAPE);
+
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toBe("/v1/dream/schedule");
+    expect(options.method).toBeUndefined();
+    expect(options.headers.Authorization).toBe("Bearer tok-admin");
+  });
+
+  it("putDreamSchedule PUTs enabled + interval_secs as JSON", async () => {
+    const body = { ...SHAPE, enabled: false, interval_secs: 43200, source: "override" };
+    global.fetch.mockResolvedValueOnce(res({ ok: true, status: 200, body }));
+
+    await expect(api.putDreamSchedule({ enabled: false, interval_secs: 43200 })).resolves.toEqual(body);
+
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toBe("/v1/dream/schedule");
+    expect(options.method).toBe("PUT");
+    expect(options.headers["Content-Type"]).toBe("application/json");
+    expect(JSON.parse(options.body)).toEqual({ enabled: false, interval_secs: 43200 });
+  });
+
+  it("putDreamSchedule surfaces a 400 for an out-of-range interval", async () => {
+    global.fetch.mockResolvedValueOnce(
+      res({ ok: false, status: 400, body: { error: "interval_secs out of range" } }),
+    );
+    const err = await api.putDreamSchedule({ enabled: true, interval_secs: 10 }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+    expect(err.message).toBe("interval_secs out of range");
+  });
+
+  it("runDreamScheduleNow POSTs /v1/dream/schedule/run with no body", async () => {
+    const body = { ...SHAPE, run_requested_at: 1763900000, queued: true };
+    global.fetch.mockResolvedValueOnce(res({ ok: true, status: 202, body }));
+
+    await expect(api.runDreamScheduleNow()).resolves.toEqual(body);
+
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toBe("/v1/dream/schedule/run");
+    expect(options.method).toBe("POST");
+    expect(options.body).toBeUndefined();
+  });
+
+  it("runDreamScheduleNow surfaces the 409 when dream or the scheduler is off", async () => {
+    global.fetch.mockResolvedValueOnce(
+      res({ ok: false, status: 409, body: { error: "dream worker is disabled" } }),
+    );
+    const err = await api.runDreamScheduleNow().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(409);
+    expect(err.message).toBe("dream worker is disabled");
+  });
+});

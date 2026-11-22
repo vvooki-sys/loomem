@@ -1,13 +1,18 @@
 import { useEffect, useState } from "react";
 import { Settings as SettingsIcon } from "lucide-react";
 import { getHealth } from "../lib/api";
+import useToasts from "../hooks/useToasts";
+import ToastStack from "../components/shared/ToastStack";
+import DreamScheduleCard from "./settings/DreamScheduleCard";
 
-// Minimal v1 settings: what this instance is (stream, role, version) and the
-// way out (logout). Token management happens at the deployment level in a
-// single-user instance — there is nothing to manage here yet.
+// Minimal v1 settings: what this instance is (stream, role, version), the
+// dream schedule (admin only) and the way out (logout). Token management
+// happens at the deployment level in a single-user instance — there is
+// nothing to manage here yet.
 
 export default function SettingsPage({ userCtx }) {
   const [version, setVersion] = useState(null);
+  const { toasts, push, dismiss } = useToasts();
 
   useEffect(() => {
     // Decorative version readout — a failed /health fetch just hides it.
@@ -44,6 +49,8 @@ export default function SettingsPage({ userCtx }) {
           </div>
         </div>
 
+        {userCtx?.is_admin === true && <DreamScheduleCard push={push} />}
+
         <div className="mt-6">
           <button
             onClick={logout}
@@ -53,6 +60,8 @@ export default function SettingsPage({ userCtx }) {
           </button>
         </div>
       </div>
+
+      <ToastStack toasts={toasts} onDismiss={dismiss} />
     </div>
   );
 }

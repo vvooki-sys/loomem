@@ -114,6 +114,30 @@ export async function deleteMemory(id) {
   });
 }
 
+// Dream schedule — GET /v1/dream/schedule (admin only). Returns the
+// DreamScheduleResponse shape: enabled/interval_secs, last/next run epochs,
+// last_result summary, plus the dream_enabled/scheduler_enabled config gates.
+export async function getDreamSchedule() {
+  return fetchJSON('/v1/dream/schedule');
+}
+
+// PUT /v1/dream/schedule — persist the schedule override; responds with the
+// same shape as GET so callers re-render from the response.
+export async function putDreamSchedule({ enabled, interval_secs }) {
+  return fetchJSON('/v1/dream/schedule', {
+    method: 'PUT',
+    body: JSON.stringify({ enabled, interval_secs }),
+  });
+}
+
+// POST /v1/dream/schedule/run — queue a dream pass for the next scheduler
+// poll (202 with `queued: true`; 409 when dream or the scheduler is off).
+export async function runDreamScheduleNow() {
+  return fetchJSON('/v1/dream/schedule/run', {
+    method: 'POST',
+  });
+}
+
 // Reality bench trendline — GET /v1/admin/bench/history. Returns a sorted
 // array of {filename, kind, timestamp, hit_rate, total_questions}.
 export async function getBenchHistory() {
