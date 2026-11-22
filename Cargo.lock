@@ -1786,7 +1786,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "loomem-cli"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1798,7 +1798,7 @@ dependencies = [
 
 [[package]]
 name = "loomem-core"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "loomem-migrate"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "rocksdb",
@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "loomem-server"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "axum",

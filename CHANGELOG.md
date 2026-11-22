@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-11-22
+
+Everything on `main` since v0.5.4: every LLM chat call goes through the active
+`llm.provider`, `gpt-6-luna` is the default chat model with per-provider
+request options, chunked knowledge extraction is the shipped default, two
+ingest/context fixes, the evaluation readiness endpoints behind a cargo
+feature, the MSRV and dependency round (tract 0.23, aes-gcm 0.11, rocksdb
+0.25, Vite 8, Tailwind 4) and the Polish website. Existing databases and
+configurations load unchanged; the new defaults apply to the shipped
+`config.toml` only (see Changed).
+
 ### Added
 
 - Per-provider chat request options on `[llm.providers.<name>]`, all off by
@@ -38,6 +49,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a keyless provider such as local Ollama; before, they needed an OpenAI key.
   Evaluation builds keep the `LOOMEM_EVALUATION_*_URL` loopback overrides.
   Embeddings still use `embedding_provider` and the OpenAI key, as before.
+- `POST /v1/evaluation/readiness`, `/v1/evaluation/ingest-readiness` and
+  `/v1/evaluation/ingest-readiness-v2` behind the `evaluation` cargo feature
+  (#169): per-source chunk, vector and document readiness probes for the
+  benchmark runner, plus a structured `ingest_receipt` on `memory_ingest` in
+  that build. The routes are mounted only when the binary is built with
+  `--features evaluation`, `LOOMEM_EVALUATION_READINESS=1` is set at startup
+  and an admin token is configured; otherwise they answer 404. The default
+  build is byte-identical, including `memory_ingest` responses. CI runs
+  clippy with the feature.
+- Hosted shared engine behind the `hosted-engine` cargo feature (#99, #123,
+  #125, #141–#145): one long-lived process serves the full `memory_*`
+  dispatcher and background jobs for explicitly passed actor/scope/epoch
+  contexts, each scope with its own state, RocksDB and Tantivy; requests are
+  served concurrently and scope revocation signals every scoped job before
+  waiting on it. The code lives under `loomem-server/src/hosted/` (the POC
+  worker in `loomem-core/examples/`) and is compiled out of the default
+  build. The public server is unchanged and stays single-user.
+- Benchmark tooling in `bench/longmemeval` (Python, no engine change): the
+  E1 runner admits only the IDs named in the structured `ingest_receipt` and
+  polls `/v1/evaluation/readiness` for per-ID evidence instead of the old
+  count barrier (#170); paid-path runner core — call journal, campaign
+  ledger, an OpenAI wire that records a reservation before every request,
+  and a loopback fake provider — whose tests make no network and no paid
+  calls (#173).
 
 ### Changed
 
@@ -138,6 +173,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that share the cap.
 - "Async rerank failed (non-blocking)" is logged at WARN (was DEBUG), so a
   truncated rerank is visible at the default log level.
+- MSRV raised from 1.93.1 to 1.99.0 to match the Docker builder image
+  (`rust:1.99-trixie`); the Docker dashboard build stage is
+  `node:26-trixie-slim` (#104, #105, #146).
+- Dependency upgrades with code adaptations: `tract-onnx` 0.23 for local
+  embeddings and the optional ONNX reranker (#131), `hmac` 0.13 and `sha2`
+  0.11 (#132, #135), `aes-gcm` 0.11 (#133), `rocksdb` 0.25 (#118),
+  `tokenizers` 0.23, `tiktoken-rs` 0.12 and `tower-http` 0.7 (#113, #115,
+  #116), plus the grouped minor and patch bumps (#112, #162). At-rest
+  encryption stays AES-256-GCM with the existing v1 blob and wrapped-key
+  formats; blobs written by the previous `aes-gcm` are covered by fixtures.
+  A failure of the system random source during nonce generation now
+  surfaces as `CryptoError::EncryptionFailed` instead of a panic inside the
+  RNG (#133).
+- Embedded dashboard toolchain: React 19 and the test stack moved together
+  (#124), ESLint 9 flat config (#137), Vite 8 with the unused `recharts`
+  dependency removed (#138), Tailwind CSS 4 through `@tailwindcss/vite`
+  (#139), and the grouped npm bumps (#107, #111, #149, #150, #151, #163).
+  No intended UI change. The dashboard build now requires Node 20.19+ or
+  22.12+ (Vite 8); the release runners and the Docker stage satisfy that.
+- CI: Rust jobs are skipped for presentation-only changes (Markdown, text,
+  CSS, PNG) and a `CI gate` job reports the expected outcomes (#134);
+  Dependabot covers cargo, GitHub Actions, npm and Docker, with a cooldown
+  before version-update PRs (#103, #106, #121, #147, #156).
 
 ### Fixed
 
@@ -154,6 +212,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) on purpose: it is the
   union of the documented values, other OpenAI-compatible providers may
   accept other subsets, and the model's own answer is the final word.
+- `memory_ingest` keeps the sanitized text as the canonical chunk content
+  whenever the sanitizer changed it, not only when HTML stripping, injection
+  detection or PII redaction fired (#167). Entity decoding (`&amp;` → `&`)
+  and whitespace normalization set no flag, so the chunk kept the raw bytes
+  while Tantivy, entity extraction and the embedding queue got the
+  normalized text; the embedding target check then treated the request as
+  obsolete and the vector was never published, leaving the chunk findable by
+  BM25 only. Untouched text is stored byte-identically, as before.
+- `memory_context` skips a hit that does not fit the remaining section
+  budget and keeps packing the smaller hits behind it, instead of ending the
+  section at the first oversized hit (#168). The biggest chunks tend to rank
+  first, so one long top hit used to empty the whole `relevant` or `recent`
+  section. The budget check is unchanged and a section is reported as
+  truncated once.
+- `scripts/install-hooks.sh` works from a linked worktree: it resolves the
+  shared hooks directory through `git rev-parse --git-path hooks`
+  (respecting `core.hooksPath`, which it never writes) and installs a
+  wrapper that runs `scripts/hooks/pre-commit` of the committing checkout
+  (#166).
+
+### Security
+
+- `libz-sys` 1.1.28 → 1.1.31 (RUSTSEC-2026-0418, build-script environment
+  leak; #102) and → 1.1.33 (RUSTSEC-2026-0544; #161), `rustix` 1.1.6
+  (RUSTSEC-2026-0486) and `quinn-udp` 0.5.16 (RUSTSEC-2026-0538) (#161),
+  `url` 2.5.9 (RUSTSEC-2026-0592; #164) — lockfile only. `.cargo/audit.toml`
+  accepts RUSTSEC-2026-0543 (`chrono` unmaintained, informational, no
+  patched release; a migration is a separate change) (#161).
+
+### Docs
+
+- Polish website and guides under `docs/pl/`: the language follows the
+  browser and an explicit EN/PL choice is remembered, static language links
+  work without JavaScript, and language-selection tests run in CI (#100,
+  #136, #140, #152).
+- LongMemEval diagnostic results published on the benchmarks page (85.4%,
+  run of 2026-10-29) and synced to `llms.txt`, `llms-full.txt` and the
+  sitemap; hosted Loomem Lite announced on the landing pages (EN and PL).
+- README and both landing pages show the current version in the `/health`
+  example (#98 for 0.5.4; 0.5.5 in this release). `CLAUDE.md` carries the
+  agent workflow and evaluation rules (#165).
+- Previously unlisted search and extraction behaviour, shipped in earlier
+  releases and documented here for completeness:
+  - `[mcp]` `search_default_top_k` (5), `search_max_top_k` (20),
+    `aggregation_default_top_k` (30) and `aggregation_max_top_k` (30) set
+    the `memory_search` `top_k` default and cap per query class; an explicit
+    caller value is kept and only clamped to the cap, and `tools/list` shows
+    the live limits (since 0.5.2, #46).
+  - BM25 query parsing never hard-fails: the raw query is tried first
+    (quoted phrases keep their meaning), then a form with Tantivy operator
+    metacharacters and smart quotes mapped to spaces, then that form
+    lowercased to neutralise bare `AND`/`OR`; only if all three fail is the
+    lexical leg skipped, and the vector and graph legs still answer (since
+    0.5.0, #23; hardened in 0.5.2, #45, #47).
+  - `[search] user_state_boost` and `agent_fact_damp` (both `1.0` = off)
+    multiply the fused score of user- and assistant-attributed
+    preference/decision and project-state facts (since 0.5.0, #25).
+  - Extraction emits an `event` fact type for dated personal experiences;
+    `event_date` is set only from an explicit or resolvable temporal cue,
+    never from the conversation date (since 0.5.0, #22).
+  - `[search] multi_query_enabled` (default `false`) decomposes a query of
+    more than three words into 2–3 LLM sub-queries merged into the BM25 leg
+    (and into the vector leg with `vector_multi_query`, default `true`);
+    `[search.graph] max_hops` (default `1`) adds 2-hop entity neighbours at
+    a lower proximity weight (0.25, against 0.5 for 1-hop) when set to `2`
+    (since 0.2.0).
 
 ## [0.5.4] - 2026-10-27
 
