@@ -1,15 +1,16 @@
 //! `/v1/dream/schedule` — admin-only view and control of the scheduled dream
 //! pass. State lives in the `meta:dream_schedule` row; this module reads and
-//! writes it only through `loomem_core::dream_schedule` (layering rule) and
-//! never runs a pass itself: the scheduler executes queued runs at its next
-//! poll, so manual and scheduled passes share one executor.
+//! writes it only through `loomem_core::dream_schedule` (layering rule; every
+//! write goes through `dream_schedule::update`) and never runs a pass itself:
+//! the scheduler executes queued runs at its next poll, so manual and
+//! scheduled passes share one executor.
 
 use axum::extract::{FromRequest, State};
 use axum::http::StatusCode;
 use axum::Json;
 use loomem_core::dream_schedule::{self, DreamScheduleRow};
 use loomem_core::scheduler::DREAM_POLL_SECS;
-use loomem_core::workers_registry::now_epoch;
+use loomem_core::workers_registry::{is_worker_paused, now_epoch};
 use std::sync::Arc;
 
 use super::admin::require_admin;
@@ -30,6 +31,7 @@ fn response_from(state: &AppState, row: &DreamScheduleRow) -> DreamScheduleRespo
         run_requested_at: row.run_requested_at,
         poll_secs: DREAM_POLL_SECS,
         queued: row.run_requested_at.is_some(),
+        paused: is_worker_paused(&state.workers, "dream"),
         last_result: row.last_result.clone(),
     }
 }
@@ -45,7 +47,8 @@ pub async fn dream_schedule_get_handler(
 }
 
 /// PUT /v1/dream/schedule — body `{ "enabled": bool, "interval_secs": u64 }`.
-/// 400 when the interval is outside 1 h ..= 30 d.
+/// 400 when the interval is outside 1 h ..= 30 d. A disabled → enabled
+/// transition re-anchors the schedule (`next_run_at = now + interval`).
 pub async fn dream_schedule_put_handler(
     State(state): State<Arc<AppState>>,
     request: axum::extract::Request,
@@ -62,18 +65,22 @@ pub async fn dream_schedule_put_handler(
         )));
     }
 
-    let mut row = dream_schedule::load(&state.store)?;
-    row.enabled = Some(payload.enabled);
-    row.interval_secs = Some(payload.interval_secs);
-    if row.anchor_at.is_none() && row.last_run_at.is_none() {
-        row.anchor_at = Some(now_epoch());
-    }
-    dream_schedule::save(&state.store, &row)?;
+    let now = now_epoch();
+    let row = dream_schedule::update(&state.store, |row| {
+        dream_schedule::apply_override(
+            row,
+            &state.config.dream,
+            payload.enabled,
+            payload.interval_secs,
+            now,
+        );
+    })?;
     Ok(Json(response_from(&state, &row)))
 }
 
 /// POST /v1/dream/schedule/run — queue a pass for the scheduler's next poll.
-/// 409 when the dream worker or the scheduler is disabled in config.
+/// 409 when the dream worker or the scheduler is disabled in config, or the
+/// `dream` worker is paused (nobody would execute the request).
 pub async fn dream_schedule_run_handler(
     State(state): State<Arc<AppState>>,
     request: axum::extract::Request,
@@ -89,10 +96,12 @@ pub async fn dream_schedule_run_handler(
             "Scheduler is disabled in config ([scheduler] enabled = false)".to_string(),
         ));
     }
+    if is_worker_paused(&state.workers, "dream") {
+        return Err(AppError::Conflict("Dream worker is paused".to_string()));
+    }
 
-    let mut row = dream_schedule::load(&state.store)?;
-    row.run_requested_at = Some(now_epoch());
-    dream_schedule::save(&state.store, &row)?;
+    let now = now_epoch();
+    let row = dream_schedule::update(&state.store, |row| row.run_requested_at = Some(now))?;
     Ok((StatusCode::ACCEPTED, Json(response_from(&state, &row))))
 }
 

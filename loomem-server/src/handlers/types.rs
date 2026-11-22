@@ -447,6 +447,8 @@ pub struct DreamScheduleResponse {
     pub poll_secs: u64,
     /// `true` while a manual run is queued and not yet started.
     pub queued: bool,
+    /// `true` while the `dream` worker is paused via `/admin/workers`.
+    pub paused: bool,
     pub last_result: Option<loomem_core::dream_schedule::DreamPassSummary>,
 }
 

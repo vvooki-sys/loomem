@@ -75,10 +75,13 @@ fn default_auto_cooldown_secs() -> u64 {
     900
 }
 
-/// Scheduled passes are on by default: the owner requirement (2026-11-22) is
-/// that dream is not on-demand only. `[dream] enabled` stays the master switch.
+/// Code default `false`: a config written before this field existed keeps
+/// dream on-demand until the owner opts in (same reasoning as
+/// `auto_trigger_threshold` — enabling the worker must not silently start
+/// paid LLM passes). The shipped `config.toml` sets `schedule_enabled = true`,
+/// so new installs run the daily pass.
 fn default_schedule_enabled() -> bool {
-    true
+    false
 }
 
 /// Default scheduled interval: once per 24 h.
@@ -142,6 +145,10 @@ pub struct DreamResult {
     pub cost_usd: f64,
     pub duration_ms: u64,
     pub cost_cap_reached: bool,
+    /// Another dream entry point already held this stream; nothing was done.
+    /// See `dream_inflight`.
+    #[serde(default)]
+    pub skipped_busy: bool,
 }
 
 /// Deserialized dream LLM response. Public so the pure-logic helper
@@ -268,6 +275,9 @@ pub async fn dream_run(
     cost_tracker: &CostTracker,
     stream: &str,
 ) -> Result<DreamResult> {
+    let Some(_inflight) = crate::dream_inflight::try_acquire(stream) else {
+        return Ok(DreamResult::skipped_busy(stream));
+    };
     let llm_config = run_ctx.llm_config;
     let dream_config = run_ctx.dream_config;
 
@@ -325,6 +335,7 @@ pub async fn dream_run(
                 cost_usd: total_cost,
                 duration_ms: start.elapsed().as_millis() as u64,
                 cost_cap_reached: true,
+                skipped_busy: false,
             });
         }
 
@@ -479,6 +490,7 @@ pub async fn dream_run(
         cost_usd: total_cost,
         duration_ms: start.elapsed().as_millis() as u64,
         cost_cap_reached: false,
+        skipped_busy: false,
     })
 }
 

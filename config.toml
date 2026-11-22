@@ -438,9 +438,11 @@ min_group_size = 2                # min chunks per subject to trigger merge
 cost_cap_usd_per_run = 0.10      # safety: stop if exceeded (per stream, per run)
 auto_trigger_threshold = 50      # fire a dream run after N new chunks per stream (0 = off, private streams only)
 auto_cooldown_secs = 900         # min 15 min between auto-runs on the same stream (debounces bulk imports)
-schedule_enabled = true          # periodic dream pass over all active streams (needs enabled = true)
+schedule_enabled = true          # periodic dream pass over all active streams (needs enabled = true).
+                                 # Code default is false: configs written before this key existed stay on-demand until you add it.
 schedule_interval_secs = 86400   # default once a day; 3600..2592000 (1 h..30 d); editable at runtime via PUT /v1/dream/schedule
-schedule_timeout_secs = 3600     # the whole pass (all streams) is aborted after this many seconds (min 60)
+schedule_timeout_secs = 3600     # soft deadline: no new stream is started after this many seconds (min 60);
+                                 # the stream in progress always finishes (each LLM call has its own 30 s timeout)
 
 # Cycle/112: POST /v1/feedback — agent-supplied chunk ratings (write-only in v1).
 [feedback]

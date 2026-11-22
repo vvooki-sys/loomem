@@ -2,13 +2,18 @@
 //!
 //! Lives next to `dream.rs` (which is at its file-size cap) and is driven by
 //! `scheduler.rs::tick_dream`. The pass covers **all** active streams, the
-//! shared stream included: the schedule is edited only by an admin in the
-//! dashboard, which satisfies the human gate that `memory_dream` enforces for
-//! non-admin MCP callers.
+//! shared stream included: the schedule is an instance-wide setting of a
+//! single-user engine, and the owner who configures the instance also owns
+//! the shared stream.
+//!
+//! `schedule_timeout_secs` is a *soft* deadline: once it has passed no new
+//! stream is started, but the stream in progress always finishes (each LLM
+//! call already carries its own 30 s timeout), so `dream_run` is never
+//! cancelled half-way through a merge.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use reqwest::Client;
@@ -16,8 +21,8 @@ use tracing::{error, info, warn};
 
 use crate::config::LlmConfig;
 use crate::cost_tracker::CostTracker;
-use crate::dream::{dream_run, DreamConfig, DreamRunContext};
-use crate::dream_schedule::{self, DreamPassSummary, DreamScheduleRow};
+use crate::dream::{dream_run, DreamConfig, DreamResult, DreamRunContext};
+use crate::dream_schedule::{self, DreamPassSummary, STATUS_DEADLINE, STATUS_FAILED, STATUS_OK};
 use crate::embedding_queue::EmbeddingQueue;
 use crate::intent_log::IntentLog;
 use crate::pii_filter::PiiFilter;
@@ -34,27 +39,73 @@ pub struct DreamPassContext<'a> {
     pub cost_tracker: &'a CostTracker,
     /// `"schedule"` or `"manual"`; copied into the summary.
     pub trigger: &'a str,
+    /// Soft deadline: no new stream is started at or after this instant.
+    /// `None` = unbounded. Injected so tests can pass an already-reached one.
+    pub deadline: Option<Instant>,
 }
 
-/// Run `dream_run` on every active stream (sorted, as `list_active_streams`
-/// returns them). A failing stream is logged and counted in `streams_failed`;
-/// the pass continues. `Err` only when the stream list itself cannot be read.
-pub async fn dream_run_all_streams(ctx: DreamPassContext<'_>) -> Result<DreamPassSummary> {
-    let streams = ctx.store.list_active_streams()?;
-    let mut summary = DreamPassSummary {
-        started_at: now_epoch(),
+/// `true` when `now` has reached the (optional) deadline.
+pub fn deadline_reached(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.is_some_and(|d| now >= d)
+}
+
+fn new_summary(trigger: &str, started_at: u64, streams_total: usize) -> DreamPassSummary {
+    DreamPassSummary {
+        started_at,
         finished_at: 0,
-        streams_total: streams.len(),
+        streams_total,
         streams_failed: 0,
         chunks_processed: 0,
         facts_merged: 0,
         contradictions_resolved: 0,
         cost_usd: 0.0,
         cost_cap_reached: 0,
-        trigger: ctx.trigger.to_string(),
-    };
+        trigger: trigger.to_string(),
+        status: STATUS_OK.to_string(),
+    }
+}
 
-    for stream in &streams {
+fn accumulate(summary: &mut DreamPassSummary, result: &DreamResult) {
+    summary.chunks_processed += result.chunks_processed;
+    summary.facts_merged += result.facts_merged;
+    summary.contradictions_resolved += result.contradictions_resolved;
+    summary.cost_usd += result.cost_usd;
+    if result.cost_cap_reached {
+        summary.cost_cap_reached += 1;
+    }
+}
+
+/// Run `dream_run` on every active stream (sorted, as `list_active_streams`
+/// returns them). A failing stream is logged and counted in `streams_failed`
+/// and the pass continues; a stream list that cannot be read yields a
+/// summary with `status = "failed"`.
+pub async fn dream_run_all_streams(ctx: DreamPassContext<'_>) -> DreamPassSummary {
+    let started_at = now_epoch();
+    let streams = match ctx.store.list_active_streams() {
+        Ok(streams) => streams,
+        Err(e) => {
+            error!(
+                trigger = ctx.trigger,
+                "Dream pass: cannot list streams: {e:#}"
+            );
+            let mut failed = new_summary(ctx.trigger, started_at, 0);
+            failed.status = STATUS_FAILED.to_string();
+            failed.finished_at = now_epoch();
+            return failed;
+        }
+    };
+    let mut summary = new_summary(ctx.trigger, started_at, streams.len());
+
+    for (visited, stream) in streams.iter().enumerate() {
+        if deadline_reached(ctx.deadline, Instant::now()) {
+            warn!(
+                trigger = ctx.trigger,
+                "Dream pass: soft deadline reached after {visited}/{} streams, not starting more",
+                streams.len()
+            );
+            summary.status = STATUS_DEADLINE.to_string();
+            break;
+        }
         let run_ctx = DreamRunContext {
             pii_filter: ctx.run_ctx.pii_filter,
             llm_config: ctx.run_ctx.llm_config,
@@ -72,15 +123,7 @@ pub async fn dream_run_all_streams(ctx: DreamPassContext<'_>) -> Result<DreamPas
         )
         .await
         {
-            Ok(result) => {
-                summary.chunks_processed += result.chunks_processed;
-                summary.facts_merged += result.facts_merged;
-                summary.contradictions_resolved += result.contradictions_resolved;
-                summary.cost_usd += result.cost_usd;
-                if result.cost_cap_reached {
-                    summary.cost_cap_reached += 1;
-                }
-            }
+            Ok(result) => accumulate(&mut summary, &result),
             Err(e) => {
                 summary.streams_failed += 1;
                 warn!(trigger = ctx.trigger, "Dream pass: stream failed: {e:#}");
@@ -89,7 +132,7 @@ pub async fn dream_run_all_streams(ctx: DreamPassContext<'_>) -> Result<DreamPas
     }
 
     summary.finished_at = now_epoch();
-    Ok(summary)
+    summary
 }
 
 /// Owned handles for a scheduled pass, cloned from the scheduler before
@@ -107,55 +150,60 @@ pub struct ScheduledPass {
     pub workers: WorkerRegistry,
 }
 
-/// Body of the scheduler's dream task: mark the start in the schedule row
-/// (so a crash mid-pass cannot re-fire in a loop), run the pass under
-/// `schedule_timeout_secs`, then record the outcome.
+/// Persist the start marker (`last_run_at = now`, manual request consumed).
+/// A pass may only start once this is durable: a crash mid-pass must not
+/// re-fire in a loop, and a queued request must not be served twice.
+pub fn mark_started(store: &RocksDbStore, started_at: u64) -> Result<()> {
+    dream_schedule::update(store, |row| {
+        row.last_run_at = Some(started_at);
+        row.run_requested_at = None;
+    })
+    .map(drop)
+}
+
+/// Body of the scheduler's dream task: durable start marker first (skip the
+/// pass if it cannot be written), then the pass under the soft deadline,
+/// then the outcome. Every pass that started leaves a `last_result`.
 pub async fn run_scheduled_pass(pass: ScheduledPass, trigger: &'static str) {
     let started_at = now_epoch();
+    if let Err(e) = mark_started(&pass.store, started_at) {
+        error!(
+            trigger,
+            "Dream pass skipped: cannot persist the start marker: {e:#}"
+        );
+        return;
+    }
     if let Some(w) = pass.workers.get("dream") {
         w.last_run_at.store(started_at, Ordering::SeqCst);
     }
-    update_row(&pass.store, |row| {
-        row.last_run_at = Some(started_at);
-        row.run_requested_at = None;
-    });
     info!(trigger, "Starting dream pass over all active streams");
 
-    let timeout = Duration::from_secs(pass.dream_config.schedule_timeout_secs);
-    let outcome = tokio::time::timeout(
-        timeout,
-        dream_run_all_streams(DreamPassContext {
-            store: &pass.store,
-            tantivy: &pass.tantivy,
-            client: &pass.client,
-            run_ctx: DreamRunContext {
-                pii_filter: &pass.pii_filter,
-                llm_config: &pass.llm_config,
-                dream_config: &pass.dream_config,
-                intent_log: pass.intent_log.as_deref(),
-                embedding_queue: pass.embedding_queue.clone(),
-            },
-            cost_tracker: &pass.cost_tracker,
-            trigger,
-        }),
-    )
+    let deadline =
+        Instant::now().checked_add(Duration::from_secs(pass.dream_config.schedule_timeout_secs));
+    let summary = dream_run_all_streams(DreamPassContext {
+        store: &pass.store,
+        tantivy: &pass.tantivy,
+        client: &pass.client,
+        run_ctx: DreamRunContext {
+            pii_filter: &pass.pii_filter,
+            llm_config: &pass.llm_config,
+            dream_config: &pass.dream_config,
+            intent_log: pass.intent_log.as_deref(),
+            embedding_queue: pass.embedding_queue.clone(),
+        },
+        cost_tracker: &pass.cost_tracker,
+        trigger,
+        deadline,
+    })
     .await;
-
-    match outcome {
-        Ok(Ok(summary)) => record_success(&pass, summary),
-        Ok(Err(e)) => error!(trigger, "Dream pass failed: {e:#}"),
-        Err(_) => error!(
-            trigger,
-            "Dream pass timed out after {}s (dream.schedule_timeout_secs)",
-            timeout.as_secs()
-        ),
-    }
+    record_outcome(&pass, summary);
 }
 
-fn record_success(pass: &ScheduledPass, summary: DreamPassSummary) {
+fn record_outcome(pass: &ScheduledPass, summary: DreamPassSummary) {
     info!(
         trigger = summary.trigger.as_str(),
-        "Dream pass completed: streams={} failed={} chunks={} merged={} contradictions={} cost=${:.4} cap_hits={}",
+        status = summary.status.as_str(),
+        "Dream pass finished: streams={} failed={} chunks={} merged={} contradictions={} cost=${:.4} cap_hits={}",
         summary.streams_total,
         summary.streams_failed,
         summary.chunks_processed,
@@ -167,23 +215,144 @@ fn record_success(pass: &ScheduledPass, summary: DreamPassSummary) {
     if let Some(w) = pass.workers.get("dream") {
         let merged = u64::try_from(summary.facts_merged).unwrap_or(u64::MAX);
         w.items_processed_total.fetch_add(merged, Ordering::SeqCst);
-        w.last_success_at.store(now_epoch(), Ordering::SeqCst);
+        // `deadline` still did real work; only a pass that could not run at
+        // all is withheld from `last_success_at`.
+        if summary.status != STATUS_FAILED {
+            w.last_success_at.store(now_epoch(), Ordering::SeqCst);
+        }
     }
-    update_row(&pass.store, |row| row.last_result = Some(summary));
+    if let Err(e) = dream_schedule::update(&pass.store, |row| row.last_result = Some(summary)) {
+        error!("Dream pass: cannot write last_result: {e:#}");
+    }
 }
 
-/// Read-modify-write of the schedule row. Re-reads before writing so an
-/// admin `PUT` made while the pass ran is not overwritten by stale fields.
-fn update_row(store: &RocksDbStore, mutate: impl FnOnce(&mut DreamScheduleRow)) {
-    let mut row = match dream_schedule::load(store) {
-        Ok(row) => row,
-        Err(e) => {
-            error!("Dream pass: cannot read schedule row, state not updated: {e:#}");
-            return;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::PiiConfig;
+    use crate::cost_tracker::CostConfig;
+    use crate::scheduler::WorkerConfig;
+    use crate::storage::RocksDbConfig;
+    use crate::tantivy_index::TantivyConfig;
+    use crate::workers_registry::build_registry;
+    use tempfile::TempDir;
+
+    fn scheduled_pass(tmp: &TempDir) -> ScheduledPass {
+        let store = Arc::new(
+            RocksDbStore::open(
+                tmp.path(),
+                &RocksDbConfig {
+                    max_open_files: 100,
+                    compression: "none".to_string(),
+                    write_buffer_size: 4 * 1024 * 1024,
+                    max_write_buffer_number: 2,
+                },
+            )
+            .expect("open tempdir store"),
+        );
+        let tantivy = TantivyIndex::open(
+            tmp.path().join("tantivy"),
+            &TantivyConfig {
+                enabled: false,
+                heap_size_mb: 16,
+                drift_warn_pct: 5.0,
+                auto_rebuild_on_drift: false,
+            },
+        )
+        .expect("open tantivy");
+        let client = Client::new();
+        ScheduledPass {
+            cost_tracker: Arc::new(CostTracker::new(
+                store.clone(),
+                CostConfig::default(),
+                client.clone(),
+            )),
+            store,
+            tantivy: Arc::new(tokio::sync::Mutex::new(tantivy)),
+            client,
+            llm_config: LlmConfig::default(),
+            dream_config: DreamConfig::default(),
+            pii_filter: Arc::new(PiiFilter::new(PiiConfig::default()).expect("pii filter")),
+            intent_log: None,
+            embedding_queue: None,
+            workers: build_registry(&WorkerConfig::default(), 86_400, 3_600, 86_400),
         }
-    };
-    mutate(&mut row);
-    if let Err(e) = dream_schedule::save(store, &row) {
-        error!("Dream pass: cannot write schedule row: {e:#}");
+    }
+
+    #[test]
+    fn deadline_reached_only_at_or_after_the_instant() {
+        let now = Instant::now();
+        assert!(!deadline_reached(None, now));
+        assert!(deadline_reached(Some(now), now));
+        assert!(deadline_reached(Some(now), now + Duration::from_millis(1)));
+        assert!(!deadline_reached(Some(now + Duration::from_secs(60)), now));
+    }
+
+    #[test]
+    fn mark_started_sets_last_run_and_clears_request() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let pass = scheduled_pass(&tmp);
+        dream_schedule::update(&pass.store, |row| row.run_requested_at = Some(5))?;
+        mark_started(&pass.store, 1_000)?;
+        let row = dream_schedule::load(&pass.store)?;
+        assert_eq!(row.last_run_at, Some(1_000));
+        assert_eq!(row.run_requested_at, None);
+        Ok(())
+    }
+
+    /// Empty store → zero streams → no LLM call; the row still records the
+    /// start marker and an `ok` summary.
+    #[tokio::test]
+    async fn run_scheduled_pass_on_empty_store_records_ok_summary() {
+        let tmp = TempDir::new().expect("tempdir");
+        let pass = scheduled_pass(&tmp);
+        dream_schedule::update(&pass.store, |row| row.run_requested_at = Some(7))
+            .expect("queue a manual run");
+        let store = pass.store.clone();
+        let workers = pass.workers.clone();
+
+        run_scheduled_pass(pass, dream_schedule::TRIGGER_MANUAL).await;
+
+        let row = dream_schedule::load(&store).expect("row");
+        assert!(row.last_run_at.is_some(), "start marker persisted");
+        assert_eq!(row.run_requested_at, None, "manual request consumed");
+        let result = row.last_result.expect("summary recorded");
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(result.streams_total, 0);
+        assert_eq!(result.streams_failed, 0);
+        assert_eq!(result.trigger, dream_schedule::TRIGGER_MANUAL);
+        assert!(result.finished_at >= result.started_at);
+
+        let w = workers.get("dream").expect("dream worker registered");
+        assert_ne!(w.last_run_at.load(Ordering::SeqCst), 0);
+        assert_ne!(w.last_success_at.load(Ordering::SeqCst), 0);
+        assert_eq!(w.items_processed_total.load(Ordering::SeqCst), 0);
+    }
+
+    /// A deadline that has already passed before the first stream leaves an
+    /// empty store with `ok` (nothing was skipped) — the deadline only
+    /// matters once there is a stream to skip.
+    #[tokio::test]
+    async fn all_streams_pass_with_reached_deadline_on_empty_store_is_ok() {
+        let tmp = TempDir::new().expect("tempdir");
+        let pass = scheduled_pass(&tmp);
+        let summary = dream_run_all_streams(DreamPassContext {
+            store: &pass.store,
+            tantivy: &pass.tantivy,
+            client: &pass.client,
+            run_ctx: DreamRunContext {
+                pii_filter: &pass.pii_filter,
+                llm_config: &pass.llm_config,
+                dream_config: &pass.dream_config,
+                intent_log: None,
+                embedding_queue: None,
+            },
+            cost_tracker: &pass.cost_tracker,
+            trigger: dream_schedule::TRIGGER_SCHEDULE,
+            deadline: Some(Instant::now()),
+        })
+        .await;
+        assert_eq!(summary.status, STATUS_OK);
+        assert_eq!(summary.streams_total, 0);
     }
 }

@@ -11,7 +11,7 @@ use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::dream_pass::{self, ScheduledPass};
-use crate::dream_schedule;
+use crate::dream_schedule::{self, Decision};
 use crate::embedding_queue::EmbeddingQueue;
 
 /// How often the scheduler re-reads the dream schedule row to decide whether
@@ -287,7 +287,7 @@ impl Scheduler {
             "clustering" => self.tick_clustering(),
             "purge" => self.tick_purge(),
             "stats" => self.tick_stats(),
-            "dream" => self.tick_dream(),
+            "dream" => self.force_dream()?,
             _ => anyhow::bail!("Unknown scheduler worker: {name}"),
         }
         Ok(())
@@ -375,47 +375,51 @@ impl Scheduler {
         self.spawn_stats_task();
     }
 
-    /// Poll the persisted dream schedule and start a pass when it is due.
-    /// Only this ticker executes dream passes, so a scheduled and a manually
-    /// queued pass never overlap.
+    /// Poll the persisted dream schedule (`dream_schedule::poll` decides and
+    /// does the bookkeeping) and start a pass when it says so. Only this
+    /// scheduler executes dream passes, so a scheduled and a manually queued
+    /// pass never overlap.
     fn tick_dream(&self) {
-        if self.is_paused("dream") {
+        if !self.config.dream.enabled || self.is_paused("dream") {
             return;
         }
         if self.dream_running.load(Ordering::SeqCst) {
-            warn!("Dream pass already running, skipping tick");
             return;
         }
-        let row = match dream_schedule::load(&self.storage) {
-            Ok(row) => row,
-            Err(e) => {
-                error!("Dream schedule: cannot read schedule row: {e:#}");
-                return;
+        match dream_schedule::poll(&self.storage, &self.config.dream, now_epoch()) {
+            Ok(Decision::Run { trigger }) => {
+                self.spawn_dream_task(trigger);
             }
-        };
-        let eff = dream_schedule::effective(&row, &self.config.dream);
-        let now = now_epoch();
-        if dream_schedule::is_due(&row, &eff, now) {
-            let trigger = if row.run_requested_at.is_some() {
-                "manual"
-            } else {
-                "schedule"
-            };
-            self.spawn_dream_task(trigger);
-        } else if row.anchor_at.is_none() && row.last_run_at.is_none() {
-            // First poll ever: anchor so the first run lands one interval
-            // from now instead of firing on every restart.
-            let anchored = dream_schedule::DreamScheduleRow {
-                anchor_at: Some(now),
-                ..row
-            };
-            if let Err(e) = dream_schedule::save(&self.storage, &anchored) {
-                error!("Dream schedule: cannot anchor schedule row: {e:#}");
-            }
+            Ok(Decision::Write(_) | Decision::Idle) => {}
+            Err(e) => error!("Dream schedule: poll failed: {e:#}"),
         }
     }
 
-    fn spawn_dream_task(&self, trigger: &'static str) {
+    /// `trigger_worker("dream")` (hosted `worker_async`): run now, regardless
+    /// of the schedule, or say why not.
+    fn force_dream(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.config.dream.enabled,
+            "Dream worker is disabled in config"
+        );
+        anyhow::ensure!(!self.is_paused("dream"), "Dream worker is paused");
+        anyhow::ensure!(
+            self.spawn_dream_task(dream_schedule::TRIGGER_MANUAL),
+            "Dream pass already running"
+        );
+        Ok(())
+    }
+
+    /// Spawn the pass if no other is running; `false` when it lost the race.
+    fn spawn_dream_task(&self, trigger: &'static str) -> bool {
+        let running = self.dream_running.clone();
+        if running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            warn!("Dream pass already running, not starting another");
+            return false;
+        }
         let pass = ScheduledPass {
             store: self.storage.clone(),
             tantivy: self.tantivy.clone(),
@@ -428,12 +432,11 @@ impl Scheduler {
             embedding_queue: self.embedding_queue.clone(),
             workers: self.workers.clone(),
         };
-        let running = self.dream_running.clone();
-        running.store(true, Ordering::SeqCst);
         tokio::spawn(async move {
             dream_pass::run_scheduled_pass(pass, trigger).await;
             running.store(false, Ordering::SeqCst);
         });
+        true
     }
 
     async fn wait_for_running_tasks_to_complete(&self) {
