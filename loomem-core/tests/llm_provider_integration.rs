@@ -137,15 +137,21 @@ fn shipped_openai_entry_resolves_legacy_inline_key_with_options() -> Result<()> 
     assert!(active.chat.max_completion_tokens);
     assert!(active.chat.omit_temperature);
     assert_eq!(active.chat.reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(active.chat.completion_tokens_floor, 2000);
+    // A 100-token cap is raised to the shipped floor; a cap above it is kept.
     let body = active.chat_body(serde_json::json!({
         "model": "m", "messages": [], "max_tokens": 100, "temperature": 0.0
     }));
     assert_eq!(
         body,
         serde_json::json!({
-            "model": "m", "messages": [], "max_completion_tokens": 100, "reasoning_effort": "low"
+            "model": "m", "messages": [], "max_completion_tokens": 2000, "reasoning_effort": "low"
         })
     );
+    let body = active.chat_body(serde_json::json!({
+        "model": "m", "messages": [], "max_tokens": 16384, "temperature": 0.0
+    }));
+    assert_eq!(body["max_completion_tokens"], 16384);
     assert!(cfg.llm.provider_summary().contains("auth=config:api_key"));
     Ok(())
 }

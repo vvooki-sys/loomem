@@ -196,6 +196,11 @@ tcp_keepalive_secs = 30       # TCP keep-alive probe interval for pooled connect
 #   max_completion_tokens = true   # send the output cap as max_completion_tokens, not max_tokens
 #   completion_tokens_floor = 0    # raise any per-call output cap below this value (0 = unchanged)
 #   reasoning_effort = "low"       # none | minimal | low | medium | high | xhigh | max
+# The reasoning_effort list is the union of values the Chat Completions
+# reference documents; a given model may reject part of it with a 400
+# (gpt-6-luna accepts none | low | medium | high | xhigh and rejects
+# "minimal"; API response, 2026-11-22). The config check only rejects values
+# outside the list — the model's own answer is the final word.
 
 # The entry named "openai" refines the built-in provider: its api_key_env
 # wins, and only the inline `api_key` above is a fallback (the legacy
@@ -211,12 +216,21 @@ api_key_env = "OPENAI_API_KEY"
 max_completion_tokens = true
 # gpt-6-luna defaults to "medium"; reasoning tokens count toward the output
 # cap, so the smallest per-call caps (10–200 tokens) need a low effort.
+# gpt-6-luna accepts none | low | medium | high | xhigh; "minimal" is
+# rejected with a 400 (API response, 2026-11-22).
 reasoning_effort = "low"
-# The reference documents `temperature` for sampling and states nothing for
-# reasoning models; omitted so a rejected value cannot fail every call.
-# Revisit after the smoke test.
+# Smoke test on the real API (2026-11-22): `temperature` other than 1 and
+# `max_tokens` are each rejected with a 400, so these two options are
+# required, not optional, for gpt-6-luna.
 omit_temperature = true
-# completion_tokens_floor = 2000  # set after smoke test
+# Smoke test (2026-11-22, reasoning_effort = "low"): reasoning tokens ate the
+# small per-call caps whole — the NER batch (cap 1000) and the LLM rerank
+# (cap 100) returned finish_reason "length" with empty content. With the
+# floor at 2000 both completed (NER, 15 chunks: 1696/2000 tokens, 235 of
+# them reasoning; rerank: 171). The cap is a limit, not a spend: a call still
+# uses only what it needs. Knowledge extraction has its own cap above the
+# floor ([knowledge_extraction] max_tokens), so the floor never touches it.
+completion_tokens_floor = 2000
 
 # [llm.providers.ollama]
 # base_url = "http://localhost:11434/v1"
@@ -348,7 +362,10 @@ split_on_truncation = false      # true = re-extract a truncated chunk as two li
 [entity_extraction]
 enabled = true               # Phase 4: entity linking for cross-session retrieval
 # model = "gpt-6-luna"  # unset: inherits [llm] compression_model
-batch_size = 20               # max chunks per LLM call
+# 20 → 10 (2026-11-22): with reasoning_effort = "low" a 14–15 chunk batch
+# used 1696 of its 2000 output tokens; 10 leaves headroom for the reasoning
+# tokens that share the cap.
+batch_size = 10               # max chunks per LLM call
 flush_interval_secs = 3
 queue_capacity = 200
 confidence_threshold = 0.5   # 0.0-1.0, below = ignore. Lowered from 0.7 for better relation coverage (edges in graph)

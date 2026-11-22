@@ -804,7 +804,7 @@ mod tests {
         assert!(entry.chat.max_completion_tokens);
         assert!(entry.chat.omit_temperature);
         assert_eq!(entry.chat.reasoning_effort.as_deref(), Some("low"));
-        assert_eq!(entry.chat.completion_tokens_floor, 0);
+        assert_eq!(entry.chat.completion_tokens_floor, 2000);
         assert_eq!(cfg.llm.active_key_env_hint(), "OPENAI_API_KEY");
         cfg.validate().expect("shipped config validates");
         // The legacy inline key still resolves through the entry (test fixtures
