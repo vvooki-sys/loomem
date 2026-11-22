@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Search quality-lever flags, all off/neutral by default and byte-identical
+  when left so: `[search] rerank_date_prefix`, `rerank_llm_max_chars` (200),
+  `rerank_onnx_max_tokens` (0 = none), `rerank_sync`, `rerank_sync_timeout_ms`
+  (2000), `event_date_proximity_boost` (0.0); `[mcp] search_include_predecessor`,
+  `predecessor_max_chars` (400), `search_group_by` (`none`). Only the config
+  surface lands here; the levers themselves follow in separate PRs.
+
 ## [0.5.5] - 2026-11-22
 
 Everything on `main` since v0.5.4: every LLM chat call goes through the active

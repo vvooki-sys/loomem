@@ -253,6 +253,32 @@ pub struct McpConfig {
     /// Hard cap on `top_k` for aggregation-detected searches.
     #[serde(default = "default_mcp_aggregation_max_top_k")]
     pub aggregation_max_top_k: usize,
+    /// `memory_search`: render the direct predecessor (`supersedes_id`) under
+    /// an `[UPDATED]` hit; its text counts toward `max_context_tokens`.
+    /// Default off: output byte-identical.
+    #[serde(default)]
+    pub search_include_predecessor: bool,
+    /// Character cap for the rendered predecessor text (ellipsis beyond).
+    /// Inert unless `search_include_predecessor` is on.
+    #[serde(default = "default_mcp_predecessor_max_chars")]
+    pub predecessor_max_chars: usize,
+    /// `memory_search`: insert `## <key>` headers between result groups;
+    /// order and numbering unchanged. `none` (default) == byte-identical.
+    #[serde(default)]
+    pub search_group_by: SearchGroupBy,
+}
+
+/// Grouping key for `memory_search` result lines (`[mcp] search_group_by`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchGroupBy {
+    /// No headers — the flat list as before.
+    #[default]
+    None,
+    /// One header per source session (falls back to the day).
+    Session,
+    /// One header per calendar day.
+    Day,
 }
 
 fn default_mcp_search_default_top_k() -> usize {
@@ -267,6 +293,9 @@ fn default_mcp_aggregation_default_top_k() -> usize {
 fn default_mcp_aggregation_max_top_k() -> usize {
     30
 }
+fn default_mcp_predecessor_max_chars() -> usize {
+    400
+}
 
 impl Default for McpConfig {
     fn default() -> Self {
@@ -275,11 +304,24 @@ impl Default for McpConfig {
             search_max_top_k: default_mcp_search_max_top_k(),
             aggregation_default_top_k: default_mcp_aggregation_default_top_k(),
             aggregation_max_top_k: default_mcp_aggregation_max_top_k(),
+            search_include_predecessor: false,
+            predecessor_max_chars: default_mcp_predecessor_max_chars(),
+            search_group_by: SearchGroupBy::None,
         }
     }
 }
 
 impl McpConfig {
+    /// Lever-flag invariants (the `top_k` pair checks stay in
+    /// [`Config::validate`]).
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.predecessor_max_chars > 0,
+            "mcp.predecessor_max_chars must be positive"
+        );
+        Ok(())
+    }
+
     /// The effective `top_k` for an MCP `memory_search` call: the explicit
     /// caller value if present (never silently overridden by complexity
     /// tiers), else the configured default — both clamped to the configured
@@ -423,6 +465,7 @@ impl Config {
             self.mcp.aggregation_default_top_k <= self.mcp.aggregation_max_top_k,
             "mcp.aggregation_default_top_k must not exceed mcp.aggregation_max_top_k"
         );
+        self.mcp.validate()?;
 
         if self.storage.tantivy.enabled {
             anyhow::ensure!(
@@ -643,6 +686,38 @@ mod tests {
         );
     }
 
+    /// Default-off guard for the `[mcp]` quality levers: a config without
+    /// the new keys loads with them off/neutral, the shipped file spells
+    /// them out and keeps them off, and `search_group_by` parses its three
+    /// snake_case values.
+    #[test]
+    fn mcp_levers_default_off_and_shipped_config_agrees() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+        let content = std::fs::read_to_string(path).expect("read config.toml");
+        let shipped: Config = toml::from_str(&content).expect("parse config.toml");
+        let absent: McpConfig = toml::from_str("search_default_top_k = 5").expect("parse");
+        for mcp in [&shipped.mcp, &absent, &McpConfig::default()] {
+            assert!(!mcp.search_include_predecessor);
+            assert_eq!(mcp.predecessor_max_chars, 400);
+            assert_eq!(mcp.search_group_by, SearchGroupBy::None);
+        }
+        for (raw, expected) in [
+            ("none", SearchGroupBy::None),
+            ("session", SearchGroupBy::Session),
+            ("day", SearchGroupBy::Day),
+        ] {
+            let parsed: McpConfig =
+                toml::from_str(&format!("search_group_by = \"{raw}\"")).expect("parse");
+            assert_eq!(parsed.search_group_by, expected);
+        }
+        assert!(toml::from_str::<McpConfig>("search_group_by = \"week\"").is_err());
+
+        let mut config = shipped;
+        config.validate().expect("shipped config validates");
+        config.mcp.predecessor_max_chars = 0;
+        assert!(config.validate().is_err());
+    }
+
     /// Shipped config.toml must reproduce the previously hardcoded MCP
     /// memory_search limits byte-identically (roadmap W2): 5/20 normal,
     /// 30/30 aggregation. Guards against drift between the file and the
@@ -689,6 +764,7 @@ mod tests {
             search_max_top_k: 40,
             aggregation_default_top_k: 30,
             aggregation_max_top_k: 60,
+            ..McpConfig::default()
         };
         assert_eq!(raised.effective_search_top_k(Some(40), false), 40);
         assert_eq!(raised.effective_search_top_k(Some(50), false), 40);

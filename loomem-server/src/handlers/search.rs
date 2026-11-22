@@ -4061,6 +4061,12 @@ mod tests {
                 tier1: loomem_core::search::tier1::Tier1Config::default(),
                 operation: loomem_core::hybrid_search::OperationSearchConfig::default(),
                 evidence_fields: false,
+                rerank_date_prefix: false,
+                rerank_llm_max_chars: 200,
+                rerank_onnx_max_tokens: 0,
+                rerank_sync: false,
+                rerank_sync_timeout_ms: 2000,
+                event_date_proximity_boost: 0.0,
             }
         }
 
