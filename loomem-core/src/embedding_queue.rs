@@ -90,6 +90,21 @@ impl Default for EmbeddingQueueConfig {
     }
 }
 
+impl EmbeddingQueueConfig {
+    /// Batch size the worker loop uses: at least 1. With `0` the collect
+    /// loop broke before awaiting the channel and spun on empty flushes.
+    pub fn effective_batch_size(&self) -> usize {
+        self.batch_size.max(1)
+    }
+
+    /// Flush interval the worker loop waits for: at least one second. With
+    /// `0` every deadline was already past, so the loop never awaited the
+    /// channel or the shutdown signal.
+    pub fn effective_flush_interval(&self) -> tokio::time::Duration {
+        tokio::time::Duration::from_secs(self.flush_interval_secs.max(1))
+    }
+}
+
 struct Worker {
     store: Arc<RocksDbStore>,
     http_client: reqwest::Client,
@@ -138,13 +153,15 @@ async fn worker_loop(
     worker: Worker,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) {
+    let batch_size = worker.config.effective_batch_size();
+    let flush_interval = worker.config.effective_flush_interval();
     info!(
         "Embedding queue worker started (batch_size={}, flush_interval={}s)",
-        worker.config.batch_size, worker.config.flush_interval_secs
+        batch_size,
+        flush_interval.as_secs()
     );
 
-    let mut batch: Vec<EmbedRequest> = Vec::with_capacity(worker.config.batch_size);
-    let flush_interval = tokio::time::Duration::from_secs(worker.config.flush_interval_secs);
+    let mut batch: Vec<EmbedRequest> = Vec::with_capacity(batch_size);
 
     loop {
         // Collect items until batch is full or timeout
@@ -152,7 +169,7 @@ async fn worker_loop(
 
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() || batch.len() >= worker.config.batch_size {
+            if remaining.is_zero() || batch.len() >= batch_size {
                 break;
             }
 
@@ -174,7 +191,7 @@ async fn worker_loop(
                     rx.close();
                     while let Some(req) = rx.recv().await {
                         batch.push(req);
-                        if batch.len() >= worker.config.batch_size {
+                        if batch.len() >= batch_size {
                             flush_pending(&mut batch, &worker).await;
                         }
                     }
@@ -300,6 +317,28 @@ fn all_failed(count: usize, reason: &str) -> Vec<Result<Vec<f32>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A zero batch size or flush interval is clamped to 1 before the worker
+    /// loop uses it; sane values pass through unchanged.
+    #[test]
+    fn zero_batch_size_and_flush_interval_are_clamped_to_one() {
+        let zero = EmbeddingQueueConfig {
+            batch_size: 0,
+            flush_interval_secs: 0,
+            queue_capacity: 1,
+        };
+        assert_eq!(zero.effective_batch_size(), 1);
+        assert_eq!(
+            zero.effective_flush_interval(),
+            tokio::time::Duration::from_secs(1)
+        );
+        let sane = EmbeddingQueueConfig::default();
+        assert_eq!(sane.effective_batch_size(), 50);
+        assert_eq!(
+            sane.effective_flush_interval(),
+            tokio::time::Duration::from_secs(5)
+        );
+    }
 
     #[test]
     fn pad_to_fills_missing_slots() {

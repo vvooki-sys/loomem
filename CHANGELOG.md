@@ -141,6 +141,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The embedding queue worker never spins on a zero batch size or flush
+  interval: both are clamped to 1 before the loop uses them. With `0` the
+  collect loop broke before awaiting the channel and the deadline was
+  always past, so the worker spun without receiving work or the shutdown
+  signal. The server builds the queue from `EmbeddingQueueConfig::default()`
+  (50 / 5 s), so this is defense in depth for callers that construct the
+  config themselves.
 - The shipped `config.toml` and the configuration docs say that `gpt-6-luna`
   rejects `reasoning_effort = "minimal"` with a 400 (API response,
   2026-11-22). The config check still accepts the full API list (`none`,
