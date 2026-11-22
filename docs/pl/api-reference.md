@@ -379,7 +379,7 @@ Uruchom konsolidację dream w bieżącym strumieniu.
 }
 ```
 
-Jeśli inny punkt wejścia dream już zajmuje strumień, wywołanie wraca natychmiast z `"skipped_busy": true` i nic nie robi.
+Jeśli inny punkt wejścia dream już zajmuje strumień (w obrębie magazynu i strumienia), wywołanie wraca natychmiast z `"skipped_busy": true` i nic nie robi.
 
 Analiza jakości pamięci jest dostępna przez narzędzie `memory_reflect` MCP.
 
@@ -412,13 +412,14 @@ Bieżący harmonogram dream i wynik ostatniego przebiegu. Tylko administrator.
     "contradictions_resolved": 2,
     "cost_usd": 0.11,
     "cost_cap_reached": 0,
+    "streams_skipped_busy": 0,
     "trigger": "schedule",
     "status": "ok"
   }
 }
 ```
 
-Znaczniki czasu to sekundy epoki, `null` gdy nieznane. `source` to `"config"`, gdy wartości pochodzą z `[dream]`, a `"override"`, gdy zmienił je administrator. `paused` ma wartość `true`, gdy proces `dream` jest wstrzymany przez `/admin/workers`. `last_result` podsumowuje ostatni zaplanowany lub ręczny przebieg: `trigger` to `"schedule"` lub `"manual"`, `cost_cap_reached` liczy strumienie, które osiągnęły `cost_cap_usd_per_run`, a `status` to `"ok"`, `"deadline"` (miękki termin `schedule_timeout_secs` przerwał przebieg przed odwiedzeniem wszystkich strumieni) lub `"failed"` (przebieg nie mógł się wykonać, np. nie udało się odczytać listy strumieni). Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia.
+Znaczniki czasu to sekundy epoki, `null` gdy nieznane. `source` to `"config"`, gdy wartości pochodzą z `[dream]`, a `"override"`, gdy zmienił je administrator. `paused` ma wartość `true`, gdy proces `dream` jest wstrzymany przez `/admin/workers`. `last_result` podsumowuje ostatni zaplanowany lub ręczny przebieg: `trigger` to `"schedule"` lub `"manual"`, `cost_cap_reached` liczy strumienie, które osiągnęły `cost_cap_usd_per_run`, `streams_skipped_busy` liczy strumienie, które już przetwarzał inny przebieg dream, a `status` to `"ok"`, `"deadline"` (miękki termin `schedule_timeout_secs` przerwał przebieg przed odwiedzeniem wszystkich strumieni) lub `"failed"` (przebieg nie mógł się wykonać, np. nie udało się odczytać listy strumieni). Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia.
 
 <span id="put-v1dreamschedule"></span>
 

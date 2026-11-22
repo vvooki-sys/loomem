@@ -424,7 +424,7 @@ Scans for soft-deleted chunks past their recovery window. Purge pipeline: graph 
 | Min group size | 2 |
 | Cost cap | $0.10 / run |
 
-Dream has three triggers. The scheduler polls the schedule every 60 seconds, so a "Run now" from the dashboard starts within a minute. The scheduled pass covers all active streams, shared ones included: the schedule is an instance-wide setting of a single-user engine, and the owner who configures the instance also owns the shared stream. The schedule needs both `[dream] enabled` and `[scheduler] enabled`, and it is on in the shipped `config.toml` (the code default is off). The three entry points are mutually exclusive per stream: a run on a busy stream returns at once with `skipped_busy: true`.
+Dream has three triggers. The scheduler polls the schedule every 60 seconds, so a "Run now" from the dashboard starts within a minute. The scheduled pass covers all active streams, shared ones included: the schedule is an instance-wide setting of a single-user engine, and the owner who configures the instance also owns the shared stream. The schedule needs both `[dream] enabled` and `[scheduler] enabled`, and it is on in the shipped `config.toml` (the code default is off). The entry points are mutually exclusive per store and stream: a run on a busy stream is skipped at once (`skipped_busy` in `POST /v1/dream`, `last_result.streams_skipped_busy` for the scheduled pass).
 
 ---
 

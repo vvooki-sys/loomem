@@ -337,7 +337,7 @@ Trigger dream consolidation on current stream.
 }
 ```
 
-If another dream entry point already holds the stream, the call returns at once with `"skipped_busy": true` and does nothing.
+If another dream entry point already holds the stream (per store and stream), the call returns at once with `"skipped_busy": true` and does nothing.
 
 Memory quality analysis is available via the `memory_reflect` MCP tool.
 
@@ -368,13 +368,14 @@ Current dream schedule and the result of the last pass. Admin only.
     "contradictions_resolved": 2,
     "cost_usd": 0.11,
     "cost_cap_reached": 0,
+    "streams_skipped_busy": 0,
     "trigger": "schedule",
     "status": "ok"
   }
 }
 ```
 
-Timestamps are epoch seconds, `null` when unknown. `source` is `"config"` when the values come from `[dream]` and `"override"` when an admin changed them. `paused` is `true` while the `dream` worker is paused via `/admin/workers`. `last_result` summarizes the last scheduled or manual pass: `trigger` is `"schedule"` or `"manual"`, `cost_cap_reached` counts streams that hit `cost_cap_usd_per_run`, and `status` is `"ok"`, `"deadline"` (the soft deadline `schedule_timeout_secs` stopped the pass before every stream was visited) or `"failed"` (the pass could not run, for example the stream list could not be read). The scheduled pass runs a dream over every active stream.
+Timestamps are epoch seconds, `null` when unknown. `source` is `"config"` when the values come from `[dream]` and `"override"` when an admin changed them. `paused` is `true` while the `dream` worker is paused via `/admin/workers`. `last_result` summarizes the last scheduled or manual pass: `trigger` is `"schedule"` or `"manual"`, `cost_cap_reached` counts streams that hit `cost_cap_usd_per_run`, `streams_skipped_busy` counts streams another dream run already held, and `status` is `"ok"`, `"deadline"` (the soft deadline `schedule_timeout_secs` stopped the pass before every stream was visited) or `"failed"` (the pass could not run, for example the stream list could not be read). The scheduled pass runs a dream over every active stream.
 
 ### PUT /v1/dream/schedule
 

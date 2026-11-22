@@ -229,6 +229,8 @@ Uruchom konsolidację pamięci. Podobnie jak sen dla mózgu, łączy, usuwa dupl
 }
 ```
 
+Jeśli inny przebieg dream już zajmuje strumień, narzędzie zwraca zamiast tego zwykły tekst `Dream skipped: another dream run is in progress on this stream.`.
+
 **Kiedy wywołać:**
 
 - Po długiej, produktywnej sesji

@@ -558,7 +558,7 @@ a:hover{text-decoration:underline}
   "duration_ms": 3200
 }
 </code></pre>
-<p>Jeśli inny punkt wejścia dream już zajmuje strumień, wywołanie wraca natychmiast z <code>"skipped_busy": true</code> i nic nie robi.</p>
+<p>Jeśli inny punkt wejścia dream już zajmuje strumień (w obrębie magazynu i strumienia), wywołanie wraca natychmiast z <code>"skipped_busy": true</code> i nic nie robi.</p>
 <p>Analiza jakości pamięci jest dostępna przez narzędzie <code>memory_reflect</code> MCP.</p>
 <h3 id="get-v1dreamschedule">GET /v1/dream/schedule</h3>
 <p>Bieżący harmonogram dream i wynik ostatniego przebiegu. Tylko administrator.</p>
@@ -584,12 +584,13 @@ a:hover{text-decoration:underline}
     "contradictions_resolved": 2,
     "cost_usd": 0.11,
     "cost_cap_reached": 0,
+    "streams_skipped_busy": 0,
     "trigger": "schedule",
     "status": "ok"
   }
 }
 </code></pre>
-<p>Znaczniki czasu to sekundy epoki, <code>null</code> gdy nieznane. <code>source</code> to <code>"config"</code>, gdy wartości pochodzą z <code>[dream]</code>, a <code>"override"</code>, gdy zmienił je administrator. <code>paused</code> ma wartość <code>true</code>, gdy proces <code>dream</code> jest wstrzymany przez <code>/admin/workers</code>. <code>last_result</code> podsumowuje ostatni zaplanowany lub ręczny przebieg: <code>trigger</code> to <code>"schedule"</code> lub <code>"manual"</code>, <code>cost_cap_reached</code> liczy strumienie, które osiągnęły <code>cost_cap_usd_per_run</code>, a <code>status</code> to <code>"ok"</code>, <code>"deadline"</code> (miękki termin <code>schedule_timeout_secs</code> przerwał przebieg przed odwiedzeniem wszystkich strumieni) lub <code>"failed"</code> (przebieg nie mógł się wykonać, np. nie udało się odczytać listy strumieni). Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia.</p>
+<p>Znaczniki czasu to sekundy epoki, <code>null</code> gdy nieznane. <code>source</code> to <code>"config"</code>, gdy wartości pochodzą z <code>[dream]</code>, a <code>"override"</code>, gdy zmienił je administrator. <code>paused</code> ma wartość <code>true</code>, gdy proces <code>dream</code> jest wstrzymany przez <code>/admin/workers</code>. <code>last_result</code> podsumowuje ostatni zaplanowany lub ręczny przebieg: <code>trigger</code> to <code>"schedule"</code> lub <code>"manual"</code>, <code>cost_cap_reached</code> liczy strumienie, które osiągnęły <code>cost_cap_usd_per_run</code>, <code>streams_skipped_busy</code> liczy strumienie, które już przetwarzał inny przebieg dream, a <code>status</code> to <code>"ok"</code>, <code>"deadline"</code> (miękki termin <code>schedule_timeout_secs</code> przerwał przebieg przed odwiedzeniem wszystkich strumieni) lub <code>"failed"</code> (przebieg nie mógł się wykonać, np. nie udało się odczytać listy strumieni). Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia.</p>
 <h3 id="put-v1dreamschedule">PUT /v1/dream/schedule</h3>
 <p>Nadpisz harmonogram w trakcie działania. Tylko administrator. Nadpisanie jest zapisywane w bazie silnika i przetrwa restart.</p>
 <pre><code class="language-json">{ "enabled": true, "interval_secs": 86400 }

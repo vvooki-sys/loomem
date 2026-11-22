@@ -618,7 +618,7 @@ a:hover{text-decoration:underline}
   &quot;duration_ms&quot;: 3200
 }
 </code></pre>
-<p>If another dream entry point already holds the stream, the call returns at once with <code>&quot;skipped_busy&quot;: true</code> and does nothing.</p>
+<p>If another dream entry point already holds the stream (per store and stream), the call returns at once with <code>&quot;skipped_busy&quot;: true</code> and does nothing.</p>
 <p>Memory quality analysis is available via the <code>memory_reflect</code> MCP tool.</p>
 <h3 id="get-v1dreamschedule">GET /v1/dream/schedule</h3>
 <p>Current dream schedule and the result of the last pass. Admin only.</p>
@@ -644,12 +644,13 @@ a:hover{text-decoration:underline}
     &quot;contradictions_resolved&quot;: 2,
     &quot;cost_usd&quot;: 0.11,
     &quot;cost_cap_reached&quot;: 0,
+    &quot;streams_skipped_busy&quot;: 0,
     &quot;trigger&quot;: &quot;schedule&quot;,
     &quot;status&quot;: &quot;ok&quot;
   }
 }
 </code></pre>
-<p>Timestamps are epoch seconds, <code>null</code> when unknown. <code>source</code> is <code>&quot;config&quot;</code> when the values come from <code>[dream]</code> and <code>&quot;override&quot;</code> when an admin changed them. <code>paused</code> is <code>true</code> while the <code>dream</code> worker is paused via <code>/admin/workers</code>. <code>last_result</code> summarizes the last scheduled or manual pass: <code>trigger</code> is <code>&quot;schedule&quot;</code> or <code>&quot;manual&quot;</code>, <code>cost_cap_reached</code> counts streams that hit <code>cost_cap_usd_per_run</code>, and <code>status</code> is <code>&quot;ok&quot;</code>, <code>&quot;deadline&quot;</code> (the soft deadline <code>schedule_timeout_secs</code> stopped the pass before every stream was visited) or <code>&quot;failed&quot;</code> (the pass could not run, for example the stream list could not be read). The scheduled pass runs a dream over every active stream.</p>
+<p>Timestamps are epoch seconds, <code>null</code> when unknown. <code>source</code> is <code>&quot;config&quot;</code> when the values come from <code>[dream]</code> and <code>&quot;override&quot;</code> when an admin changed them. <code>paused</code> is <code>true</code> while the <code>dream</code> worker is paused via <code>/admin/workers</code>. <code>last_result</code> summarizes the last scheduled or manual pass: <code>trigger</code> is <code>&quot;schedule&quot;</code> or <code>&quot;manual&quot;</code>, <code>cost_cap_reached</code> counts streams that hit <code>cost_cap_usd_per_run</code>, <code>streams_skipped_busy</code> counts streams another dream run already held, and <code>status</code> is <code>&quot;ok&quot;</code>, <code>&quot;deadline&quot;</code> (the soft deadline <code>schedule_timeout_secs</code> stopped the pass before every stream was visited) or <code>&quot;failed&quot;</code> (the pass could not run, for example the stream list could not be read). The scheduled pass runs a dream over every active stream.</p>
 <h3 id="put-v1dreamschedule">PUT /v1/dream/schedule</h3>
 <p>Override the schedule at runtime. Admin only. The override is stored in the engine's database and survives restarts.</p>
 <pre><code class="language-json">{ &quot;enabled&quot;: true, &quot;interval_secs&quot;: 86400 }

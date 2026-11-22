@@ -205,6 +205,8 @@ Trigger memory consolidation. Like sleep for the brain — merges, deduplicates,
 }
 ```
 
+If another dream run already holds the stream, the tool replies with the plain text `Dream skipped: another dream run is in progress on this stream.` instead.
+
 **When to call:**
 - After a long, productive session
 - When the user asks to "clean up" or "consolidate" memory
