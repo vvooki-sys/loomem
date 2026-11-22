@@ -12,6 +12,8 @@ Hard rules every AI assistant (Claude Code, Cowork, Copilot, Cursor, …) must f
 - **Docs / landing / content / GEO** → § Docs & site + hard rule 5 (surgical). A docs task never touches Rust.
 - **Dashboard (`loomem-dashboard/`, React SPA)** → § Build & run (dashboard bullet) + hard rule 5. A dashboard task touches no Rust beyond `loomem-server/src/spa.rs`.
 - **Cutting a release** → § Releases.
+- **Any multi-step task, or a session that writes code** → § Agent workflow (worktrees, delegation, cleanup).
+- **Benchmarks / evaluation** → § Benchmarks & evaluation.
 - **Always** → § Five hard rules, especially live-state (rule 4), product boundaries (rule 3), secrets (rule 1).
 
 ---
@@ -49,6 +51,7 @@ Crates: `loomem-core` (domain + storage), `loomem-server` (HTTP/MCP), `loomem-cl
 
 - **Storage / domain:** `loomem-core/src/storage.rs` (RocksDB, `Chunk`), `tantivy_index.rs`, `hybrid_search.rs`, `graph/`, `crypto/` (+ `encrypt_backfill/`) for at-rest encryption.
 - **LLM prompts & extraction:** `loomem-core/src/llm.rs`, `memory_extractor.rs` (extraction prompt), `dream.rs`, `consolidation.rs`, `advisor.rs`.
+- **LLM provider routing:** `loomem-core/src/llm_provider.rs`. Every chat call goes through the active `llm.provider` (`LlmConfig::active_provider()` → `ResolvedProvider::chat_request` / `send_chat`). **Never hardcode a provider URL or a model name** in new code — read both from config. OpenAI is not assumed: the default chat model is moving from `gpt-4.1-mini` (retired by OpenAI on 2027-01-14) to Kimi `k3-256k` through a `kimi` provider; check `config.toml` for what is live. Embeddings are separate (`embedding_provider`, default `local`).
 - **MCP surface:** `loomem-server/src/mcp/` — `dispatcher.rs` (tool dispatch, source of truth for the tool set), `router.rs`, `handler.rs`, `tools.rs`. Canonical handshake text: `loomem-server/mcp_instructions.md`.
 - **HTTP handlers:** `loomem-server/src/handlers/` (`search.rs`, `ingest.rs`, `admin.rs`, `purge.rs`, …).
 - **Config:** `config.rs` composes per-module sub-configs (`manifest/config.rs`, `access_audit/config.rs`, …). Runtime config: `config.toml`.
@@ -105,9 +108,31 @@ fix:  handle empty stream id in purge handler
 
 **Releases (SemVer):** in one commit, bump `[workspace.package] version` in `Cargo.toml`, add a `CHANGELOG.md` entry, and tag `vX.Y.Z`. Pushing the tag triggers `release.yml`, which builds the dashboard SPA and then 4 targets (x86_64/aarch64 Linux, aarch64/x86_64 macOS; no Windows archive). **`main` should never be ahead of the latest tag** — tag the release commit itself.
 
-**Workflow reality:** solo repo, but **engine changes go through a PR on a feature branch** — since 2026-08 direct-to-`main` engine commits were reverted as a process violation. Only docs, `chore`, `ci` and release commits go straight to `main`. The `protect-main` ruleset blocks deletion and force-push only, so the PR rule is convention — follow it anyway. The **pre-commit hook (fmt + clippy) is the real local gate** — install it once with `scripts/install-hooks.sh`; CI re-runs the same checks on push and PR. The numbered-cycle / critic-pass discipline (`multi-agent-workflow-lite`) is **optional**, used per cycle for risky engine work; cycle artifacts are not committed. PR + critic is mandatory for external contributions.
+**Workflow reality:** solo repo, but **engine changes go through a PR on a feature branch** — since 2026-08 direct-to-`main` engine commits were reverted as a process violation. Only docs, `chore`, `ci` and release commits go straight to `main`. The `protect-main` ruleset blocks deletion and force-push only, so the PR rule is convention — follow it anyway. The **pre-commit hook (fmt + clippy) is the real local gate** — install it once with `scripts/install-hooks.sh`; CI re-runs the same checks on push and PR. Every engine PR gets an independent critic pass before merge (see § Agent workflow); for risky engine work use the numbered-cycle discipline (`multi-agent-workflow-lite`). Cycle artifacts are not committed. PR + critic is mandatory for external contributions.
 
 **Memory dogfooding:** Claude Code/Cowork now have a `loomem` MCP connector pointed at the product. Don't pollute product memory with dev-chatter — use a dedicated dev stream or skip storing ephemeral build/session notes.
+
+---
+
+## Agent workflow
+
+How AI sessions work in this repo (Claude Code first; other tools follow the same intent).
+
+- **Start from `origin/main`, in your own worktree.** `git fetch` first, then cut a fresh worktree and branch from `origin/main` (Claude Code: under `.claude/worktrees/`). Never work in, switch branches in, or "update" a checkout you did not create — another session may be using it, and a local `main` can be far behind `origin/main`. Before trusting any audit or memory about the code, confirm which commit it was made on (rule 4).
+- **Orchestrate and delegate.** For anything beyond a handful of edits, the top-level session plans, splits and verifies; specialised subagents do the work: read-only exploration (fan out over independent areas), planning per item, **one implementer per PR in its own worktree**, an **independent critic** that reviews the diff without the implementer's reasoning, and a verifier that runs the gate and tests. Independent PRs run in parallel; two implementers never touch the same files. Delegation can be hierarchical (a coordinator per work item may delegate further). Every subagent gets a self-contained brief: goal, files, constraints, definition of done.
+- **Verify, don't relay.** A subagent's report is a claim. Check the diff, CI and test output yourself before calling anything done.
+- **New behaviour lands behind a config flag, off by default and byte-identical** to the current path, unless a measured A/B justifies a new default (no category may regress by 2 pp or more; see the benchmark rules below).
+- **Clean up after yourself.** After a PR merges, delete its remote and local branch and remove its worktree (`git worktree remove`, then `git worktree prune`). At the end of a task, `git worktree list` and `git branch -a` show nothing of yours. Stale branches that are already merged into `origin/main` may be deleted; **never delete someone else's unmerged branch or worktree** — list it for the owner instead (last commit date + PR state).
+- **Owner overrides.** The maintainer may keep a local, gitignored `CLAUDE.local.md` next to this file with owner-specific permissions (e.g. merge/release autonomy, cost limits). Where present it refines this section; it never relaxes the five hard rules.
+
+---
+
+## Benchmarks & evaluation
+
+- **No paid model calls without an approved budget.** Dry-runs, smoke tests and failure tests run offline: a loopback stub provider, outbound traffic blocked, temporary data dirs, random ports (never the product port 3035). A paid run starts only after the owner approves a cost sheet, and only through a runner that **reserves cost in a durable journal before each HTTP request** and stops at the limit.
+- **Never recreate a lost cost register or evidence file.** If a frozen artifact or register is missing, report it; a new campaign gets a new register with an explicit limit.
+- **Disclose the reader and judge.** `gpt-4.1` is no longer available, so earlier gpt-4.1 numbers are not directly comparable with new runs. Publish per-type results, prompts, config, tokens-to-reader and the exact reader/judge models; ≥ 90 % claims need two seeds. Model aliases without a dated snapshot must be recorded from each response and a run stops if the model changes.
+- **Thresholds are frozen per campaign.** Never lower a decision threshold, a selector threshold or a denominator to make a result pass; a change needs a new, versioned policy approved before the next measurement.
 
 ---
 
