@@ -283,7 +283,7 @@ omit_temperature = true
 |-----|------|-------------|
 | `provider` | string | Completions provider for every LLM-backed step: the name of a [`[llm.providers.<name>]`](#llmprovidersname) entry, or the built-in `"openai"` (`https://api.openai.com/v1`) when no entry of that name exists |
 | `embedding_provider` | string | `"local"` (on-device ONNX, no API key) or `"openai"`. Missing in older configs → treated as `"openai"` |
-| `api_key_env` | string | Legacy key field: read by `embedding_provider = "openai"`, by the built-in `"openai"` provider, and as the fallback of the `[llm.providers.openai]` entry when its own `api_key_env` is unset |
+| `api_key_env` | string | Legacy key field: read by `embedding_provider = "openai"` and by the built-in `"openai"` provider. A `[llm.providers.openai]` entry never reads it; only an inline `api_key` is that entry's fallback |
 | `embedding_model` | string | Embedding model name when `embedding_provider = "openai"` |
 | `embedding_model_path` | string? | Directory with `model.onnx` + `tokenizer.json` for local embeddings. Unset → `~/.loomem/models/multilingual-e5-small` |
 | `embedding_dim` | int | Embedding vector dimensions — **must match the active model** |
@@ -335,8 +335,10 @@ To use the API instead of local embeddings, set `embedding_provider = "openai"`,
 
 Named OpenAI-compatible completion providers. `provider` picks one by name;
 embeddings are not affected (they follow `embedding_provider`). The entry named
-`openai` refines the built-in provider: its `api_key_env` wins, and the legacy
-top-level `llm.api_key` / `llm.api_key_env` are the fallback. A config without
+`openai` refines the built-in provider: its `api_key_env` wins, and only the
+inline top-level `llm.api_key` is a fallback — the legacy `llm.api_key_env` is
+never read for the entry, so an entry with its own, unset env var fails closed
+instead of sending the OpenAI key elsewhere. A config without
 this entry (every installation created before the switch to `gpt-6-luna`) keeps
 the built-in provider and sends exactly the requests it sent before.
 
@@ -374,7 +376,9 @@ present and starts without `LOOMEM_ALLOW_KEYLESS`.
 **Existing installations.** The installer never overwrites `config.toml`, so
 nothing changes until you edit it. To switch to the new default: set
 `compression_model = "gpt-6-luna"`, remove any per-feature `model = "gpt-4.1-mini"`
-lines, and add the `[llm.providers.openai]` table above. To stay on the old model:
+lines, and add the `[llm.providers.openai]` table above (once it exists, its
+`api_key_env` takes precedence over an inline `llm.api_key`, which stays the
+fallback). To stay on the old model:
 nothing to do before 2027-01-14, when OpenAI retires `gpt-4.1-mini`.
 
 ---

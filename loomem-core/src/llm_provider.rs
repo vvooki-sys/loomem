@@ -7,7 +7,8 @@
 //! `[llm.providers]` table keeps the built-in `openai` provider, which reads
 //! the legacy top-level `llm.api_key` / `llm.api_key_env`. An entry named
 //! `openai` refines the built-in provider: it sets the base URL and the
-//! request options, and its key falls back to the legacy fields.
+//! request options; its own `api_key_env` wins, and only the inline
+//! `llm.api_key` is a fallback (never the legacy env var).
 
 mod capabilities;
 mod reply;
@@ -142,8 +143,9 @@ pub enum ProviderError {
 /// parameter so tests stay free of process-wide env mutation.
 ///
 /// `legacy_key` / `legacy_key_env` are the top-level `llm.api_key` /
-/// `llm.api_key_env`, used by the built-in `openai` provider and, as a
-/// fallback behind its own `api_key_env`, by an entry named `openai`.
+/// `llm.api_key_env`, used by the built-in `openai` provider. An entry named
+/// `openai` falls back to the inline `legacy_key` only (see
+/// [`entry_api_key`]); `legacy_key_env` is never read for a named entry.
 pub fn resolve(
     active: &str,
     providers: &BTreeMap<String, LlmProviderConfig>,
@@ -151,33 +153,11 @@ pub fn resolve(
     legacy_key_env: &str,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<ResolvedProvider, ProviderError> {
-    let non_empty = |env: &str| lookup(env).filter(|k| !k.is_empty());
-    let missing = |env: &str| ProviderError::MissingKey {
-        provider: active.to_string(),
-        env: env.to_string(),
-    };
-    let legacy = || {
-        legacy_key
-            .filter(|k| !k.is_empty())
-            .map(str::to_string)
-            .or_else(|| non_empty(legacy_key_env))
-    };
-
     if let Some(p) = providers.get(active) {
-        let api_key = match p.api_key_env.as_deref() {
-            None => None,
-            // The `openai` entry refines the built-in provider: a config that
-            // keeps its key in the legacy `llm.api_key` / `llm.api_key_env`
-            // still resolves when the entry's env var is unset.
-            Some(env) if active == BUILTIN_OPENAI => {
-                Some(non_empty(env).or_else(legacy).ok_or_else(|| missing(env))?)
-            }
-            Some(env) => Some(non_empty(env).ok_or_else(|| missing(env))?),
-        };
         return Ok(ResolvedProvider {
             name: active.to_string(),
             base_url: p.base_url.trim_end_matches('/').to_string(),
-            api_key,
+            api_key: entry_api_key(active, p, legacy_key, &lookup)?,
             chat: p.chat.clone(),
         });
     }
@@ -185,13 +165,54 @@ pub fn resolve(
     if active != BUILTIN_OPENAI {
         return Err(ProviderError::Unknown(active.to_string()));
     }
-    let api_key = legacy().ok_or_else(|| missing(legacy_key_env))?;
+    let api_key = inline_key(legacy_key)
+        .or_else(|| lookup(legacy_key_env).filter(|k| !k.is_empty()))
+        .ok_or_else(|| ProviderError::MissingKey {
+            provider: active.to_string(),
+            env: legacy_key_env.to_string(),
+        })?;
     Ok(ResolvedProvider {
         name: active.to_string(),
         base_url: OPENAI_BASE_URL.to_string(),
         api_key: Some(api_key),
         chat: ChatCapabilities::default(),
     })
+}
+
+/// The inline legacy `llm.api_key`, when non-empty.
+fn inline_key(legacy_key: Option<&str>) -> Option<String> {
+    legacy_key.filter(|k| !k.is_empty()).map(str::to_string)
+}
+
+/// Key of a named entry: `None` for an entry without `api_key_env`,
+/// otherwise the entry's env var. The entry named `openai` refines the
+/// built-in provider, so it falls back to the inline legacy `llm.api_key`
+/// (configs and fixtures that keep the key there still resolve) — but never
+/// to the legacy `llm.api_key_env`: an `openai` entry pointed at a proxy with
+/// its own, unset env var must fail closed rather than send the real OpenAI
+/// key elsewhere.
+fn entry_api_key(
+    active: &str,
+    entry: &LlmProviderConfig,
+    legacy_key: Option<&str>,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<Option<String>, ProviderError> {
+    let Some(env) = entry.api_key_env.as_deref() else {
+        return Ok(None);
+    };
+    let inline = || {
+        (active == BUILTIN_OPENAI)
+            .then(|| inline_key(legacy_key))
+            .flatten()
+    };
+    lookup(env)
+        .filter(|k| !k.is_empty())
+        .or_else(inline)
+        .map(Some)
+        .ok_or_else(|| ProviderError::MissingKey {
+            provider: active.to_string(),
+            env: env.to_string(),
+        })
 }
 
 /// Static checks (no env access): the active provider exists, every
@@ -260,28 +281,26 @@ pub fn describe(
         };
         format!("env:{env} ({state})")
     };
-    let legacy_auth = || {
-        if legacy_key.is_some_and(|k| !k.is_empty()) {
-            "config:api_key".to_string()
-        } else {
-            presence(legacy_key_env)
-        }
-    };
+    let inline = inline_key(legacy_key).is_some();
     let (base_url, auth) = match providers.get(active) {
         Some(p) => (
             p.base_url.trim_end_matches('/').to_string(),
             match p.api_key_env.as_deref() {
                 None => "none".to_string(),
-                // The `openai` entry falls back to the legacy key, as in `resolve`.
+                // The `openai` entry falls back to the inline key only, as in
+                // `entry_api_key`; its own env var is reported otherwise.
                 Some(env)
-                    if active == BUILTIN_OPENAI && !lookup(env).is_some_and(|k| !k.is_empty()) =>
+                    if active == BUILTIN_OPENAI
+                        && inline
+                        && !lookup(env).is_some_and(|k| !k.is_empty()) =>
                 {
-                    legacy_auth()
+                    "config:api_key".to_string()
                 }
                 Some(env) => presence(env),
             },
         ),
-        None => (OPENAI_BASE_URL.to_string(), legacy_auth()),
+        None if inline => (OPENAI_BASE_URL.to_string(), "config:api_key".to_string()),
+        None => (OPENAI_BASE_URL.to_string(), presence(legacy_key_env)),
     };
     format!("provider={active}, base_url={base_url}, auth={auth}")
 }
@@ -403,11 +422,11 @@ mod tests {
     }
 
     /// An entry named `openai` refines the built-in provider: its own env var
-    /// wins, and the legacy `llm.api_key` / `llm.api_key_env` are the
-    /// fallback, so a config (or test fixture) that keeps its key in the
-    /// legacy fields still resolves.
+    /// wins, and the inline legacy `llm.api_key` is the only fallback, so a
+    /// config (or test fixture) that keeps its key inline still resolves.
+    /// The legacy `llm.api_key_env` is never read for the entry.
     #[test]
-    fn openai_entry_falls_back_to_legacy_key_fields() {
+    fn openai_entry_falls_back_to_inline_legacy_key_only() {
         let p = providers(&[(
             "openai",
             "https://api.openai.com/v1",
@@ -415,15 +434,21 @@ mod tests {
         )]);
         let inline = resolve("openai", &p, Some("sk-inline"), "OPENAI_API_KEY", env(&[])).unwrap();
         assert_eq!(inline.api_key.as_deref(), Some("sk-inline"));
-        let legacy_env = resolve(
-            "openai",
-            &p,
-            None,
-            "LEGACY_KEY",
-            env(&[("LEGACY_KEY", "sk-legacy")]),
-        )
-        .unwrap();
-        assert_eq!(legacy_env.api_key.as_deref(), Some("sk-legacy"));
+        // A key that lives only in the legacy env var does not count.
+        assert_eq!(
+            resolve(
+                "openai",
+                &p,
+                None,
+                "LEGACY_KEY",
+                env(&[("LEGACY_KEY", "sk-legacy")]),
+            )
+            .unwrap_err(),
+            ProviderError::MissingKey {
+                provider: "openai".into(),
+                env: "OPENAI_API_KEY".into(),
+            }
+        );
         // The entry's env var still wins over the inline key.
         let own = resolve(
             "openai",
@@ -459,9 +484,17 @@ mod tests {
             shown,
             "provider=openai, base_url=https://api.openai.com/v1, auth=config:api_key"
         );
+        // Without an inline key the entry's own env var is reported, not the
+        // legacy one.
         assert_eq!(
-            describe("openai", &p, None, "LEGACY_KEY", env(&[])),
-            "provider=openai, base_url=https://api.openai.com/v1, auth=env:LEGACY_KEY (missing)"
+            describe(
+                "openai",
+                &p,
+                None,
+                "LEGACY_KEY",
+                env(&[("LEGACY_KEY", "sk-legacy")])
+            ),
+            "provider=openai, base_url=https://api.openai.com/v1, auth=env:OPENAI_API_KEY (missing)"
         );
         assert_eq!(
             describe(
@@ -473,6 +506,30 @@ mod tests {
             ),
             "provider=openai, base_url=https://api.openai.com/v1, auth=env:OPENAI_API_KEY (set)"
         );
+    }
+
+    /// Fail-closed regression guard: an `openai` entry pointed at a proxy with
+    /// its own, unset env var must not pick up the real OpenAI key from the
+    /// legacy env var.
+    #[test]
+    fn openai_entry_with_unset_own_env_never_reads_legacy_env() {
+        let p = providers(&[("openai", "https://proxy.example/v1", Some("PROXY_KEY"))]);
+        let real_key_only = env(&[("OPENAI_API_KEY", "sk-real")]);
+        assert_eq!(
+            resolve("openai", &p, None, "OPENAI_API_KEY", &real_key_only).unwrap_err(),
+            ProviderError::MissingKey {
+                provider: "openai".into(),
+                env: "PROXY_KEY".into(),
+            }
+        );
+        assert_eq!(
+            describe("openai", &p, None, "OPENAI_API_KEY", &real_key_only),
+            "provider=openai, base_url=https://proxy.example/v1, auth=env:PROXY_KEY (missing)"
+        );
+        // With its own env var set the proxy entry resolves to that key only.
+        let both = env(&[("OPENAI_API_KEY", "sk-real"), ("PROXY_KEY", "sk-proxy")]);
+        let r = resolve("openai", &p, None, "OPENAI_API_KEY", &both).unwrap();
+        assert_eq!(r.api_key.as_deref(), Some("sk-proxy"));
     }
 
     #[test]
