@@ -1,12 +1,12 @@
 """E1 fragments-arm adapter tests against a fake MCP/HTTP transport; no engine."""
 import argparse
 import hashlib
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest import mock
 from unittest.mock import patch
 
 from representations import _record
@@ -22,6 +22,27 @@ SOURCE_B = "66666666-7777-8888-9999-aaaaaaaaaaaa"
 EVIDENCE = {"author": "user", "conversation_date": "2023-05-20", "event_date": None,
             "event_date_provenance": None, "source_id": SOURCE_A, "byte_start": 0, "byte_end": 11}
 STAGES = ("ranked_candidates", "after_soft_delete", "after_filters_and_dedup", "response")
+
+
+def proof(ids, scope):
+    return {"schema_version": 1, "scope": scope, "evidence": runner_local_e1.READINESS_EVIDENCE,
+            "dimension": 384, "ready": True,
+            "records": [{"id": i, "chunk": "active", "vector": "valid", "document": "current"}
+                        for i in ids]}
+
+
+@contextmanager
+def fake_clock(start=1000.0):
+    """Drive the runner's ``time.monotonic``/``time.sleep`` deterministically.
+
+    Readiness polling never touches the real clock in this suite: ``sleep``
+    only advances the fake clock, so deadline tests run in microseconds.
+    """
+    clock = {"now": start}
+    with patch.object(runner_local_e1.time, "monotonic", lambda: clock["now"]), \
+            patch.object(runner_local_e1.time, "sleep",
+                         lambda seconds: clock.__setitem__("now", clock["now"] + seconds)):
+        yield clock
 
 
 def question():
@@ -42,6 +63,14 @@ def ingest_text(source_id, fragments):
 
 def tool_result(text, is_error=False):
     result = {"content": [{"type": "text", "text": text}]}
+    match = runner_local_e1.INGEST_RESULT.fullmatch(text)
+    if match:
+        source, count = match.group(1), int(match.group(2))
+        result["structuredContent"] = {"ingest_receipt": {
+            "version": 1, "scope": "source_and_fragments", "status": "complete",
+            "source_id": source, "fragment_ids": [source + ":f" + str(i) for i in range(count)],
+            "fragments": {"stored": count, "failed": 0, "skipped": 0,
+                          "segmentation_status": "complete"}}}
     if is_error:
         result["isError"] = True
     return result
@@ -52,7 +81,10 @@ def fake_adapter(settings=None):
     adapter.settings = settings or {"capture_context": False, "top_k": 5,
                                     "_e1": {"provenance_role": "claim", "token_counter": "approx"}}
     adapter.process = SimpleNamespace(poll=lambda: None)
-    adapter.mapping, adapter.fragment_counts = {}, {}
+    adapter.mapping = {}
+    adapter.expected_ids_by_source = {}
+    adapter.ingest_sources, adapter.sealed = {}, False
+    adapter.readiness_observations = {}
     adapter.session_id, adapter.rpc_id = None, 0
     adapter.token, adapter.endpoint = "t" * 64, "http://127.0.0.1:39999"
     return adapter
@@ -194,8 +226,11 @@ class ConfigTests(unittest.TestCase):
 
 class IngestResultTests(unittest.TestCase):
     def test_strict_parse(self):
-        self.assertEqual(parse_ingest_result(tool_result(ingest_text(SOURCE_A, 3))), (SOURCE_A, 3))
-        self.assertEqual(parse_ingest_result(tool_result(ingest_text(SOURCE_A, 0))), (SOURCE_A, 0))
+        self.assertEqual(parse_ingest_result(tool_result(ingest_text(SOURCE_A, 3))),
+                         (SOURCE_A, frozenset([SOURCE_A, SOURCE_A + ":f0",
+                                              SOURCE_A + ":f1", SOURCE_A + ":f2"])))
+        self.assertEqual(parse_ingest_result(tool_result(ingest_text(SOURCE_A, 0))),
+                         (SOURCE_A, frozenset([SOURCE_A])))
         for text in [ingest_text(SOURCE_A, 3) + " ", " " + ingest_text(SOURCE_A, 3),
                      ingest_text(SOURCE_A, "03"), ingest_text("not-a-uuid", 3),
                      f"Stored source transcript (id: {SOURCE_A}). Knowledge extraction disabled.",
@@ -207,12 +242,29 @@ class IngestResultTests(unittest.TestCase):
                      "skipped 0. Stored 3 fragments.",
                      f"Source persistence failed (id: {SOURCE_A}). Source may exist; no extraction or "
                      "fact writes started."]:
+            result = tool_result(ingest_text(SOURCE_A, 3))
+            result["content"][0]["text"] = text
             with self.subTest(text=text), self.assertRaises(ValidationError):
-                parse_ingest_result(tool_result(text))
+                parse_ingest_result(result)
         with self.assertRaises(ValidationError):
             parse_ingest_result(tool_result(ingest_text(SOURCE_A, 3), is_error=True))
         with self.assertRaises(ValidationError):
             parse_ingest_result({"content": [{"type": "image", "data": ""}]})
+
+    def test_missing_partial_and_disagreeing_receipts_fail(self):
+        base = tool_result(ingest_text(SOURCE_A, 2))
+        missing = dict(base)
+        missing.pop("structuredContent")
+        partial = json.loads(json.dumps(base))
+        partial["structuredContent"]["ingest_receipt"]["status"] = "partial"
+        wrong_count = json.loads(json.dumps(base))
+        wrong_count["content"][0]["text"] = ingest_text(SOURCE_A, 1)
+        wrong_source = json.loads(json.dumps(base))
+        wrong_source["content"][0]["text"] = ingest_text(SOURCE_B, 2)
+        for result in (missing, partial, wrong_count, wrong_source):
+            with self.subTest(result=result), self.assertRaises(ValidationError):
+                parse_ingest_result(result)
+
 
 
 class AdapterTests(unittest.TestCase):
@@ -235,10 +287,54 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(mcp.calls[2][0]["params"]["arguments"]["conversation_date"], "2023-06-01")
         self.assertEqual(adapter.mapping, {SOURCE_A: records[0]["record_id"],
                                            SOURCE_B: records[1]["record_id"]})
-        self.assertEqual(adapter.fragment_counts, {SOURCE_A: 3, SOURCE_B: 1})
         self.assertEqual(adapter.expected_chunks(), 6)
         self.assertNotIn("GOLD", json.dumps(mcp.calls))
         self.assertNotIn("has_answer", json.dumps(mcp.calls))
+
+    def test_sparse_receipt_controls_mapping_and_counts(self):
+        adapter = fake_adapter()
+        result = tool_result(ingest_text(SOURCE_A, 2))
+        result["structuredContent"]["ingest_receipt"]["fragment_ids"] = [
+            SOURCE_A + ":f1", SOURCE_A + ":f7"]
+        adapter.tool_call = lambda *args: result
+        record = session_records(question())[0]
+        adapter.ingest({"records": [record]})
+        self.assertEqual(adapter.expected_ids_by_source[SOURCE_A],
+                         frozenset([SOURCE_A, SOURCE_A + ":f1", SOURCE_A + ":f7"]))
+        self.assertEqual(adapter.expected_chunks(), 3)
+        self.assertEqual(adapter.map_id(SOURCE_A + ":f7"), record["record_id"] + ":f7")
+        self.assertEqual(adapter.reverse_map_id(record["record_id"] + ":f7"), SOURCE_A + ":f7")
+        for index in (0, 2, 8):
+            with self.subTest(index=index):
+                with self.assertRaises(KeyError):
+                    adapter.map_id(SOURCE_A + ":f" + str(index))
+                with self.assertRaises(ValidationError):
+                    adapter.reverse_map_id(record["record_id"] + ":f" + str(index))
+        # Invalid receipt cannot add any accepted source or expected ID.
+        adapter = fake_adapter()
+        result["structuredContent"]["ingest_receipt"]["status"] = "partial"
+        adapter.tool_call = lambda *args: result
+        with self.assertRaises(ValidationError):
+            adapter.ingest({"records": [record]})
+        self.assertEqual(adapter.mapping, {})
+        self.assertEqual(adapter.expected_ids_by_source, {})
+
+    def test_identity_clears_expected_sets(self):
+        adapter = fake_adapter()
+        adapter.expected_ids_by_source = {SOURCE_A: frozenset([SOURCE_A])}
+        adapter.mapping = {SOURCE_A: "a" * 64}
+        adapter.counter = 0
+        adapter.sealed = True
+        with tempfile.TemporaryDirectory() as temp:
+            adapter.invocation = Path(temp)
+            with patch.object(adapter, "close"), patch.object(adapter, "launch"), \
+                    patch.object(runner_local_e1, "effective_config_e1", return_value=""):
+                adapter.identity()
+        self.assertEqual(adapter.expected_ids_by_source, {})
+        self.assertEqual(adapter.mapping, {})
+        self.assertEqual(adapter.expected_chunks(), 0)
+        self.assertFalse(adapter.sealed)
+        self.assertEqual(adapter.ingest_sources, {})
 
     def test_ingest_failures(self):
         adapter = fake_adapter()
@@ -261,94 +357,156 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             adapter.request("/ingest", {"scope": "x", "records": records[:1]})
 
-    def test_readiness_counts_sources_plus_fragments(self):
+    def test_readiness_batches_exact_sources_and_seals_ingest(self):
         adapter = fake_adapter()
+        adapter.mcp_request = FakeMcp([ingest_text(SOURCE_A, 2), ingest_text(SOURCE_B, 1)])
         records = session_records(question())
-        adapter.mapping = {SOURCE_A: records[0]["record_id"], SOURCE_B: records[1]["record_id"]}
-        adapter.fragment_counts = {SOURCE_A: 3, SOURCE_B: 1}
-        counts = iter([2, 6])
-
+        adapter.ingest({"records": records})
+        calls = []
         def engine_request(path, payload=None):
-            if path == "/v1/status":
-                adapter.current = next(counts)
-                return {"config_summary": {"embeddings_count": adapter.current,
-                                           "tantivy_docs": adapter.current}}
-            self.assertEqual(path, "/v1/health/index-sync")
-            return {"rocksdb_chunks": adapter.current, "tantivy_docs": adapter.current}
+            self.assertEqual(path, "/v1/evaluation/readiness")
+            self.assertEqual(payload["stream"], "__user_default__")
+            calls.append(payload)
+            source = payload["sources"][0]
+            return proof(source["fragment_ids"] + [source["source_id"]], payload["scope"])
         adapter.engine_request = engine_request
-        ready = adapter.request("/ready", {"scope": "x", "expected_ids": [r["record_id"] for r in records]})
-        self.assertEqual(ready, {"ready": True, "pending_jobs": 0, "indexes_ready": True,
-                                 "indexed_ids": [records[0]["record_id"], records[1]["record_id"]]})
+        result = adapter.ready({"scope": "x", "expected_ids": [r["record_id"] for r in records]})
+        self.assertTrue(result["ready"])
+        self.assertEqual(len(result["records"]), 5)
+        self.assertEqual([c["sources"][0]["content"] for c in calls], [r["content"] for r in records])
+        self.assertTrue(adapter.sealed)
         with self.assertRaises(ValidationError):
-            adapter.request("/ready", {"scope": "x", "expected_ids": [records[0]["record_id"]]})
+            adapter.ingest({"records": records})
+        with self.assertRaises(ValidationError):
+            adapter.ready({"scope": "x", "expected_ids": [records[0]["record_id"]]})
 
-    def test_readiness_times_out_when_fragments_never_index(self):
+    def test_oversized_source_proof_fails_before_network(self):
+        for huge_content in (False, True):
+            adapter = fake_adapter()
+            adapter.mcp_request = FakeMcp([ingest_text(SOURCE_A, 1)])
+            records = session_records(question())[:1]
+            adapter.ingest({"records": records})
+            if huge_content:
+                adapter.ingest_sources[SOURCE_A]["content"] = "x" * (2 * 1024 * 1024)
+            else:
+                children = [SOURCE_A + ":f" + str(i) for i in range(1024)]
+                adapter.expected_ids_by_source[SOURCE_A] = frozenset([SOURCE_A, *children])
+                adapter.ingest_sources[SOURCE_A]["fragment_ids"] = children
+            with patch.object(adapter, "engine_request", side_effect=AssertionError("network")):
+                with self.assertRaisesRegex(ValidationError, "request limit"):
+                    adapter.ready({"scope": "x", "expected_ids": [records[0]["record_id"]]})
+
+    def test_readiness_retries_only_pending_sources(self):
         adapter = fake_adapter()
-        adapter.mapping, adapter.fragment_counts = {SOURCE_A: "r"}, {SOURCE_A: 2}
-        adapter.engine_request = lambda path, payload=None: {
-            "config_summary": {"embeddings_count": 1, "tantivy_docs": 1},
-            "rocksdb_chunks": 1, "tantivy_docs": 1}
-        cls = runner_local_e1.LocalEngineAdapterE1
-        original = (cls.READY_DEADLINE_SECONDS, cls.READY_SECONDS_PER_CHUNK, cls.READY_POLL_SECONDS)
-        cls.READY_DEADLINE_SECONDS, cls.READY_SECONDS_PER_CHUNK, cls.READY_POLL_SECONDS = 0.05, 0.0, 0.01
-        try:
-            with self.assertRaises(ValidationError):
-                adapter.request("/ready", {"scope": "x", "expected_ids": ["r"]})
-        finally:
-            cls.READY_DEADLINE_SECONDS, cls.READY_SECONDS_PER_CHUNK, cls.READY_POLL_SECONDS = original
+        adapter.mcp_request = FakeMcp([ingest_text(SOURCE_A, 1), ingest_text(SOURCE_B, 1)])
+        records = session_records(question())
+        adapter.ingest({"records": records})
+        payload = {"scope": "x", "expected_ids": [r["record_id"] for r in records]}
+        pending = proof([SOURCE_B, SOURCE_B + ":f0"], "x")
+        pending["records"][1]["vector"] = "missing"
+        pending["ready"] = False
+        calls = []
+        def engine_request(path, request):
+            source_id = request["sources"][0]["source_id"]
+            calls.append(source_id)
+            if source_id == SOURCE_A or len(calls) > 2:
+                return proof([source_id, source_id + ":f0"], "x")
+            return pending
+        adapter.engine_request = engine_request
+        with fake_clock() as clock:
+            result = adapter.ready(payload)
+        self.assertTrue(result["ready"])
+        self.assertEqual(len(result["records"]), 4)
+        self.assertEqual(calls, [SOURCE_A, SOURCE_B, SOURCE_B])
+        self.assertEqual(clock["now"] - 1000.0, adapter.READY_POLL_SECONDS)
+        self.assertEqual(adapter.readiness_observations[SOURCE_A]["attempts"], 1)
+        self.assertEqual(adapter.readiness_observations[SOURCE_B]["attempts"], 2)
+
+    def test_readiness_retries_pending_but_rejects_missing_endpoint_and_bad_proof(self):
+        adapter = fake_adapter()
+        adapter.mcp_request = FakeMcp([ingest_text(SOURCE_A, 1)])
+        records = session_records(question())[:1]
+        adapter.ingest({"records": records})
+        payload = {"scope": "x", "expected_ids": [records[0]["record_id"]]}
+        pending = proof([SOURCE_A, SOURCE_A + ":f0"], "x")
+        pending["records"][1]["vector"] = "missing"
+        pending["ready"] = False
+        responses = iter([pending, proof([SOURCE_A, SOURCE_A + ":f0"], "x")])
+        adapter.engine_request = lambda *args: next(responses)
+        with fake_clock():
+            self.assertTrue(adapter.ready(payload)["ready"])
+        adapter.engine_request = lambda *args: {"ready": True, "pending_jobs": 0}
+        with fake_clock(), self.assertRaises(ValidationError):
+            adapter.ready(payload)
+        with patch.object(adapter, "engine_request", side_effect=OSError("404")):
+            with fake_clock(), self.assertRaises(OSError):
+                adapter.ready(payload)
+        adapter.engine_request = lambda *args: pending
+        with fake_clock() as clock, self.assertRaises(ValidationError):
+            adapter.ready(payload)
+        # Two expected chunks (source + f0): 45 s floor plus 0.5 s each.
+        self.assertGreaterEqual(clock["now"] - 1000.0, 46.0)
+        self.assertLess(clock["now"] - 1000.0, 47.0)
 
     def test_readiness_deadline_scales_with_expected_chunks(self):
         adapter = fake_adapter()
-        adapter.mapping, adapter.fragment_counts = {SOURCE_A: "r", SOURCE_B: "s"}, {SOURCE_A: 300, SOURCE_B: 358}
+        adapter.mapping = {SOURCE_A: "r", SOURCE_B: "s"}
+        adapter.expected_ids_by_source = {
+            SOURCE_A: frozenset([SOURCE_A, *(SOURCE_A + ":f" + str(i) for i in range(300))]),
+            SOURCE_B: frozenset([SOURCE_B, *(SOURCE_B + ":f" + str(i) for i in range(358))])}
         self.assertEqual(adapter.expected_chunks(), 660)
         # Fixed expectations, not the constants the helper reads: 45 s floor plus
         # 0.5 s per expected chunk. A regression to the flat E0 deadline fails here.
         self.assertEqual(adapter.ready_deadline_seconds(660), 375.0)
         self.assertEqual(adapter.ready_deadline_seconds(0), 45.0)
 
+    def large_corpus_adapter(self):
+        """Two ingested sources with 660 expected chunks, like a LongMemEval-S question."""
+        adapter = fake_adapter()
+        adapter.mcp_request = FakeMcp([ingest_text(SOURCE_A, 300), ingest_text(SOURCE_B, 358)])
+        records = session_records(question())
+        adapter.ingest({"records": records})
+        self.assertEqual(adapter.expected_chunks(), 660)
+        return adapter, {"scope": "x", "expected_ids": [r["record_id"] for r in records]}
+
     def test_readiness_waits_past_the_flat_deadline_for_a_large_corpus(self):
         """Indexing that completes after 45 s but before the scaled deadline is ready.
 
-        A fake clock drives both ``time.monotonic`` and ``time.sleep`` so the test
-        is deterministic: the engine reports the full count only once 100 s have
-        elapsed, which the old flat 45 s deadline would have declared a failure.
+        The fake clock drives both ``time.monotonic`` and ``time.sleep``: the
+        engine proves every record only once 100 s have elapsed, which the old
+        flat 45 s deadline would have declared a failure.
         """
-        adapter = fake_adapter()
-        adapter.mapping, adapter.fragment_counts = {SOURCE_A: "r", SOURCE_B: "s"}, {SOURCE_A: 300, SOURCE_B: 358}
-        clock = {"now": 1000.0}
+        adapter, payload = self.large_corpus_adapter()
+        clock_ref = {}
 
-        def monotonic():
-            return clock["now"]
-
-        def sleep(seconds):
-            clock["now"] += seconds
-
-        def engine_request(path, payload=None):
-            elapsed = clock["now"] - 1000.0
-            count = 660 if elapsed >= 100.0 else 400
-            if path == "/v1/status":
-                return {"config_summary": {"embeddings_count": count, "tantivy_docs": 660}}
-            self.assertEqual(path, "/v1/health/index-sync")
-            return {"rocksdb_chunks": 660, "tantivy_docs": 660}
+        def engine_request(path, request):
+            source = request["sources"][0]
+            full = proof([source["source_id"], *source["fragment_ids"]], "x")
+            if clock_ref["clock"]["now"] - 1000.0 < 100.0:
+                full["records"][-1]["vector"] = "missing"
+                full["ready"] = False
+            return full
         adapter.engine_request = engine_request
-        with mock.patch.object(runner_local_e1.time, "monotonic", monotonic), \
-                mock.patch.object(runner_local_e1.time, "sleep", sleep):
-            ready = adapter.request("/ready", {"scope": "x", "expected_ids": ["r", "s"]})
+        with fake_clock() as clock:
+            clock_ref["clock"] = clock
+            ready = adapter.ready(payload)
         self.assertTrue(ready["ready"])
+        self.assertEqual(len(ready["records"]), 660)
         self.assertGreaterEqual(clock["now"] - 1000.0, 100.0)
         self.assertLess(clock["now"] - 1000.0, 375.0)
 
     def test_readiness_still_fails_at_the_scaled_deadline(self):
-        adapter = fake_adapter()
-        adapter.mapping, adapter.fragment_counts = {SOURCE_A: "r", SOURCE_B: "s"}, {SOURCE_A: 300, SOURCE_B: 358}
-        clock = {"now": 0.0}
-        adapter.engine_request = lambda path, payload=None: {
-            "config_summary": {"embeddings_count": 400, "tantivy_docs": 660},
-            "rocksdb_chunks": 660, "tantivy_docs": 660}
-        with mock.patch.object(runner_local_e1.time, "monotonic", lambda: clock["now"]), \
-                mock.patch.object(runner_local_e1.time, "sleep", lambda s: clock.__setitem__("now", clock["now"] + s)):
-            with self.assertRaises(ValidationError):
-                adapter.request("/ready", {"scope": "x", "expected_ids": ["r", "s"]})
+        adapter, payload = self.large_corpus_adapter()
+
+        def engine_request(path, request):
+            source = request["sources"][0]
+            pending = proof([source["source_id"], *source["fragment_ids"]], "x")
+            pending["records"][-1]["vector"] = "missing"
+            pending["ready"] = False
+            return pending
+        adapter.engine_request = engine_request
+        with fake_clock(start=0.0) as clock, self.assertRaises(ValidationError):
+            adapter.ready(payload)
         self.assertGreaterEqual(clock["now"], 375.0)
         self.assertLess(clock["now"], 376.0)
 
@@ -356,7 +514,8 @@ class AdapterTests(unittest.TestCase):
         adapter = fake_adapter()
         adapter.settings["capture_context"] = True
         adapter.mapping = {SOURCE_A: "a" * 64, SOURCE_B: "b" * 64}
-        adapter.fragment_counts = {SOURCE_A: 3, SOURCE_B: 1}
+        adapter.expected_ids_by_source = {SOURCE_A: frozenset([SOURCE_A, SOURCE_A + ":f0",
+            SOURCE_A + ":f1", SOURCE_A + ":f3"]), SOURCE_B: frozenset([SOURCE_B, SOURCE_B + ":f0"])}
         stages = [[SOURCE_A + ":f1", SOURCE_A, SOURCE_B + ":f0", SOURCE_A + ":f3"],
                   [SOURCE_A + ":f1", SOURCE_A, SOURCE_B + ":f0"],
                   [SOURCE_A + ":f1", SOURCE_A], [SOURCE_A + ":f1", SOURCE_A]]
@@ -395,6 +554,7 @@ class AdapterTests(unittest.TestCase):
         adapter = fake_adapter()
         adapter.settings["capture_context"] = True
         adapter.mapping = {SOURCE_A: "a" * 64}
+        adapter.expected_ids_by_source = {SOURCE_A: frozenset([SOURCE_A, SOURCE_A + ":f2"])}
         requests = []
 
         def engine_request(path, payload=None):
@@ -424,7 +584,10 @@ class DrivenAdapter(LocalEngineAdapterE1):
         self.settings = {"capture_context": True, "top_k": 5,
                          "_e1": {"provenance_role": "claim", "token_counter": "approx"}}
         self.process = SimpleNamespace(poll=lambda: None)
-        self.mapping, self.fragment_counts = {}, {}
+        self.mapping = {}
+        self.expected_ids_by_source = {}
+        self.ingest_sources, self.sealed = {}, False
+        self.readiness_observations = {}
         self.session_id, self.rpc_id = None, 0
         self.token, self.endpoint = "t" * 64, "http://127.0.0.1:39999"
         self.mcp = FakeMcp(texts)
@@ -432,18 +595,19 @@ class DrivenAdapter(LocalEngineAdapterE1):
 
     def identity(self):
         self.calls.append("identity")
-        self.mapping, self.fragment_counts, self.session_id = {}, {}, None
+        self.mapping, self.session_id = {}, None
+        self.expected_ids_by_source = {}
+        self.ingest_sources, self.sealed = {}, False
+        self.readiness_observations = {}
 
     def mcp_request(self, body, session_id=None):
         return self.mcp(body, session_id)
 
     def engine_request(self, path, payload=None):
         self.calls.append(path)
-        if path == "/v1/status":
-            return {"config_summary": {"embeddings_count": self.expected_chunks(),
-                                       "tantivy_docs": self.expected_chunks()}}
-        if path == "/v1/health/index-sync":
-            return {"rocksdb_chunks": self.expected_chunks(), "tantivy_docs": self.expected_chunks()}
+        if path == "/v1/evaluation/readiness":
+            source = payload["sources"][0]
+            return proof([source["source_id"], *source["fragment_ids"]], payload["scope"])
         self.assertions = payload
         return json.loads(json.dumps(self.response))
 
@@ -462,6 +626,67 @@ class RetrieveE1Tests(unittest.TestCase):
                                  "stages": [{"stage": n, "chunk_ids": ids} for n, ids in zip(STAGES, stages)]},
                     "rejections": [{"chunk_id": SOURCE_B, "stage": "after_filters_and_dedup",
                                     "reason": "content_prefix_dedup"}]}}
+
+    def test_legacy_count_proof_blocks_retrieval(self):
+        adapter = DrivenAdapter(self.response(), [ingest_text(SOURCE_A, 2), ingest_text(SOURCE_B, 1)])
+        adapter.ready = lambda payload: {"ready": True, "pending_jobs": 0,
+                                         "indexes_ready": True, "indexed_ids": list(adapter.mapping.values())}
+        row = retrieve_e1(adapter, question(), "m" * 64, context_sink=lambda _: None)
+        self.assertEqual(row["failure_stage"], "readiness")
+        self.assertFalse(hasattr(adapter, "assertions"))
+        self.assertEqual(adapter.closed, 1)
+
+    def test_readiness_artifacts_are_bounded_text_free_and_optional(self):
+        adapter = DrivenAdapter(self.response(), [ingest_text(SOURCE_A, 2), ingest_text(SOURCE_B, 1)])
+        artifacts = []
+        row = retrieve_e1(adapter, question(), "m" * 64, readiness_sink=artifacts.append)
+        self.assertEqual(row["status"], "retrieval_complete")
+        self.assertNotIn("context_sha256", row)
+        artifact = artifacts[0]
+        self.assertEqual(artifact["status"], "retrieval_complete")
+        self.assertEqual(len(artifact["sources"]), 2)
+        self.assertTrue(all(s["attempts"] == 1 for s in artifact["sources"]))
+        self.assertTrue(all(s["last_proof"]["ready"] for s in artifact["sources"]))
+        serialized = json.dumps(artifact)
+        for excluded in ("GOLD", "gravel", "Bearer", adapter.token, "haystack", "content"):
+            self.assertNotIn(excluded, serialized)
+
+    def test_failed_readiness_retains_safe_last_proof_and_no_raw_exception(self):
+        adapter = DrivenAdapter(self.response(), [ingest_text(SOURCE_A, 2), ingest_text(SOURCE_B, 1)])
+        original = adapter.engine_request
+        def request(path, payload=None):
+            if payload["sources"][0]["source_id"] == SOURCE_B:
+                return {"secret": "DO_NOT_PERSIST", "ready": True}
+            return original(path, payload)
+        adapter.engine_request = request
+        artifacts = []
+        row = retrieve_e1(adapter, question(), "m" * 64, readiness_sink=artifacts.append)
+        self.assertEqual(row["failure_stage"], "readiness")
+        sources = artifacts[0]["sources"]
+        self.assertTrue(sources[0]["last_proof"]["ready"])
+        self.assertIsNone(sources[1]["last_proof"])
+        self.assertEqual(sources[1]["failure"], "invalid_proof")
+        self.assertNotIn("DO_NOT_PERSIST", json.dumps(artifacts))
+
+    def test_partial_ingest_and_early_failure_do_not_reuse_prior_proof(self):
+        adapter = DrivenAdapter(self.response(), [ingest_text(SOURCE_A, 2), ingest_text(SOURCE_A, 1)])
+        artifacts = []
+        row = retrieve_e1(adapter, question(), "m" * 64, readiness_sink=artifacts.append)
+        self.assertEqual(row["failure_stage"], "ingest")
+        self.assertEqual(len(artifacts[0]["sources"]), 1)
+        self.assertEqual(artifacts[0]["sources"][0]["failure"], "not_probed")
+        adapter.identity = lambda: (_ for _ in ()).throw(OSError("SECRET"))
+        retrieve_e1(adapter, question(), "n" * 64, readiness_sink=artifacts.append)
+        self.assertEqual(artifacts[1]["sources"], [])
+        self.assertNotIn("SECRET", json.dumps(artifacts))
+
+    def test_artifact_sink_failure_stops_experiment(self):
+        adapter = DrivenAdapter(self.response(), [ingest_text(SOURCE_A, 2), ingest_text(SOURCE_B, 1)])
+        def failed_sink(artifact):
+            raise OSError("disk full")
+        with self.assertRaises(OSError):
+            retrieve_e1(adapter, question(), "m" * 64, readiness_sink=failed_sink)
+        self.assertEqual(adapter.closed, 1)
 
     def test_full_flow_yields_v2_row_with_rejections_and_context(self):
         adapter = DrivenAdapter(self.response(), [ingest_text(SOURCE_A, 2), ingest_text(SOURCE_B, 1)])
@@ -547,6 +772,33 @@ class RunE1Tests(unittest.TestCase):
         self.freeze({"provenance_role": "claim", "token_counter": "chars"})
         with self.assertRaises(ValidationError):
             runner_local_e1.run_e1(self.args)
+
+    def test_readiness_directory_requires_optin_and_writes_separate_artifact(self):
+        self.args.readiness_artifacts = self.root / "readiness"
+        self.freeze({"provenance_role": "claim", "token_counter": "approx"})
+        self.args.dry_run = True
+        with self.assertRaises(ValidationError):
+            runner_local_e1.run_e1(self.args)
+        self.freeze({"provenance_role": "claim", "token_counter": "approx"}, capture=True)
+        runner_local_e1.run_e1(self.args)
+        self.assertFalse(self.args.readiness_artifacts.exists())
+        self.args.dry_run = False
+        def driven(settings):
+            adapter = DrivenAdapter(RetrieveE1Tests.response(self),
+                                    [ingest_text(SOURCE_A, 2), ingest_text(SOURCE_B, 1)])
+            adapter.settings = settings
+            return adapter
+        with patch.object(runner_local_e1, "LocalEngineAdapterE1", driven):
+            summary = runner_local_e1.run_e1(self.args)
+        self.assertEqual(summary["failed"], 0)
+        artifacts = list(self.args.readiness_artifacts.glob("*.json"))
+        self.assertEqual(len(artifacts), 1)
+        artifact = json.loads(artifacts[0].read_text())
+        self.assertEqual(artifact["status"], "retrieval_complete")
+        self.assertEqual(len(artifact["artifact_fingerprints"]["binary_sha256"]), 64)
+        self.assertNotIn("readiness", self.args.trace.read_text())
+        with self.assertRaises(FileExistsError):
+            runner_local_e1.save_artifact(self.args.readiness_artifacts, artifact)
 
     def test_run_writes_v2_sidecar_and_contexts_and_is_create_only(self):
         self.freeze({"provenance_role": "claim", "token_counter": "approx"}, capture=True)

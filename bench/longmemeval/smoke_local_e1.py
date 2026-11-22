@@ -156,8 +156,13 @@ def run_arm(settings, e1, row, output, binding):
         ingested = adapter.request('/ingest', {'records': records})
         assert ingested['accepted_ids'] == expected
         print(json.dumps({'arm': arm, 'stage': 'readiness'}), flush=True)
-        ready = adapter.request('/ready', {'expected_ids': expected})
-        assert ready['ready'] and ready['indexed_ids'] == expected
+        scope = canonical_hash([binding, row['question_id']])
+        ready = adapter.request('/ready', {'scope': scope, 'expected_ids': expected})
+        assert ready['ready']
+        if e1:
+            assert len(ready['records']) == adapter.expected_chunks()
+        else:
+            assert ready['indexed_ids'] == expected
         payload = {'query': row['question'], 'top_k': 5, 'trace': True,
                    'capture_context': True}
         print(json.dumps({'arm': arm, 'stage': 'retrieval'}), flush=True)
@@ -234,6 +239,7 @@ def run(args):
                 'configuration_hashing': 'sha256 of canonical parsed TOML JSON',
                 'adapter_sources_sha256': {name: sha256(Path(__file__).with_name(name + '.py'))
                     for name in ('runner', 'runner_local', 'runner_local_e1', 'runner_local_v2',
+                                 'ingest_receipt', 'readiness_proof', 'readiness_artifact',
                                  'representations', 'evidence_v2', 'qa_context', 'qa_context_v2',
                                  'stage_diagnostics', 'longmemeval_dates', 'validate')},
                 'network': 'macOS sandbox: outbound loopback only; Python DNS loopback only',
