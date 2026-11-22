@@ -289,11 +289,33 @@ struct EmbeddingData {
     embedding: Vec<f32>,
 }
 
+/// Typed chat body for compress/reflect. The optional fields are filled from
+/// the provider's [`llm_provider::ChatCapabilities`] and skipped when unset,
+/// so for a provider without options the serialized bytes are exactly
+/// `{"model":…,"messages":[…],"max_tokens":N}` as before.
 #[derive(Debug, Serialize)]
 struct CompletionRequest {
     model: String,
     messages: Vec<Message>,
-    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
+}
+
+impl CompletionRequest {
+    fn new(provider: &ResolvedProvider, model: &str, messages: Vec<Message>, cap: u32) -> Self {
+        let limit = provider.chat.completion_limit(cap);
+        Self {
+            model: model.to_string(),
+            messages,
+            max_tokens: limit.max_tokens,
+            max_completion_tokens: limit.max_completion_tokens,
+            reasoning_effort: provider.chat.reasoning_effort.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -586,9 +608,10 @@ pub async fn compress(
     // Concatenate all texts
     let combined_text = texts.join("\n\n---\n\n");
 
-    let request_body = CompletionRequest {
-        model: config.compression_model.clone(),
-        messages: vec![
+    let request_body = CompletionRequest::new(
+        &provider,
+        &config.compression_model,
+        vec![
             Message {
                 role: "system".to_string(),
                 content: compress_system_prompt(consolidation_style.unwrap_or("observation")),
@@ -598,8 +621,8 @@ pub async fn compress(
                 content: combined_text.clone(),
             },
         ],
-        max_tokens: 500,
-    };
+        500,
+    );
 
     let timeout = Duration::from_secs(30);
 
@@ -740,9 +763,10 @@ pub async fn reflect(
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let request_body = CompletionRequest {
-        model: config.compression_model.clone(),
-        messages: vec![
+    let request_body = CompletionRequest::new(
+        &provider,
+        &config.compression_model,
+        vec![
             Message {
                 role: "system".to_string(),
                 content: REFLECT_PROMPT.to_string(),
@@ -752,8 +776,8 @@ pub async fn reflect(
                 content: combined,
             },
         ],
-        max_tokens: 2000,
-    };
+        2000,
+    );
 
     let request = provider
         .chat_request(client)
@@ -895,6 +919,56 @@ mod tests {
         assert!(compressed.contains("one sentence"));
     }
 
+    fn messages() -> Vec<Message> {
+        vec![
+            Message {
+                role: "system".to_string(),
+                content: "s".to_string(),
+            },
+            Message {
+                role: "user".to_string(),
+                content: "u".to_string(),
+            },
+        ]
+    }
+
+    /// For a provider without request options the typed body serializes to
+    /// exactly the bytes sent before the options existed.
+    #[test]
+    fn completion_request_is_byte_identical_without_capabilities() {
+        let provider = ResolvedProvider {
+            name: "openai".into(),
+            base_url: llm_provider::OPENAI_BASE_URL.into(),
+            api_key: Some("k".into()),
+            chat: Default::default(),
+        };
+        let body = CompletionRequest::new(&provider, "m", messages(), 500);
+        assert_eq!(
+            serde_json::to_string(&body).unwrap(),
+            r#"{"model":"m","messages":[{"role":"system","content":"s"},{"role":"user","content":"u"}],"max_tokens":500}"#
+        );
+    }
+
+    #[test]
+    fn completion_request_follows_provider_capabilities() {
+        let provider = ResolvedProvider {
+            name: "p".into(),
+            base_url: "http://x".into(),
+            api_key: None,
+            chat: llm_provider::ChatCapabilities {
+                omit_temperature: true,
+                max_completion_tokens: true,
+                completion_tokens_floor: 2000,
+                reasoning_effort: Some("low".into()),
+            },
+        };
+        let body = CompletionRequest::new(&provider, "m", messages(), 500);
+        assert_eq!(
+            serde_json::to_string(&body).unwrap(),
+            r#"{"model":"m","messages":[{"role":"system","content":"s"},{"role":"user","content":"u"}],"max_completion_tokens":2000,"reasoning_effort":"low"}"#
+        );
+    }
+
     fn named_provider(name: &str, api_key_env: Option<&str>) -> LlmConfig {
         let mut cfg = LlmConfig::default();
         cfg.provider = name.to_string();
@@ -903,6 +977,7 @@ mod tests {
             LlmProviderConfig {
                 base_url: "https://api.example/v1".to_string(),
                 api_key_env: api_key_env.map(str::to_string),
+                chat: Default::default(),
             },
         );
         cfg

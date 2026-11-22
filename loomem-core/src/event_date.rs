@@ -104,7 +104,7 @@ async fn call_llm(
     system_prompt: &str,
     content: &str,
 ) -> Result<Option<NaiveDate>> {
-    let body = serde_json::json!({
+    let body = provider.chat_body(serde_json::json!({
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -112,7 +112,7 @@ async fn call_llm(
         ],
         "max_tokens": 60,
         "temperature": 0.0,
-    });
+    }));
 
     let request = provider
         .chat_request(client)

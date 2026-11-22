@@ -66,12 +66,12 @@ impl ManifestCompleter for HttpManifestCompleter {
         async move {
             let provider =
                 provider.context("LLM provider not available for manifest generation")?;
-            let request_body = serde_json::json!({
+            let request_body = provider.chat_body(serde_json::json!({
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 1000,
                 "temperature": 0.0
-            });
+            }));
 
             let url = loomem_core::evaluation_url::chat_completions(
                 "LOOMEM_EVALUATION_MANIFEST_URL",

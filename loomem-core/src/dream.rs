@@ -318,7 +318,8 @@ pub async fn dream_run(
             continue;
         }
 
-        let request_body = build_dream_request(&dream_config.model, subject, chunks);
+        let request_body =
+            provider.chat_body(build_dream_request(&dream_config.model, subject, chunks));
 
         let request = provider
             .authorize(client.post(next_subject_endpoint(&provider)?))

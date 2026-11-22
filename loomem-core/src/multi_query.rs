@@ -36,7 +36,7 @@ pub async fn decompose(client: &reqwest::Client, config: &LlmConfig, query: &str
         query
     );
 
-    let body = serde_json::json!({
+    let body = provider.chat_body(serde_json::json!({
         "model": &config.compression_model,
         "messages": [
             {"role": "system", "content": "You decompose search queries into sub-queries. Return only JSON."},
@@ -44,7 +44,7 @@ pub async fn decompose(client: &reqwest::Client, config: &LlmConfig, query: &str
         ],
         "temperature": 0.0,
         "max_tokens": 150,
-    });
+    }));
 
     let request = provider
         .chat_request(client)

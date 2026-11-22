@@ -217,6 +217,7 @@ async fn request(
         name: "test".into(),
         base_url: String::new(),
         api_key: Some(key.into()),
+        chat: Default::default(),
     };
     let (success, envelope) = response_envelope(client, &provider, endpoint, body, timeout).await?;
     if !success {

@@ -100,7 +100,7 @@ pub async fn extract_entities_llm(
     // Returns (extractions, input_tokens, output_tokens)
     let user_msg = build_prompt(chunks);
 
-    let body = serde_json::json!({
+    let body = provider.chat_body(serde_json::json!({
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -108,7 +108,7 @@ pub async fn extract_entities_llm(
         ],
         "temperature": 0.0,
         "max_tokens": 1000,
-    });
+    }));
 
     for attempt in 1..=2 {
         debug!("LLM NER attempt {} for {} chunks", attempt, chunks.len());

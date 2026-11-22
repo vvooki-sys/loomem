@@ -129,7 +129,7 @@ pub async fn classify_relation(
 
     let user_message = format!("OLD memory: {}\nNEW memory: {}", old_content, new_content);
 
-    let request_body = serde_json::json!({
+    let request_body = provider.chat_body(serde_json::json!({
         "model": model,
         "messages": [
             {"role": "system", "content": CLASSIFY_PROMPT},
@@ -137,7 +137,7 @@ pub async fn classify_relation(
         ],
         "max_tokens": 100,
         "temperature": 0.0
-    });
+    }));
 
     let request = provider
         .chat_request(client)
@@ -264,7 +264,7 @@ pub async fn rewrite_with_history(
 
     let user_message = build_rewrite_user_message(old_content, new_content, old_date, new_date);
 
-    let request_body = serde_json::json!({
+    let request_body = provider.chat_body(serde_json::json!({
         "model": model,
         "messages": [
             {"role": "system", "content": REWRITE_PROMPT},
@@ -272,7 +272,7 @@ pub async fn rewrite_with_history(
         ],
         "max_tokens": 200,
         "temperature": 0.0
-    });
+    }));
 
     let request = provider
         .chat_request(client)

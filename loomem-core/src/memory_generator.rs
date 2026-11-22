@@ -44,12 +44,42 @@ Zasady:
 - Jeśli fragmenty zawierają nazwy plików/ścieżek, zachowaj je
 - Nie dodawaj informacji, których nie ma w źródłach"#;
 
+/// Typed chat body. The optional fields follow the provider's
+/// [`crate::llm_provider::ChatCapabilities`] and are skipped when unset, so a
+/// provider without options sends exactly
+/// `{"model":…,"messages":[…],"max_tokens":4000,"temperature":0.3}` as before.
 #[derive(Debug, Serialize)]
 struct CompletionRequest {
     model: String,
     messages: Vec<Message>,
-    max_tokens: u32,
-    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
+}
+
+impl CompletionRequest {
+    fn new(
+        provider: &crate::llm_provider::ResolvedProvider,
+        model: &str,
+        messages: Vec<Message>,
+        cap: u32,
+        temperature: f32,
+    ) -> Self {
+        let limit = provider.chat.completion_limit(cap);
+        Self {
+            model: model.to_string(),
+            messages,
+            max_tokens: limit.max_tokens,
+            max_completion_tokens: limit.max_completion_tokens,
+            temperature: provider.chat.temperature(temperature),
+            reasoning_effort: provider.chat.reasoning_effort.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -169,9 +199,10 @@ async fn llm_format_memory(
         .active_provider()
         .context("LLM provider not available for memory formatting")?;
 
-    let request_body = CompletionRequest {
-        model: model.to_string(),
-        messages: vec![
+    let request_body = CompletionRequest::new(
+        &provider,
+        model,
+        vec![
             Message {
                 role: "system".to_string(),
                 content: SYSTEM_PROMPT.to_string(),
@@ -181,9 +212,9 @@ async fn llm_format_memory(
                 content: grouped_content,
             },
         ],
-        max_tokens: 4000,
-        temperature: 0.3,
-    };
+        4000,
+        0.3,
+    );
 
     let timeout = std::time::Duration::from_secs(60);
 
@@ -380,5 +411,51 @@ mod tests {
         let formatted = format_chunks_for_llm(groups, 10);
         assert!(formatted.contains("TestEntity"));
         assert!(formatted.contains("Test content 1"));
+    }
+
+    fn request_messages() -> Vec<Message> {
+        vec![Message {
+            role: "user".to_string(),
+            content: "u".to_string(),
+        }]
+    }
+
+    /// Without request options the typed body serializes to exactly the
+    /// bytes sent before the options existed (temperature 0.3 included).
+    #[test]
+    fn request_is_byte_identical_without_capabilities() {
+        use crate::llm_provider::{ChatCapabilities, ResolvedProvider};
+        let provider = ResolvedProvider {
+            name: "openai".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: Some("k".into()),
+            chat: ChatCapabilities::default(),
+        };
+        let body = CompletionRequest::new(&provider, "m", request_messages(), 4000, 0.3);
+        assert_eq!(
+            serde_json::to_string(&body).unwrap(),
+            r#"{"model":"m","messages":[{"role":"user","content":"u"}],"max_tokens":4000,"temperature":0.3}"#
+        );
+    }
+
+    #[test]
+    fn request_follows_provider_capabilities() {
+        use crate::llm_provider::{ChatCapabilities, ResolvedProvider};
+        let provider = ResolvedProvider {
+            name: "p".into(),
+            base_url: "http://x".into(),
+            api_key: None,
+            chat: ChatCapabilities {
+                omit_temperature: true,
+                max_completion_tokens: true,
+                completion_tokens_floor: 0,
+                reasoning_effort: Some("low".into()),
+            },
+        };
+        let body = CompletionRequest::new(&provider, "m", request_messages(), 4000, 0.3);
+        assert_eq!(
+            serde_json::to_string(&body).unwrap(),
+            r#"{"model":"m","messages":[{"role":"user","content":"u"}],"max_completion_tokens":4000,"reasoning_effort":"low"}"#
+        );
     }
 }

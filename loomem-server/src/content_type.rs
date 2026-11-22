@@ -85,7 +85,7 @@ impl ContentTypeClassifier for HttpContentTypeClassifier {
 
         async move {
             let provider = provider.context("LLM provider not available for content-type")?;
-            let request_body = serde_json::json!({
+            let request_body = provider.chat_body(serde_json::json!({
                 "model": model,
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -93,7 +93,7 @@ impl ContentTypeClassifier for HttpContentTypeClassifier {
                 ],
                 "max_tokens": 10,
                 "temperature": 0.0
-            });
+            }));
 
             let request = provider
                 .chat_request(&client)

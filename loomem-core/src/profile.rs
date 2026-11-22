@@ -249,7 +249,7 @@ pub async fn generate_profile(
         .active_provider()
         .context("LLM provider not available for profile generation")?;
 
-    let request_body = serde_json::json!({
+    let request_body = provider.chat_body(serde_json::json!({
         "model": &profile_config.model,
         "messages": [
             {"role": "system", "content": PROFILE_PROMPT},
@@ -257,7 +257,7 @@ pub async fn generate_profile(
         ],
         "max_tokens": 2000,
         "temperature": 0.0
-    });
+    }));
 
     let url = crate::evaluation_url::chat_completions(
         "LOOMEM_EVALUATION_PROFILE_URL",
