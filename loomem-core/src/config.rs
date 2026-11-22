@@ -339,14 +339,16 @@ impl Default for ResourceGuardsConfig {
 }
 
 impl Config {
-    /// Issue #65: names of the LLM-backed subsystems that are enabled while no
-    /// API key is resolvable. A non-empty result means the engine would come up
-    /// silently degraded — `memory_ingest` returns a missing-key error, entity
-    /// extraction is off and the dream worker fails on every use — while
-    /// `/health` still reports ok. Callers should
-    /// refuse to start unless the operator opted in via `LOOMEM_ALLOW_KEYLESS=1`.
+    /// Issue #65: names of the LLM-backed subsystems that are enabled while the
+    /// active completions provider does not resolve (its key is missing; a
+    /// provider without `api_key_env` always resolves). A non-empty result
+    /// means the engine would come up silently degraded — `memory_ingest`
+    /// returns a missing-key error, entity extraction is off and the dream
+    /// worker fails on every use — while `/health` still reports ok. Callers
+    /// should refuse to start unless the operator opted in via
+    /// `LOOMEM_ALLOW_KEYLESS=1`.
     pub fn llm_dependent_enabled_without_key(&self) -> Vec<&'static str> {
-        if self.llm.get_api_key().is_some() {
+        if self.llm.completions_key_present() {
             return Vec::new();
         }
         let mut enabled = Vec::new();

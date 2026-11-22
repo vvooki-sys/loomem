@@ -134,6 +134,40 @@ impl LlmConfig {
         )
     }
 
+    /// Whether the active completions provider resolves: its key is present,
+    /// or it is configured without `api_key_env` and needs none. This is what
+    /// the startup fail-closed check and `/health` report. With the built-in
+    /// `openai` provider this equals `get_api_key().is_some()`.
+    pub fn completions_key_present(&self) -> bool {
+        self.completions_key_present_with(|name| std::env::var(name).ok())
+    }
+
+    /// [`Self::completions_key_present`] with an injected env lookup, so
+    /// tests stay free of process-wide env mutation.
+    pub fn completions_key_present_with(&self, lookup: impl Fn(&str) -> Option<String>) -> bool {
+        llm_provider::resolve(
+            &self.provider,
+            &self.providers,
+            self.api_key.as_deref(),
+            &self.api_key_env,
+            lookup,
+        )
+        .is_ok()
+    }
+
+    /// Env var the operator should export for the active completions
+    /// provider: its `api_key_env`, or the legacy top-level `api_key_env` for
+    /// the built-in `openai` provider and for a provider that takes no key.
+    pub fn active_key_env_hint(&self) -> &str {
+        self.providers
+            .get(&self.provider)
+            .and_then(|p| p.api_key_env.as_deref())
+            .unwrap_or(&self.api_key_env)
+    }
+
+    /// The legacy OpenAI key: inline `api_key`, else `api_key_env`. Used by
+    /// the OpenAI embedding path; completions resolve through
+    /// [`Self::active_provider`].
     pub fn get_api_key(&self) -> Option<String> {
         if let Some(ref key) = self.api_key {
             if !key.is_empty() {
@@ -859,6 +893,79 @@ mod tests {
         assert!(!compressed.contains("[CHUNK"));
         assert!(!compressed.contains("[/CHUNK]"));
         assert!(compressed.contains("one sentence"));
+    }
+
+    fn named_provider(name: &str, api_key_env: Option<&str>) -> LlmConfig {
+        let mut cfg = LlmConfig::default();
+        cfg.provider = name.to_string();
+        cfg.providers.insert(
+            name.to_string(),
+            LlmProviderConfig {
+                base_url: "https://api.example/v1".to_string(),
+                api_key_env: api_key_env.map(str::to_string),
+            },
+        );
+        cfg
+    }
+
+    /// For the built-in `openai` provider the startup/health check is exactly
+    /// the legacy accessor. Checked against the real `get_api_key()` without
+    /// touching the process env: the inline key decides, and an env var name
+    /// that does not exist resolves to nothing for both.
+    #[test]
+    fn completions_key_present_matches_get_api_key_for_builtin_openai() {
+        let mut cfg = LlmConfig::default();
+        cfg.api_key_env = "LOOMEM_TEST_LLM_KEY_PRESENT_NO_SUCH_VAR_4c2a".to_string();
+        for inline in [None, Some(""), Some("sk-inline")] {
+            cfg.api_key = inline.map(str::to_string);
+            assert_eq!(
+                cfg.completions_key_present(),
+                cfg.get_api_key().is_some(),
+                "inline={inline:?}"
+            );
+        }
+        cfg.api_key = None;
+        assert!(!cfg.completions_key_present());
+        cfg.api_key = Some("sk-inline".to_string());
+        assert!(cfg.completions_key_present());
+        // Env-backed legacy key, through the injected lookup.
+        cfg.api_key = None;
+        assert!(cfg.completions_key_present_with(|n| {
+            (n == "LOOMEM_TEST_LLM_KEY_PRESENT_NO_SUCH_VAR_4c2a").then(|| "sk-env".to_string())
+        }));
+        assert!(!cfg.completions_key_present_with(|_| Some(String::new())));
+    }
+
+    #[test]
+    fn completions_key_present_follows_the_named_provider() {
+        let cfg = named_provider("router", Some("ROUTER_TEST_KEY"));
+        // The legacy OpenAI key is irrelevant for a named provider.
+        let legacy_only = |n: &str| (n == "OPENAI_API_KEY").then(|| "sk-openai".to_string());
+        assert!(!cfg.completions_key_present_with(legacy_only));
+        assert!(!cfg.completions_key_present_with(|_| Some(String::new())));
+        assert!(cfg.completions_key_present_with(|n| {
+            (n == "ROUTER_TEST_KEY").then(|| "sk-router".to_string())
+        }));
+        // A provider without api_key_env (Ollama) needs no key: subsystems run.
+        let ollama = named_provider("ollama", None);
+        assert!(ollama.completions_key_present_with(|_| None));
+        // An undefined provider cannot resolve, so nothing is "present".
+        let mut undefined = LlmConfig::default();
+        undefined.provider = "nope".to_string();
+        assert!(!undefined.completions_key_present_with(|_| Some("k".to_string())));
+    }
+
+    #[test]
+    fn active_key_env_hint_names_the_active_provider_env() {
+        assert_eq!(LlmConfig::default().active_key_env_hint(), "OPENAI_API_KEY");
+        assert_eq!(
+            named_provider("router", Some("ROUTER_API_KEY")).active_key_env_hint(),
+            "ROUTER_API_KEY"
+        );
+        assert_eq!(
+            named_provider("ollama", None).active_key_env_hint(),
+            "OPENAI_API_KEY"
+        );
     }
 
     #[tokio::test]

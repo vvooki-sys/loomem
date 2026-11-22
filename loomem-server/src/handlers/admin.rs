@@ -196,7 +196,7 @@ pub async fn health_handler(State(state): State<Arc<AppState>>) -> Json<HealthRe
     Json(HealthResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        llm_key_present: state.config.llm.get_api_key().is_some(),
+        llm_key_present: state.config.llm.completions_key_present(),
     })
 }
 
