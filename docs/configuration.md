@@ -260,27 +260,35 @@ Master switch for all background workers.
 
 ```toml
 [llm]
-provider = "openai"                  # completions (consolidation / reflect)
-api_key_env = "OPENAI_API_KEY"
+provider = "openai"                  # completions: a [llm.providers.<name>] entry, or the built-in "openai"
+api_key_env = "OPENAI_API_KEY"       # legacy key field: OpenAI embeddings + fallback for the built-in provider
 embedding_provider = "local"         # "local" (on-device ONNX) or "openai"
 embedding_model = "text-embedding-3-small"   # used when embedding_provider = "openai"
 # embedding_model_path = "/abs/path"  # local model dir; default ~/.loomem/models/multilingual-e5-small
 embedding_dim = 384                  # MUST match the active embedding model
-compression_model = "gpt-4.1-mini"
-timeout_secs = 10
+compression_model = "gpt-6-luna"     # chat model for every LLM-backed step
+timeout_secs = 10                    # shared HTTP client (OpenAI embeddings); chat calls have their own per-request timeout
 fallback_to_regex = true
+
+[llm.providers.openai]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+max_completion_tokens = true
+reasoning_effort = "low"
+omit_temperature = true
+# completion_tokens_floor = 2000  # set after smoke test
 ```
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `provider` | string | Completions provider for consolidation / reflect (`"openai"`) |
+| `provider` | string | Completions provider for every LLM-backed step: the name of a [`[llm.providers.<name>]`](#llmprovidersname) entry, or the built-in `"openai"` (`https://api.openai.com/v1`) when no entry of that name exists |
 | `embedding_provider` | string | `"local"` (on-device ONNX, no API key) or `"openai"`. Missing in older configs → treated as `"openai"` |
-| `api_key_env` | string | Environment variable name for the API key |
+| `api_key_env` | string | Legacy key field: read by `embedding_provider = "openai"`, by the built-in `"openai"` provider, and as the fallback of the `[llm.providers.openai]` entry when its own `api_key_env` is unset |
 | `embedding_model` | string | Embedding model name when `embedding_provider = "openai"` |
 | `embedding_model_path` | string? | Directory with `model.onnx` + `tokenizer.json` for local embeddings. Unset → `~/.loomem/models/multilingual-e5-small` |
 | `embedding_dim` | int | Embedding vector dimensions — **must match the active model** |
-| `compression_model` | string | Model for consolidation, extraction, dream |
-| `timeout_secs` | int | API call timeout |
+| `compression_model` | string | Chat model for every LLM-backed step (consolidation, extraction, dream, …); the per-feature `model` keys inherit it when unset |
+| `timeout_secs` | int | Timeout of the shared HTTP client (OpenAI embeddings); every chat call carries its own per-request timeout |
 | `fallback_to_regex` | bool | Consolidation only: regex compression when the completions API call fails (does not cover a missing key) |
 
 ### Local embeddings (default)
@@ -296,7 +304,8 @@ ships in the default build; obtain the model files with:
 ```
 
 The completions LLM (consolidation, fact extraction, dream) is independent. With
-the default config (those subsystems enabled) and no `OPENAI_API_KEY`, the server
+the default config (those subsystems enabled) and no key for the active provider
+(`OPENAI_API_KEY` with the shipped config), the server
 refuses to start unless `LOOMEM_ALLOW_KEYLESS=1` is set, and then `memory_ingest`
 may store the source text but returns a missing-key error and extracts no facts;
 LLM-based entity extraction is off and
@@ -304,7 +313,8 @@ dream/consolidation fail, while `memory_store` and semantic search work fully
 locally. Disabling those subsystems in `config.toml` lifts the startup check, and
 with `knowledge_extraction.enabled = false` `memory_ingest` stores the raw
 transcript instead. To use a local LLM for
-completions too, point `provider` at an OpenAI-compatible endpoint (future cycle).
+completions too, point `provider` at an OpenAI-compatible endpoint declared in
+[`[llm.providers.<name>]`](#llmprovidersname).
 
 ### Embedding dimension & re-embedding
 
@@ -320,6 +330,52 @@ loomem-server --reembed   # recompute all vectors with the configured provider (
 
 To use the API instead of local embeddings, set `embedding_provider = "openai"`,
 `embedding_dim = 1536`, export `OPENAI_API_KEY`, and re-embed.
+
+### [llm.providers.<name>]
+
+Named OpenAI-compatible completion providers. `provider` picks one by name;
+embeddings are not affected (they follow `embedding_provider`). The entry named
+`openai` refines the built-in provider: its `api_key_env` wins, and the legacy
+top-level `llm.api_key` / `llm.api_key_env` are the fallback. A config without
+this entry (every installation created before the switch to `gpt-6-luna`) keeps
+the built-in provider and sends exactly the requests it sent before.
+
+```toml
+[llm.providers.openai]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+max_completion_tokens = true
+reasoning_effort = "low"
+omit_temperature = true
+# completion_tokens_floor = 2000  # set after smoke test
+
+# [llm.providers.ollama]
+# base_url = "http://localhost:11434/v1"   # no api_key_env: requests carry no key
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `base_url` | string | required | API root, e.g. `https://api.openai.com/v1` or `http://localhost:11434/v1`. Absolute `http(s)` URL; no query, fragment or credentials |
+| `api_key_env` | string? | — | Environment variable holding the key. Omitted → no key: requests carry no `Authorization` header (Ollama, vLLM, a gateway) |
+| `omit_temperature` | bool | false | Drop `temperature` from every chat request |
+| `max_completion_tokens` | bool | false | Send the output cap as `max_completion_tokens` instead of the deprecated `max_tokens` |
+| `completion_tokens_floor` | int | 0 | Raise any per-call output cap below this value to it (`0` = unchanged) |
+| `reasoning_effort` | string? | — | One of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; added to every chat request when set |
+
+An entry with none of the four request options set sends exactly the request the built-in provider sends.
+
+The startup check and the `/health` field `llm_key_present` follow the active
+provider: with the shipped config the server refuses to start without
+`OPENAI_API_KEY` while `entity_extraction`, `knowledge_extraction` or `dream` are
+enabled (unless `LOOMEM_ALLOW_KEYLESS=1`), and the error names the active
+provider's env var. A provider without `api_key_env` (local Ollama) counts as
+present and starts without `LOOMEM_ALLOW_KEYLESS`.
+
+**Existing installations.** The installer never overwrites `config.toml`, so
+nothing changes until you edit it. To switch to the new default: set
+`compression_model = "gpt-6-luna"`, remove any per-feature `model = "gpt-4.1-mini"`
+lines, and add the `[llm.providers.openai]` table above. To stay on the old model:
+nothing to do before 2027-01-14, when OpenAI retires `gpt-4.1-mini`.
 
 ---
 
@@ -416,7 +472,7 @@ persist = true
 ```toml
 [knowledge_extraction]
 enabled = true
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # unset: inherits [llm] compression_model
 max_transcript_tokens = 20000
 dedup_cosine_threshold = 0.92
 contradiction_check = true
@@ -435,7 +491,7 @@ Controls the `memory_ingest` LLM pipeline.
 | `input_chunk_tokens` | int | 0 | Input budget per extraction call (4 chars ≈ 1 token). `0` keeps the legacy pipeline: one call per transcript up to `max_transcript_tokens`. Any other value splits the transcript at line boundaries into chunks of at most `min(input_chunk_tokens, max_transcript_tokens)` tokens, one call each |
 | `split_on_truncation` | bool | false | When `true`, a chunk whose completion was truncated is re-extracted as two line-aligned halves (depth 2, at most 4 extra calls per chunk). When `false`, the truncated chunk is rejected and reported, with no retry |
 
-The three keys are additive: with the defaults above, extraction issues exactly the calls it did before they existed. A truncated reply is never admitted in either mode.
+The three keys are additive: with the defaults above, extraction issues exactly the calls it did before they existed. A truncated reply is never admitted in either mode; a completion that ends with `finish_reason = "length"` is an explicit error on every chat path, not only in extraction.
 
 ---
 
@@ -473,7 +529,7 @@ Validation at startup: `max_fragment_tokens` must be positive, and with `embeddi
 ```toml
 [entity_extraction]
 enabled = true
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # unset: inherits [llm] compression_model
 batch_size = 20
 flush_interval_secs = 3
 queue_capacity = 200
@@ -492,7 +548,7 @@ Async LLM NER for entities not in the dictionary.
 enabled = true
 similarity_threshold = 0.70
 max_candidates = 5
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # unset: inherits [llm] compression_model
 ```
 
 When a new fact arrives, top `max_candidates` similar existing facts are checked via LLM for contradiction. Verdict: `updates` (supersede), `extends` (keep both), `none` (no relation).
@@ -518,7 +574,7 @@ max_extractions_per_request = 30
 ```toml
 [profile]
 enabled = true
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # unset: inherits [llm] compression_model
 max_chunks = 100
 cache_ttl_secs = 3600
 max_static_facts = 30
@@ -575,7 +631,7 @@ max_associations = 3
 enabled = true
 batch_size = 50
 min_group_size = 2
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # unset: inherits [llm] compression_model
 cost_cap_usd_per_run = 0.10
 ```
 
@@ -594,7 +650,7 @@ cost_cap_usd_per_run = 0.10
 enabled = true
 max_chunks = 200
 max_sections = 20
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # unset: inherits [llm] compression_model
 ```
 
 Controls `generate-memory-md` endpoint output.
@@ -606,7 +662,7 @@ Controls `generate-memory-md` endpoint output.
 | Variable | Purpose | Required |
 |----------|---------|----------|
 | `LOOMEM_AUTH_TOKEN` | API Bearer key (name configurable via `server.auth_token_env`) | No (auth disabled if unset — local passthrough mode) |
-| `OPENAI_API_KEY` | LLM API key (name configurable via `llm.api_key_env`) | Only for OpenAI completions (`provider = "openai"`) or OpenAI embeddings (`embedding_provider = "openai"`). With local embeddings and no key, the default config starts only with `LOOMEM_ALLOW_KEYLESS=1` and the LLM steps are unavailable (`memory_store` and search still work). |
+| `OPENAI_API_KEY` | LLM API key (name configurable via `llm.api_key_env`, and per provider via `llm.providers.<name>.api_key_env`) | Only for a completions provider whose entry names it (the shipped `[llm.providers.openai]` does) or OpenAI embeddings (`embedding_provider = "openai"`). With local embeddings and no key, the default config starts only with `LOOMEM_ALLOW_KEYLESS=1` and the LLM steps are unavailable (`memory_store` and search still work). |
 | `LOOMEM_CONFIG` | Config file path | No (default: `config.toml`) |
 | `PORT` | Override server port | No |
 | `SERVER_ORIGIN` | OAuth redirect base URL | No (for MCP Remote) |

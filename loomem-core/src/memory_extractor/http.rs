@@ -26,7 +26,7 @@ impl ExtractionChat for HttpExtractionChat<'_> {
         // Clone captures so the future owns them (Send, no borrow across await).
         let client = self.client.clone();
         let provider = self.provider.clone();
-        let body = request_body.clone();
+        let body = provider.chat_body(request_body.clone());
         async move {
             let provider_url = provider.chat_completions_url();
             let endpoint = endpoint(&provider_url)?;

@@ -129,7 +129,7 @@ pub async fn classify_relation(
 
     let user_message = format!("OLD memory: {}\nNEW memory: {}", old_content, new_content);
 
-    let request_body = serde_json::json!({
+    let request_body = provider.chat_body(serde_json::json!({
         "model": model,
         "messages": [
             {"role": "system", "content": CLASSIFY_PROMPT},
@@ -137,7 +137,7 @@ pub async fn classify_relation(
         ],
         "max_tokens": 100,
         "temperature": 0.0
-    });
+    }));
 
     let request = provider
         .chat_request(client)
@@ -162,6 +162,8 @@ pub async fn classify_relation(
     #[derive(Deserialize)]
     struct LlmChoice {
         message: LlmMessage,
+        #[serde(default)]
+        finish_reason: Option<String>,
     }
     #[derive(Deserialize)]
     struct LlmMessage {
@@ -173,9 +175,13 @@ pub async fn classify_relation(
         .await
         .context("Failed to parse contradiction LLM response")?;
 
-    let content = llm_resp
-        .choices
-        .first()
+    let choice = llm_resp.choices.first();
+    crate::llm_provider::ensure_not_truncated(
+        choice.and_then(|c| c.finish_reason.as_deref()),
+        model,
+        crate::llm_provider::completion_limit_of(&request_body),
+    )?;
+    let content = choice
         .map(|c| c.message.content.clone())
         .unwrap_or_default();
 
@@ -264,7 +270,7 @@ pub async fn rewrite_with_history(
 
     let user_message = build_rewrite_user_message(old_content, new_content, old_date, new_date);
 
-    let request_body = serde_json::json!({
+    let request_body = provider.chat_body(serde_json::json!({
         "model": model,
         "messages": [
             {"role": "system", "content": REWRITE_PROMPT},
@@ -272,7 +278,7 @@ pub async fn rewrite_with_history(
         ],
         "max_tokens": 200,
         "temperature": 0.0
-    });
+    }));
 
     let request = provider
         .chat_request(client)
@@ -297,6 +303,8 @@ pub async fn rewrite_with_history(
     #[derive(Deserialize)]
     struct LlmChoice {
         message: LlmMessage,
+        #[serde(default)]
+        finish_reason: Option<String>,
     }
     #[derive(Deserialize)]
     struct LlmMessage {
@@ -308,9 +316,13 @@ pub async fn rewrite_with_history(
         .await
         .context("Failed to parse history-preserving rewrite response")?;
 
-    let content = llm_resp
-        .choices
-        .first()
+    let choice = llm_resp.choices.first();
+    crate::llm_provider::ensure_not_truncated(
+        choice.and_then(|c| c.finish_reason.as_deref()),
+        model,
+        crate::llm_provider::completion_limit_of(&request_body),
+    )?;
+    let content = choice
         .map(|c| c.message.content.clone())
         .unwrap_or_default();
 

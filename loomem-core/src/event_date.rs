@@ -104,7 +104,7 @@ async fn call_llm(
     system_prompt: &str,
     content: &str,
 ) -> Result<Option<NaiveDate>> {
-    let body = serde_json::json!({
+    let body = provider.chat_body(serde_json::json!({
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -112,7 +112,7 @@ async fn call_llm(
         ],
         "max_tokens": 60,
         "temperature": 0.0,
-    });
+    }));
 
     let request = provider
         .chat_request(client)
@@ -134,6 +134,8 @@ async fn call_llm(
     #[derive(Deserialize)]
     struct Choice {
         message: Msg,
+        #[serde(default)]
+        finish_reason: Option<String>,
     }
     #[derive(Deserialize)]
     struct Msg {
@@ -141,12 +143,13 @@ async fn call_llm(
     }
 
     let parsed: Wire = resp.json().await?;
-    let raw = parsed
-        .choices
-        .into_iter()
-        .next()
-        .map(|c| c.message.content)
-        .unwrap_or_default();
+    let choice = parsed.choices.into_iter().next();
+    crate::llm_provider::ensure_not_truncated(
+        choice.as_ref().and_then(|c| c.finish_reason.as_deref()),
+        model,
+        crate::llm_provider::completion_limit_of(&body),
+    )?;
+    let raw = choice.map(|c| c.message.content).unwrap_or_default();
 
     let json_str = raw
         .trim()

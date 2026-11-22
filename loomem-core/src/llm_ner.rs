@@ -100,7 +100,7 @@ pub async fn extract_entities_llm(
     // Returns (extractions, input_tokens, output_tokens)
     let user_msg = build_prompt(chunks);
 
-    let body = serde_json::json!({
+    let body = provider.chat_body(serde_json::json!({
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -108,7 +108,7 @@ pub async fn extract_entities_llm(
         ],
         "temperature": 0.0,
         "max_tokens": 1000,
-    });
+    }));
 
     for attempt in 1..=2 {
         debug!("LLM NER attempt {} for {} chunks", attempt, chunks.len());
@@ -138,6 +138,11 @@ pub async fn extract_entities_llm(
 
                     let parsed: serde_json::Value = serde_json::from_str(&text)
                         .context("Failed to parse LLM NER response JSON")?;
+                    crate::llm_provider::ensure_choice_not_truncated(
+                        &parsed,
+                        model,
+                        crate::llm_provider::completion_limit_of(&body),
+                    )?;
 
                     let usage = &parsed["usage"];
                     let input_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0);

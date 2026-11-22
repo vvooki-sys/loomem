@@ -10,6 +10,10 @@ use tracing::{debug, warn};
 use crate::llm_failures::{global as llm_failures, LlmFailureKind};
 use crate::llm_provider::{self, LlmProviderConfig, ProviderError, ResolvedProvider};
 
+/// Chat model used when a config sets none: the shipped `config.toml`
+/// `compression_model`, which every per-feature `model` inherits.
+pub const DEFAULT_CHAT_MODEL: &str = "gpt-6-luna";
+
 /// Default embedding provider for configs that predate the
 /// `embedding_provider` field. Kept as "openai" so existing installations
 /// (whose config.toml has no such key) keep their current behavior; fresh
@@ -85,7 +89,7 @@ impl Default for LlmConfig {
             embedding_model: "text-embedding-3-small".to_string(),
             embedding_model_path: None,
             embedding_dim: 1536,
-            compression_model: "gpt-4o-mini".to_string(),
+            compression_model: DEFAULT_CHAT_MODEL.to_string(),
             timeout_secs: 30,
             fallback_to_regex: true,
             pool_max_idle_per_host: default_pool_max_idle_per_host(),
@@ -134,6 +138,40 @@ impl LlmConfig {
         )
     }
 
+    /// Whether the active completions provider resolves: its key is present,
+    /// or it is configured without `api_key_env` and needs none. This is what
+    /// the startup fail-closed check and `/health` report. With the built-in
+    /// `openai` provider this equals `get_api_key().is_some()`.
+    pub fn completions_key_present(&self) -> bool {
+        self.completions_key_present_with(|name| std::env::var(name).ok())
+    }
+
+    /// [`Self::completions_key_present`] with an injected env lookup, so
+    /// tests stay free of process-wide env mutation.
+    pub fn completions_key_present_with(&self, lookup: impl Fn(&str) -> Option<String>) -> bool {
+        llm_provider::resolve(
+            &self.provider,
+            &self.providers,
+            self.api_key.as_deref(),
+            &self.api_key_env,
+            lookup,
+        )
+        .is_ok()
+    }
+
+    /// Env var the operator should export for the active completions
+    /// provider: its `api_key_env`, or the legacy top-level `api_key_env` for
+    /// the built-in `openai` provider and for a provider that takes no key.
+    pub fn active_key_env_hint(&self) -> &str {
+        self.providers
+            .get(&self.provider)
+            .and_then(|p| p.api_key_env.as_deref())
+            .unwrap_or(&self.api_key_env)
+    }
+
+    /// The legacy OpenAI key: inline `api_key`, else `api_key_env`. Used by
+    /// the OpenAI embedding path; completions resolve through
+    /// [`Self::active_provider`].
     pub fn get_api_key(&self) -> Option<String> {
         if let Some(ref key) = self.api_key {
             if !key.is_empty() {
@@ -255,11 +293,38 @@ struct EmbeddingData {
     embedding: Vec<f32>,
 }
 
+/// Typed chat body for compress/reflect. The optional fields are filled from
+/// the provider's [`llm_provider::ChatCapabilities`] and skipped when unset,
+/// so for a provider without options the serialized bytes are exactly
+/// `{"model":…,"messages":[…],"max_tokens":N}` as before.
 #[derive(Debug, Serialize)]
 struct CompletionRequest {
     model: String,
     messages: Vec<Message>,
-    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
+}
+
+impl CompletionRequest {
+    fn new(provider: &ResolvedProvider, model: &str, messages: Vec<Message>, cap: u32) -> Self {
+        let limit = provider.chat.completion_limit(cap);
+        Self {
+            model: model.to_string(),
+            messages,
+            max_tokens: limit.max_tokens,
+            max_completion_tokens: limit.max_completion_tokens,
+            reasoning_effort: provider.chat.reasoning_effort.clone(),
+        }
+    }
+
+    /// The output cap this body carries, for the truncation error.
+    fn limit(&self) -> u32 {
+        self.max_tokens.or(self.max_completion_tokens).unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -277,6 +342,8 @@ struct CompletionResponse {
 #[derive(Debug, Deserialize)]
 struct Choice {
     message: MessageResponse,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -552,9 +619,10 @@ pub async fn compress(
     // Concatenate all texts
     let combined_text = texts.join("\n\n---\n\n");
 
-    let request_body = CompletionRequest {
-        model: config.compression_model.clone(),
-        messages: vec![
+    let request_body = CompletionRequest::new(
+        &provider,
+        &config.compression_model,
+        vec![
             Message {
                 role: "system".to_string(),
                 content: compress_system_prompt(consolidation_style.unwrap_or("observation")),
@@ -564,8 +632,8 @@ pub async fn compress(
                 content: combined_text.clone(),
             },
         ],
-        max_tokens: 500,
-    };
+        500,
+    );
 
     let timeout = Duration::from_secs(30);
 
@@ -604,12 +672,17 @@ pub async fn compress(
                         .await
                         .context("Failed to parse completion response")?;
 
-                    let summary = body
+                    let choice = body
                         .choices
                         .into_iter()
                         .next()
-                        .map(|c| c.message.content)
                         .context("No completion data in response")?;
+                    llm_provider::ensure_not_truncated(
+                        choice.finish_reason.as_deref(),
+                        &config.compression_model,
+                        request_body.limit(),
+                    )?;
+                    let summary = choice.message.content;
 
                     let usage = body.usage.unwrap_or(Usage {
                         prompt_tokens: 0,
@@ -706,9 +779,10 @@ pub async fn reflect(
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let request_body = CompletionRequest {
-        model: config.compression_model.clone(),
-        messages: vec![
+    let request_body = CompletionRequest::new(
+        &provider,
+        &config.compression_model,
+        vec![
             Message {
                 role: "system".to_string(),
                 content: REFLECT_PROMPT.to_string(),
@@ -718,8 +792,8 @@ pub async fn reflect(
                 content: combined,
             },
         ],
-        max_tokens: 2000,
-    };
+        2000,
+    );
 
     let request = provider
         .chat_request(client)
@@ -742,12 +816,17 @@ pub async fn reflect(
         .await
         .context("Failed to parse reflect response")?;
 
-    let content = body
+    let choice = body
         .choices
         .into_iter()
         .next()
-        .map(|c| c.message.content)
         .context("No reflect response")?;
+    llm_provider::ensure_not_truncated(
+        choice.finish_reason.as_deref(),
+        &config.compression_model,
+        request_body.limit(),
+    )?;
+    let content = choice.message.content;
 
     let usage = body.usage.unwrap_or(Usage {
         prompt_tokens: 0,
@@ -859,6 +938,185 @@ mod tests {
         assert!(!compressed.contains("[CHUNK"));
         assert!(!compressed.contains("[/CHUNK]"));
         assert!(compressed.contains("one sentence"));
+    }
+
+    fn messages() -> Vec<Message> {
+        vec![
+            Message {
+                role: "system".to_string(),
+                content: "s".to_string(),
+            },
+            Message {
+                role: "user".to_string(),
+                content: "u".to_string(),
+            },
+        ]
+    }
+
+    /// For a provider without request options the typed body serializes to
+    /// exactly the bytes sent before the options existed.
+    #[test]
+    fn completion_request_is_byte_identical_without_capabilities() {
+        let provider = ResolvedProvider {
+            name: "openai".into(),
+            base_url: llm_provider::OPENAI_BASE_URL.into(),
+            api_key: Some("k".into()),
+            chat: Default::default(),
+        };
+        let body = CompletionRequest::new(&provider, "m", messages(), 500);
+        assert_eq!(
+            serde_json::to_string(&body).unwrap(),
+            r#"{"model":"m","messages":[{"role":"system","content":"s"},{"role":"user","content":"u"}],"max_tokens":500}"#
+        );
+    }
+
+    #[test]
+    fn completion_request_follows_provider_capabilities() {
+        let provider = ResolvedProvider {
+            name: "p".into(),
+            base_url: "http://x".into(),
+            api_key: None,
+            chat: llm_provider::ChatCapabilities {
+                omit_temperature: true,
+                max_completion_tokens: true,
+                completion_tokens_floor: 2000,
+                reasoning_effort: Some("low".into()),
+            },
+        };
+        let body = CompletionRequest::new(&provider, "m", messages(), 500);
+        assert_eq!(
+            serde_json::to_string(&body).unwrap(),
+            r#"{"model":"m","messages":[{"role":"system","content":"s"},{"role":"user","content":"u"}],"max_completion_tokens":2000,"reasoning_effort":"low"}"#
+        );
+    }
+
+    fn named_provider(name: &str, api_key_env: Option<&str>) -> LlmConfig {
+        let mut cfg = LlmConfig::default();
+        cfg.provider = name.to_string();
+        cfg.providers.insert(
+            name.to_string(),
+            LlmProviderConfig {
+                base_url: "https://api.example/v1".to_string(),
+                api_key_env: api_key_env.map(str::to_string),
+                chat: Default::default(),
+            },
+        );
+        cfg
+    }
+
+    /// For the built-in `openai` provider the startup/health check is exactly
+    /// the legacy accessor. Checked against the real `get_api_key()` without
+    /// touching the process env: the inline key decides, and an env var name
+    /// that does not exist resolves to nothing for both.
+    #[test]
+    fn completions_key_present_matches_get_api_key_for_builtin_openai() {
+        let mut cfg = LlmConfig::default();
+        cfg.api_key_env = "LOOMEM_TEST_LLM_KEY_PRESENT_NO_SUCH_VAR_4c2a".to_string();
+        for inline in [None, Some(""), Some("sk-inline")] {
+            cfg.api_key = inline.map(str::to_string);
+            assert_eq!(
+                cfg.completions_key_present(),
+                cfg.get_api_key().is_some(),
+                "inline={inline:?}"
+            );
+        }
+        cfg.api_key = None;
+        assert!(!cfg.completions_key_present());
+        cfg.api_key = Some("sk-inline".to_string());
+        assert!(cfg.completions_key_present());
+        // Env-backed legacy key, through the injected lookup.
+        cfg.api_key = None;
+        assert!(cfg.completions_key_present_with(|n| {
+            (n == "LOOMEM_TEST_LLM_KEY_PRESENT_NO_SUCH_VAR_4c2a").then(|| "sk-env".to_string())
+        }));
+        assert!(!cfg.completions_key_present_with(|_| Some(String::new())));
+    }
+
+    #[test]
+    fn completions_key_present_follows_the_named_provider() {
+        let cfg = named_provider("router", Some("ROUTER_TEST_KEY"));
+        // The legacy OpenAI key is irrelevant for a named provider.
+        let legacy_only = |n: &str| (n == "OPENAI_API_KEY").then(|| "sk-openai".to_string());
+        assert!(!cfg.completions_key_present_with(legacy_only));
+        assert!(!cfg.completions_key_present_with(|_| Some(String::new())));
+        assert!(cfg.completions_key_present_with(|n| {
+            (n == "ROUTER_TEST_KEY").then(|| "sk-router".to_string())
+        }));
+        // A provider without api_key_env (Ollama) needs no key: subsystems run.
+        let ollama = named_provider("ollama", None);
+        assert!(ollama.completions_key_present_with(|_| None));
+        // An undefined provider cannot resolve, so nothing is "present".
+        let mut undefined = LlmConfig::default();
+        undefined.provider = "nope".to_string();
+        assert!(!undefined.completions_key_present_with(|_| Some("k".to_string())));
+    }
+
+    /// The code default and the shipped config name the same chat model, so
+    /// a config without `compression_model` behaves like the shipped one.
+    #[test]
+    fn shipped_config_compression_model_is_the_default_chat_model() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+        let content = std::fs::read_to_string(path).expect("read config.toml");
+        let shipped: crate::config::Config = toml::from_str(&content).expect("parse config.toml");
+        assert_eq!(shipped.llm.compression_model, DEFAULT_CHAT_MODEL);
+        assert_eq!(LlmConfig::default().compression_model, DEFAULT_CHAT_MODEL);
+    }
+
+    #[test]
+    fn active_key_env_hint_names_the_active_provider_env() {
+        assert_eq!(LlmConfig::default().active_key_env_hint(), "OPENAI_API_KEY");
+        assert_eq!(
+            named_provider("router", Some("ROUTER_API_KEY")).active_key_env_hint(),
+            "ROUTER_API_KEY"
+        );
+        assert_eq!(
+            named_provider("ollama", None).active_key_env_hint(),
+            "OPENAI_API_KEY"
+        );
+    }
+
+    async fn reflect_against(reply: &str) -> Result<(serde_json::Value, Usage)> {
+        let (base_url, server) = crate::test_http::serve_once("200 OK", reply, None).await;
+        let mut cfg = named_provider("mock", None);
+        cfg.providers.get_mut("mock").unwrap().base_url = base_url;
+        let result = tokio::time::timeout(
+            crate::test_http::DEADLINE,
+            reflect(
+                &Client::new(),
+                &cfg,
+                &[("id".to_string(), "content".to_string())],
+            ),
+        )
+        .await
+        .expect("reflect did not finish in time");
+        crate::test_http::finish(server).await;
+        result
+    }
+
+    /// A reply cut at the output cap is an error naming reason, model and
+    /// limit; a reply that stopped normally is used as before.
+    #[tokio::test]
+    async fn reflect_rejects_a_truncated_reply_and_accepts_a_stopped_one() {
+        let err = reflect_against(
+            r#"{"choices":[{"finish_reason":"length","message":{"content":"{\"contradictions\":["}}]}"#,
+        )
+        .await
+        .expect_err("truncated reply must fail");
+        let shown = format!("{err:#}");
+        assert!(shown.contains("finish_reason=length"), "{shown}");
+        assert!(
+            shown.contains(&format!("model={DEFAULT_CHAT_MODEL}")),
+            "{shown}"
+        );
+        assert!(shown.contains("completion token limit=2000"), "{shown}");
+
+        let (value, usage) = reflect_against(
+            r#"{"choices":[{"finish_reason":"stop","message":{"content":"{\"ok\":true}"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#,
+        )
+        .await
+        .expect("stopped reply is used");
+        assert_eq!(value, serde_json::json!({"ok": true}));
+        assert_eq!(usage.completion_tokens, 2);
     }
 
     #[tokio::test]

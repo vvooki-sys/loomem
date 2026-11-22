@@ -196,11 +196,17 @@ impl PricedReservation<'_> {
 
 // Standard text rates verified 2026-10-20 against developers.openai.com/api/docs/models/
 // gpt-4.1, gpt-4.1-mini, and gpt-4o-mini; snapshots intentionally enumerated.
+// gpt-6-luna: developers.openai.com/api/docs/pricing, accessed 2026-11-22
+// (0.10 in / 0.50 out; cached input 0.01, so the 75% cached-token discount in
+// `reconcile` over-charges luna cache hits — an upper bound, not a shortfall).
+// The pricing page lists no dated snapshot for it, so `same_model` accepts
+// only the exact id until a response has recorded one.
 fn prices(model: &str) -> Option<(f64, f64)> {
     match model {
         "gpt-4o-mini" | "gpt-4o-mini-2024-07-18" => Some((0.15, 0.60)),
         "gpt-4.1-mini" | "gpt-4.1-mini-2025-04-14" => Some((0.40, 1.60)),
         "gpt-4.1" | "gpt-4.1-2025-04-14" => Some((2.0, 8.0)),
+        "gpt-6-luna" => Some((0.10, 0.50)),
         _ => None,
     }
 }

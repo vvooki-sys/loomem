@@ -551,15 +551,23 @@ enabled = true
 <hr/>
 <h2 id="llm">[llm]</h2>
 <pre><code class="language-toml">[llm]
-provider = "openai"                  # generowanie odpowiedzi (konsolidacja / reflect)
-api_key_env = "OPENAI_API_KEY"
+provider = "openai"                  # generowanie tekstu: wpis [llm.providers.&lt;name&gt;] lub wbudowany "openai"
+api_key_env = "OPENAI_API_KEY"       # starsze pole klucza: embeddingi OpenAI + zapas dla wbudowanego dostawcy
 embedding_provider = "local"         # "local" (ONNX na urządzeniu) lub "openai"
 embedding_model = "text-embedding-3-small"   # używany, gdy embedding_provider = "openai"
 # embedding_model_path = "/abs/path"  # katalog modelu lokalnego; domyślnie ~/.loomem/models/multilingual-e5-small
 embedding_dim = 384                  # MUSI odpowiadać aktywnemu modelowi embeddingów
-compression_model = "gpt-4.1-mini"
-timeout_secs = 10
+compression_model = "gpt-6-luna"     # model czatu dla każdego etapu opartego na LLM
+timeout_secs = 10                    # wspólny klient HTTP (embeddingi OpenAI); wywołania czatu mają własny limit czasu
 fallback_to_regex = true
+
+[llm.providers.openai]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+max_completion_tokens = true
+reasoning_effort = "low"
+omit_temperature = true
+# completion_tokens_floor = 2000  # ustaw po teście dymnym
 </code></pre>
 <table>
 <thead>
@@ -573,7 +581,7 @@ fallback_to_regex = true
 <tr>
 <td><code>provider</code></td>
 <td>string</td>
-<td>Dostawca generowania tekstu do konsolidacji / reflect (<code>"openai"</code>)</td>
+<td>Dostawca generowania tekstu dla każdego etapu opartego na LLM: nazwa wpisu <a href="#llmprovidersname"><code>[llm.providers.&lt;name&gt;]</code></a> lub wbudowany <code>"openai"</code> (<code>https://api.openai.com/v1</code>), gdy wpis o tej nazwie nie istnieje</td>
 </tr>
 <tr>
 <td><code>embedding_provider</code></td>
@@ -583,7 +591,7 @@ fallback_to_regex = true
 <tr>
 <td><code>api_key_env</code></td>
 <td>string</td>
-<td>Nazwa zmiennej środowiskowej z kluczem API</td>
+<td>Starsze pole klucza: używane przez <code>embedding_provider = "openai"</code>, przez wbudowanego dostawcę <code>"openai"</code> oraz jako zapas wpisu <code>[llm.providers.openai]</code>, gdy jego własny <code>api_key_env</code> nie jest ustawiony</td>
 </tr>
 <tr>
 <td><code>embedding_model</code></td>
@@ -603,12 +611,12 @@ fallback_to_regex = true
 <tr>
 <td><code>compression_model</code></td>
 <td>string</td>
-<td>Model do konsolidacji, ekstrakcji i dream</td>
+<td>Model czatu dla każdego etapu opartego na LLM (konsolidacja, ekstrakcja, dream, …); klucze <code>model</code> poszczególnych funkcji dziedziczą go, gdy nie są ustawione</td>
 </tr>
 <tr>
 <td><code>timeout_secs</code></td>
 <td>int</td>
-<td>Limit czasu wywołania API</td>
+<td>Limit czasu wspólnego klienta HTTP (embeddingi OpenAI); każde wywołanie czatu ma własny limit czasu na żądanie</td>
 </tr>
 <tr>
 <td><code>fallback_to_regex</code></td>
@@ -621,12 +629,76 @@ fallback_to_regex = true
 <p>Nowe instalacje korzystają z <strong><code>embedding_provider = "local"</code></strong>: embeddingi są obliczane na urządzeniu przez model ONNX bez kwantyzacji (domyślnie <code>multilingual-e5-small</code>, 384 wymiary, dobra skuteczność wyszukiwania wielojęzycznego i polskiego) przy użyciu środowiska <code>tract</code> napisanego w Rust. Klucz API nie jest wymagany, a tekst nie opuszcza urządzenia. Obsługa modelu jest w domyślnej kompilacji; pliki modelu pobierzesz poleceniem:</p>
 <pre><code class="language-sh">./scripts/fetch-embedding-model.sh         # → ~/.loomem/models/multilingual-e5-small
 </code></pre>
-<p>LLM generujący tekst (konsolidacja, ekstrakcja faktów, dream) działa niezależnie. Przy domyślnej konfiguracji (te podsystemy są włączone) i bez <code>OPENAI_API_KEY</code> serwer nie uruchomi się, o ile nie ustawisz <code>LOOMEM_ALLOW_KEYLESS=1</code>. Wtedy <code>memory_ingest</code> może zapisać tekst źródłowy, ale zwraca błąd braku klucza i nie wyodrębnia faktów. Ekstrakcja encji przez LLM jest wyłączona, a dream i konsolidacja kończą się błędem; <code>memory_store</code> i wyszukiwanie semantyczne działają całkowicie lokalnie. Wyłączenie tych podsystemów w <code>config.toml</code> usuwa kontrolę przy starcie, a przy <code>knowledge_extraction.enabled = false</code> <code>memory_ingest</code> zapisuje surową transkrypcję. Aby używać lokalnego LLM do generowania tekstu, skieruj <code>provider</code> do punktu końcowego zgodnego z OpenAI (przyszły etap).</p>
+<p>LLM generujący tekst (konsolidacja, ekstrakcja faktów, dream) działa niezależnie. Przy domyślnej konfiguracji (te podsystemy są włączone) i bez klucza aktywnego dostawcy (<code>OPENAI_API_KEY</code> w dostarczanej konfiguracji) serwer nie uruchomi się, o ile nie ustawisz <code>LOOMEM_ALLOW_KEYLESS=1</code>. Wtedy <code>memory_ingest</code> może zapisać tekst źródłowy, ale zwraca błąd braku klucza i nie wyodrębnia faktów. Ekstrakcja encji przez LLM jest wyłączona, a dream i konsolidacja kończą się błędem; <code>memory_store</code> i wyszukiwanie semantyczne działają całkowicie lokalnie. Wyłączenie tych podsystemów w <code>config.toml</code> usuwa kontrolę przy starcie, a przy <code>knowledge_extraction.enabled = false</code> <code>memory_ingest</code> zapisuje surową transkrypcję. Aby używać lokalnego LLM do generowania tekstu, skieruj <code>provider</code> do punktu końcowego zgodnego z OpenAI zadeklarowanego w <a href="#llmprovidersname"><code>[llm.providers.&lt;name&gt;]</code></a>.</p>
 <h3 id="embedding-dimension-re-embedding">Wymiar embeddingów i ponowne obliczanie</h3>
 <p><code>embedding_dim</code> <strong>musi</strong> odpowiadać aktywnemu modelowi embeddingów (<code>multilingual-e5-small</code> = 384, OpenAI <code>text-embedding-3-small</code> = 1536). Wymiar użyty przy tworzeniu bazy jest zapisany w jej metadanych; w razie niezgodności serwer <strong>odmawia uruchomienia</strong>, zamiast po cichu mieszać wymiary wektorów. Aby zmienić dostawcę lub model istniejącej bazy, przelicz embeddingi:</p>
 <pre><code class="language-sh">loomem-server --reembed   # przelicz wektory skonfigurowanym dostawcą (uruchom po zatrzymaniu serwera)
 </code></pre>
 <p>Aby korzystać z API zamiast lokalnych embeddingów, ustaw <code>embedding_provider = "openai"</code> i <code>embedding_dim = 1536</code>, wyeksportuj <code>OPENAI_API_KEY</code> i przelicz embeddingi.</p>
+<h3 id="llmprovidersname">[llm.providers.&lt;name&gt;]</h3>
+<p>Nazwani dostawcy generowania tekstu zgodni z OpenAI. <code>provider</code> wybiera jednego po nazwie; embeddingi nie są objęte tym ustawieniem (kierują się <code>embedding_provider</code>). Wpis o nazwie <code>openai</code> doprecyzowuje wbudowanego dostawcę: jego <code>api_key_env</code> ma pierwszeństwo, a starsze pola <code>llm.api_key</code> / <code>llm.api_key_env</code> są zapasem. Konfiguracja bez tego wpisu (każda instalacja utworzona przed przejściem na <code>gpt-6-luna</code>) zachowuje wbudowanego dostawcę i wysyła dokładnie te same żądania co wcześniej.</p>
+<pre><code class="language-toml">[llm.providers.openai]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+max_completion_tokens = true
+reasoning_effort = "low"
+omit_temperature = true
+# completion_tokens_floor = 2000  # ustaw po teście dymnym
+
+# [llm.providers.ollama]
+# base_url = "http://localhost:11434/v1"   # bez api_key_env: żądania idą bez klucza
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Klucz</th>
+<th>Typ</th>
+<th>Domyślnie</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>base_url</code></td>
+<td>string</td>
+<td>wymagany</td>
+<td>Adres główny API, np. <code>https://api.openai.com/v1</code> lub <code>http://localhost:11434/v1</code>. Bezwzględny adres <code>http(s)</code>; bez zapytania, fragmentu i danych logowania</td>
+</tr>
+<tr>
+<td><code>api_key_env</code></td>
+<td>string?</td>
+<td>—</td>
+<td>Zmienna środowiskowa z kluczem. Pominięta → bez klucza: żądania nie mają nagłówka <code>Authorization</code> (Ollama, vLLM, brama)</td>
+</tr>
+<tr>
+<td><code>omit_temperature</code></td>
+<td>bool</td>
+<td>false</td>
+<td>Usuwa <code>temperature</code> z każdego żądania czatu</td>
+</tr>
+<tr>
+<td><code>max_completion_tokens</code></td>
+<td>bool</td>
+<td>false</td>
+<td>Wysyła limit odpowiedzi jako <code>max_completion_tokens</code> zamiast wycofywanego <code>max_tokens</code></td>
+</tr>
+<tr>
+<td><code>completion_tokens_floor</code></td>
+<td>int</td>
+<td>0</td>
+<td>Podnosi do tej wartości każdy limit odpowiedzi na wywołanie, który jest od niej niższy (<code>0</code> = bez zmian)</td>
+</tr>
+<tr>
+<td><code>reasoning_effort</code></td>
+<td>string?</td>
+<td>—</td>
+<td>Jedna z wartości <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>; dodawana do każdego żądania czatu, gdy jest ustawiona</td>
+</tr>
+</tbody>
+</table>
+<p>Wpis bez żadnej z czterech opcji żądania wysyła dokładnie to samo żądanie co wbudowany dostawca.</p>
+<p>Kontrola przy starcie i pole <code>llm_key_present</code> w <code>/health</code> kierują się aktywnym dostawcą: z dostarczaną konfiguracją serwer odmawia uruchomienia bez <code>OPENAI_API_KEY</code>, gdy włączone są <code>entity_extraction</code>, <code>knowledge_extraction</code> lub <code>dream</code> (chyba że ustawiono <code>LOOMEM_ALLOW_KEYLESS=1</code>), a komunikat błędu podaje zmienną środowiskową aktywnego dostawcy. Dostawca bez <code>api_key_env</code> (lokalna Ollama) jest traktowany jak obecny klucz i uruchamia się bez <code>LOOMEM_ALLOW_KEYLESS</code>.</p>
+<p><strong>Istniejące instalacje.</strong> Instalator nigdy nie nadpisuje <code>config.toml</code>, więc nic się nie zmienia, dopóki go nie edytujesz. Aby przejść na nowy domyślny model: ustaw <code>compression_model = "gpt-6-luna"</code>, usuń wszystkie wiersze <code>model = "gpt-4.1-mini"</code> w sekcjach poszczególnych funkcji i dodaj powyższą tabelę <code>[llm.providers.openai]</code>. Aby zostać przy starym modelu: nic nie trzeba robić przed 2027-01-14, kiedy OpenAI wycofuje <code>gpt-4.1-mini</code>.</p>
 <hr/>
 <h2 id="server">[server]</h2>
 <pre><code class="language-toml">[server]
@@ -738,7 +810,7 @@ persist = true
 <h2 id="knowledge_extraction">[knowledge_extraction]</h2>
 <pre><code class="language-toml">[knowledge_extraction]
 enabled = true
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # brak: dziedziczy compression_model z [llm]
 max_transcript_tokens = 20000
 dedup_cosine_threshold = 0.92
 contradiction_check = true
@@ -779,7 +851,7 @@ split_on_truncation = false
 </tr>
 </tbody>
 </table>
-<p>Te trzy klucze są dodatkowymi ustawieniami: z powyższymi wartościami domyślnymi ekstrakcja wykonuje te same wywołania co przed ich wprowadzeniem. Obcięta odpowiedź nie jest przyjmowana w żadnym trybie.</p>
+<p>Te trzy klucze są dodatkowymi ustawieniami: z powyższymi wartościami domyślnymi ekstrakcja wykonuje te same wywołania co przed ich wprowadzeniem. Obcięta odpowiedź nie jest przyjmowana w żadnym trybie; odpowiedź zakończona <code>finish_reason = "length"</code> jest jawnym błędem na każdej ścieżce czatu, nie tylko w ekstrakcji.</p>
 <hr/>
 <h2 id="fragments">[fragments]</h2>
 <p><strong>Eksperymentalne, wymaga włączenia.</strong> Domyślnie wyłączone; istniejące wdrożenia i klienci zachowują działanie identyczne bajt po bajcie.</p>
@@ -839,7 +911,7 @@ token_counter = "embedder"
 <h2 id="entity_extraction">[entity_extraction]</h2>
 <pre><code class="language-toml">[entity_extraction]
 enabled = true
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # brak: dziedziczy compression_model z [llm]
 batch_size = 20
 flush_interval_secs = 3
 queue_capacity = 200
@@ -853,7 +925,7 @@ max_tokens_per_batch = 2000
 enabled = true
 similarity_threshold = 0.70
 max_candidates = 5
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # brak: dziedziczy compression_model z [llm]
 </code></pre>
 <p>Gdy pojawia się nowy fakt, LLM sprawdza najlepsze <code>max_candidates</code> podobnych istniejących faktów pod kątem sprzeczności. Wynik: <code>updates</code> (zastępuje), <code>extends</code> (zachowuje oba), <code>none</code> (brak relacji).</p>
 <hr/>
@@ -870,7 +942,7 @@ max_extractions_per_request = 30
 <h2 id="profile">[profile]</h2>
 <pre><code class="language-toml">[profile]
 enabled = true
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # brak: dziedziczy compression_model z [llm]
 max_chunks = 100
 cache_ttl_secs = 3600
 max_static_facts = 30
@@ -957,7 +1029,7 @@ max_associations = 3
 enabled = true
 batch_size = 50
 min_group_size = 2
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # brak: dziedziczy compression_model z [llm]
 cost_cap_usd_per_run = 0.10
 </code></pre>
 <table>
@@ -992,7 +1064,7 @@ cost_cap_usd_per_run = 0.10
 enabled = true
 max_chunks = 200
 max_sections = 20
-model = "gpt-4.1-mini"
+# model = "gpt-6-luna"  # brak: dziedziczy compression_model z [llm]
 </code></pre>
 <p>Steruje wynikiem punktu końcowego <code>generate-memory-md</code>.</p>
 <hr/>
@@ -1013,8 +1085,8 @@ model = "gpt-4.1-mini"
 </tr>
 <tr>
 <td><code>OPENAI_API_KEY</code></td>
-<td>Klucz API LLM (nazwa konfigurowana przez <code>llm.api_key_env</code>)</td>
-<td>Tylko dla generowania tekstu OpenAI (<code>provider = "openai"</code>) lub embeddingów OpenAI (<code>embedding_provider = "openai"</code>). Przy lokalnych embeddingach i bez klucza domyślna konfiguracja uruchamia się tylko z <code>LOOMEM_ALLOW_KEYLESS=1</code>, a etapy LLM są niedostępne (<code>memory_store</code> i wyszukiwanie nadal działają).</td>
+<td>Klucz API LLM (nazwa konfigurowana przez <code>llm.api_key_env</code>, a dla dostawcy przez <code>llm.providers.&lt;name&gt;.api_key_env</code>)</td>
+<td>Tylko dla dostawcy generowania tekstu, którego wpis ją wskazuje (dostarczany <code>[llm.providers.openai]</code> tak robi), lub embeddingów OpenAI (<code>embedding_provider = "openai"</code>). Przy lokalnych embeddingach i bez klucza domyślna konfiguracja uruchamia się tylko z <code>LOOMEM_ALLOW_KEYLESS=1</code>, a etapy LLM są niedostępne (<code>memory_store</code> i wyszukiwanie nadal działają).</td>
 </tr>
 <tr>
 <td><code>LOOMEM_CONFIG</code></td>

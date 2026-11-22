@@ -47,6 +47,8 @@ struct ChatResponse {
 #[derive(Deserialize)]
 struct ChatChoice {
     message: ChatMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 #[derive(Deserialize)]
 struct ChatMessage {
@@ -66,12 +68,12 @@ impl ManifestCompleter for HttpManifestCompleter {
         async move {
             let provider =
                 provider.context("LLM provider not available for manifest generation")?;
-            let request_body = serde_json::json!({
+            let request_body = provider.chat_body(serde_json::json!({
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 1000,
                 "temperature": 0.0
-            });
+            }));
 
             let url = loomem_core::evaluation_url::chat_completions(
                 "LOOMEM_EVALUATION_MANIFEST_URL",
@@ -97,12 +99,13 @@ impl ManifestCompleter for HttpManifestCompleter {
                 .json()
                 .await
                 .context("Failed to parse manifest LLM response")?;
-            Ok(parsed
-                .choices
-                .into_iter()
-                .next()
-                .map(|c| c.message.content)
-                .unwrap_or_default())
+            let choice = parsed.choices.into_iter().next();
+            loomem_core::llm_provider::ensure_not_truncated(
+                choice.as_ref().and_then(|c| c.finish_reason.as_deref()),
+                &model,
+                loomem_core::llm_provider::completion_limit_of(&request_body),
+            )?;
+            Ok(choice.map(|c| c.message.content).unwrap_or_default())
         }
     }
 }

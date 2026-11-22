@@ -51,15 +51,15 @@ pub async fn rerank(
         numbered.join("\n\n")
     );
 
-    let body = serde_json::json!({
-        "model": &config.compression_model, // gpt-4.1-mini
+    let body = provider.chat_body(serde_json::json!({
+        "model": &config.compression_model,
         "messages": [
             {"role": "system", "content": "You are a search result reranker. Return only JSON."},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.0,
         "max_tokens": 100,
-    });
+    }));
 
     let request = provider
         .chat_request(client)
@@ -84,6 +84,11 @@ pub async fn rerank(
 
             // Parse OpenAI response → extract content
             let parsed: serde_json::Value = serde_json::from_str(&text)?;
+            crate::llm_provider::ensure_choice_not_truncated(
+                &parsed,
+                &config.compression_model,
+                crate::llm_provider::completion_limit_of(&body),
+            )?;
             let content = parsed["choices"][0]["message"]["content"]
                 .as_str()
                 .unwrap_or("{}");

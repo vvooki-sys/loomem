@@ -394,7 +394,7 @@ Harmonogram zarządza zadaniami w tle. Wszystkie procesy można wstrzymać i wzn
 | Styl | `structured` (fakty z typem i rozstrzyganiem dat) |
 | Próg podobieństwa | 0.20 (kosinusowy, do grupowania tematów) |
 
-**Proces:** 1. Skanowanie nieskonsolidowanych chunków L0 2. Grupowanie według strumienia (izolacja użytkownika) 3. **Podział na podgrupy według podobieństwa tematu** — zachłanne klastrowanie embeddingów (próg kosinusowy). Zapobiega łączeniu niepowiązanych faktów w jednym chunku L1. 4. Redakcja danych osobowych (dla każdej podgrupy) 5. Kompresja przez LLM (gpt-4.1-mini) — jedno wywołanie na podgrupę 6. Utworzenie chunka L1 z `source_ids` wskazującymi na L0 7. Indeksowanie w Tantivy i kolejka embeddingów 8. Oznaczenie L0 jako `consolidated: true`
+**Proces:** 1. Skanowanie nieskonsolidowanych chunków L0 2. Grupowanie według strumienia (izolacja użytkownika) 3. **Podział na podgrupy według podobieństwa tematu** — zachłanne klastrowanie embeddingów (próg kosinusowy). Zapobiega łączeniu niepowiązanych faktów w jednym chunku L1. 4. Redakcja danych osobowych (dla każdej podgrupy) 5. Kompresja przez LLM (gpt-6-luna) — jedno wywołanie na podgrupę 6. Utworzenie chunka L1 z `source_ids` wskazującymi na L0 7. Indeksowanie w Tantivy i kolejka embeddingów 8. Oznaczenie L0 jako `consolidated: true`
 
 Chunki bez embeddingów trafiają do jednej grupy (zachowanie sprzed klastrowania). Strumienie o jednym temacie tworzą jedną podgrupę — bez ryzyka regresji.
 
@@ -433,7 +433,7 @@ Wyniki klastrowania trafiają do mechanizmu skojarzeń (poniżej); dla klastrów
 | Interwał opróżniania | 3 sekundy    |
 | Pojemność kolejki    | 200          |
 | Próg pewności        | 0.5          |
-| Model                | gpt-4.1-mini |
+| Model                | gpt-6-luna   |
 
 Asynchroniczne rozpoznawanie encji przez LLM działa w tle dla encji nieobecnych w słowniku.
 

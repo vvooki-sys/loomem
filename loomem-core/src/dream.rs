@@ -318,7 +318,8 @@ pub async fn dream_run(
             continue;
         }
 
-        let request_body = build_dream_request(&dream_config.model, subject, chunks);
+        let request_body =
+            provider.chat_body(build_dream_request(&dream_config.model, subject, chunks));
 
         let request = provider
             .authorize(client.post(next_subject_endpoint(&provider)?))
@@ -354,6 +355,8 @@ pub async fn dream_run(
         #[derive(Deserialize)]
         struct Choice {
             message: Msg,
+            #[serde(default)]
+            finish_reason: Option<String>,
         }
         #[derive(Deserialize)]
         struct Msg {
@@ -372,7 +375,11 @@ pub async fn dream_run(
 
         // Track cost
         if let Some(ref usage) = resp.usage {
-            let cost = (usage.prompt_tokens as f64 * 0.15 + usage.completion_tokens as f64 * 0.60)
+            // Same table as the tracker; an unpriced model counts as $0.
+            let (input_price, output_price) =
+                crate::cost_tracker::chat_prices(&dream_config.model).unwrap_or((0.0, 0.0));
+            let cost = (usage.prompt_tokens as f64 * input_price
+                + usage.completion_tokens as f64 * output_price)
                 / 1_000_000.0;
             total_cost += cost;
             let _ = cost_tracker.record(
@@ -382,9 +389,18 @@ pub async fn dream_run(
             );
         }
 
-        let content = resp
-            .choices
-            .first()
+        let choice = resp.choices.first();
+        if let Err(e) = crate::llm_provider::ensure_not_truncated(
+            choice.and_then(|c| c.finish_reason.as_deref()),
+            &dream_config.model,
+            crate::llm_provider::completion_limit_of(&request_body),
+        ) {
+            warn!("Dream LLM reply rejected: {e}");
+            crate::llm_failures::global()
+                .record(crate::llm_failures::LlmFailureKind::Consolidation);
+            continue;
+        }
+        let content = choice
             .map(|c| c.message.content.clone())
             .unwrap_or_default();
         let json_str = content

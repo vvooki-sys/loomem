@@ -70,6 +70,7 @@ fn endpoint_follows_the_active_provider() {
         name: "p".into(),
         base_url: base_url.into(),
         api_key: None,
+        chat: Default::default(),
     };
     assert_eq!(
         endpoint(&provider("https://api.openai.com/v1")).as_deref(),
@@ -296,6 +297,7 @@ async fn select_calls_keyless_provider_with_unpriced_model() {
             crate::llm_provider::LlmProviderConfig {
                 base_url,
                 api_key_env: None,
+                chat: Default::default(),
             },
         )]
         .into(),

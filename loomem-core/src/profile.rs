@@ -249,7 +249,7 @@ pub async fn generate_profile(
         .active_provider()
         .context("LLM provider not available for profile generation")?;
 
-    let request_body = serde_json::json!({
+    let request_body = provider.chat_body(serde_json::json!({
         "model": &profile_config.model,
         "messages": [
             {"role": "system", "content": PROFILE_PROMPT},
@@ -257,7 +257,7 @@ pub async fn generate_profile(
         ],
         "max_tokens": 2000,
         "temperature": 0.0
-    });
+    }));
 
     let url = crate::evaluation_url::chat_completions(
         "LOOMEM_EVALUATION_PROFILE_URL",
@@ -286,6 +286,8 @@ pub async fn generate_profile(
     #[derive(Deserialize)]
     struct LlmChoice {
         message: LlmMessage,
+        #[serde(default)]
+        finish_reason: Option<String>,
     }
     #[derive(Deserialize)]
     struct LlmMessage {
@@ -297,9 +299,13 @@ pub async fn generate_profile(
         .await
         .context("Failed to parse profile LLM response")?;
 
-    let content = llm_resp
-        .choices
-        .first()
+    let choice = llm_resp.choices.first();
+    crate::llm_provider::ensure_not_truncated(
+        choice.and_then(|c| c.finish_reason.as_deref()),
+        &profile_config.model,
+        crate::llm_provider::completion_limit_of(&request_body),
+    )?;
+    let content = choice
         .map(|c| c.message.content.clone())
         .unwrap_or_default();
 

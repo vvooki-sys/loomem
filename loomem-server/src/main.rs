@@ -281,7 +281,7 @@ async fn main() -> Result<()> {
                 "[{}] enabled but no LLM API key found: export {} (or set the [llm] api_key \
                  config field), or start with LOOMEM_ALLOW_KEYLESS=1 to accept degraded keyless mode",
                 keyless_subsystems.join(", "),
-                config.llm.api_key_env
+                config.llm.active_key_env_hint()
             );
         }
     }
