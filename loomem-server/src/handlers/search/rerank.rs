@@ -81,8 +81,14 @@ pub(super) async fn stage(
 /// until it finishes. It owns only the query, the documents and the
 /// `Arc<OnnxReranker>` (see [`Backend`]) — never `AppState` or the store —
 /// and its result is discarded.
+///
+/// The soft-delete filter ran before the wait, so every path re-applies it
+/// afterwards ([`still_visible`]): a chunk deleted or purged while the model
+/// ran never reaches the fresh response. (The cache needs no such pass: a
+/// delete clears the cache and bumps its generation, so the publish below
+/// is refused.)
 async fn sync_rerank<B: RerankBackend>(
-    state: &AppState,
+    state: &Arc<AppState>,
     payload: &SearchRequest,
     input: RerankInput<'_>,
     cache_key: Option<u64>,
@@ -98,11 +104,11 @@ async fn sync_rerank<B: RerankBackend>(
         Ok(Ok(indices)) => indices,
         Ok(Err(e)) => {
             tracing::warn!("Sync rerank failed, keeping fused order: {}", e);
-            return input.ranked;
+            return still_visible(state, input.ranked);
         }
         Err(_) => {
             tracing::warn!(timeout_ms, "Sync rerank timed out, keeping fused order");
-            return input.ranked;
+            return still_visible(state, input.ranked);
         }
     };
     counters.record_rerank_completion();
@@ -117,7 +123,24 @@ async fn sync_rerank<B: RerankBackend>(
         )
         .await;
     }
-    cache_policy::reranked_results(indices, &job.candidates, &input.ranked, top_k)
+    // The whole pool in model order, so a hit deleted during the wait is
+    // replaced by the next fused one before the `final_top_k` cut.
+    let pool_len = input.ranked.len();
+    let reordered =
+        cache_policy::reranked_results(indices, &job.candidates, &input.ranked, pool_len);
+    let mut visible = still_visible(state, reordered);
+    visible.truncate(top_k);
+    visible
+}
+
+/// The pre-rerank soft-delete filter again (same predicate: deleted, purged
+/// or unreadable chunks go), for results held across the model wait.
+fn still_visible(
+    state: &Arc<AppState>,
+    mut results: Vec<HybridSearchResult>,
+) -> Vec<HybridSearchResult> {
+    results.retain(|r| !crate::handlers::delete::is_deleted_in_store(state, &r.id));
+    results
 }
 
 /// One model call's inputs, built on the request path: the candidate slice,

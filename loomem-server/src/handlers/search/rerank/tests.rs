@@ -567,13 +567,17 @@ impl RerankBackend for Stub {
     }
 }
 
-/// Reranker on, synchronous, keyless.
+/// Reranker on, synchronous, keyless; the store holds the pool's chunks
+/// (the post-wait visibility check drops ids it cannot read).
 fn sync_state(timeout_ms: u64) -> Arc<AppState> {
     let (_, original) = make_test_app();
     let mut config = keyless_rerank_config(original.config.clone());
     config.search.rerank_sync = true;
     config.search.rerank_sync_timeout_ms = timeout_ms;
     let (_app, state) = make_test_app_cfg(config);
+    for r in pool() {
+        state.store.store_chunk(&chunk(&r.id, &r.content)).unwrap();
+    }
     state
 }
 
@@ -841,5 +845,93 @@ async fn http_rerank_sync_returns_model_order_in_fresh_response() {
 
     let response = http(&app, "lantern").await;
     assert_eq!(ids(&response), [fused[1], fused[0], fused[2]]);
+    assert_eq!(counts(&state), (1, 1));
+}
+
+/// A chunk deleted while the model runs (here: after the pre-rerank filter,
+/// before the post-wait check) never reaches the fresh response — on
+/// success (the next fused hit takes its place before the cut), on error
+/// and on timeout (paused clock, auto-advanced).
+#[tokio::test(start_paused = true)]
+async fn sync_rerank_drops_chunks_deleted_during_the_wait() {
+    let cases = [
+        (Stub::Order(vec![1, 2, 0]), ["b", "a"]),
+        (Stub::Fail, ["a", "b"]),
+        (Stub::Hang, ["a", "b"]),
+    ];
+    for (stub, expected) in cases {
+        let state = sync_state(50);
+        let (payload, _ctx, key, generation) = cacheable(&state).await;
+        let mut deleted = chunk("c", "lantern c");
+        deleted.deleted_at = Some(1);
+        state.store.store_chunk(&deleted).unwrap();
+
+        let out = sync_rerank(&state, &payload, input(2, generation), Some(key), stub).await;
+
+        assert_eq!(result_ids(&out), expected);
+    }
+}
+
+/// Traced request, `rerank_sync` on, mock reply `[1, 0]`, `top_k = 1`: the
+/// fused head is pushed out by the reranker. The trace rejects it as
+/// `reranked`, not as `operation_finalization`.
+#[tokio::test]
+async fn traced_sync_rerank_blames_the_reranker_not_finalization() {
+    let (base_url, _requests) = fake_rerank_provider().await;
+    let mut config = local_rerank_config(&base_url);
+    config.search.decay.l0_lambda = 0.0;
+    config.search.decay.l1_lambda = 0.0;
+    config.search.rerank_sync = true;
+    let (app, state) = make_test_app_cfg(config);
+    #[cfg(feature = "onnx-rerank")]
+    assert!(state.onnx_reranker.is_none());
+    seed(&state).await;
+    let payload = json!({"query": "lantern", "streams": [STREAM], "top_k": 1, "trace": true});
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/search")
+        .header("Authorization", "Bearer admin-token")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+        .unwrap();
+    let (status, body) = send(app.clone(), request).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let value: Value = serde_json::from_slice(&body).unwrap();
+
+    let returned = ids(&value);
+    assert_eq!(returned.len(), 1);
+    let rejections = value["trace_metadata"]["rejections"].as_array().unwrap();
+    let reasons: Vec<_> = rejections
+        .iter()
+        .map(|r| {
+            (
+                r["chunk_id"].as_str().unwrap(),
+                r["reason"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(
+        reasons.iter().all(|(id, _)| *id != returned[0]),
+        "{reasons:?}"
+    );
+    assert_eq!(
+        reasons
+            .iter()
+            .filter(|(_, reason)| *reason == "reranked")
+            .count(),
+        1,
+        "{reasons:?}"
+    );
+    assert!(
+        reasons.iter().all(|(_, r)| *r != "operation_finalization"),
+        "{reasons:?}"
+    );
+    let stages: Vec<_> = value["trace_metadata"]["evidence"]["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["stage"].as_str().unwrap())
+        .collect();
+    assert!(!stages.contains(&"after_rerank"), "internal stage dropped");
     assert_eq!(counts(&state), (1, 1));
 }

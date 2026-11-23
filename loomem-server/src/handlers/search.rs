@@ -712,7 +712,7 @@ pub async fn search_handler(
 
     let (outcome, evidence) =
         telemetry::filter_with_telemetry(hybrid_results, &ctx, &payload, &state);
-    let metrics = ResponseMetrics::full(&ctx, &outcome, evidence, operation_metrics);
+    let mut metrics = ResponseMetrics::full(&ctx, &outcome, evidence, operation_metrics);
     let FilterOutcome {
         results: hybrid_results,
         final_top_k,
@@ -720,7 +720,7 @@ pub async fn search_handler(
     } = outcome;
 
     // Rerank stage (cost gate + async rerank-to-cache); hands the ranked
-    // pool back unchanged. See `rerank::stage`.
+    // pool back unchanged, or reranked with `rerank_sync`. See `rerank::stage`.
     let mut hybrid_results = rerank::stage(
         &state,
         &ctx,
@@ -736,6 +736,7 @@ pub async fn search_handler(
     .await;
 
     hybrid_results.truncate(final_top_k);
+    evidence::after_rerank(&mut metrics.evidence, &hybrid_results, &ctx, &state);
     let lane = operation_lane::finalize(
         hybrid_results,
         primary_started.elapsed().as_micros(),

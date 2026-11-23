@@ -248,6 +248,9 @@ pub enum RejectionReason {
     SourceAgentFilter,
     TruncatedTopK,
     OperationFinalization,
+    /// Pushed out of the top-k by the synchronous reranker (`[search]
+    /// rerank_sync`). Never produced with the flag off.
+    Reranked,
 }
 
 #[cfg(test)]
