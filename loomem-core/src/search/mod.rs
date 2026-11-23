@@ -9,6 +9,7 @@
 pub mod context_evidence;
 pub mod context_relevance;
 pub mod context_selection;
+pub mod date_proximity;
 pub mod fusion;
 pub mod operation;
 pub mod query_classifier;

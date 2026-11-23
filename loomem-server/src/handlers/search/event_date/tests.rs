@@ -8,6 +8,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 mod fragments;
+mod proximity;
 
 const RECORDED: u64 = 1_704_067_200;
 
