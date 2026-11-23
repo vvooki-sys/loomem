@@ -98,7 +98,7 @@ impl Grounding {
         if fact
             .event_date_context
             .as_deref()
-            .is_some_and(|cue| !cue.trim().is_empty() && !self.source.contains(&normalized(cue)))
+            .is_some_and(|cue| !cue.trim().is_empty() && !self.supports(cue))
         {
             return false;
         }
@@ -107,8 +107,27 @@ impl Grounding {
         };
         pattern
             .find_iter(&fact.content)
-            .all(|cue| self.source.contains(&normalized(cue.as_str())))
+            .all(|cue| self.supports(cue.as_str()))
     }
+
+    /// The source contains `cue` as a complete expression: a match whose
+    /// alphanumeric edges are not glued to further letters or digits, so
+    /// "3 weeks ago" is not supported by "13 weeks ago".
+    fn supports(&self, cue: &str) -> bool {
+        contains_phrase(&self.source, &normalized(cue))
+    }
+}
+
+fn contains_phrase(haystack: &str, needle: &str) -> bool {
+    let glued = |edge: Option<char>, outer: Option<char>| {
+        edge.is_some_and(char::is_alphanumeric) && outer.is_some_and(char::is_alphanumeric)
+    };
+    haystack.match_indices(needle).any(|(start, _)| {
+        let end = start + needle.len();
+        let before = haystack.get(..start).and_then(|s| s.chars().next_back());
+        let after = haystack.get(end..).and_then(|s| s.chars().next());
+        !glued(needle.chars().next(), before) && !glued(needle.chars().next_back(), after)
+    })
 }
 
 #[cfg(test)]
@@ -182,6 +201,44 @@ mod tests {
             &fact("Byłem trzy tygodnie temu.", None),
             "Właśnie wróciłem."
         ));
+    }
+
+    /// A cue must match a complete expression in the source, not a substring
+    /// of a different one ("3 weeks ago" inside "13 weeks ago").
+    #[test]
+    fn rejects_a_different_number_that_contains_the_cue() {
+        let source = "user: I visited the festival 13 weeks ago.";
+        assert!(!admits(
+            &fact("The user visited the festival 3 weeks ago.", None),
+            source
+        ));
+        assert!(!admits(
+            &fact("The user visited the festival.", Some("3 weeks ago")),
+            source
+        ));
+        assert!(admits(
+            &fact(
+                "The user visited the festival 13 weeks ago.",
+                Some("13 weeks ago")
+            ),
+            source
+        ));
+        assert!(!admits(
+            &fact("The user left 2 days ago.", None),
+            "user: I left 12 days ago, back in 2 days."
+        ));
+    }
+
+    #[test]
+    fn phrase_match_respects_alphanumeric_edges_only() {
+        assert!(contains_phrase("i left yesterday.", "yesterday"));
+        assert!(contains_phrase("(yesterday)", "yesterday"));
+        assert!(contains_phrase("i met anna, yesterday", ", yesterday"));
+        assert!(!contains_phrase("dayyesterday", "yesterday"));
+        assert!(!contains_phrase("yesterdays", "yesterday"));
+        assert!(contains_phrase("byłem tam 2 dni temu", "2 dni temu"));
+        assert!(!contains_phrase("byłem tam 12 dni temu", "2 dni temu"));
+        assert!(contains_phrase("a 12 x, then 2 x", "2 x"));
     }
 
     #[test]
