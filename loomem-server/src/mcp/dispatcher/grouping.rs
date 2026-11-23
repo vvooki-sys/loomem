@@ -5,10 +5,15 @@
 //! for an aggregation query, the text is exactly `search_format::render_lines`.
 //!
 //! Headers are not charged to `max_context_tokens`: the budget trims hits
-//! before rendering and counts hit (and predecessor) text only, so a grouped
-//! response may run a few header lines over the budget.
-use super::search_format::{render_line, render_lines, Predecessor};
+//! before rendering and counts hit (and predecessor) text only. Worst case is
+//! one header per hit, so at most `[mcp] search_max_top_k` headers (20 as
+//! shipped; aggregations get none). A session id is cut to
+//! `MAX_HEADER_ID_CHARS` characters, so one header is at most ~80 bytes of
+//! ASCII (~21 tokens by `estimate_tokens`, ~420 for 20 hits) and at most
+//! ~270 bytes with 4-byte characters (~70 tokens, ~1,400 for 20 hits).
+use super::search_format::{cap_chars, render_line, render_lines, Predecessor};
 use crate::handlers::types::SearchResult;
+use crate::AppState;
 use chrono::NaiveDate;
 use loomem_core::config::SearchGroupBy;
 use loomem_core::storage::{Chunk, RocksDbStore};
@@ -21,6 +26,10 @@ mod tests;
 /// Label for a day key whose date tag is empty or not a date.
 const UNKNOWN_DATE: &str = "unknown date";
 
+/// Character cap for a session id in a header (`…` appended when cut).
+/// `source_session` has no length limit at ingest.
+const MAX_HEADER_ID_CHARS: usize = 64;
+
 /// Kind prefixes `ingest_date::date_prefix` may put before the date.
 const DATE_TAG_KINDS: [&str; 3] = ["event:", "observed:", "recorded:"];
 
@@ -32,6 +41,18 @@ pub(super) fn effective_mode(configured: SearchGroupBy, is_aggregation: bool) ->
     } else {
         configured
     }
+}
+
+/// `render_grouped` with the configured `[mcp] search_group_by`, forced off
+/// for aggregation queries — the `tool_search` call site.
+pub(super) fn render_for(
+    state: &AppState,
+    hits: &[SearchResult],
+    preds: &HashMap<String, Predecessor>,
+    is_aggregation: bool,
+) -> String {
+    let mode = effective_mode(state.config.mcp.search_group_by, is_aggregation);
+    render_grouped(&state.store, hits, preds, mode)
 }
 
 /// Render every hit like `render_lines`, with a `## <key>` header before each
@@ -75,7 +96,8 @@ fn hit_key(store: &RocksDbStore, r: &SearchResult, mode: SearchGroupBy) -> Optio
 /// Header label for a hit, or `None` when grouping is off.
 /// - `Session`: `session: <fragment source id>`, else `session: <source
 ///   session>`, else the day key (a chunk with no session groups by day).
-///   Control characters in the id render as spaces (one line per header).
+///   Control characters and line/paragraph separators in the id render as
+///   spaces (one line per header); the id is cut to `MAX_HEADER_ID_CHARS`.
 /// - `Day`: the `YYYY-MM-DD` of the date tag `ts`, or `unknown date`.
 pub(super) fn group_key(mode: SearchGroupBy, chunk: Option<&Chunk>, ts: &str) -> Option<String> {
     match mode {
@@ -83,7 +105,7 @@ pub(super) fn group_key(mode: SearchGroupBy, chunk: Option<&Chunk>, ts: &str) ->
         SearchGroupBy::Session => Some(
             chunk
                 .and_then(session_id)
-                .map(|id| format!("session: {}", single_line(id)))
+                .map(|id| format!("session: {}", header_id(id)))
                 .unwrap_or_else(|| day_key(ts)),
         ),
         SearchGroupBy::Day => Some(day_key(ts)),
@@ -100,13 +122,20 @@ fn session_id(chunk: &Chunk) -> Option<&str> {
         .or_else(|| session.filter(|id| !id.trim().is_empty()))
 }
 
-/// `id` with every control character (line breaks included) replaced by a
-/// space: a caller-supplied `source_session` must not open a header line of
-/// its own, so one key always renders as exactly one header.
-fn single_line(id: &str) -> String {
-    id.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
+/// `id` as a header label: every control character (line breaks included)
+/// and U+2028/U+2029 replaced by a space, so a caller-supplied
+/// `source_session` cannot open a header line of its own, then cut to
+/// `MAX_HEADER_ID_CHARS` characters so it cannot blow up the response.
+fn header_id(id: &str) -> String {
+    let single_line: String = id
+        .chars()
+        .map(|c| match c {
+            '\u{2028}' | '\u{2029}' => ' ',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+    cap_chars(&single_line, MAX_HEADER_ID_CHARS)
 }
 
 /// `YYYY-MM-DD` from a date tag (`2024-01-01`, `event:2024-01-01`,

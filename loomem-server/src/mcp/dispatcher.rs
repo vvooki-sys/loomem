@@ -10,6 +10,7 @@ mod search_format;
 #[cfg(test)]
 mod search_format_tests;
 use dream::tool_dream;
+use grouping::render_for;
 use ingest::tool_ingest;
 #[cfg(feature = "evaluation")]
 pub(crate) use ingest::{expected_bytes, ExpectedFact};
@@ -931,9 +932,7 @@ async fn tool_search(
             // [UPDATED] note, evidence suffix, score, id) — see
             // `search_format::render_line`; `## <key>` group headers between
             // them with `[mcp] search_group_by` (never for aggregations).
-            let mode = grouping::effective_mode(state.config.mcp.search_group_by, is_aggregation);
-            let lines = grouping::render_grouped(&state.store, &resp.results, &preds, mode);
-            text.push_str(&lines);
+            text.push_str(&render_for(state, &resp.results, &preds, is_aggregation));
             text.push_str("\nNote: When facts have dates, ALWAYS prefer the most recent version. Items marked [UPDATED] supersede older versions.");
             Ok(ToolResult::text(text))
         }

@@ -151,6 +151,30 @@ fn multiline_session_id_renders_as_one_header_line() {
     assert!(!key.unwrap().contains(['\n', '\r']));
 }
 
+#[test]
+fn unicode_line_and_paragraph_separators_render_as_spaces() {
+    let c = chunk("x", "x", Some("A\u{2028}## session: B\u{2029}C"), DAY1);
+    let key = group_key(SearchGroupBy::Session, Some(&c), "2024-01-01");
+    assert_eq!(key, Some("session: A ## session: B C".into()));
+}
+
+#[test]
+fn long_session_id_is_cut_to_the_header_cap() {
+    let key = |id: &str| {
+        let c = chunk("x", "x", Some(id), DAY1);
+        group_key(SearchGroupBy::Session, Some(&c), "2024-01-01").unwrap()
+    };
+    let long = "x".repeat(10_000);
+    assert_eq!(key(&long), format!("session: {}…", "x".repeat(64)));
+    let exact = "y".repeat(64);
+    assert_eq!(key(&exact), format!("session: {exact}"));
+    // Counted in characters, not bytes: 2-byte and 4-byte ids cut cleanly.
+    let polish = "ż".repeat(100);
+    assert_eq!(key(&polish), format!("session: {}…", "ż".repeat(64)));
+    let emoji = "🧵".repeat(65);
+    assert_eq!(key(&emoji), format!("session: {}…", "🧵".repeat(64)));
+}
+
 #[tokio::test]
 async fn multiline_session_id_adds_no_extra_header() {
     let st = state(SearchGroupBy::Session);
