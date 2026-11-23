@@ -8,9 +8,10 @@ pub struct RetrievalCounters {
     vector_searches: AtomicU64,
     /// Primary retrieval returned BM25 only (no embeddings or simple query).
     lexical_only_searches: AtomicU64,
-    /// Asynchronous reranks that were started.
+    /// Reranks that were started (async, or inline with `rerank_sync`).
     rerank_invocations: AtomicU64,
-    /// Asynchronous reranks whose model call returned an ordering.
+    /// Reranks whose model call returned an ordering (a synchronous one
+    /// only when it did so within `rerank_sync_timeout_ms`).
     rerank_completions: AtomicU64,
 }
 

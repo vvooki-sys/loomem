@@ -255,8 +255,8 @@ fn keyless_rerank_config(mut config: loomem_core::config::Config) -> loomem_core
 /// identity order instead of an error (it maps every provider failure to
 /// `Ok(identity)`; only a 2xx with malformed or truncated JSON is an
 /// `Err`), so the spawn publishes a reranked slot that merely repeats the
-/// fused head. The `Err` arm — no publish, no completion — needs a backend
-/// stub and is covered when the synchronous rerank lands.
+/// fused head. The `Err` arm — no publish, no completion — is covered for
+/// the synchronous rerank with a backend stub (`sync_model_error_…` below).
 #[tokio::test]
 async fn stage_with_reranker_on_spawns_keyless_identity_rerank() {
     let (_app, original) = make_test_app();
@@ -538,4 +538,308 @@ async fn llm_prompt_carries_dated_capped_documents() {
     assert!(is_reranked);
     let ids: Vec<_> = cached.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(ids, ["b", "a"], "mock order published");
+}
+
+// ---------------------------------------------------------------------------
+// W2a — synchronous rerank (`[search] rerank_sync`).
+// ---------------------------------------------------------------------------
+
+/// Backend stubs for [`sync_rerank`]: a fixed order, a model failure, and a
+/// call that never returns (only the timeout can end it).
+enum Stub {
+    Order(Vec<usize>),
+    Fail,
+    Hang,
+}
+
+impl RerankBackend for Stub {
+    async fn run_model(
+        self,
+        _query: String,
+        _documents: Vec<String>,
+        _top_k: usize,
+    ) -> anyhow::Result<Vec<usize>> {
+        match self {
+            Stub::Order(order) => Ok(order),
+            Stub::Fail => Err(anyhow::anyhow!("stub model failure")),
+            Stub::Hang => std::future::pending().await,
+        }
+    }
+}
+
+/// Reranker on, synchronous, keyless.
+fn sync_state(timeout_ms: u64) -> Arc<AppState> {
+    let (_, original) = make_test_app();
+    let mut config = keyless_rerank_config(original.config.clone());
+    config.search.rerank_sync = true;
+    config.search.rerank_sync_timeout_ms = timeout_ms;
+    let (_app, state) = make_test_app_cfg(config);
+    state
+}
+
+/// A cacheable request, its context, cache key and the cache generation.
+async fn cacheable(state: &Arc<AppState>) -> (SearchRequest, QueryContext, u64, u64) {
+    let payload = request("lantern");
+    let ctx = prepare_query_context(state, &auth(), &payload).unwrap();
+    let key = ctx.cache_key.expect("plain request is cacheable");
+    let generation = state.query_cache.lock().await.generation();
+    (payload, ctx, key, generation)
+}
+
+fn input(final_top_k: usize, cache_generation: u64) -> RerankInput<'static> {
+    RerankInput {
+        ranked: pool(),
+        final_top_k,
+        lane: None,
+        cache_generation,
+    }
+}
+
+fn result_ids(results: &[HybridSearchResult]) -> Vec<&str> {
+    results.iter().map(|r| r.id.as_str()).collect()
+}
+
+/// `(rerank_invocations, rerank_completions)`.
+fn counts(state: &AppState) -> (u64, u64) {
+    let snapshot = state.retrieval_counters.snapshot();
+    (snapshot.rerank_invocations, snapshot.rerank_completions)
+}
+
+/// Success with a cache key: the model's order is the fresh result (cut to
+/// `final_top_k`), and the same order lands in the reranked cache slot.
+#[tokio::test]
+async fn sync_success_returns_model_order_and_publishes_it() {
+    let state = sync_state(2000);
+    let (payload, _ctx, key, generation) = cacheable(&state).await;
+
+    let out = sync_rerank(
+        &state,
+        &payload,
+        input(3, generation),
+        Some(key),
+        Stub::Order(vec![2, 0, 1]),
+    )
+    .await;
+
+    assert_eq!(result_ids(&out), ["c", "a", "b"]);
+    assert_eq!(counts(&state), (1, 1));
+    let (is_reranked, cached) = state.query_cache.lock().await.get_best(key).unwrap();
+    assert!(is_reranked);
+    assert_eq!(as_json(&cached), as_json(&out), "published == returned");
+}
+
+/// The fresh result keeps the pool's membership: cut to `final_top_k`, and
+/// ids the model left out are filled in fused order.
+#[tokio::test]
+async fn sync_success_is_cut_to_final_top_k_and_filled_in_fused_order() {
+    let state = sync_state(2000);
+    let (payload, _ctx, key, generation) = cacheable(&state).await;
+    let out = sync_rerank(
+        &state,
+        &payload,
+        input(2, generation),
+        Some(key),
+        Stub::Order(vec![2, 0, 1]),
+    )
+    .await;
+    assert_eq!(result_ids(&out), ["c", "a"]);
+
+    let state = sync_state(2000);
+    let (payload, _ctx, key, generation) = cacheable(&state).await;
+    let out = sync_rerank(
+        &state,
+        &payload,
+        input(3, generation),
+        Some(key),
+        Stub::Order(vec![1]),
+    )
+    .await;
+    assert_eq!(result_ids(&out), ["b", "a", "c"]);
+}
+
+/// No cache key (uncacheable request): reranked all the same, nothing
+/// published.
+#[tokio::test]
+async fn sync_success_without_cache_key_reranks_but_does_not_publish() {
+    let state = sync_state(2000);
+    let (payload, _ctx, key, generation) = cacheable(&state).await;
+
+    let out = sync_rerank(
+        &state,
+        &payload,
+        input(3, generation),
+        None,
+        Stub::Order(vec![2, 0, 1]),
+    )
+    .await;
+
+    assert_eq!(result_ids(&out), ["c", "a", "b"]);
+    assert_eq!(counts(&state), (1, 1));
+    assert!(state.query_cache.lock().await.get_best(key).is_none());
+}
+
+/// Model error: the fused pool comes back untouched (not even cut), nothing
+/// is published, no completion, and no async rerank is started instead.
+#[tokio::test]
+async fn sync_model_error_keeps_fused_order_without_fallback_spawn() {
+    let state = sync_state(2000);
+    let (payload, _ctx, key, generation) = cacheable(&state).await;
+
+    let out = sync_rerank(
+        &state,
+        &payload,
+        input(2, generation),
+        Some(key),
+        Stub::Fail,
+    )
+    .await;
+
+    assert_eq!(as_json(&out), as_json(&pool()));
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(counts(&state), (1, 0), "one call, no completion, no spawn");
+    assert!(state.query_cache.lock().await.get_best(key).is_none());
+}
+
+/// Timeout on a paused clock: still pending 1 ms before the budget, the
+/// fused pool just past it (the timer wheel rounds a deadline up to the next
+/// whole millisecond); nothing published, no async fallback.
+#[tokio::test]
+async fn sync_timeout_keeps_fused_order_without_fallback_spawn() {
+    const BUDGET_MS: u64 = 50;
+    let state = sync_state(BUDGET_MS);
+    let (payload, _ctx, key, generation) = cacheable(&state).await;
+    tokio::time::pause();
+
+    let call = sync_rerank(
+        &state,
+        &payload,
+        input(2, generation),
+        Some(key),
+        Stub::Hang,
+    );
+    tokio::pin!(call);
+    assert!(futures::poll!(&mut call).is_pending());
+    tokio::time::advance(std::time::Duration::from_millis(BUDGET_MS - 1)).await;
+    assert!(
+        futures::poll!(&mut call).is_pending(),
+        "budget not spent yet"
+    );
+    tokio::time::advance(std::time::Duration::from_millis(2)).await;
+    let std::task::Poll::Ready(out) = futures::poll!(&mut call) else {
+        panic!("sync rerank must give up at the budget");
+    };
+
+    assert_eq!(as_json(&out), as_json(&pool()));
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(counts(&state), (1, 0), "one call, no completion, no spawn");
+    assert!(state.query_cache.lock().await.get_best(key).is_none());
+}
+
+/// `rerank_sync` sits behind the same gate: reranker off → pass-through,
+/// no model call.
+#[tokio::test]
+async fn stage_with_rerank_sync_but_reranker_off_is_a_pass_through() {
+    let (_, original) = make_test_app();
+    let mut config = original.config.clone();
+    config.search.rerank_sync = true;
+    assert!(!config.search.rerank_enabled);
+    let (_app, state) = make_test_app_cfg(config);
+    let (payload, ctx, key, generation) = cacheable(&state).await;
+
+    let out = stage(&state, &ctx, &payload, &auth(), input(2, generation)).await;
+
+    assert_eq!(as_json(&out), as_json(&pool()));
+    assert_eq!(counts(&state), (0, 0));
+    assert!(state.query_cache.lock().await.get_best(key).is_none());
+}
+
+/// Stage with `rerank_sync` on, keyless, no ONNX model: the LLM reranker
+/// answers with the identity order (provider failures map to
+/// `Ok(identity)`), so the fresh result is the fused head cut to
+/// `final_top_k`, the reranked slot is already there when `stage` returns,
+/// and exactly one model call ran (no async spawn on top).
+#[tokio::test]
+async fn stage_with_rerank_sync_keyless_reranks_inline_to_identity() {
+    let state = sync_state(2000);
+    #[cfg(feature = "onnx-rerank")]
+    assert!(state.onnx_reranker.is_none());
+    let (payload, ctx, key, generation) = cacheable(&state).await;
+
+    let out = stage(&state, &ctx, &payload, &auth(), input(2, generation)).await;
+
+    assert_eq!(result_ids(&out), ["a", "b"]);
+    assert_eq!(counts(&state), (1, 1));
+    let (is_reranked, cached) = state.query_cache.lock().await.get_best(key).unwrap();
+    assert!(is_reranked);
+    assert_eq!(result_ids(&cached), ["a", "b"]);
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(counts(&state), (1, 1), "no async rerank on top");
+}
+
+/// HTTP, reranker on, keyless, no model: `rerank_sync = true` gives the
+/// same fresh responses as the async path, and the same cache hits.
+#[tokio::test]
+async fn http_rerank_sync_keyless_is_identical_to_async() {
+    let (_, original) = make_test_app();
+    let mut base = keyless_rerank_config(original.config.clone());
+    base.search.decay.l0_lambda = 0.0;
+    base.search.decay.l1_lambda = 0.0;
+    let (off_app, off_state) = make_test_app_cfg(base.clone());
+    let mut config = base;
+    config.search.rerank_sync = true;
+    assert!(config.llm.active_provider().is_err());
+    let (on_app, on_state) = make_test_app_cfg(config);
+    #[cfg(feature = "onnx-rerank")]
+    assert!(off_state.onnx_reranker.is_none() && on_state.onnx_reranker.is_none());
+    seed(&off_state).await;
+    seed(&on_state).await;
+
+    let queries = ["lantern", "lantern b"];
+    for query in queries {
+        let expected = http(&off_app, query).await;
+        assert_eq!(http(&on_app, query).await, expected, "fresh {query:?}");
+    }
+    assert_eq!(counts(&on_state), (2, 2), "sync reranks done inline");
+    wait_for_completions(&off_state, 2).await;
+    for query in queries {
+        let expected = http(&off_app, query).await;
+        assert_eq!(http(&on_app, query).await, expected, "cached {query:?}");
+    }
+    assert_eq!(counts(&on_state), (2, 2), "cache hits run no model");
+}
+
+/// HTTP against the local mock (reply `[1, 0]`): with `rerank_sync` on the
+/// fresh response already carries the model's order — the fused top two
+/// swapped, the rest in fused order.
+#[tokio::test]
+async fn http_rerank_sync_returns_model_order_in_fresh_response() {
+    let (_, original) = make_test_app();
+    let mut fused_config = original.config.clone();
+    fused_config.search.decay.l0_lambda = 0.0;
+    fused_config.search.decay.l1_lambda = 0.0;
+    let (fused_app, fused_state) = make_test_app_cfg(fused_config);
+    seed(&fused_state).await;
+    let fused = http(&fused_app, "lantern").await;
+    let fused = ids(&fused);
+    assert_eq!(fused.len(), 3);
+
+    let (base_url, _requests) = fake_rerank_provider().await;
+    let mut config = local_rerank_config(&base_url);
+    config.search.decay.l0_lambda = 0.0;
+    config.search.decay.l1_lambda = 0.0;
+    config.search.rerank_sync = true;
+    let (app, state) = make_test_app_cfg(config);
+    #[cfg(feature = "onnx-rerank")]
+    assert!(state.onnx_reranker.is_none());
+    seed(&state).await;
+
+    let response = http(&app, "lantern").await;
+    assert_eq!(ids(&response), [fused[1], fused[0], fused[2]]);
+    assert_eq!(counts(&state), (1, 1));
 }

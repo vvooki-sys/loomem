@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `memory_search`, `rerank_llm_max_chars` sets the LLM reranker's
   per-document cap (200 = previous), `rerank_onnx_max_tokens` truncates ONNX
   cross-encoder pairs (0 = none, otherwise at least 16).
+- `[search] rerank_sync` reranks on the request path, so the fresh
+  `/v1/search` response already carries the reranked order; on error or
+  after `rerank_sync_timeout_ms` (default 2000) it keeps the fused order
+  (default off = async-to-cache only, byte-identical).
 
 ## [0.5.5] - 2026-11-22
 
