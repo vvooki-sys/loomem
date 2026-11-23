@@ -671,6 +671,11 @@ batch_size = 50
 min_group_size = 2
 # model = "gpt-6-luna"  # brak: dziedziczy compression_model z [llm]
 cost_cap_usd_per_run = 0.10
+auto_trigger_threshold = 50
+auto_cooldown_secs = 900
+schedule_enabled = true
+schedule_interval_secs = 86400
+schedule_timeout_secs = 3600
 ```
 
 | Klucz | Typ | Opis |
@@ -678,6 +683,13 @@ cost_cap_usd_per_run = 0.10
 | `batch_size` | int | Liczba fragmentów na przebieg dream |
 | `min_group_size` | int | Minimalna liczba fragmentów tematu do połączenia |
 | `cost_cap_usd_per_run` | f64 | Limit bezpieczeństwa na sesję dream |
+| `auto_trigger_threshold` | int | Uruchom dream po tylu nowych chunkach w strumieniu prywatnym (`0` = wyłączone; domyślnie w kodzie `0`, dostarczany `config.toml` ustawia `50`) |
+| `auto_cooldown_secs` | int | Minimalna liczba sekund między automatycznymi uruchomieniami w tym samym strumieniu (domyślnie `900`) |
+| `schedule_enabled` | bool | Uruchamiaj cykliczny przebieg dream dla każdego aktywnego strumienia. Domyślnie w kodzie `false` (konfiguracja sprzed tego klucza pozostaje na żądanie); dostarczany `config.toml` ustawia `true` |
+| `schedule_interval_secs` | int | Liczba sekund między zaplanowanymi przebiegami (domyślnie `86400`, czyli doba; dozwolony zakres `3600` do `2592000`) |
+| `schedule_timeout_secs` | int | Miękki termin dla całego zaplanowanego przebiegu: po tylu sekundach nie startuje żaden nowy strumień, a strumień w toku kończy się normalnie, a następny przebieg wznawia od pierwszego strumienia odciętego przez termin (w porządku posortowanym, z zawinięciem), więc późniejsze strumienie nie są pomijane w nieskończoność (domyślnie `3600`, minimum `60`) |
+
+Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia, także współdzielonych, i wymaga jednocześnie `[dream] enabled = true` oraz `[scheduler] enabled = true`. Harmonogram jest ustawieniem całej instancji jednoużytkownikowego silnika, więc jeden przebieg obejmuje wszystkie strumienie. Strona Ustawienia w dashboardzie (lub `PUT /v1/dream/schedule`) może nadpisać `enabled` i interwał w trakcie działania; nadpisanie jest zapisywane w bazie silnika i przetrwa restart, a `schedule_enabled` i `schedule_interval_secs` pozostają wartościami zapasowymi, gdy nic nie nadpisano. Włączenie harmonogramu po jego wyłączeniu ustawia następny przebieg o jeden interwał od tej chwili, bez nadrabiania zaległego przebiegu. Restart nie ustawia harmonogramu od nowa: przebieg, który stał się wymagalny, gdy silnik był zatrzymany, uruchamia się raz przy pierwszym sprawdzeniu po starcie (co najwyżej jedno nadrobienie, potem normalny interwał). Wszystkie punkty wejścia dream (harmonogram, automatyczne uruchomienie, `memory_dream`, `POST /v1/dream`) wzajemnie się wykluczają w obrębie magazynu i strumienia: uruchomienie na strumieniu, który już jest przetwarzany, jest natychmiast pomijane. `POST /v1/dream` zwraca `skipped_busy: true`, `memory_dream` odpowiada `Dream skipped: another dream run is in progress on this stream.`, zaplanowany przebieg liczy takie strumienie w `last_result.streams_skipped_busy`, a automatyczne uruchomienie tylko zapisuje pominięcie w logu. Ręczne `memory_dream` / `POST /v1/dream` i automatyczne uruchomienie po progu chunków działają niezależnie od harmonogramu.
 
 ------------------------------------------------------------------------
 

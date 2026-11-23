@@ -481,10 +481,14 @@ Wyszukuje chunki miękko usunięte, dla których minął okres odzyskiwania. Kol
 
 | Ustawienie | Domyślnie |
 |----|----|
+| Zaplanowany przebieg | Domyślnie co 24 godziny (`dream.schedule_interval_secs`), dla wszystkich aktywnych strumieni |
 | Automatyczne uruchomienie | 50 nowych chunków na strumień prywatny, z 15-minutową przerwą między uruchomieniami |
+| Ręcznie | `memory_dream` lub `POST /v1/dream` |
 | Rozmiar partii | 50 chunków |
 | Minimalny rozmiar grupy | 2 |
 | Limit kosztu | 0,10 USD / uruchomienie |
+
+Dream ma trzy wyzwalacze. Scheduler sprawdza harmonogram co 60 sekund, więc „Uruchom teraz” z dashboardu startuje w ciągu minuty. Zaplanowany przebieg obejmuje wszystkie aktywne strumienie, także współdzielone: harmonogram jest ustawieniem całej instancji jednoużytkownikowego silnika, a właściciel konfigurujący instancję jest też właścicielem strumienia współdzielonego. Harmonogram wymaga jednocześnie `[dream] enabled` i `[scheduler] enabled` i jest włączony w dostarczanym `config.toml` (domyślnie w kodzie jest wyłączony). Punkty wejścia wzajemnie się wykluczają w obrębie magazynu i strumienia: uruchomienie na zajętym strumieniu jest natychmiast pomijane (`skipped_busy` w `POST /v1/dream`, `last_result.streams_skipped_busy` dla zaplanowanego przebiegu). Restart nie ustawia harmonogramu od nowa: przebieg, który stał się wymagalny, gdy silnik był zatrzymany, uruchamia się raz przy pierwszym sprawdzeniu po starcie, a potem obowiązuje normalny interwał; interwał od chwili włączenia liczony jest tylko przy przełączeniu harmonogramu z wyłączonego na włączony. `schedule_timeout_secs` to miękki termin: gdy przebieg zatrzyma się na nim, następny wznawia od pierwszego strumienia, którego nie rozpoczął (w porządku posortowanym, z zawinięciem), więc późniejsze strumienie nie są pomijane w nieskończoność.
 
 ------------------------------------------------------------------------
 

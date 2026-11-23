@@ -640,6 +640,11 @@ batch_size = 50
 min_group_size = 2
 # model = "gpt-6-luna"  # unset: inherits [llm] compression_model
 cost_cap_usd_per_run = 0.10
+auto_trigger_threshold = 50
+auto_cooldown_secs = 900
+schedule_enabled = true
+schedule_interval_secs = 86400
+schedule_timeout_secs = 3600
 ```
 
 | Key | Type | Description |
@@ -647,6 +652,13 @@ cost_cap_usd_per_run = 0.10
 | `batch_size` | int | Chunks per dream run |
 | `min_group_size` | int | Min chunks per subject to merge |
 | `cost_cap_usd_per_run` | f64 | Safety cap per dream session |
+| `auto_trigger_threshold` | int | Fire a dream run after this many new chunks on a private stream (`0` = off; the code default is `0`, the shipped `config.toml` sets `50`) |
+| `auto_cooldown_secs` | int | Minimum seconds between automatic runs on the same stream (default `900`) |
+| `schedule_enabled` | bool | Run a periodic dream pass over every active stream. Code default `false` (a config written before this key existed stays on-demand); the shipped `config.toml` sets `true` |
+| `schedule_interval_secs` | int | Seconds between scheduled passes (default `86400`, one day; allowed range `3600` to `2592000`) |
+| `schedule_timeout_secs` | int | Soft deadline for the whole scheduled pass: no new stream is started after this many seconds, and the stream in progress finishes, and the next pass resumes at the first stream the deadline cut off (sorted order, wrapping) so later streams are not skipped forever (default `3600`, minimum `60`) |
+
+The scheduled pass runs a dream over every active stream, shared streams included, and needs both `[dream] enabled = true` and `[scheduler] enabled = true`. The schedule is an instance-wide setting of a single-user engine, so one pass covers every stream. The dashboard Settings page (or `PUT /v1/dream/schedule`) can override `enabled` and the interval at runtime; the override is stored in the engine's database and survives restarts, while `schedule_enabled` and `schedule_interval_secs` stay the fallback when nothing is overridden. Enabling the schedule after it was off anchors the next run one interval from that moment, with no catch-up pass. A restart does not re-anchor: a run that became due while the engine was stopped runs once at the first poll after start (at most one catch-up, then the normal interval). All dream entry points (schedule, auto-trigger, `memory_dream`, `POST /v1/dream`) are mutually exclusive per store and stream: a run on a stream that is already being dreamed is skipped at once. `POST /v1/dream` reports `skipped_busy: true`, `memory_dream` replies `Dream skipped: another dream run is in progress on this stream.`, the scheduled pass counts such streams in `last_result.streams_skipped_busy`, and the auto-trigger only logs the skip. Manual `memory_dream` / `POST /v1/dream` and the count-based auto-trigger work independently of the schedule.
 
 ---
 

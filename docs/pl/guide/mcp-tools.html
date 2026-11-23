@@ -395,10 +395,11 @@ a:hover{text-decoration:underline}
   "duration_ms": 3200
 }
 </code></pre>
+<p>Jeśli inny przebieg dream już zajmuje strumień, narzędzie zwraca zamiast tego zwykły tekst <code>Dream skipped: another dream run is in progress on this stream.</code>.</p>
 <p><strong>Kiedy wywołać:</strong>
 - Po długiej, produktywnej sesji
 - Gdy użytkownik prosi o „uporządkowanie” lub „konsolidację” pamięci
-- Automatycznie po 30 minutach bezczynności</p>
+- Silnik uruchamia go też sam: przy dostarczanym <code>config.toml</code> raz na dobę (klucze harmonogramu w <code>[dream]</code>) i po 50 nowych chunkach w strumieniu prywatnym</p>
 <hr/>
 <h3 id="memory_reflect">memory_reflect</h3>
 <p>Przeanalizuj jakość pamięci i uzyskaj sugestie ulepszeń.</p>

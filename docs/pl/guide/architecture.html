@@ -757,8 +757,16 @@ score    = fusion_score * decay
 </thead>
 <tbody>
 <tr>
+<td>Zaplanowany przebieg</td>
+<td>Domyślnie co 24 godziny (<code>dream.schedule_interval_secs</code>), dla wszystkich aktywnych strumieni</td>
+</tr>
+<tr>
 <td>Automatyczne uruchomienie</td>
 <td>50 nowych chunków na strumień prywatny, z 15-minutową przerwą między uruchomieniami</td>
+</tr>
+<tr>
+<td>Ręcznie</td>
+<td><code>memory_dream</code> lub <code>POST /v1/dream</code></td>
 </tr>
 <tr>
 <td>Rozmiar partii</td>
@@ -774,6 +782,7 @@ score    = fusion_score * decay
 </tr>
 </tbody>
 </table>
+<p>Dream ma trzy wyzwalacze. Scheduler sprawdza harmonogram co 60 sekund, więc „Uruchom teraz” z dashboardu startuje w ciągu minuty. Zaplanowany przebieg obejmuje wszystkie aktywne strumienie, także współdzielone: harmonogram jest ustawieniem całej instancji jednoużytkownikowego silnika, a właściciel konfigurujący instancję jest też właścicielem strumienia współdzielonego. Harmonogram wymaga jednocześnie <code>[dream] enabled</code> i <code>[scheduler] enabled</code> i jest włączony w dostarczanym <code>config.toml</code> (domyślnie w kodzie jest wyłączony). Punkty wejścia wzajemnie się wykluczają w obrębie magazynu i strumienia: uruchomienie na zajętym strumieniu jest natychmiast pomijane (<code>skipped_busy</code> w <code>POST /v1/dream</code>, <code>last_result.streams_skipped_busy</code> dla zaplanowanego przebiegu). Restart nie ustawia harmonogramu od nowa: przebieg, który stał się wymagalny, gdy silnik był zatrzymany, uruchamia się raz przy pierwszym sprawdzeniu po starcie, a potem obowiązuje normalny interwał; interwał od chwili włączenia liczony jest tylko przy przełączeniu harmonogramu z wyłączonego na włączony. <code>schedule_timeout_secs</code> to miękki termin: gdy przebieg zatrzyma się na nim, następny wznawia od pierwszego strumienia, którego nie rozpoczął (w porządku posortowanym, z zawinięciem), więc późniejsze strumienie nie są pomijane w nieskończoność.</p>
 <hr/>
 <h2 id="authentication">Uwierzytelnianie</h2>
 <p>Loomem jest przeznaczony dla jednego użytkownika: jeden klucz API kontroluje dostęp do całej instancji.</p>

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-11-22
+
+Everything on `main` since v0.5.4: every LLM chat call goes through the active
+`llm.provider`, `gpt-6-luna` is the default chat model with per-provider
+request options, chunked knowledge extraction is the shipped default, two
+ingest/context fixes, the evaluation readiness endpoints behind a cargo
+feature, a scheduled dream pass editable from the dashboard, the search
+quality-lever flags (all off), the MSRV and dependency round (tract 0.23,
+aes-gcm 0.11, rocksdb 0.25, Vite 8, Tailwind 4) and the Polish website.
+Existing databases and configurations load unchanged; the new defaults apply
+to the shipped `config.toml` only (see Changed).
+
 ### Added
 
 - Search quality-lever flags, all off/neutral by default and byte-identical
@@ -15,20 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (2000), `event_date_proximity_boost` (0.0); `[mcp] search_include_predecessor`,
   `predecessor_max_chars` (400), `search_group_by` (`none`). Only the config
   surface lands here; the levers themselves follow in separate PRs.
-
-## [0.5.5] - 2026-11-22
-
-Everything on `main` since v0.5.4: every LLM chat call goes through the active
-`llm.provider`, `gpt-6-luna` is the default chat model with per-provider
-request options, chunked knowledge extraction is the shipped default, two
-ingest/context fixes, the evaluation readiness endpoints behind a cargo
-feature, the MSRV and dependency round (tract 0.23, aes-gcm 0.11, rocksdb
-0.25, Vite 8, Tailwind 4) and the Polish website. Existing databases and
-configurations load unchanged; the new defaults apply to the shipped
-`config.toml` only (see Changed).
-
-### Added
-
+- Scheduled dream: a periodic dream pass over every active stream, once a day
+  by default, editable from the dashboard Settings page (admin only; the
+  override is stored in the engine's database and survives restarts). New
+  endpoints `GET` and `PUT /v1/dream/schedule` and `POST
+  /v1/dream/schedule/run` (admin only), and new `[dream]` keys
+  `schedule_enabled`, `schedule_interval_secs` (`86400`, allowed `3600` to
+  `2592000`) and `schedule_timeout_secs` (`3600`, minimum `60`, a soft
+  deadline: no new stream starts after it and the stream in progress
+  finishes). It needs both `[dream] enabled` and `[scheduler] enabled`; manual
+  `memory_dream` / `POST /v1/dream` and the count-based auto-trigger still
+  work, and all entry points are mutually exclusive per store and stream (a
+  second run on a busy stream returns at once: `POST /v1/dream` reports
+  `skipped_busy: true`, `memory_dream` says it was skipped, the scheduled pass
+  counts it in `last_result.streams_skipped_busy`).
+  A run that became due while the engine was stopped runs once at the first
+  poll after start (a restart does not re-anchor), and a pass cut off by
+  `schedule_timeout_secs` resumes at the first unstarted stream next time.
+  The schedule response also carries `running` and `paused`.
+  Upgrade note: the code default of `schedule_enabled` is `false`, so a config
+  written before this key existed stays on-demand; the shipped `config.toml`
+  sets it to `true`, which turns the daily pass on for new installs.
 - Per-provider chat request options on `[llm.providers.<name>]`, all off by
   default: `omit_temperature` (drop `temperature`), `max_completion_tokens`
   (send the output cap as `max_completion_tokens` instead of the deprecated

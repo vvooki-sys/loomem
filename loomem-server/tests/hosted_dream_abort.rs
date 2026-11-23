@@ -398,6 +398,17 @@ fn revoke_waits_for_an_apply_section_and_a_revoked_job_leaves_nothing_half_done(
     engine.shutdown();
 }
 
+/// Regression for #143: revocation SIGNALS every job of the scope before it
+/// JOINS any of them. Two jobs of one scope each hold revocation-relevant
+/// work open: a `memory_dream` inside its first apply section and a
+/// `memory_store` inside its durable phase. (Two dream jobs can no longer be
+/// used here: a hosted job always dreams `context.scope`, and the per-stream
+/// in-flight guard makes the second one return at once as skipped — see
+/// `second_dream_on_a_busy_stream_is_skipped_without_an_llm_call`.)
+/// Both holds make `revoke` defer and log `REVOKE_DEFERRED_MARKER`; if revoke
+/// joined the first held job before signalling the second, the second marker
+/// would never appear (the hold is released only after both are seen) and
+/// this test would time out.
 #[test]
 fn revoke_signals_every_job_before_waiting_for_any_section() {
     let llm = start_mock_llm();
@@ -414,18 +425,23 @@ fn revoke_signals_every_job_before_waiting_for_any_section() {
                 .collect()
         })
         .collect();
-    // Two dream jobs of one scope, each held inside its first apply section.
-    for op in ["dream-1", "dream-2"] {
-        engine.ok(json!({
-            "cmd": "tool_async", "context": a, "op_id": op, "name": "memory_dream",
-            "args": {}, "failpoint": "hosted_hold_apply",
-        }));
-    }
-    engine.wait_for_stderr_count(APPLY_HOLD_MARKER, 2);
-    assert_eq!(*llm.requests.lock().expect("counter"), 2);
+    // Job 1: a dream held inside its first apply section.
+    engine.ok(json!({
+        "cmd": "tool_async", "context": a, "op_id": "dream-1", "name": "memory_dream",
+        "args": {}, "failpoint": "hosted_hold_apply",
+    }));
+    engine.wait_for_stderr(APPLY_HOLD_MARKER);
+    assert_eq!(*llm.requests.lock().expect("counter"), 1);
+    // Job 2: a store of the same scope held right after its durable write.
+    engine.ok(json!({
+        "cmd": "tool_async", "context": a, "op_id": "store-2", "name": "memory_store",
+        "args": {"content": "synthetic held durable source", "subject": "subject-held"},
+        "failpoint": "hosted_hold_durable",
+    }));
+    engine.wait_for_stderr(DURABLE_HOLD_MARKER);
     let revoked = context("actor-a", "scope-a", 2);
     let revoke_id = engine.send(json!({"cmd": "revoke", "context": revoked}));
-    // Both jobs are told to stop before revocation waits for either section;
+    // Both jobs are told to stop before revocation waits for either of them;
     // joining the first job before signalling the second would stall here.
     engine.wait_for_stderr_count(REVOKE_DEFERRED_MARKER, 2);
     let release_id = engine.send(json!({"cmd": "release_holds"}));
@@ -437,8 +453,8 @@ fn revoke_signals_every_job_before_waiting_for_any_section() {
     }
     assert_eq!(replies[&release_id]["ok"], Value::Bool(true), "{replies:?}");
     assert_eq!(replies[&revoke_id]["ok"], Value::Bool(true), "{replies:?}");
-    // Each job finished only its open section and started no further subject.
-    assert_eq!(*llm.requests.lock().expect("counter"), 2, "no third merge");
+    // The dream finished only its open section and started no further subject.
+    assert_eq!(*llm.requests.lock().expect("counter"), 1, "no second merge");
     engine.ok(json!({"cmd": "open_scope", "context": revoked, "generation": "live"}));
     let untouched = subjects
         .iter()
@@ -448,7 +464,54 @@ fn revoke_signals_every_job_before_waiting_for_any_section() {
                 .all(|source| !engine.superseded(&revoked, source))
         })
         .count();
-    assert!(untouched >= 1, "at least one subject stays untouched");
+    assert_eq!(
+        untouched, 2,
+        "exactly one subject was applied before the stop"
+    );
+    engine.shutdown();
+}
+
+/// Per-stream exclusion: while one dream of a scope is held in its apply
+/// section, a second `memory_dream` on the same scope returns at once, makes
+/// no LLM call, and says so instead of reporting an empty success.
+#[test]
+fn second_dream_on_a_busy_stream_is_skipped_without_an_llm_call() {
+    let llm = start_mock_llm();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = write_config(temp.path());
+    let mut engine = Engine::start(&temp.path().join("engine"), &config, &llm.url);
+    let a = context("actor-a", "scope-a", 1);
+    engine.ok(json!({"cmd": "open_scope", "context": a, "generation": "live"}));
+    for subject in ["subject-one", "subject-two"] {
+        for n in 1..=2 {
+            engine.store(&a, subject, &format!("synthetic {subject} source {n}"));
+        }
+    }
+    engine.ok(json!({
+        "cmd": "tool_async", "context": a, "op_id": "dream-1", "name": "memory_dream",
+        "args": {}, "failpoint": "hosted_hold_apply",
+    }));
+    engine.wait_for_stderr(APPLY_HOLD_MARKER);
+    assert_eq!(*llm.requests.lock().expect("counter"), 1);
+
+    // The second dream returns while the first is still parked in its hold.
+    let skipped = engine.tool(&a, "memory_dream", json!({}));
+    assert!(
+        skipped.contains("Dream skipped: another dream run is in progress on this stream."),
+        "{skipped}"
+    );
+    assert!(!skipped.contains("Facts merged"), "{skipped}");
+    assert_eq!(
+        *llm.requests.lock().expect("counter"),
+        1,
+        "the skipped dream made no LLM call"
+    );
+
+    // Release the first dream; it finishes both subjects on its own.
+    engine.ok(json!({"cmd": "release_holds"}));
+    let first = engine.ok(json!({"cmd": "await", "context": a, "op_id": "dream-1"}));
+    assert_ne!(first["result"]["isError"], Value::Bool(true), "{first}");
+    assert_eq!(*llm.requests.lock().expect("counter"), 2);
     engine.shutdown();
 }
 

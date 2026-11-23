@@ -22,3 +22,8 @@ pub const TANTIVY_REBUILD_FLAG_KEY: &[u8] = b"meta:tantivy_rebuild_needed";
 /// written after each batch and on completion/error. Absence means the
 /// backfill has never been run. Cycle /147 introduced.
 pub const ENCRYPT_BACKFILL_PROGRESS_KEY: &[u8] = b"meta:encrypt_backfill:progress";
+
+/// `meta:dream_schedule` — JSON-serialised `dream_schedule::DreamScheduleRow`
+/// (runtime override of `[dream] schedule_*`, last pass result, pending
+/// manual run). Absence means "inherit config, never run".
+pub const DREAM_SCHEDULE_KEY: &[u8] = b"meta:dream_schedule";

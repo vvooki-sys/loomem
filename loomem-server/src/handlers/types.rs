@@ -419,6 +419,43 @@ pub struct DreamRequest {
     pub stream: Option<String>,
 }
 
+/// Body of `PUT /v1/dream/schedule`.
+#[derive(Debug, Deserialize)]
+pub struct DreamScheduleUpdateRequest {
+    pub enabled: bool,
+    pub interval_secs: u64,
+}
+
+/// Shape shared by the three `/v1/dream/schedule*` endpoints. Epoch seconds;
+/// `null` when unknown.
+#[derive(Debug, Serialize)]
+pub struct DreamScheduleResponse {
+    /// `[dream] enabled` — master switch for the dream worker.
+    pub dream_enabled: bool,
+    /// `[scheduler] enabled` — without it no pass can run.
+    pub scheduler_enabled: bool,
+    /// Effective schedule switch (row override or config default).
+    pub enabled: bool,
+    /// Effective interval (row override or config default).
+    pub interval_secs: u64,
+    /// `"config"` or `"override"`.
+    pub source: loomem_core::dream_schedule::ScheduleSource,
+    pub last_run_at: Option<u64>,
+    pub next_run_at: Option<u64>,
+    pub run_requested_at: Option<u64>,
+    /// How often the scheduler polls the row (`DREAM_POLL_SECS`).
+    pub poll_secs: u64,
+    /// `true` while a manual run is queued and not yet started.
+    pub queued: bool,
+    /// `true` while the `dream` worker is paused via `/admin/workers`.
+    pub paused: bool,
+    /// `true` while a pass has started and not yet recorded `last_result`
+    /// (derived from the persisted row; an engine restart closes an
+    /// interrupted pass as `"failed"`, so this never sticks).
+    pub running: bool,
+    pub last_result: Option<loomem_core::dream_schedule::DreamPassSummary>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ContextPackRequest {
     pub query: Option<String>,

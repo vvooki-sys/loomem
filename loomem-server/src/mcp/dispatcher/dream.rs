@@ -32,6 +32,9 @@ pub(super) async fn tool_dream(
     )
     .await
     {
+        Ok(result) if result.skipped_busy => Ok(ToolResult::text(
+            "Dream skipped: another dream run is in progress on this stream.",
+        )),
         Ok(result) => {
             let text = format!(
                 "Dream consolidation complete:\n- Chunks processed: {}\n- Subject groups: {}\n- Facts merged: {}\n- Contradictions resolved: {}\n- Cost: ${:.3}{}",

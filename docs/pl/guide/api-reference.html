@@ -558,7 +558,48 @@ a:hover{text-decoration:underline}
   "duration_ms": 3200
 }
 </code></pre>
+<p>Jeśli inny punkt wejścia dream już zajmuje strumień (w obrębie magazynu i strumienia), wywołanie wraca natychmiast z <code>"skipped_busy": true</code> i nic nie robi.</p>
 <p>Analiza jakości pamięci jest dostępna przez narzędzie <code>memory_reflect</code> MCP.</p>
+<h3 id="get-v1dreamschedule">GET /v1/dream/schedule</h3>
+<p>Bieżący harmonogram dream i wynik ostatniego przebiegu. Tylko administrator.</p>
+<pre><code class="language-json">{
+  "dream_enabled": true,
+  "scheduler_enabled": true,
+  "enabled": true,
+  "interval_secs": 86400,
+  "source": "config",
+  "last_run_at": 1763851200,
+  "next_run_at": 1763937600,
+  "run_requested_at": null,
+  "poll_secs": 60,
+  "queued": false,
+  "paused": false,
+  "running": false,
+  "last_result": {
+    "started_at": 1763851200,
+    "finished_at": 1763851460,
+    "streams_total": 3,
+    "streams_failed": 0,
+    "chunks_processed": 120,
+    "facts_merged": 14,
+    "contradictions_resolved": 2,
+    "cost_usd": 0.11,
+    "cost_cap_reached": 0,
+    "streams_skipped_busy": 0,
+    "trigger": "schedule",
+    "status": "ok"
+  }
+}
+</code></pre>
+<p>Znaczniki czasu to sekundy epoki, <code>null</code> gdy nieznane. <code>source</code> to <code>"config"</code>, gdy wartości pochodzą z <code>[dream]</code>, a <code>"override"</code>, gdy zmienił je administrator. <code>paused</code> ma wartość <code>true</code>, gdy proces <code>dream</code> jest wstrzymany przez <code>/admin/workers</code>. <code>running</code> ma wartość <code>true</code> od chwili, gdy przebieg zapisał znacznik startu, do zapisania <code>last_result</code>; restart silnika zamyka przerwany przebieg jako <code>last_result.status</code> <code>"failed"</code>, więc flaga nigdy nie zostaje na <code>true</code>. Dashboard odświeża kartę, dopóki uruchomienie jest w kolejce lub trwa. <code>last_result</code> podsumowuje ostatni zaplanowany lub ręczny przebieg: <code>trigger</code> to <code>"schedule"</code> lub <code>"manual"</code>, <code>cost_cap_reached</code> liczy strumienie, które osiągnęły <code>cost_cap_usd_per_run</code>, <code>streams_skipped_busy</code> liczy strumienie, które już przetwarzał inny przebieg dream, a <code>status</code> to <code>"ok"</code>, <code>"deadline"</code> (miękki termin <code>schedule_timeout_secs</code> przerwał przebieg przed odwiedzeniem wszystkich strumieni) lub <code>"failed"</code> (przebieg nie mógł się wykonać, np. nie udało się odczytać listy strumieni). Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia.</p>
+<h3 id="put-v1dreamschedule">PUT /v1/dream/schedule</h3>
+<p>Nadpisz harmonogram w trakcie działania. Tylko administrator. Nadpisanie jest zapisywane w bazie silnika i przetrwa restart.</p>
+<pre><code class="language-json">{ "enabled": true, "interval_secs": 86400 }
+</code></pre>
+<p>Zwraca <code>200</code> z tym samym ciałem co <code>GET /v1/dream/schedule</code>. <code>interval_secs</code> musi mieścić się w przedziale od 3600 do 2592000 (od 1 godziny do 30 dni); inna wartość zwraca <code>400</code>. Włączenie harmonogramu po jego wyłączeniu ustawia następny przebieg o jeden interwał od tej chwili (bez nadrabiania zaległego przebiegu).</p>
+<h3 id="post-v1dreamschedulerun">POST /v1/dream/schedule/run</h3>
+<p>Zakolejkuj teraz przebieg dream dla wszystkich aktywnych strumieni. Tylko administrator. Scheduler podejmie go przy najbliższym sprawdzeniu (w ciągu 60 sekund).</p>
+<p>Zwraca <code>202</code> z tym samym ciałem co <code>GET /v1/dream/schedule</code> i <code>"queued": true</code>. Zwraca <code>409</code> z <code>{"error": "..."}</code>, gdy <code>[dream]</code> lub <code>[scheduler]</code> jest wyłączone w konfiguracji albo gdy proces <code>dream</code> jest wstrzymany (nikt nie wykonałby żądania).</p>
 <h3 id="post-v1boost">POST /v1/boost</h3>
 <p>Zwiększ ważność fragmentu do 1,5.</p>
 <pre><code class="language-json">{ "id": "abc-123" }
@@ -619,7 +660,7 @@ a:hover{text-decoration:underline}
 <hr/>
 <h2 id="background-workers">Procesy działające w tle</h2>
 <h3 id="post-adminworkerspause">POST /admin/workers/pause</h3>
-<p>Wstrzymaj wszystkie procesy działające w tle (konsolidację, wygaszanie, kompaktowanie, kopie zapasowe, grupowanie, usuwanie i statystyki). Przydatne podczas ewaluacji wymagających niezmiennej bazy danych.</p>
+<p>Wstrzymaj wszystkie procesy działające w tle (konsolidację, wygaszanie, kompaktowanie, kopie zapasowe, grupowanie, usuwanie, statystyki i dream). Przydatne podczas ewaluacji wymagających niezmiennej bazy danych.</p>
 <p><strong>Wymaga tokenu administratora.</strong></p>
 <p><strong>Odpowiedź:</strong></p>
 <pre><code class="language-json">{
@@ -643,6 +684,7 @@ a:hover{text-decoration:underline}
 }
 </code></pre>
 <p>Stan wstrzymania nie jest zachowywany po restarcie serwera — procesy uruchamiają się automatycznie przy starcie.</p>
+<p>Odpowiedź zawiera też listę procesów, w tym <code>dream</code>. Dla <code>dream</code> pole <code>interval_secs</code> to wartość konfiguracyjna <code>schedule_interval_secs</code>; aktualny harmonogram, także nadpisany w dashboardzie, jest w <code>GET /v1/dream/schedule</code>.</p>
 <hr/>
 <h2 id="mcp-endpoint">Punkt końcowy MCP</h2>
 <h3 id="post-mcp">POST /mcp</h3>

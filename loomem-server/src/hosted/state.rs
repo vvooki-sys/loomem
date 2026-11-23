@@ -136,6 +136,7 @@ impl ScopeServices {
             &config.worker,
             config.retention.hard_purge_interval_secs,
             3600,
+            config.dream.schedule_interval_secs,
         );
         let hybrid_search = crate::evaluation_clock::engine(config.clone())?;
         let state = Arc::new(AppState {
@@ -348,26 +349,29 @@ fn build_scheduler(
     state: &Arc<AppState>,
     shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) -> Arc<Scheduler> {
-    Arc::new(Scheduler::new(
-        state.store.clone(),
-        state.tantivy.clone(),
-        state.http_client.clone(),
-        state.pii_filter.clone(),
-        CostTracker::new(
+    Arc::new(
+        Scheduler::new(
             state.store.clone(),
-            state.config.cost.clone(),
+            state.tantivy.clone(),
             state.http_client.clone(),
-        ),
-        state.config.clone(),
-        shutdown_rx,
-        state.intent_log.clone(),
-        state.entity_extractor.clone(),
-        state.graph.clone(),
-        state.entity_extraction_queue.clone(),
-        state.local_embedder.clone(),
-        state.event_tx.clone(),
-        state.workers.clone(),
-    ))
+            state.pii_filter.clone(),
+            CostTracker::new(
+                state.store.clone(),
+                state.config.cost.clone(),
+                state.http_client.clone(),
+            ),
+            state.config.clone(),
+            shutdown_rx,
+            state.intent_log.clone(),
+            state.entity_extractor.clone(),
+            state.graph.clone(),
+            state.entity_extraction_queue.clone(),
+            state.local_embedder.clone(),
+            state.event_tx.clone(),
+            state.workers.clone(),
+        )
+        .with_embedding_queue(state.embedding_queue.clone()),
+    )
 }
 
 fn dream_trigger(config: &Config) -> Arc<loomem_core::dream_auto::DreamAutoTrigger> {

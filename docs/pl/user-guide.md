@@ -171,7 +171,7 @@ Loomem może uruchamiać proces „snu”, który:
 - rozwiązuje sprzeczności, na przykład po zmianie preferowanego IDE,
 - kompresuje obszerne wspomnienia do zwięzłych faktów.
 
-Proces można wywołać przez `memory_dream` albo uruchamiać automatycznie po osiągnięciu skonfigurowanego progu. Wymaga dostępności odpowiednich funkcji opartych na LLM.
+Domyślnie działa raz na dobę dla każdego aktywnego strumienia (administrator może to zmienić na stronie Ustawienia w dashboardzie). Można go też wywołać przez `memory_dream` albo uruchamiać automatycznie po osiągnięciu skonfigurowanego progu. Wymaga dostępności odpowiednich funkcji opartych na LLM.
 
 ### Obsługa sprzeczności
 

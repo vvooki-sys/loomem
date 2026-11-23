@@ -34,14 +34,18 @@ pub const KNOWN_WORKERS: &[&str] = &[
     "clustering",
     "purge",
     "stats",
+    "dream",
 ];
 
 /// Intervals for workers whose config does not live directly in `WorkerConfig`.
-/// `retention_interval_secs` is for purge, `stats_interval_secs` is fixed.
+/// `retention_interval_secs` is for purge, `stats_interval_secs` is fixed, and
+/// `dream_interval_secs` is the `[dream] schedule_interval_secs` config default
+/// (the live value may be overridden in the persisted schedule row).
 pub fn build_registry(
     config: &WorkerConfig,
     retention_interval_secs: u64,
     stats_interval_secs: u64,
+    dream_interval_secs: u64,
 ) -> WorkerRegistry {
     let mut map: HashMap<&'static str, WorkerStats> = HashMap::new();
     map.insert(
@@ -60,6 +64,7 @@ pub fn build_registry(
     );
     map.insert("purge", WorkerStats::new(retention_interval_secs));
     map.insert("stats", WorkerStats::new(stats_interval_secs));
+    map.insert("dream", WorkerStats::new(dream_interval_secs));
     Arc::new(map)
 }
 
@@ -90,7 +95,7 @@ mod tests {
     #[test]
     fn build_registry_has_all_known_workers() {
         let cfg = test_config();
-        let reg = build_registry(&cfg, 86400, 3600);
+        let reg = build_registry(&cfg, 86400, 3600, 86400);
         for name in KNOWN_WORKERS {
             assert!(reg.get(*name).is_some(), "missing worker: {}", name);
         }
@@ -100,7 +105,7 @@ mod tests {
     #[test]
     fn build_registry_defaults_all_fields_zero_or_false() {
         let cfg = test_config();
-        let reg = build_registry(&cfg, 86400, 3600);
+        let reg = build_registry(&cfg, 86400, 3600, 86400);
         for name in KNOWN_WORKERS {
             let w = reg.get(*name).unwrap();
             assert!(
@@ -128,7 +133,7 @@ mod tests {
     #[test]
     fn build_registry_interval_matches_config() {
         let cfg = test_config();
-        let reg = build_registry(&cfg, 86400, 3600);
+        let reg = build_registry(&cfg, 86400, 3600, 86400);
 
         assert_eq!(
             reg.get("consolidation").unwrap().interval_secs,
@@ -152,12 +157,13 @@ mod tests {
         );
         assert_eq!(reg.get("purge").unwrap().interval_secs, 86400);
         assert_eq!(reg.get("stats").unwrap().interval_secs, 3600);
+        assert_eq!(reg.get("dream").unwrap().interval_secs, 86400);
     }
 
     #[test]
     fn is_worker_paused_returns_correct_state() {
         let cfg = test_config();
-        let reg = build_registry(&cfg, 86400, 3600);
+        let reg = build_registry(&cfg, 86400, 3600, 86400);
 
         assert!(!is_worker_paused(&reg, "consolidation"));
 

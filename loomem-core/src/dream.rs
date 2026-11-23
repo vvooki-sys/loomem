@@ -44,6 +44,22 @@ pub struct DreamConfig {
     /// back-to-back.
     #[serde(default = "default_auto_cooldown_secs")]
     pub auto_cooldown_secs: u64,
+    /// Periodic dream pass over all active streams, driven by the scheduler
+    /// (`scheduler.rs::tick_dream`). Needs `enabled = true` and
+    /// `[scheduler] enabled = true`. Overridable at runtime through
+    /// `PUT /v1/dream/schedule` (see `dream_schedule`).
+    #[serde(default = "default_schedule_enabled")]
+    pub schedule_enabled: bool,
+    /// Seconds between two scheduled passes (default once a day). Bounded to
+    /// 1 h ..= 30 d by `Config::validate` and by the HTTP handler.
+    #[serde(default = "default_schedule_interval_secs")]
+    pub schedule_interval_secs: u64,
+    /// Soft deadline for one scheduled pass: once this many seconds have
+    /// elapsed no further stream is started; the stream in progress always
+    /// finishes (each LLM call has its own 30 s timeout). Nothing is
+    /// cancelled mid-merge.
+    #[serde(default = "default_schedule_timeout_secs")]
+    pub schedule_timeout_secs: u64,
 }
 
 /// Default auto-trigger threshold: `0` (disabled), so auto-triggering is strictly
@@ -61,6 +77,25 @@ fn default_auto_cooldown_secs() -> u64 {
     900
 }
 
+/// Code default `false`: a config written before this field existed keeps
+/// dream on-demand until the owner opts in (same reasoning as
+/// `auto_trigger_threshold` — enabling the worker must not silently start
+/// paid LLM passes). The shipped `config.toml` sets `schedule_enabled = true`,
+/// so new installs run the daily pass.
+fn default_schedule_enabled() -> bool {
+    false
+}
+
+/// Default scheduled interval: once per 24 h.
+fn default_schedule_interval_secs() -> u64 {
+    86_400
+}
+
+/// Default budget for one whole scheduled pass: 1 h.
+fn default_schedule_timeout_secs() -> u64 {
+    3_600
+}
+
 impl Default for DreamConfig {
     fn default() -> Self {
         Self {
@@ -71,6 +106,9 @@ impl Default for DreamConfig {
             cost_cap_usd_per_run: 0.10,
             auto_trigger_threshold: default_auto_trigger_threshold(),
             auto_cooldown_secs: default_auto_cooldown_secs(),
+            schedule_enabled: default_schedule_enabled(),
+            schedule_interval_secs: default_schedule_interval_secs(),
+            schedule_timeout_secs: default_schedule_timeout_secs(),
         }
     }
 }
@@ -109,6 +147,10 @@ pub struct DreamResult {
     pub cost_usd: f64,
     pub duration_ms: u64,
     pub cost_cap_reached: bool,
+    /// Another dream entry point already held this stream; nothing was done.
+    /// See `dream_inflight`.
+    #[serde(default)]
+    pub skipped_busy: bool,
 }
 
 /// Deserialized dream LLM response. Public so the pure-logic helper
@@ -227,7 +269,26 @@ pub struct DreamRunContext<'a> {
 }
 
 /// Run dream consolidation on a single stream.
+///
+/// Every entry point (MCP, `POST /v1/dream`, auto-trigger, scheduled pass)
+/// comes through here, so a stream that is already dreaming returns a zeroed
+/// result at once instead of merging the same subjects twice.
 pub async fn dream_run(
+    store: &RocksDbStore,
+    tantivy: &tokio::sync::Mutex<TantivyIndex>,
+    client: &Client,
+    run_ctx: DreamRunContext<'_>,
+    cost_tracker: &CostTracker,
+    stream: &str,
+) -> Result<DreamResult> {
+    let Some(_inflight) = crate::dream_inflight::try_acquire(store, stream) else {
+        return Ok(DreamResult::skipped_busy(stream));
+    };
+    dream_run_exclusive(store, tantivy, client, run_ctx, cost_tracker, stream).await
+}
+
+/// Body of [`dream_run`]; the caller holds the stream's in-flight guard.
+async fn dream_run_exclusive(
     store: &RocksDbStore,
     tantivy: &tokio::sync::Mutex<TantivyIndex>,
     client: &Client,
@@ -292,6 +353,7 @@ pub async fn dream_run(
                 cost_usd: total_cost,
                 duration_ms: start.elapsed().as_millis() as u64,
                 cost_cap_reached: true,
+                skipped_busy: false,
             });
         }
 
@@ -446,6 +508,7 @@ pub async fn dream_run(
         cost_usd: total_cost,
         duration_ms: start.elapsed().as_millis() as u64,
         cost_cap_reached: false,
+        skipped_busy: false,
     })
 }
 

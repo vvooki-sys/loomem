@@ -455,10 +455,11 @@ a:hover{text-decoration:underline}
   &quot;duration_ms&quot;: 3200
 }
 </code></pre>
+<p>If another dream run already holds the stream, the tool replies with the plain text <code>Dream skipped: another dream run is in progress on this stream.</code> instead.</p>
 <p><strong>When to call:</strong>
 - After a long, productive session
 - When the user asks to "clean up" or "consolidate" memory
-- Automatically triggered after 30 minutes of inactivity</p>
+- The engine also runs it on its own: with the shipped <code>config.toml</code>, once a day (<code>[dream]</code> schedule keys) and after 50 new chunks on a private stream</p>
 <hr />
 <h3 id="memory_reflect">memory_reflect</h3>
 <p>Analyze memory quality and get improvement suggestions.</p>

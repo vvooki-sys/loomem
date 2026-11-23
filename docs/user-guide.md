@@ -168,7 +168,7 @@ Loomem can run a "dream" process that:
 - Resolves contradictions (e.g., if you changed your preferred IDE)
 - Compresses verbose memories into concise facts
 
-Dreaming can be requested through `memory_dream` or triggered automatically when configured; it requires the relevant LLM-backed functions to be available.
+By default it runs once a day over every active stream (editable in the dashboard Settings page for admins). It can also be requested through `memory_dream` or triggered automatically after enough new chunks, when configured; it requires the relevant LLM-backed functions to be available.
 
 ### Contradiction handling
 

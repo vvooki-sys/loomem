@@ -557,6 +557,7 @@ async fn main() -> Result<()> {
             &config.worker,
             config.retention.hard_purge_interval_secs,
             3600,
+            config.dream.schedule_interval_secs,
         );
 
         let scheduler = loomem_core::scheduler::Scheduler::new(
@@ -574,7 +575,8 @@ async fn main() -> Result<()> {
             local_embedder.clone(),
             event_tx.clone(),
             workers_registry.clone(),
-        );
+        )
+        .with_embedding_queue(embedding_queue.clone());
 
         let handle = tokio::spawn(async move {
             scheduler.run().await;
@@ -604,6 +606,7 @@ async fn main() -> Result<()> {
             &config.worker,
             config.retention.hard_purge_interval_secs,
             3600,
+            config.dream.schedule_interval_secs,
         )
     };
 
@@ -1036,6 +1039,14 @@ fn protected_routes(p: &RouteParams) -> Router<Arc<AppState>> {
             post(handlers::reprocess_legacy_handler),
         )
         .route("/v1/dream", post(handlers::dream_handler))
+        .route(
+            "/v1/dream/schedule",
+            get(handlers::dream_schedule_get_handler).put(handlers::dream_schedule_put_handler),
+        )
+        .route(
+            "/v1/dream/schedule/run",
+            post(handlers::dream_schedule_run_handler),
+        )
         .route("/v1/context-pack", post(handlers::context_pack_handler))
         .route(
             "/api/memories/{id}",
@@ -1362,6 +1373,7 @@ mod tests {
             &loomem_core::scheduler::WorkerConfig::default(),
             86400,
             3600,
+            config.dream.schedule_interval_secs,
         );
 
         let state = Arc::new(AppState {
@@ -1611,6 +1623,11 @@ mod tests {
             "consolidation worker missing from status response"
         );
     }
+
+    // Dream-schedule HTTP tests live in their own file so this (already
+    // over-cap) module does not grow further; they use the helpers above.
+    #[path = "dream_schedule_http_tests.rs"]
+    mod dream_schedule_http;
 
     // ── Bench HTTP handler tests (cycle/128) ─────────────────────────
 
