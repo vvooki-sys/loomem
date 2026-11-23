@@ -8,9 +8,10 @@ use super::{cache_policy, prepare_llm_input, LaneOutcome, QueryContext};
 use crate::auth::AuthContext;
 use crate::handlers::types::SearchRequest;
 use crate::AppState;
-use loomem_core::config::LlmConfig;
+use loomem_core::config::{LlmConfig, SearchConfig};
 #[cfg(feature = "onnx-rerank")]
 use loomem_core::onnx_reranker::OnnxReranker;
+use loomem_core::storage::RocksDbStore;
 use loomem_core::{reranker, HybridSearchResult};
 use std::sync::Arc;
 
@@ -50,9 +51,35 @@ pub(super) async fn stage(
     input.ranked
 }
 
-/// The text the reranker scores for each candidate — today the raw content.
-pub(super) fn documents(candidates: &[HybridSearchResult]) -> Vec<String> {
-    candidates.iter().map(|r| r.content.clone()).collect()
+/// The text the reranker scores for each candidate. Default: the raw
+/// content, without touching the store. With `rerank_date_prefix` on, the
+/// content is prefixed with the same date `memory_search` lines show
+/// (`[event:…]` / `[observed:…]` / `[recorded:…]` for ingest provenance,
+/// else the extracted event date, else the hit's own timestamp) — the
+/// prefix counts toward the LLM reranker's `rerank_llm_max_chars`.
+pub(super) fn documents(
+    candidates: &[HybridSearchResult],
+    store: &RocksDbStore,
+    cfg: &SearchConfig,
+) -> Vec<String> {
+    if !cfg.rerank_date_prefix {
+        return candidates.iter().map(|r| r.content.clone()).collect();
+    }
+    candidates
+        .iter()
+        .map(|r| dated_document(store, r))
+        .collect()
+}
+
+/// `"[{date}] {content}"`; the bare content when no date can be derived.
+fn dated_document(store: &RocksDbStore, r: &HybridSearchResult) -> String {
+    let chunk = store.get_chunk(&r.id).ok().flatten();
+    let ts = crate::handlers::ingest_date::date_prefix(chunk.as_ref(), Some(r.timestamp));
+    if ts.is_empty() {
+        r.content.clone()
+    } else {
+        format!("[{ts}] {}", r.content)
+    }
 }
 
 fn spawn_async(state: &Arc<AppState>, payload: &SearchRequest, input: &RerankInput<'_>, key: u64) {
@@ -72,7 +99,7 @@ fn spawn_async(state: &Arc<AppState>, payload: &SearchRequest, input: &RerankInp
         state.config.search.rare_term_lane.candidate_cap,
     );
     let eligible_results = input.ranked.clone();
-    let chunks = documents(&results_for_rerank);
+    let chunks = documents(&results_for_rerank, &state.store, &state.config.search);
     let query_for_rerank = prepare_llm_input(&payload.query, "reranker::rerank");
     let cache = state.query_cache.clone();
     let backend = Backend::from_state(state);
@@ -106,6 +133,8 @@ fn spawn_async(state: &Arc<AppState>, payload: &SearchRequest, input: &RerankInp
 struct Backend {
     http_client: reqwest::Client,
     llm: LlmConfig,
+    /// `[search] rerank_llm_max_chars` — per-document cap for the LLM path.
+    llm_max_chars: usize,
     #[cfg(feature = "onnx-rerank")]
     onnx: Option<Arc<OnnxReranker>>,
 }
@@ -115,6 +144,7 @@ impl Backend {
         Self {
             http_client: state.http_client.clone(),
             llm: state.config.llm.clone(),
+            llm_max_chars: state.config.search.rerank_llm_max_chars,
             #[cfg(feature = "onnx-rerank")]
             onnx: state.onnx_reranker.as_ref().map(Arc::clone),
         }
@@ -137,7 +167,15 @@ impl Backend {
                 Err(error) => Err(anyhow::anyhow!("ONNX rerank task failed: {error}")),
             };
         }
-        reranker::rerank(&self.http_client, &self.llm, &query, &documents, top_k).await
+        reranker::rerank(
+            &self.http_client,
+            &self.llm,
+            &query,
+            &documents,
+            top_k,
+            self.llm_max_chars,
+        )
+        .await
     }
 }
 

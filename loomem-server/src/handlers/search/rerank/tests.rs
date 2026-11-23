@@ -45,14 +45,124 @@ fn as_json(results: &[HybridSearchResult]) -> Value {
     serde_json::to_value(results).unwrap()
 }
 
+/// Flag off: the raw content one to one, even for ids the store does not
+/// hold (the store is never read) — the pre-flag documents byte for byte.
 #[test]
-fn documents_are_the_raw_content_one_to_one() {
+fn documents_with_date_prefix_off_are_the_raw_content_one_to_one() {
+    let (_app, state) = make_test_app();
+    assert!(!state.config.search.rerank_date_prefix);
     let pool = pool();
+    assert!(state.store.get_chunk("a").unwrap().is_none());
     assert_eq!(
-        documents(&pool),
+        documents(&pool, &state.store, &state.config.search),
         pool.iter().map(|r| r.content.clone()).collect::<Vec<_>>()
     );
-    assert!(documents(&[]).is_empty());
+    assert!(documents(&[], &state.store, &state.config.search).is_empty());
+}
+
+fn date_prefix_on() -> SearchConfig {
+    let (_app, state) = make_test_app();
+    let mut search = state.config.search.clone();
+    search.rerank_date_prefix = true;
+    search
+}
+
+fn event_meta(
+    content: &str,
+    event_date: &str,
+    source_id: Option<String>,
+) -> loomem_core::storage::ExtractionMeta {
+    loomem_core::memory_extractor::ExtractedFact {
+        content: content.into(),
+        fact_type: "event".into(),
+        subject: None,
+        event_date: Some(event_date.into()),
+        event_date_context: None,
+        confidence: 0.9,
+        attributed_to: None,
+    }
+    .to_extraction_meta(source_id, "test")
+}
+
+/// A legacy chunk with an extracted event date (no ingest marker).
+fn legacy_event_chunk(id: &str, event_date: &str) -> Chunk {
+    let mut chunk = chunk(id, &format!("lantern {id}"));
+    chunk.extraction_meta = Some(event_meta(&chunk.content, event_date, None));
+    chunk
+}
+
+const SOURCE_ID: &str = "00000000-0000-4000-8000-000000000001";
+
+/// The server-owned `memory_ingest` source a fact links to (the store
+/// refuses a fact whose lineage ancestor is missing).
+fn ingest_source_chunk() -> Chunk {
+    let mut chunk = chunk(SOURCE_ID, "raw transcript");
+    chunk.metadata = Some(json!({"_loomem_ingest": {
+        "version": 1, "kind": "source", "conversation_date": "2026-10-20"
+    }}));
+    chunk.consolidated = true;
+    chunk.trust_level = Some("a2".into());
+    chunk.persistent = true;
+    chunk.provenance_role = loomem_core::storage::ProvenanceRole::Evidence;
+    chunk.source = Some(loomem_core::source_tag::SourceTag::from_agent(
+        "mcp-ingest-source",
+    ));
+    chunk
+}
+
+/// A server-owned `memory_ingest` fact (marker + linked source), the shape
+/// `memory_search` renders as `[event:YYYY-MM-DD]`.
+fn ingest_fact_chunk(id: &str, event_date: &str) -> Chunk {
+    let mut chunk = chunk(id, &format!("lantern {id}"));
+    let source_id = SOURCE_ID.to_string();
+    chunk.metadata = Some(json!({"_loomem_ingest": {
+        "version": 1, "kind": "fact", "conversation_date": "2026-10-20"
+    }}));
+    chunk.level = 1;
+    chunk.trust_level = Some("a2".into());
+    chunk.persistent = true;
+    chunk.source_ids = Some(vec![source_id.clone()]);
+    chunk.source = Some(loomem_core::source_tag::SourceTag::from_agent("mcp-ingest"));
+    chunk.extraction_meta = Some(event_meta(&chunk.content, event_date, Some(source_id)));
+    chunk
+}
+
+/// Flag on: each document carries the `memory_search` date — the extracted
+/// event date of a legacy chunk, the `event:` label of an ingest fact, and
+/// the hit's own timestamp when the store has no chunk for the id.
+#[test]
+fn documents_with_date_prefix_on_carry_the_memory_search_date() {
+    let (_app, state) = make_test_app();
+    let legacy = legacy_event_chunk("a", "2023-05-06");
+    let ingest = ingest_fact_chunk("b", "2022-02-03");
+    assert!(crate::handlers::ingest_date::new_ingest_date_prefix(&legacy).is_none());
+    assert!(crate::handlers::ingest_date::new_ingest_date_prefix(&ingest).is_some());
+    state.store.store_chunk(&legacy).unwrap();
+    state.store.store_chunk(&ingest_source_chunk()).unwrap();
+    state.store.store_chunk(&ingest).unwrap();
+    assert!(state.store.get_chunk("c").unwrap().is_none());
+
+    let docs = documents(&pool(), &state.store, &date_prefix_on());
+
+    assert_eq!(
+        docs,
+        [
+            "[2023-05-06] lantern a",
+            "[event:2022-02-03] lantern b",
+            "[2024-01-01] lantern c",
+        ]
+    );
+}
+
+/// A timestamp that maps to no date (and no chunk) leaves the bare content
+/// rather than an empty `[] ` prefix.
+#[test]
+fn documents_with_date_prefix_on_and_no_date_keep_the_bare_content() {
+    let (_app, state) = make_test_app();
+    let mut orphan = hit("x", 0.5);
+    orphan.timestamp = i64::MAX;
+    let docs = documents(&[orphan], &state.store, &date_prefix_on());
+    assert_eq!(docs, ["lantern x"]);
 }
 
 #[tokio::test]
@@ -111,13 +221,31 @@ async fn stage_with_reranker_on_but_uncacheable_request_does_not_spawn() {
 /// so the task finishes on its first poll and one yield is enough. The
 /// bound only turns a regression into a failure instead of a hang.
 async fn wait_for_completion(state: &Arc<AppState>) {
+    wait_for_completions(state, 1).await;
+}
+
+async fn wait_for_completions(state: &Arc<AppState>, expected: u64) {
     for _ in 0..1_000 {
-        if state.retrieval_counters.snapshot().rerank_completions == 1 {
+        if state.retrieval_counters.snapshot().rerank_completions == expected {
             return;
         }
         tokio::task::yield_now().await;
     }
     panic!("async rerank never completed");
+}
+
+/// Reranker on, keyless (the developer's real key can never be resolved).
+fn keyless_rerank_config(mut config: loomem_core::config::Config) -> loomem_core::config::Config {
+    config.search.rerank_enabled = true;
+    config.llm.api_key = None;
+    config.llm.api_key_env = "LOOMEM_TEST_KEY_THAT_IS_NEVER_SET".into();
+    config.llm.providers.clear();
+    config.llm.provider = "openai".into();
+    assert!(
+        config.llm.active_provider().is_err(),
+        "test must stay keyless"
+    );
+    config
 }
 
 /// Positive path of the W0 stage: reranker on, cacheable request, no ONNX
@@ -284,4 +412,38 @@ async fn http_responses_are_identical_with_every_lever_off() {
             .rerank_invocations,
         0
     );
+}
+
+/// W2b levers on (date prefix, a smaller LLM cap, an ONNX token cap) with
+/// the reranker on and keyless: the rerank stays async-to-cache, so the
+/// fresh responses are identical to the levers-off arm, and so are the
+/// cache hits served after the spawned reranks complete (keyless, both
+/// arms publish the identity order whatever the document text).
+#[tokio::test]
+async fn http_responses_are_identical_with_document_text_levers_on() {
+    let (_, original) = make_test_app();
+    let mut base = keyless_rerank_config(original.config.clone());
+    base.search.decay.l0_lambda = 0.0;
+    base.search.decay.l1_lambda = 0.0;
+    let (off_app, off_state) = make_test_app_cfg(base.clone());
+    let mut config = base;
+    config.search.rerank_date_prefix = true;
+    config.search.rerank_llm_max_chars = 50;
+    config.search.rerank_onnx_max_tokens = 256;
+    let (on_app, on_state) = make_test_app_cfg(config);
+    seed(&off_state).await;
+    seed(&on_state).await;
+
+    let queries = ["lantern", "lantern b"];
+    for query in queries {
+        let expected = http(&off_app, query).await;
+        assert_eq!(http(&on_app, query).await, expected, "fresh {query:?}");
+    }
+    wait_for_completions(&off_state, 2).await;
+    wait_for_completions(&on_state, 2).await;
+    for query in queries {
+        let expected = http(&off_app, query).await;
+        assert_eq!(http(&on_app, query).await, expected, "cached {query:?}");
+    }
+    assert_eq!(on_state.retrieval_counters.snapshot().rerank_invocations, 2);
 }

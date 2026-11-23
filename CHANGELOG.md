@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Reranker document text levers, off by default and byte-identical when left so: `[search] rerank_date_prefix` dates each reranker document like `memory_search`, `rerank_llm_max_chars` sets the LLM reranker's per-document cap (200 = previous), `rerank_onnx_max_tokens` truncates ONNX cross-encoder pairs (0 = none).
+
 ## [0.5.5] - 2026-11-22
 
 Everything on `main` since v0.5.4: every LLM chat call goes through the active
