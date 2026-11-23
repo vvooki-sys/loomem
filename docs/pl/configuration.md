@@ -115,6 +115,39 @@ evidence_fields = false
 | `stem_polish` | bool | Włącz stemming języka polskiego |
 | `evidence_fields` | bool | **Eksperymentalne, wymaga włączenia** (domyślnie `false`). Przy `true` każdy wynik `/v1/search` oraz każdy element `GET /api/memories/{id}` zawiera dodatkowy obiekt `evidence` (`author`, `conversation_date`, `event_date`, `event_date_provenance`, `source_id`, `byte_start`, `byte_end`), a każdy wiersz `memory_search` zawiera przed wynikiem znacznik dowodu w nawiasach. Przy `false` odpowiedzi są identyczne bajt po bajcie z odpowiedziami sprzed wprowadzenia flagi. Zobacz [dokumentację API](api-reference.md#post-v1search). |
 
+<span id="quality-levers"></span>
+
+### Dźwignie jakości
+
+``` toml
+[search]
+rerank_date_prefix = false
+rerank_llm_max_chars = 200
+rerank_onnx_max_tokens = 0
+rerank_sync = false
+rerank_sync_timeout_ms = 2000
+event_date_proximity_boost = 0.0
+content_dedup = "prefix"
+```
+
+Te klucze `[search]`, klucze `memory_search` w [`[mcp]`](#mcp) oraz `temporal_grounding` w [`[knowledge_extraction]`](#knowledge_extraction) to dźwignie jakości. Wszystkie są domyślnie wyłączone lub neutralne: przy wartościach z dostarczanej konfiguracji wynik jest identyczny bajt po bajcie z wynikiem sprzed wprowadzenia klucza. Wartość domyślna zmienia się dopiero po zmierzonym teście A/B. Wartość odrzucona przez walidację zatrzymuje wczytanie konfiguracji.
+
+| Klucz | Typ | Domyślnie | Opis |
+|----|----|----|----|
+| `rerank_date_prefix` | bool | `false` | Poprzedza każdy dokument wysyłany do rerankera tym samym znacznikiem daty, który pokazują wiersze `memory_search` (`[event:YYYY-MM-DD]`, `[observed:…]` lub `[recorded:…]`, w przeciwnym razie wyodrębniona data zdarzenia, a w ostatniej kolejności znacznik czasu wyniku). Kosztuje jeden odczyt chunka na każdego kandydata do rerankingu. Przy rerankerze LLM prefiks wlicza się do `rerank_llm_max_chars`. `false`: reranker widzi surową treść |
+| `rerank_llm_max_chars` | int | `200` | Liczba znaków (nie bajtów) każdego dokumentu wysyłanego do zapasowego rerankera LLM, używanego, gdy nie jest wczytany cross-encoder ONNX. Cross-encoder ONNX ją ignoruje. Musi być dodatnia. `200` to wartość wcześniej zapisana na stałe w kodzie |
+| `rerank_onnx_max_tokens` | int | `0` | Limit tokenów dla każdej pary (zapytanie, dokument) ocenianej przez cross-encoder ONNX, łącznie z tokenami specjalnymi. Tokeny są usuwane najpierw z dłuższej sekwencji (zwykle dokumentu); gdy obie mają tę samą długość, przycinane są obie. `0`: bez przycinania, a para przekraczająca limit modelu powoduje błąd asynchronicznego rerankingu, jak dotąd. Każda inna wartość musi wynosić **co najmniej 16**; mniejsze wartości odrzuca walidacja. Ignorowany, z ostrzeżeniem w logu, gdy `tokenizer.json` modelu sam ustawia przycinanie |
+| `rerank_sync` | bool | `false` | Uruchamia reranker na ścieżce żądania i zwraca jego kolejność w tej samej odpowiedzi. `false`: reranking działa w tle, jego kolejność trafia do pamięci podręcznej dla następnego identycznego zapytania, a bieżąca odpowiedź zachowuje kolejność po fuzji. Działa tylko przy `rerank_enabled = true` i gdy budżet kosztów dopuszcza reranker. Przy `true` rerankowane są także żądania, których nie da się zapisać w pamięci podręcznej. Przy błędzie modelu lub przekroczeniu czasu odpowiedź zachowuje kolejność po fuzji. Wynik wypchnięty przez reranker z top-k jest śledzony z powodem odrzucenia `reranked` (zobacz [dokumentację API](api-reference.md#post-v1search)). Przed włączeniem przeczytaj ostrzeżenie pod tabelą |
+| `rerank_sync_timeout_ms` | int | `2000` | Budżet czasu w milisekundach wyłącznie na wywołanie modelu w synchronicznym rerankingu. Budowanie dokumentów, oczekiwanie na blokadę pamięci podręcznej i odczyty magazynu po oczekiwaniu dochodzą do tego czasu. Musi być dodatni. Nie działa bez `rerank_sync = true` |
+| `event_date_proximity_boost` | f64 | `0.0` | Waga mnożnika wyniku dla trafień, których data zdarzenia leży w zakresie dat żądania lub blisko niego (`date_from`/`date_to` albo data odczytana z treści zapytania). W zakresie, łącznie z krańcami, wynik jest mnożony przez `1 + weight`. Poza nim wzmocnienie maleje liniowo co pełny dzień UTC i osiąga `1.0` po `n + 1` dniach od zakresu, gdzie `n` to długość zakresu w dniach, ograniczona do 365. Trafienia bez daty zdarzenia i żądania bez zakresu pozostają bez zmian. Musi być skończona i nieujemna; `0.0` wyłącza wzmocnienie. Filtr dat nadal działa później, więc spadek poza zakresem zmienia tylko kolejność trafień, które filtr zachowuje (starszych rekordów, których nie odrzuca według daty). Zapytania czasowe są po ocenie ponownie sortowane według znacznika czasu, więc dla nich wzmocnienie zmienia wyniki punktowe, ale nie kolejność |
+| `content_dedup` | string | `"prefix"` | Sposób łączenia niemal identycznych wyników. `"prefix"` (dotychczasowe działanie): usuwa wynik, którego pierwsze 150 znaków po zamianie na małe litery ma wspólny początek dłuższy niż 80% krótszego z nich, gdy oba mają co najmniej 30 bajtów; fragmenty różnych źródeł oraz fragment i jego własne źródło nigdy nie są łączone. `"exact"`: łączy tylko identyczne bajt po bajcie zwykłe chunki o długości co najmniej 30 bajtów i nigdy fragmenty, więc zaprzeczenie lub aktualizacja po wspólnym początku przetrwa. Każda inna wartość powoduje błąd wczytania konfiguracji. W śledzeniu wyniki usunięte w obu trybach zachowują powód odrzucenia `content_prefix_dedup` |
+
+> **Ostrzeżenie: `rerank_sync`.** Nie włączaj tego klucza, dopóki nie powstanie limit równoczesnych synchronicznych rerankingów (planowana kontynuacja).
+>
+> - Po przekroczeniu czasu ocena ONNX nie jest anulowana: działa dalej w puli wątków blokujących, a jej wynik jest odrzucany. Przy `rerank_candidates = 20` i ~97 ms na parę (~1,94 s na wyszukiwanie) równoczesne wyszukiwania mogą gromadzić takie osierocone zadania.
+> - `rerank_sync_timeout_ms` obejmuje tylko wywołanie modelu, a nie pracę wokół niego (zobacz tabelę).
+> - Przy rerankerze LLM tryb synchroniczny rerankuje także żądania, których nie da się zapisać w pamięci podręcznej, a tych wydatków na LLM nie liczy licznik kosztów.
+
 <span id="searchcache"></span>
 
 ### \[search.cache\]
@@ -408,6 +441,35 @@ auth_token_env = "LOOMEM_AUTH_TOKEN"
 
 ------------------------------------------------------------------------
 
+<span id="mcp"></span>
+
+## \[mcp\]
+
+``` toml
+[mcp]
+search_default_top_k = 5
+search_max_top_k = 20
+aggregation_default_top_k = 30
+aggregation_max_top_k = 30
+search_include_predecessor = false
+predecessor_max_chars = 400
+search_group_by = "none"
+```
+
+Limity `top_k` i postać tekstu wyników narzędzia MCP `memory_search`. Trzy ostatnie klucze to dźwignie jakości (zobacz [Dźwignie jakości](#quality-levers)). Żaden z nich nie dotyczy zapytań agregujących (wyliczeniowych), których wynik pozostaje płaską listą numerowaną.
+
+| Klucz | Typ | Domyślnie | Opis |
+|----|----|----|----|
+| `search_default_top_k` | int | `5` | `top_k`, gdy zwykłe zapytanie go nie podaje |
+| `search_max_top_k` | int | `20` | Górny limit `top_k` dla zwykłych zapytań |
+| `aggregation_default_top_k` | int | `30` | `top_k`, gdy zapytanie agregujące go nie podaje |
+| `aggregation_max_top_k` | int | `30` | Górny limit `top_k` dla zapytań agregujących |
+| `search_include_predecessor` | bool | `false` | Pod trafieniem oznaczonym `[UPDATED]` dodaje jeden wiersz `↳ previously [<data>]: <tekst>` z wersją, którą to trafienie bezpośrednio zastąpiło (`supersedes_id`, jeden krok). Wiersz poprzednika **nie** podlega `time_filter` ani `valid_at`: jest pokazywany także wtedy, gdy jego własna data leży poza żądanym zakresem. Jest pomijany, gdy poprzednik jest usunięty, należy do innego strumienia, nie istnieje lub sam jest jednym z trafień. Jego tekst wlicza się do `max_context_tokens` wywołania |
+| `predecessor_max_chars` | int | `400` | Limit znaków tekstu poprzednika; dłuższy tekst jest przycinany i kończy się `…`. Musi być dodatni. Nie działa bez `search_include_predecessor = true` |
+| `search_group_by` | string | `"none"` | `"none"`, `"session"` lub `"day"`. Wstawia nagłówek `## <klucz>` przed każdym trafieniem, które zaczyna nową grupę. Kolejność i numeracja trafień się nie zmieniają, więc grupa, która nie jest ciągła, dostaje nagłówek ponownie. `"session"`: kluczem jest `session: <id>`, gdzie id to identyfikator źródła dla fragmentu, w przeciwnym razie sesja źródłowa trafienia, a w ostatniej kolejności trafienie jest grupowane według dnia. `"day"`: `YYYY-MM-DD` ze znacznika daty trafienia albo `unknown date`. Etykieta nagłówka jest sprowadzana do jednego wiersza i ograniczona do 80 znaków (dalej `…`). Nagłówki nie wliczają się do `max_context_tokens`: budżet przycina trafienia przed renderowaniem i liczy tylko tekst trafień i poprzedników. Każda inna wartość powoduje błąd wczytania konfiguracji |
+
+------------------------------------------------------------------------
+
 <span id="resource_guards"></span>
 
 ## \[resource_guards\]
@@ -502,6 +564,7 @@ max_facts_per_chunk = 20
 max_tokens = 16384
 input_chunk_tokens = 4000
 split_on_truncation = true
+temporal_grounding = "off"
 ```
 
 Steruje procesem LLM `memory_ingest`.
@@ -514,6 +577,19 @@ Steruje procesem LLM `memory_ingest`.
 | `split_on_truncation` | bool | true | Fragment, którego odpowiedź została obcięta, jest ponownie przetwarzany jako dwie połowy rozdzielone na granicy wiersza (głębokość 2, maksymalnie 4 dodatkowe wywołania na fragment). Przy `false` obcięty fragment jest odrzucany i zgłaszany bez ponawiania |
 
 Te wartości są domyślne w dostarczanej konfiguracji od 2026-11-22 (decyzja właściciela, celowo bez testu A/B — pomiarem jest pilotaż walidacyjny). Wcześniej ekstrakcja wykonywała jedno wywołanie na transkrypcję do 20 tys. tokenów, z limitem odpowiedzi 2000 tokenów i 20 faktami na transkrypcję. Wartości domyślne w kodzie dla konfiguracji pomijającej te klucze pozostają przy poprzednich (`20` / `2000` / `0` / `false`), więc starsza konfiguracja zachowuje się jak dotąd; przy `input_chunk_tokens = 0` i `max_facts_per_transcript = 20` cała transkrypcja jest jednym fragmentem, a limit na fragment jest dawnym limitem, fakt po fakcie. Jedyna widoczna zmiana dla takiej konfiguracji: transkrypcja dłuższa niż `max_transcript_tokens`, którą poprzedni proces przetwarza jako nakładające się okna, dostaje teraz limit na każde okno. Obcięta odpowiedź nie jest przyjmowana w żadnym trybie; odpowiedź zakończona `finish_reason = "length"` jest jawnym błędem na każdej ścieżce czatu, nie tylko w ekstrakcji.
+
+`temporal_grounding` to dźwignia jakości (zobacz [Dźwignie jakości](#quality-levers)):
+
+| Klucz | Typ | Domyślnie | Opis |
+|----|----|----|----|
+| `temporal_grounding` | string | `"off"` | Odrzuca wyodrębnione fakty, których czas względny (np. „three weeks ago” lub „yesterday”) albo `event_date_context` nie występuje we fragmencie źródłowym. `"off"`: bez kontroli; prompt i przyjęte fakty są identyczne bajt po bajcie z wcześniejszymi. `"filter"`: odrzuca takie fakty; prompt ekstrakcji się nie zmienia. `"prompt_and_filter"`: jak `"filter"`, a do promptu systemowego ekstrakcji dodawane jest na początku powiadomienie TEMPORAL GROUNDING, co zmienia prompt wysyłany do LLM. Każda inna wartość powoduje błąd wczytania konfiguracji |
+
+Kontrola porównuje tekst po normalizacji białych znaków i zamianie na małe litery i obejmuje tylko część wyrażeń względnych: fakt, który używa innej formy, przechodzi kontrolę treści bez sprawdzenia. Znane formy, których nie obejmuje:
+
+- angielskie: „last night”, „this morning”, „next week”, „in two weeks”, „last Friday/weekend/summer”, „a couple of weeks ago”, „a few/several days ago” oraz liczebniki słowne powyżej dziesięciu („eleven days ago”);
+- polskie: „dziś”, „przedwczoraj”, „w zeszłym tygodniu”, „tydzień/miesiąc/rok temu” oraz liczebniki słowne powyżej pięciu („sześć dni temu” i wyższe).
+
+Kompilacja z funkcją cargo `evaluation` podaje liczbę faktów odrzuconych przez kontrolę jako `grounding_rejected_facts` w potwierdzeniu ekstrakcji `memory_ingest` (`extraction_receipt.outcome`). Pole jest pomijane, gdy kontrola jest wyłączona, a zwykłe kompilacje nie zawierają potwierdzenia.
 
 ------------------------------------------------------------------------
 

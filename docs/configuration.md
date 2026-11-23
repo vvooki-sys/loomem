@@ -103,6 +103,36 @@ evidence_fields = false
 | `stem_polish` | bool | Enable Polish language stemming |
 | `evidence_fields` | bool | **Experimental, opt-in** (default `false`). When `true`, every `/v1/search` hit and `GET /api/memories/{id}` item carries an additive `evidence` object (`author`, `conversation_date`, `event_date`, `event_date_provenance`, `source_id`, `byte_start`, `byte_end`), and each `memory_search` line carries a bracketed evidence tag before the score. When `false`, responses are byte-identical to pre-flag output. See [API Reference](api-reference.md#post-v1search). |
 
+### Quality levers
+
+```toml
+[search]
+rerank_date_prefix = false
+rerank_llm_max_chars = 200
+rerank_onnx_max_tokens = 0
+rerank_sync = false
+rerank_sync_timeout_ms = 2000
+event_date_proximity_boost = 0.0
+content_dedup = "prefix"
+```
+
+These `[search]` keys, the `memory_search` keys in [`[mcp]`](#mcp) and `temporal_grounding` in [`[knowledge_extraction]`](#knowledge_extraction) are quality levers. All of them are off or neutral by default: with the shipped values, output is byte-identical to the output before the key existed. A default changes only after a measured A/B run. A value the validation rejects stops the config from loading.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `rerank_date_prefix` | bool | `false` | Prefix each document sent to the reranker with the same date tag `memory_search` lines show (`[event:YYYY-MM-DD]`, `[observed:…]` or `[recorded:…]`, else the extracted event date, else the hit's timestamp). Costs one chunk read per reranked candidate. With the LLM reranker the prefix counts toward `rerank_llm_max_chars`. `false`: the reranker sees the raw content |
+| `rerank_llm_max_chars` | int | `200` | Characters (not bytes) of each document sent to the LLM fallback reranker, which runs when no ONNX cross-encoder is loaded. The ONNX cross-encoder ignores it. Must be positive. `200` is the value that was hardcoded before |
+| `rerank_onnx_max_tokens` | int | `0` | Token cap for each (query, document) pair the ONNX cross-encoder scores, special tokens included. Tokens come off the longer sequence first (normally the document); once both are the same length, both are cut. `0`: no truncation, and a pair over the model's limit fails the async rerank as before. Any other value must be **at least 16**; smaller values are rejected by validation. Ignored, with a log warning, when the model's `tokenizer.json` already sets its own truncation |
+| `rerank_sync` | bool | `false` | Run the reranker on the request path and return its order in the same response. `false`: the rerank runs in the background, its order is cached for the next identical query, and the current response keeps the fused order. Only acts when `rerank_enabled = true` and the cost budget allows the reranker. With `true`, requests that cannot be cached are reranked too. On a model error or timeout the response keeps the fused order. A hit the reranker pushes out of the top-k is traced with the rejection reason `reranked` (see [API Reference](api-reference.md#post-v1search)). Read the warning below before enabling it |
+| `rerank_sync_timeout_ms` | int | `2000` | Time budget in milliseconds for the synchronous rerank's model call only. Building the documents, waiting on the cache lock and the store reads after the wait come on top. Must be positive. Inert unless `rerank_sync = true` |
+| `event_date_proximity_boost` | f64 | `0.0` | Weight of a score multiplier for hits whose event date falls inside or near the request's date range (`date_from`/`date_to`, or a date parsed from the query text). Inside the range, edges included, the score is multiplied by `1 + weight`. Outside it the boost falls off linearly per whole UTC day and reaches `1.0` at `n + 1` days from the range, where `n` is the range length in days, capped at 365. Hits without an event date, and requests without a range, are unchanged. Must be finite and non-negative; `0.0` disables it. The date filter still runs afterwards, so the fall-off outside the range only reorders hits the filter keeps (legacy records, which it does not drop by date). Temporal queries are re-sorted by timestamp after scoring, so for them the boost changes scores but not order |
+| `content_dedup` | string | `"prefix"` | How near-duplicate results are collapsed. `"prefix"` (the previous behaviour): drop a result whose first 150 lowercase characters share a leading run longer than 80% of the shorter one, when both are at least 30 bytes; fragments of different sources, and a fragment against its own source, never collapse. `"exact"`: collapse only byte-identical plain chunks of at least 30 bytes, and never fragments, so a negation or update after a shared prefix survives. Any other value fails config loading. In a trace, results dropped in either mode keep the rejection reason `content_prefix_dedup` |
+
+> **Warning: `rerank_sync`.** Do not enable it until a cap on in-flight synchronous reranks exists (a planned follow-up).
+> - On timeout, ONNX scoring is not cancelled: it keeps running in the blocking thread pool and its result is discarded. With `rerank_candidates = 20` at ~97 ms per pair (~1.94 s per search), concurrent searches can pile such orphaned jobs up.
+> - `rerank_sync_timeout_ms` covers only the model call, not the work around it (see the table).
+> - With the LLM reranker, sync mode also reranks requests that cannot be cached, and that LLM spend is not counted by the cost tracker.
+
 ### [search.cache]
 
 ```toml
@@ -402,6 +432,33 @@ auth_token_env = "LOOMEM_AUTH_TOKEN"
 
 ---
 
+## [mcp]
+
+```toml
+[mcp]
+search_default_top_k = 5
+search_max_top_k = 20
+aggregation_default_top_k = 30
+aggregation_max_top_k = 30
+search_include_predecessor = false
+predecessor_max_chars = 400
+search_group_by = "none"
+```
+
+`top_k` limits and text rendering for the MCP `memory_search` tool. The last three keys are quality levers (see [Quality levers](#quality-levers)). None of them applies to aggregation (enumeration) queries, whose output stays a flat numbered list.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `search_default_top_k` | int | `5` | `top_k` when a normal query omits it |
+| `search_max_top_k` | int | `20` | Cap on `top_k` for normal queries |
+| `aggregation_default_top_k` | int | `30` | `top_k` when an aggregation query omits it |
+| `aggregation_max_top_k` | int | `30` | Cap on `top_k` for aggregation queries |
+| `search_include_predecessor` | bool | `false` | Under a hit marked `[UPDATED]`, add one `↳ previously [<date>]: <text>` line with the version that hit directly superseded (`supersedes_id`, one hop). The predecessor line is **not** subject to `time_filter` or `valid_at`: it is shown even when its own date lies outside the requested range. It is left out when the predecessor is deleted, in another stream, missing, or already one of the hits. Its text counts toward the call's `max_context_tokens` |
+| `predecessor_max_chars` | int | `400` | Character cap for the predecessor text; longer text is cut and ends with `…`. Must be positive. Inert unless `search_include_predecessor = true` |
+| `search_group_by` | string | `"none"` | `"none"`, `"session"` or `"day"`. Inserts a `## <key>` header before each hit that starts a new group. Hit order and numbering do not change, so a group that is not contiguous gets its header again. `"session"`: the key is `session: <id>`, where the id is the source id for a fragment, else the hit's source session, else the hit falls back to its day. `"day"`: the `YYYY-MM-DD` of the hit's date tag, or `unknown date`. A header label is made single-line and capped at 80 characters (`…` beyond). Headers sit outside `max_context_tokens`: the budget trims hits before rendering and counts only hit and predecessor text. Any other value fails config loading |
+
+---
+
 ## [resource_guards]
 
 ```toml
@@ -487,6 +544,7 @@ max_facts_per_chunk = 20
 max_tokens = 16384
 input_chunk_tokens = 4000
 split_on_truncation = true
+temporal_grounding = "off"
 ```
 
 Controls the `memory_ingest` LLM pipeline.
@@ -499,6 +557,19 @@ Controls the `memory_ingest` LLM pipeline.
 | `split_on_truncation` | bool | true | A chunk whose completion was truncated is re-extracted as two line-aligned halves (depth 2, at most 4 extra calls per chunk). `false` rejects and reports the truncated chunk, with no retry |
 
 These are the shipped defaults since 2026-11-22 (an owner decision, deliberately without an A/B — the validation pilot is the measurement). Before, extraction was one call per transcript up to 20K tokens, with a 2000-token completion cap and 20 facts per transcript. The code defaults for a config that omits these keys stay at the legacy values (`20` / `2000` / `0` / `false`), so an older config behaves as before; with `input_chunk_tokens = 0` and `max_facts_per_transcript = 20` the whole transcript is one chunk and the per-chunk cap is the former cap, fact for fact. The one visible change for such a config: a transcript over `max_transcript_tokens`, which the legacy path processes as overlapping windows, now gets the cap per window. A truncated reply is never admitted in either mode; a completion that ends with `finish_reason = "length"` is an explicit error on every chat path, not only in extraction.
+
+`temporal_grounding` is a quality lever (see [Quality levers](#quality-levers)):
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `temporal_grounding` | string | `"off"` | Rejects extracted facts whose relative time (such as "three weeks ago" or "yesterday") or `event_date_context` does not appear in the source chunk. `"off"`: no check; the prompt and the admitted facts are byte-identical to before. `"filter"`: drop such facts; the extraction prompt does not change. `"prompt_and_filter"`: `"filter"`, plus a TEMPORAL GROUNDING notice prepended to the extraction system prompt, which changes the prompt sent to the LLM. Any other value fails config loading |
+
+The check compares whitespace-normalized, lowercased text, and it covers only some relative expressions: a fact that uses any other form passes the content check unexamined. Known forms it does not cover:
+
+- English: "last night", "this morning", "next week", "in two weeks", "last Friday/weekend/summer", "a couple of weeks ago", "a few/several days ago", and number words above ten ("eleven days ago").
+- Polish: "dziś", "przedwczoraj", "w zeszłym tygodniu", "tydzień/miesiąc/rok temu", and number words above five ("sześć dni temu" and up).
+
+A build with the `evaluation` cargo feature reports the number of facts the check rejected as `grounding_rejected_facts` in the `memory_ingest` extraction receipt (`extraction_receipt.outcome`). The field is omitted while grounding is off, and regular builds carry no receipt.
 
 ---
 
