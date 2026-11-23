@@ -188,6 +188,57 @@ class DryRunTests(unittest.TestCase):
 
 
 @unittest.skipUnless(SANDBOX_PRESENT, "sandbox-exec absent: paid-mode preflight cannot pass here")
+class PinnedFingerprintTests(unittest.TestCase):
+    """A paid campaign pinned with --extraction-system-sha256: the proxy compares the engine's very
+    first extraction prompt with the pin and halts BEFORE any reservation when it differs."""
+
+    def setUp(self):
+        if not tokenizer_available():
+            self.skipTest("o200k cache unavailable (TIKTOKEN_CACHE_DIR)")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.fixture = build_fixture(self.root)
+        self.campaign_dir = self.root / "paid"
+        for target, value in (("paid_preflight.MIN_FREE_BYTES", 1),):
+            patch = mock.patch(target, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        probe = mock.patch("paid_preflight_engine.probe_engine",
+                           return_value={"passed": True, "problems": [], "observed": {
+                               "system_bytes": 1, "wire_overhead_bytes": 1, "sheet_system_extraction": 6000,
+                               "system_sha256": "0" * 64, "readiness_bad_body_status": 422}})
+        probe.start()
+        self.addCleanup(probe.stop)
+        self.fake = fake_provider(self.fixture.prompts(), PROFILES, {})
+        self.fake.__enter__()
+        self.addCleanup(self.fake.__exit__, None, None, None)
+        self.env = runner_env(OPENAI_API_KEY=self.fake.token)
+        env_patch = mock.patch.dict(os.environ, {"OPENAI_API_KEY": self.fake.token})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+
+    def test_other_extraction_prompt_halts_before_any_reservation(self):
+        from paid_fake_engine import fake_engine_factory
+        code, out = main(["create-campaign", *self.fixture.flags(self.campaign_dir, extra=[
+            "--provider-base-url", self.fake.url, "--api-key-env", "OPENAI_API_KEY",
+            "--extraction-system-sha256", "1" * 64])], env=self.env)
+        self.assertEqual(code, 0, out)
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            code = _main(["run", "--campaign-dir", str(self.campaign_dir), "--phase", "extraction"],
+                         factories={"engine": fake_engine_factory}, stdout=io.StringIO(), env=self.env)
+        self.assertEqual(code, 3, err.getvalue())
+        self.assertIn("non-conforming extraction request", err.getvalue())
+        journal = CallJournal(self.campaign_dir)
+        letters = sorted(i["letter"] for i in journal.state.intents.values())
+        self.assertEqual(letters, ["K"], "only the control call was reserved; no E reservation")
+        ledger = json.loads((self.campaign_dir / "budget.json").read_text())
+        self.assertEqual(len(ledger["requests"]), 1)
+        self.assertEqual(len(self.fake.log), 1, "the engine's request never reached the provider")
+        self.assertFalse((self.campaign_dir / "extraction" / "h1.json").exists())
+
+
 class AcknowledgeUncertainTests(unittest.TestCase):
     """A paid campaign whose provider is the loopback fake: `run` is refused while a sent request is
     unsettled, and proceeds with the id acknowledged, marking that arm technical_error without a retry."""

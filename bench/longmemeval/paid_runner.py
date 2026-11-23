@@ -159,7 +159,10 @@ def cmd_run(args, factories, clock, env, out):
         proxy = proxy_factory(campaign=campaign, journal=journal, sheet=loaded.sheet, transport=transport,
                               extraction_profile=campaign.profile("extraction"),
                               manifest_sha256=campaign.spec["holdout"]["manifest_sha256"],
-                              system_sha256=frozen_extraction_system(campaign.directory),
+                              # The pin from the dry-run binds the proxy from the FIRST paid request: an engine
+                              # sending any other extraction prompt halts before anything is reserved.
+                              system_sha256=(frozen_extraction_system(campaign.directory)
+                                             or campaign.spec.get("extraction_system_sha256")),
                               precount=precount, acknowledged=acknowledged, clock=clock)
         with proxy:
             try:
