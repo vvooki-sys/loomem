@@ -15,10 +15,12 @@ mod completion;
 mod config_validation;
 mod http;
 mod reply;
+mod temporal_grounding;
 use chunking::extract_chunk_with_split;
 pub use completion::ExtractionOutcome;
 use config_validation::transcript_chunks;
 pub use http::HttpExtractionChat;
+pub use temporal_grounding::TemporalGrounding;
 
 /// /153: an operator-defined extraction category. `fact_type` is the wire key
 /// used in the `## Types` list and the JSON `fact_type` enum; when absent,
@@ -83,6 +85,13 @@ pub struct KnowledgeExtractionConfig {
     /// a config without this field deserializing unchanged).
     #[serde(default)]
     pub topics: Option<Vec<ExtractionTopic>>,
+    /// Reject extracted facts whose relative time ("three weeks ago",
+    /// "yesterday") or `event_date_context` is not in the source chunk.
+    /// `Off` (default) keeps the prompt bytes and admission byte-identical;
+    /// `Filter` drops such facts with the prompt unchanged; `PromptAndFilter`
+    /// also prepends a TEMPORAL GROUNDING notice to the system prompt.
+    #[serde(default)]
+    pub temporal_grounding: TemporalGrounding,
 }
 
 fn default_extraction_max_tokens() -> u32 {
@@ -110,6 +119,7 @@ impl Default for KnowledgeExtractionConfig {
             input_chunk_tokens: 0,
             split_on_truncation: false,
             topics: None,
+            temporal_grounding: TemporalGrounding::Off,
         }
     }
 }
@@ -161,11 +171,12 @@ pub fn build_extraction_prompt(
     let topics = match config.topics.as_ref() {
         Some(t) if !t.is_empty() => t,
         _ => {
-            return prefix_untrusted_notice(
-                &EXTRACTION_PROMPT
+            return prefix_untrusted_notice(&temporal_grounding::with_notice(
+                config.temporal_grounding,
+                EXTRACTION_PROMPT
                     .replace("{conversation_date}", conversation_date)
                     .replace("{max_facts}", &max_facts.to_string()),
-            )
+            ))
         }
     };
 
@@ -187,8 +198,10 @@ pub fn build_extraction_prompt(
         .collect::<Vec<_>>()
         .join("|");
 
-    prefix_untrusted_notice(&format!(
-        r#"Extract factual knowledge from this conversation. Each fact is a self-contained sentence.
+    prefix_untrusted_notice(&temporal_grounding::with_notice(
+        config.temporal_grounding,
+        format!(
+            r#"Extract factual knowledge from this conversation. Each fact is a self-contained sentence.
 
 Facts may be authored by any party in the conversation. Extract them from the user's statements AND from the assistant's (or agent's) recommendations, plans, schedules, and researched answers — assistant-authored content carries first-class facts that the user is likely to reference later.
 
@@ -214,6 +227,7 @@ The conversation_date is: {conversation_date}
 
 Return ONLY valid JSON (no markdown, no code blocks):
 {{"facts": [{{"content": "...", "fact_type": {enum_values}, "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "attributed_to": "user"|"assistant"|null, "confidence": 0.9}}]}}"#,
+        ),
     ))
 }
 
@@ -490,10 +504,13 @@ pub async fn extract_knowledge_with(
             extract_chunk_with_split(chat, extraction_config, &system_prompt, i, chunk_text).await;
         outcome.record_input_chunk(&run);
         raw_facts_seen += run.facts.len();
-        let admitted = outcome.admit_chunk_facts(
-            run.facts.into_iter().filter(|f| f.confidence >= 0.5),
-            max_facts,
+        let (admissible, grounding_rejected) = temporal_grounding::admissible(
+            run.facts,
+            chunk_text,
+            extraction_config.temporal_grounding,
         );
+        outcome.record_grounding_rejections(grounding_rejected);
+        let admitted = outcome.admit_chunk_facts(admissible.into_iter(), max_facts);
         debug!(
             "Extracted {admitted} facts (filtered by confidence >= 0.5, capped at {max_facts} per chunk)"
         );
@@ -524,23 +541,59 @@ pub async fn extract_knowledge_with(
     // failures (server-degradation brief A2) so silent ingest degradation is
     // visible in llm_failures_recent without masquerading as a transport error.
     if succeeded_chunks > 0 && outcome.facts.is_empty() {
-        // Coherent with the counter: every increment leaves a log naming the
-        // cause. raw_facts_seen == 0 → nothing in the response body (pair with
-        // the per-chunk body_len log to spot degraded transport); > 0 → facts
-        // were returned but all scored below the confidence threshold.
-        if raw_facts_seen == 0 {
-            debug!(
-                "Extraction empty: {succeeded_chunks} chunk(s) succeeded with no facts in the response body (see per-chunk body_len logs)"
-            );
-        } else {
-            debug!(
-                "Extraction empty: {succeeded_chunks} chunk(s) succeeded, {raw_facts_seen} raw fact(s) all filtered below confidence 0.5"
-            );
-        }
-        crate::llm_failures::global().record(crate::llm_failures::LlmFailureKind::ExtractionEmpty);
+        report_empty_extraction(
+            succeeded_chunks,
+            raw_facts_seen,
+            outcome.grounding_rejected_facts,
+        );
     }
 
     Ok(outcome)
+}
+
+/// Why a run with at least one completed call admitted no facts.
+#[derive(Debug, PartialEq, Eq)]
+enum EmptyCause {
+    /// Nothing in the response body: a transport-degradation signal.
+    NoFactsInBody,
+    /// Facts were returned but all scored below the confidence threshold.
+    BelowConfidence,
+    /// Temporal grounding rejected at least one confident fact: deliberate
+    /// filtering, not degradation.
+    TemporalGrounding(usize),
+}
+
+fn empty_extraction_cause(raw_facts_seen: usize, grounding_rejected: Option<usize>) -> EmptyCause {
+    match grounding_rejected {
+        _ if raw_facts_seen == 0 => EmptyCause::NoFactsInBody,
+        Some(rejected) if rejected > 0 => EmptyCause::TemporalGrounding(rejected),
+        _ => EmptyCause::BelowConfidence,
+    }
+}
+
+/// Coherent with the `extraction_empty` counter: every increment leaves a log
+/// naming the cause. A run emptied by temporal grounding is logged but not
+/// counted, so the counter keeps meaning possible degradation.
+fn report_empty_extraction(
+    succeeded_chunks: usize,
+    raw_facts_seen: usize,
+    grounding_rejected: Option<usize>,
+) {
+    match empty_extraction_cause(raw_facts_seen, grounding_rejected) {
+        EmptyCause::NoFactsInBody => debug!(
+            "Extraction empty: {succeeded_chunks} chunk(s) succeeded with no facts in the response body (see per-chunk body_len logs)"
+        ),
+        EmptyCause::BelowConfidence => debug!(
+            "Extraction empty: {succeeded_chunks} chunk(s) succeeded, {raw_facts_seen} raw fact(s) all filtered below confidence 0.5"
+        ),
+        EmptyCause::TemporalGrounding(rejected) => {
+            debug!(
+                "Extraction empty: {succeeded_chunks} chunk(s) succeeded, {raw_facts_seen} raw fact(s) filtered by confidence or temporal grounding ({rejected} rejected by temporal grounding); not counted as extraction_empty"
+            );
+            return;
+        }
+    }
+    crate::llm_failures::global().record(crate::llm_failures::LlmFailureKind::ExtractionEmpty);
 }
 
 /// Legacy wrapper — calls extract_knowledge with today's date.

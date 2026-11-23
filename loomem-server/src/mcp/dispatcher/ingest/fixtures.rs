@@ -2,7 +2,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use loomem_core::memory_extractor::{ChatHttpReply, ExtractionChat};
+use loomem_core::memory_extractor::{ChatHttpReply, ExtractionChat, TemporalGrounding};
 use loomem_core::storage::Chunk;
 use serde_json::{json, Value};
 use tokio::sync::Notify;
@@ -77,6 +77,26 @@ pub(super) fn fixture(chunk_tokens: usize) -> (axum::Router, Arc<AppState>) {
     config.knowledge_extraction.contradiction_check = false;
     config.llm.api_key = None;
     config.llm.api_key_env = "P15_ABSENT".into();
+    crate::tests::make_test_app_cfg(config)
+}
+
+/// [`fixture`] with `[knowledge_extraction] temporal_grounding` set, pinned
+/// keyless: no provider can resolve a real key, so only the injected chat
+/// transport is ever called.
+pub(super) fn fixture_with_grounding(mode: TemporalGrounding) -> (axum::Router, Arc<AppState>) {
+    let (_, original) = crate::tests::make_test_app();
+    let mut config = original.config.clone();
+    config.knowledge_extraction.enabled = true;
+    config.knowledge_extraction.max_transcript_tokens = 20000;
+    config.knowledge_extraction.contradiction_check = false;
+    config.knowledge_extraction.temporal_grounding = mode;
+    config.llm.api_key = None;
+    config.llm.api_key_env = "LOOMEM_TEST_KEY_THAT_IS_NEVER_SET".into();
+    config.llm.providers.clear();
+    assert!(
+        config.llm.active_provider().is_err(),
+        "test must stay keyless"
+    );
     crate::tests::make_test_app_cfg(config)
 }
 

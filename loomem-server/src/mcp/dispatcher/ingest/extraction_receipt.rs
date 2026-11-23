@@ -171,6 +171,10 @@ struct Outcome {
     fact_limit_reached: Option<bool>,
     discarded_facts: Option<usize>,
     accepted_facts: Option<usize>,
+    /// Facts rejected by `[knowledge_extraction] temporal_grounding`. Omitted
+    /// while grounding is off, so the off receipt is byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grounding_rejected_facts: Option<usize>,
 }
 
 #[cfg(any(test, feature = "evaluation"))]
@@ -186,6 +190,7 @@ impl Outcome {
             fact_limit_reached: Some(outcome.fact_limit_reached),
             discarded_facts: Some(outcome.discarded_facts),
             accepted_facts: Some(outcome.facts.len()),
+            grounding_rejected_facts: outcome.grounding_rejected_facts,
         }
     }
 

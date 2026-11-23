@@ -35,6 +35,11 @@ pub struct ExtractionOutcome {
     /// `fact_limit_reached`, this distinguishes an exact-cap result with no
     /// observed cap loss from cap loss.
     pub discarded_facts: usize,
+    /// Confident facts dropped by `[knowledge_extraction] temporal_grounding`,
+    /// summed over chunks. `None` while grounding is off (no check ran);
+    /// `Some(0)` when it is on and rejected nothing. Not counted in
+    /// `discarded_facts`.
+    pub grounding_rejected_facts: Option<usize>,
 }
 
 impl ExtractionOutcome {
@@ -42,6 +47,14 @@ impl ExtractionOutcome {
         Self {
             input_chunks_total: total,
             ..Self::default()
+        }
+    }
+
+    /// Add one chunk's grounding rejections; `None` (grounding off) leaves
+    /// the count `None`.
+    pub(super) fn record_grounding_rejections(&mut self, rejected: Option<usize>) {
+        if let Some(n) = rejected {
+            *self.grounding_rejected_facts.get_or_insert(0) += n;
         }
     }
 
