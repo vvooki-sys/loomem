@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `memory_search`, `rerank_llm_max_chars` sets the LLM reranker's
   per-document cap (200 = previous), `rerank_onnx_max_tokens` truncates ONNX
   cross-encoder pairs (0 = none, otherwise at least 16).
+- `[search] content_dedup = "exact"` collapses only byte-identical search
+  results (plain chunks of at least 30 bytes, never fragments), so an update
+  or negation after a shared 150-char prefix is no longer hidden (default
+  `"prefix"`, byte-identical; drops keep the `content_prefix_dedup` reason).
 
 ## [0.5.5] - 2026-11-22
 
