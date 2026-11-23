@@ -23,7 +23,8 @@ pub(super) fn validate(search: &SearchConfig) -> Result<()> {
         search.surprise_boost >= 0.0,
         "surprise_boost must be non-negative"
     );
-    validate_limits(search)
+    validate_limits(search)?;
+    validate_levers(search)
 }
 
 fn validate_limits(search: &SearchConfig) -> Result<()> {
@@ -38,6 +39,25 @@ fn validate_limits(search: &SearchConfig) -> Result<()> {
     );
     SearchCandidateBudget::new(search.top_k, search.max_request_top_k)
         .context("max_request_top_k exceeds supported candidate budget")?;
+    Ok(())
+}
+
+/// Quality-lever flags: every one is off/neutral by default; these checks
+/// only reject values that could never be meant (`0` caps, negative or
+/// non-finite weights). `rerank_onnx_max_tokens = 0` is a valid "off".
+fn validate_levers(search: &SearchConfig) -> Result<()> {
+    anyhow::ensure!(
+        search.rerank_llm_max_chars > 0,
+        "search.rerank_llm_max_chars must be positive"
+    );
+    anyhow::ensure!(
+        search.rerank_sync_timeout_ms > 0,
+        "search.rerank_sync_timeout_ms must be positive"
+    );
+    anyhow::ensure!(
+        search.event_date_proximity_boost >= 0.0 && search.event_date_proximity_boost.is_finite(),
+        "search.event_date_proximity_boost must be a finite non-negative number"
+    );
     Ok(())
 }
 
@@ -72,5 +92,64 @@ mod tests {
         let decoded: SearchConfig = serde_json::from_value(search).unwrap();
         assert_eq!(decoded.max_request_top_k, 1000);
         assert_eq!(decoded.top_k, original.search.top_k);
+    }
+
+    const LEVER_KEYS: [&str; 6] = [
+        "rerank_date_prefix",
+        "rerank_llm_max_chars",
+        "rerank_onnx_max_tokens",
+        "rerank_sync",
+        "rerank_sync_timeout_ms",
+        "event_date_proximity_boost",
+    ];
+
+    fn assert_levers_off(search: &SearchConfig) {
+        assert!(!search.rerank_date_prefix);
+        assert_eq!(search.rerank_llm_max_chars, 200);
+        assert_eq!(search.rerank_onnx_max_tokens, 0);
+        assert!(!search.rerank_sync);
+        assert_eq!(search.rerank_sync_timeout_ms, 2000);
+        assert_eq!(search.event_date_proximity_boost, 0.0);
+    }
+
+    /// A pre-lever config file (none of the new keys) loads with every lever
+    /// off/neutral — the previous hardcoded behavior.
+    #[test]
+    fn missing_lever_keys_deserialize_to_off_defaults() {
+        let mut search = serde_json::to_value(&config().search).unwrap();
+        let object = search.as_object_mut().unwrap();
+        for key in LEVER_KEYS {
+            assert!(object.remove(key).is_some(), "{key} missing from fixture");
+        }
+        let decoded: SearchConfig = serde_json::from_value(search).unwrap();
+        assert_levers_off(&decoded);
+    }
+
+    /// Default-off guard: the shipped config.toml spells every lever out and
+    /// keeps it off/neutral, so a stock deployment stays byte-identical.
+    #[test]
+    fn shipped_config_keeps_every_lever_off() {
+        let config = config();
+        assert_levers_off(&config.search);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn lever_validation_rejects_zero_caps_and_bad_weights() {
+        let mut zero_chars = config();
+        zero_chars.search.rerank_llm_max_chars = 0;
+        assert!(zero_chars.validate().is_err());
+
+        let mut zero_timeout = config();
+        zero_timeout.search.rerank_sync_timeout_ms = 0;
+        assert!(zero_timeout.validate().is_err());
+
+        let mut boost = config();
+        boost.search.event_date_proximity_boost = -0.1;
+        assert!(boost.validate().is_err());
+        boost.search.event_date_proximity_boost = f64::NAN;
+        assert!(boost.validate().is_err());
+        boost.search.event_date_proximity_boost = 1.5;
+        boost.validate().unwrap();
     }
 }

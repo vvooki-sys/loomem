@@ -5,6 +5,9 @@ mod dream;
 #[cfg(test)]
 mod evidence_suffix_tests;
 mod ingest;
+mod search_format;
+#[cfg(test)]
+mod search_format_tests;
 use dream::tool_dream;
 use ingest::tool_ingest;
 #[cfg(feature = "evaluation")]
@@ -785,17 +788,6 @@ struct SearchArgs {
     stream: Option<String>,
 }
 
-/// /142 + /143 (ADR-017): format the content-type tag ` [content_type]` for an
-/// MCP result line, e.g. ` [case_study]`. Empty when the result carries no
-/// classification (no sidecar hit). Since /143 the band/source are dropped from
-/// the tag — `other` already signals uncertainty and source is always `llm`.
-fn content_type_tag(content_type: Option<&str>) -> String {
-    match content_type {
-        Some(ct) => format!(" [{ct}]"),
-        None => String::new(),
-    }
-}
-
 /// Approximate per-result formatting overhead (line number, date tag, score,
 /// id, optional content-type/trust tags) added to each kept result's token
 /// cost so the budget reflects the rendered output, not just raw content
@@ -936,63 +928,10 @@ async fn tool_search(
                     resp.results.len()
                 )
             };
-            for (i, r) in resp.results.iter().enumerate() {
-                let chunk_opt = state.store.get_chunk(&r.id).ok().flatten();
-                let timestamp = r
-                    .metadata
-                    .as_ref()
-                    .and_then(|meta| meta.get("timestamp"))
-                    .and_then(Value::as_i64);
-                let ts = crate::handlers::ingest_date::date_prefix(chunk_opt.as_ref(), timestamp);
-
-                let supersedes_note = chunk_opt
-                    .as_ref()
-                    .and_then(|c| c.supersedes_id.as_ref())
-                    .map(|_| " [UPDATED — supersedes older version]")
-                    .unwrap_or("");
-
-                // Cycle/142 + /143: content-type tag `[content_type]`, e.g.
-                // `[case_study]`. Present only when the result was classified
-                // (sidecar hit). Band/source dropped in /143 (ADR-017 Amd v2).
-                let content_type_tag = content_type_tag(r.content_type.as_deref());
-
-                // Cycle /001 (MemIR) observability: surface the trust tier and the
-                // applied trust×provenance multiplier so the ranking effect is
-                // visible (black-box testing + demos). None trust_level == "a1".
-                // A `[trust:?]` sentinel marks a result whose chunk could not be
-                // loaded (read error / index-vs-store desync) so it is not
-                // confused with a chunk that legitimately has no trust metadata.
-                let trust_tag = chunk_opt
-                    .as_ref()
-                    .map(|c| {
-                        format!(
-                            " [trust:{} ×{:.2}]",
-                            c.trust_level.as_deref().unwrap_or("a1"),
-                            loomem_core::hybrid_search::trust_provenance_multiplier(c)
-                        )
-                    })
-                    .unwrap_or_else(|| " [trust:?]".to_string());
-
-                // Emit the chunk_id on each result line so callers can recover
-                // it after a search alone — needed for memory_delete,
-                // memory_history and memory_feedback, which all key on
-                // chunk_id. Previously only memory_store/_ingest surfaced ids,
-                // forcing callers to capture them at write time. The evidence
-                // tag (`[search] evidence_fields`) sits before `(score:` so the
-                // line still ends with the id; empty when the flag is off.
-                text.push_str(&format!(
-                    "{}. [{}]{}{} {}{}{} (score: {:.2}) (id: {})\n",
-                    i + 1,
-                    ts,
-                    content_type_tag,
-                    trust_tag,
-                    r.content,
-                    supersedes_note,
-                    crate::evidence::hit_text_suffix(r.evidence.as_ref()),
-                    r.score,
-                    r.id
-                ));
-            }
+            // One line per hit (date tag, content-type/trust tags, content,
+            // [UPDATED] note, evidence suffix, score, id) — see
+            // `search_format::render_line`.
+            text.push_str(&search_format::render_lines(&state.store, &resp.results));
             text.push_str("\nNote: When facts have dates, ALWAYS prefer the most recent version. Items marked [UPDATED] supersede older versions.");
             Ok(ToolResult::text(text))
         }
@@ -1955,10 +1894,13 @@ mod tests {
     // (band/source dropped — ADR-017 Amendment v2).
     #[test]
     fn ac5_content_type_tag_format() {
-        assert_eq!(content_type_tag(Some("case_study")), " [case_study]");
-        assert_eq!(content_type_tag(Some("other")), " [other]");
+        assert_eq!(
+            search_format::content_type_tag(Some("case_study")),
+            " [case_study]"
+        );
+        assert_eq!(search_format::content_type_tag(Some("other")), " [other]");
         // Unclassified chunk (no sidecar hit) → no tag.
-        assert_eq!(content_type_tag(None), "");
+        assert_eq!(search_format::content_type_tag(None), "");
     }
 
     /// Build an AuthContext with an explicit memberships list.

@@ -402,6 +402,7 @@ mod tests {
             search_max_top_k: 42,
             aggregation_default_top_k: 30,
             aggregation_max_top_k: 60,
+            ..McpConfig::default()
         };
         let desc = top_k_description(&raised);
         assert!(desc.contains("default 7, max 42"), "got: {desc}");
