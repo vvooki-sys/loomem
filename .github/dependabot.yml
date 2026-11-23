@@ -55,6 +55,16 @@ updates:
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # ESLint 10 waits for eslint-plugin-react to accept it (peer range
+      # `^9.7` as of 7.37.5). `@eslint/js` 10 declares `peerOptional
+      # eslint@^10`, which npm 10 treats as a hard ERESOLVE against
+      # `eslint@9` and broke the v0.5.5 release build (#151, #158). Raise
+      # eslint and @eslint/js together once the plugin supports ESLint 10.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
 
   # Dockerfile base images (node, rust, debian).
   - package-ecosystem: docker

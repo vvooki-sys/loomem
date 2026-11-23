@@ -111,7 +111,13 @@ jobs:
         working-directory: loomem-dashboard
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Node 20+ is preinstalled on ubuntu-latest runners.
+      # Same Node (22, npm 10) as release.yml, so a lockfile that npm 10
+      # cannot resolve fails here instead of in the release build.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: loomem-dashboard/package-lock.json
       - name: npm ci
         run: npm ci
       - name: eslint

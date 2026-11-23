@@ -227,6 +227,8 @@ to the shipped `config.toml` only (see Changed).
 
 ### Fixed
 
+- Release builds of the embedded dashboard resolve dependencies on npm 10
+  again (`@eslint/js` back on the ESLint 9 line; CI and release pin Node 22).
 - The embedding queue worker never spins on a zero batch size or flush
   interval: both are clamped to 1 before the loop uses them. With `0` the
   collect loop broke before awaiting the channel and the deadline was
