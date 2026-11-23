@@ -152,13 +152,21 @@ fn adapter_reads_event_date_and_is_neutral_without_it() {
     let mut undated = inside.clone();
     undated.extraction_meta = None;
     assert_eq!(proximity_multiplier_for(&undated, Some(&range), 1.0), 1.0);
-    for raw in ["not a date", "1969-12-31"] {
-        let mut odd = inside.clone();
-        odd.extraction_meta.as_mut().unwrap().event_date = Some(raw.into());
-        assert_eq!(
-            proximity_multiplier_for(&odd, Some(&range), 1.0),
-            1.0,
-            "{raw}"
-        );
-    }
+    let mut odd = inside.clone();
+    odd.extraction_meta.as_mut().unwrap().event_date = Some("not a date".into());
+    assert_eq!(proximity_multiplier_for(&odd, Some(&range), 1.0), 1.0);
+}
+
+#[test]
+fn adapter_boosts_pre_1970_event_dates() {
+    let mut old = corpus()[1].clone();
+    old.extraction_meta.as_mut().unwrap().event_date = Some(" 1956-06-15 ".into());
+    // 1956-01-01T00:00:00Z ..= 1956-12-31T23:59:59Z
+    let range = DateFilter::Range(-441_849_600, -410_227_201);
+    assert_eq!(proximity_multiplier_for(&old, Some(&range), 1.0), 2.0);
+    // Far outside 2024: neutral, as for any other date.
+    assert_eq!(
+        proximity_multiplier_for(&old, Some(&range_2024()), 1.0),
+        1.0
+    );
 }

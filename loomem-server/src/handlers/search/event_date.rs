@@ -105,9 +105,9 @@ pub(super) fn proximity_multiplier(chunk: &Chunk, ctx: &QueryContext, state: &Ap
     proximity_multiplier_for(chunk, ctx.date_filter.as_ref(), weight)
 }
 
-/// Boost for a chunk whose event date (`extraction_meta.event_date`, read via
-/// `ExtractionMeta::event_date_unix`, so legacy chunks carrying the field
-/// count too) falls inside or near the query's date range, weighted by
+/// Boost for a chunk whose event date (`extraction_meta.event_date`, parsed
+/// like `ExtractionMeta::event_date_unix` but signed, so legacy chunks
+/// carrying the field and pre-1970 dates count too) falls inside or near the query's date range, weighted by
 /// `weight`. The curve lives in
 /// `loomem_core::search::date_proximity::multiplier`; a weight of `0.0` (the
 /// default), no range, or no event date returns exactly `1.0`, which leaves
@@ -136,12 +136,16 @@ pub(super) fn proximity_multiplier_for(
     if !date_proximity::enabled(weight) {
         return 1.0;
     }
-    let event = chunk
-        .extraction_meta
-        .as_ref()
-        .and_then(|meta| meta.event_date_unix())
-        .and_then(|ts| i64::try_from(ts).ok());
-    date_proximity::multiplier(event, Some((*start, *end)), weight)
+    date_proximity::multiplier(event_unix(chunk), Some((*start, *end)), weight)
+}
+
+/// `extraction_meta.event_date` (`YYYY-MM-DD`) as a signed UTC-midnight unix
+/// timestamp. Same parse as `ExtractionMeta::event_date_unix`, minus its
+/// `u64` narrowing, so pre-1970 event dates are boosted like any other.
+fn event_unix(chunk: &Chunk) -> Option<i64> {
+    let raw = chunk.extraction_meta.as_ref()?.event_date.as_deref()?;
+    let day = chrono::NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d").ok()?;
+    Some(day.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
 }
 
 /// A supplemental operation lane cannot reintroduce a stale indexed event date.
