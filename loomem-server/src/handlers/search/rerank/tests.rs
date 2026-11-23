@@ -260,17 +260,8 @@ fn keyless_rerank_config(mut config: loomem_core::config::Config) -> loomem_core
 #[tokio::test]
 async fn stage_with_reranker_on_spawns_keyless_identity_rerank() {
     let (_app, original) = make_test_app();
-    let mut config = original.config.clone();
-    config.search.rerank_enabled = true;
     // Never resolve a real key from the developer's environment.
-    config.llm.api_key = None;
-    config.llm.api_key_env = "LOOMEM_W0_TEST_KEY_THAT_IS_NEVER_SET".into();
-    config.llm.providers.clear();
-    config.llm.provider = "openai".into();
-    assert!(
-        config.llm.active_provider().is_err(),
-        "test must stay keyless"
-    );
+    let config = keyless_rerank_config(original.config.clone());
     let (_app, state) = make_test_app_cfg(config);
     #[cfg(feature = "onnx-rerank")]
     assert!(state.onnx_reranker.is_none());
@@ -431,6 +422,8 @@ async fn http_responses_are_identical_with_document_text_levers_on() {
     config.search.rerank_llm_max_chars = 50;
     config.search.rerank_onnx_max_tokens = 256;
     let (on_app, on_state) = make_test_app_cfg(config);
+    #[cfg(feature = "onnx-rerank")]
+    assert!(off_state.onnx_reranker.is_none() && on_state.onnx_reranker.is_none());
     seed(&off_state).await;
     seed(&on_state).await;
 

@@ -42,13 +42,27 @@ fn validate_limits(search: &SearchConfig) -> Result<()> {
     Ok(())
 }
 
+/// Smallest non-zero `rerank_onnx_max_tokens`. The cap counts the
+/// cross-encoder's special tokens (3 for a BERT pair: `[CLS] q [SEP] d
+/// [SEP]`), and the tokenizer subtracts them from the cap unchecked, so a
+/// cap at or below that count panics (debug) or wraps (release). 16 leaves
+/// room for the special tokens plus a few tokens of query and document;
+/// anything smaller could never be meant.
+const MIN_RERANK_ONNX_MAX_TOKENS: usize = 16;
+
 /// Quality-lever flags: every one is off/neutral by default; these checks
 /// only reject values that could never be meant (`0` caps, negative or
-/// non-finite weights). `rerank_onnx_max_tokens = 0` is a valid "off".
+/// non-finite weights). `rerank_onnx_max_tokens = 0` is a valid "off";
+/// otherwise it must be at least [`MIN_RERANK_ONNX_MAX_TOKENS`].
 fn validate_levers(search: &SearchConfig) -> Result<()> {
     anyhow::ensure!(
         search.rerank_llm_max_chars > 0,
         "search.rerank_llm_max_chars must be positive"
+    );
+    anyhow::ensure!(
+        search.rerank_onnx_max_tokens == 0
+            || search.rerank_onnx_max_tokens >= MIN_RERANK_ONNX_MAX_TOKENS,
+        "search.rerank_onnx_max_tokens must be 0 (no truncation) or at least {MIN_RERANK_ONNX_MAX_TOKENS}"
     );
     anyhow::ensure!(
         search.rerank_sync_timeout_ms > 0,
@@ -139,6 +153,17 @@ mod tests {
         let mut zero_chars = config();
         zero_chars.search.rerank_llm_max_chars = 0;
         assert!(zero_chars.validate().is_err());
+
+        for tiny in [1, 2, 3, MIN_RERANK_ONNX_MAX_TOKENS - 1] {
+            let mut onnx = config();
+            onnx.search.rerank_onnx_max_tokens = tiny;
+            assert!(onnx.validate().is_err(), "{tiny}");
+        }
+        for ok in [0, MIN_RERANK_ONNX_MAX_TOKENS, 512] {
+            let mut onnx = config();
+            onnx.search.rerank_onnx_max_tokens = ok;
+            onnx.validate().unwrap();
+        }
 
         let mut zero_timeout = config();
         zero_timeout.search.rerank_sync_timeout_ms = 0;

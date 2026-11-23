@@ -9,8 +9,8 @@
 mod inner {
     use anyhow::{Context, Result};
     use std::path::Path;
-    use tokenizers::{Tokenizer, TruncationParams};
-    use tracing::{debug, info};
+    use tokenizers::{PostProcessor, Tokenizer, TruncationParams};
+    use tracing::{debug, info, warn};
     use tract_onnx::prelude::*;
 
     type Model = std::sync::Arc<TypedRunnableModel>;
@@ -145,10 +145,13 @@ mod inner {
     }
 
     /// Cap (query, document) pairs at `max_tokens` with the tokenizer's
-    /// default strategy (longest-first, so the document is cut before the
-    /// query). Doing it on the tokenizer keeps the special tokens correct —
-    /// `max_length` counts them. A tokenizer that already truncates, and
-    /// `None` / `Some(0)`, are left untouched.
+    /// default longest-first strategy: tokens come off the longer sequence
+    /// first — normally the document — and once both are the same length
+    /// both are cut, the query included. Doing it on the tokenizer keeps the
+    /// special tokens correct — `max_length` counts them. A tokenizer that
+    /// already truncates (logged), and `None` / `Some(0)`, are left
+    /// untouched. A cap that does not exceed the special tokens a pair gets
+    /// is an error: the tokenizer would subtract them unchecked and panic.
     pub(super) fn apply_truncation(
         tokenizer: &mut Tokenizer,
         max_tokens: Option<usize>,
@@ -156,18 +159,30 @@ mod inner {
         let Some(max_length) = max_tokens.filter(|&n| n > 0) else {
             return Ok(());
         };
-        if tokenizer.get_truncation().is_none() {
-            tokenizer
-                .with_truncation(Some(TruncationParams {
-                    max_length,
-                    ..Default::default()
-                }))
-                .map_err(|e| anyhow::anyhow!("Failed to set reranker truncation: {}", e))?;
-            info!(
-                "Reranker tokenizer truncates pairs at {} tokens",
-                max_length
+        if let Some(own) = tokenizer.get_truncation() {
+            warn!(
+                "Reranker tokenizer.json already truncates at {} tokens; ignoring rerank_onnx_max_tokens = {}",
+                own.max_length, max_length
             );
+            return Ok(());
         }
+        let special = tokenizer
+            .get_post_processor()
+            .map_or(0, |processor| processor.added_tokens(true));
+        anyhow::ensure!(
+            max_length > special,
+            "rerank_onnx_max_tokens = {max_length} leaves no room for the {special} special tokens of a pair"
+        );
+        tokenizer
+            .with_truncation(Some(TruncationParams {
+                max_length,
+                ..Default::default()
+            }))
+            .map_err(|e| anyhow::anyhow!("Failed to set reranker truncation: {}", e))?;
+        info!(
+            "Reranker tokenizer truncates pairs at {} tokens",
+            max_length
+        );
         Ok(())
     }
 }
@@ -243,12 +258,27 @@ mod tests {
     /// A whitespace word-level tokenizer with no post-processor, so a pair
     /// encodes to exactly `words(query) + words(document)` tokens.
     fn word_tokenizer(truncation: &str) -> Tokenizer {
+        tokenizer_with(truncation, "null")
+    }
+
+    /// The same tokenizer with BERT special tokens (`[CLS] q [SEP] d
+    /// [SEP]`: 3 for a pair), like the ms-marco cross-encoder.
+    fn bert_word_tokenizer() -> Tokenizer {
+        tokenizer_with(
+            "null",
+            r#"{"type":"BertProcessing","sep":["[SEP]",3],"cls":["[CLS]",4]}"#,
+        )
+    }
+
+    fn tokenizer_with(truncation: &str, post_processor: &str) -> Tokenizer {
         let json = format!(
             r#"{{"version":"1.0","truncation":{truncation},"padding":null,
             "added_tokens":[],"normalizer":null,
-            "pre_tokenizer":{{"type":"WhitespaceSplit"}},"post_processor":null,
+            "pre_tokenizer":{{"type":"WhitespaceSplit"}},
+            "post_processor":{post_processor},
             "decoder":null,"model":{{"type":"WordLevel",
-            "vocab":{{"[UNK]":0,"q":1,"d":2}},"unk_token":"[UNK]"}}}}"#
+            "vocab":{{"[UNK]":0,"q":1,"d":2,"[SEP]":3,"[CLS]":4}},
+            "unk_token":"[UNK]"}}}}"#
         );
         Tokenizer::from_str(&json).expect("build word tokenizer")
     }
@@ -273,12 +303,34 @@ mod tests {
     }
 
     #[test]
-    fn cap_truncates_the_document_before_the_query() {
+    fn cap_cuts_the_longer_sequence_first() {
         let mut tokenizer = word_tokenizer("null");
         inner::apply_truncation(&mut tokenizer, Some(8)).expect("apply");
+        // Longest-first: a short query survives while the 40-token
+        // document shrinks to fill the rest of the cap...
         let ids = pair_ids(&tokenizer, "q q", &"d ".repeat(40));
-        // Longest-first: the 40-token document shrinks, the query survives.
         assert_eq!(ids, vec![1, 1, 2, 2, 2, 2, 2, 2]);
+        // ...but once the document is down to the query's length, both are
+        // cut: a long query loses tokens too.
+        let ids = pair_ids(&tokenizer, &"q ".repeat(10), &"d ".repeat(40));
+        assert_eq!(ids, vec![1, 1, 1, 1, 2, 2, 2, 2]);
+    }
+
+    /// A cap at or below the special tokens of a pair would make the
+    /// tokenizer subtract past zero (a panic in debug builds); it is
+    /// refused with an error instead. One token above is accepted.
+    #[test]
+    fn cap_within_the_special_tokens_is_an_error_not_a_panic() {
+        for cap in [1, 2, 3] {
+            let mut tokenizer = bert_word_tokenizer();
+            let error = inner::apply_truncation(&mut tokenizer, Some(cap)).unwrap_err();
+            assert!(error.to_string().contains("special tokens"), "{error}");
+            assert!(tokenizer.get_truncation().is_none(), "{cap}");
+        }
+        let mut tokenizer = bert_word_tokenizer();
+        inner::apply_truncation(&mut tokenizer, Some(8)).expect("apply");
+        let ids = pair_ids(&tokenizer, "q q", &"d ".repeat(40));
+        assert_eq!(ids, vec![4, 1, 1, 3, 2, 2, 2, 3]);
     }
 
     #[test]
@@ -300,6 +352,12 @@ mod tests {
 
         let uncapped = OnnxReranker::load(Path::new(&model_dir), None).expect("load");
         assert!(uncapped.pair_len(query, &long_doc).expect("encode") > 512);
+
+        // The real BERT post-processor adds 3 tokens to a pair: a cap within
+        // them fails the load instead of panicking.
+        for tiny in [1, 2, 3] {
+            assert!(OnnxReranker::load(Path::new(&model_dir), Some(tiny)).is_err());
+        }
 
         let capped = OnnxReranker::load(Path::new(&model_dir), Some(512)).expect("load");
         assert_eq!(capped.pair_len(query, &long_doc).expect("encode"), 512);

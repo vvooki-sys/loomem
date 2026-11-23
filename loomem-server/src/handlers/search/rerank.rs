@@ -99,7 +99,9 @@ fn spawn_async(state: &Arc<AppState>, payload: &SearchRequest, input: &RerankInp
         state.config.search.rare_term_lane.candidate_cap,
     );
     let eligible_results = input.ranked.clone();
-    let chunks = documents(&results_for_rerank, &state.store, &state.config.search);
+    // The document text is built inside the task: with `rerank_date_prefix`
+    // on it reads each candidate's chunk, which stays off the request path.
+    let doc_state = Arc::clone(state);
     let query_for_rerank = prepare_llm_input(&payload.query, "reranker::rerank");
     let cache = state.query_cache.clone();
     let backend = Backend::from_state(state);
@@ -108,6 +110,11 @@ fn spawn_async(state: &Arc<AppState>, payload: &SearchRequest, input: &RerankInp
     counters.record_rerank_invocation();
 
     tokio::spawn(async move {
+        let chunks = documents(
+            &results_for_rerank,
+            &doc_state.store,
+            &doc_state.config.search,
+        );
         match backend.run_model(query_for_rerank, chunks, top_k).await {
             Ok(indices) => {
                 counters.record_rerank_completion();
