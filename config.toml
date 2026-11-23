@@ -436,7 +436,10 @@ max_associations = 3
 #     one pass over ALL active streams when it is due (schedule_* below; the
 #     dashboard Settings page / PUT /v1/dream/schedule override these at runtime,
 #     POST /v1/dream/schedule/run queues a pass for the next poll). Needs
-#     enabled = true here and [scheduler] enabled = true.
+#     enabled = true here and [scheduler] enabled = true. A run that became
+#     due while the engine was stopped runs once at the first poll after
+#     start (at most one catch-up, then the normal interval), so a machine
+#     that is restarted daily still gets its daily pass.
 #   - count-based: auto_trigger_threshold new chunks on a private stream.
 #   - manual: the memory_dream MCP tool or POST /v1/dream (one stream).
 [dream]

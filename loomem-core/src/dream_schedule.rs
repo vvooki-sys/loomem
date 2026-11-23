@@ -69,6 +69,12 @@ pub struct DreamScheduleRow {
     /// transition re-anchor instead of running a surprise catch-up pass.
     #[serde(default)]
     pub last_seen_enabled: Option<bool>,
+    /// First stream the last pass did not start because it hit the soft
+    /// deadline; the next pass starts its (sorted, wrapped) stream order
+    /// there so every stream is reached eventually. Cleared when a pass
+    /// visits every stream.
+    #[serde(default)]
+    pub resume_after: Option<String>,
 }
 
 /// Aggregate of one pass over all active streams.
@@ -105,6 +111,30 @@ pub struct DreamPassSummary {
     pub status: String,
 }
 
+impl DreamPassSummary {
+    /// Zeroed `status = "failed"` summary for a pass that started (marker
+    /// written) but never recorded its outcome — the engine stopped
+    /// mid-pass. `started_at == finished_at == last_run_at` so [`is_running`]
+    /// is false afterwards. The trigger of the interrupted pass is not
+    /// persisted anywhere, so it is reported as `"schedule"`.
+    pub fn interrupted(started_at: u64) -> Self {
+        Self {
+            started_at,
+            finished_at: started_at,
+            streams_total: 0,
+            streams_failed: 0,
+            chunks_processed: 0,
+            facts_merged: 0,
+            contradictions_resolved: 0,
+            cost_usd: 0.0,
+            cost_cap_reached: 0,
+            streams_skipped_busy: 0,
+            trigger: TRIGGER_SCHEDULE.to_string(),
+            status: STATUS_FAILED.to_string(),
+        }
+    }
+}
+
 /// Where the effective `enabled` / `interval_secs` pair comes from.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -127,7 +157,8 @@ pub enum Decision {
     /// Start a pass now with this trigger.
     Run { trigger: &'static str },
     /// Persist this row (anchor / transition bookkeeping) and do not run.
-    Write(DreamScheduleRow),
+    /// Boxed: the row is far larger than the other variants.
+    Write(Box<DreamScheduleRow>),
     /// Nothing to do this poll.
     Idle,
 }
@@ -210,12 +241,20 @@ pub fn next_run_at(row: &DreamScheduleRow, eff: &EffectiveSchedule) -> Option<u6
 }
 
 /// Due when a manual run was requested, or when the schedule is enabled and
-/// `now` has reached `next_run_at`.
+/// `now` has reached `next_run_at`. There is no upper bound: a run that
+/// became due while the engine was stopped is due at the first poll after
+/// start (one catch-up pass; the pass marker then moves the base to `now`,
+/// so the normal interval follows). A laptop-hosted engine restarted daily
+/// must not have its daily dream postponed forever.
 pub fn is_due(row: &DreamScheduleRow, eff: &EffectiveSchedule, now: u64) -> bool {
     if row.run_requested_at.is_some() {
         return true;
     }
     next_run_at(row, eff).is_some_and(|next| now >= next)
+}
+
+fn write_row(row: DreamScheduleRow) -> Decision {
+    Decision::Write(Box::new(row))
 }
 
 /// One scheduler poll, as a pure function of the row. In order:
@@ -224,7 +263,10 @@ pub fn is_due(row: &DreamScheduleRow, eff: &EffectiveSchedule, now: u64) -> bool
 /// 3. an enabled schedule that was last seen disabled, or that has no base
 ///    yet, is anchored at `now` — no catch-up run;
 /// 4. a row that never recorded `last_seen_enabled = true` records it;
-/// 5. otherwise run when due.
+/// 5. otherwise run when due — including a run that became due while the
+///    engine was stopped: at most one catch-up pass at the first poll after
+///    start, then the normal interval (see [`is_due`]). Only a disabled →
+///    enabled transition re-anchors; a restart does not.
 pub fn decide(row: &DreamScheduleRow, eff: &EffectiveSchedule, now: u64) -> Decision {
     if row.run_requested_at.is_some() {
         return Decision::Run {
@@ -235,7 +277,7 @@ pub fn decide(row: &DreamScheduleRow, eff: &EffectiveSchedule, now: u64) -> Deci
         return if row.last_seen_enabled == Some(false) {
             Decision::Idle
         } else {
-            Decision::Write(DreamScheduleRow {
+            write_row(DreamScheduleRow {
                 last_seen_enabled: Some(false),
                 ..row.clone()
             })
@@ -243,14 +285,14 @@ pub fn decide(row: &DreamScheduleRow, eff: &EffectiveSchedule, now: u64) -> Deci
     }
     let re_enabled = row.last_seen_enabled == Some(false);
     if re_enabled || base(row).is_none() {
-        return Decision::Write(DreamScheduleRow {
+        return write_row(DreamScheduleRow {
             anchor_at: Some(now),
             last_seen_enabled: Some(true),
             ..row.clone()
         });
     }
     if row.last_seen_enabled != Some(true) {
-        return Decision::Write(DreamScheduleRow {
+        return write_row(DreamScheduleRow {
             last_seen_enabled: Some(true),
             ..row.clone()
         });
@@ -272,21 +314,54 @@ pub fn poll(store: &RocksDbStore, cfg: &DreamConfig, now: u64) -> Result<Decisio
         let eff = effective(row, cfg);
         decision = decide(row, &eff, now);
         if let Decision::Write(next) = &decision {
-            *row = next.clone();
+            *row = next.as_ref().clone();
         }
     })?;
     Ok(decision)
 }
 
-/// Called once when the scheduler starts. With the dream worker off in
-/// config the poll never runs, so the disabled state is recorded here; the
-/// first poll after `[dream] enabled` is turned back on (restart) then
-/// re-anchors instead of running a catch-up pass. No-op while enabled.
-pub fn record_worker_state(store: &RocksDbStore, dream_enabled: bool) -> Result<()> {
-    if dream_enabled {
-        return Ok(());
+/// `true` while a pass has started (`last_run_at` written by the start
+/// marker) and not yet recorded its outcome: no `last_result`, or one from
+/// an earlier pass (`last_result.started_at < last_run_at`). The pass writes
+/// the same `started_at` into both, so the comparison is exact.
+pub fn is_running(row: &DreamScheduleRow) -> bool {
+    match (row.last_run_at, &row.last_result) {
+        (Some(started), Some(result)) => result.started_at < started,
+        (Some(_), None) => true,
+        (None, _) => false,
     }
-    update(store, |row| row.last_seen_enabled = Some(false)).map(drop)
+}
+
+/// Close a pass the engine stopped in the middle of: when the row says
+/// started-but-no-result, record a zeroed `"failed"` summary at the start
+/// marker so [`is_running`] is false after a restart. Returns `true` when
+/// it wrote one.
+pub fn reconcile_interrupted(row: &mut DreamScheduleRow) -> bool {
+    let Some(started_at) = row.last_run_at.filter(|_| is_running(row)) else {
+        return false;
+    };
+    row.last_result = Some(DreamPassSummary::interrupted(started_at));
+    true
+}
+
+/// Called once when the scheduler starts. Two things a poll cannot do:
+/// - with the dream worker off in config the poll never runs, so the
+///   disabled state is recorded here; the first poll after `[dream] enabled`
+///   is turned back on (restart) then re-anchors instead of catching up;
+/// - a pass interrupted by the stop is closed as `"failed"`
+///   ([`reconcile_interrupted`]).
+///
+/// A restart with the worker enabled does **not** re-anchor: a run that
+/// became due during the downtime runs once at the first poll (see
+/// [`is_due`]).
+pub fn record_worker_state(store: &RocksDbStore, dream_enabled: bool) -> Result<()> {
+    update(store, |row| {
+        if !dream_enabled {
+            row.last_seen_enabled = Some(false);
+        }
+        reconcile_interrupted(row);
+    })
+    .map(drop)
 }
 
 /// Apply an admin override (`PUT /v1/dream/schedule`). A disabled → enabled
@@ -460,7 +535,7 @@ mod tests {
         let fresh = row(Some(10), None);
         assert_eq!(
             decide(&fresh, &disabled, 10_000),
-            Decision::Write(seen(fresh.clone(), Some(false)))
+            write_row(seen(fresh.clone(), Some(false)))
         );
         assert_eq!(
             decide(&seen(fresh.clone(), Some(false)), &disabled, 10_000),
@@ -469,7 +544,7 @@ mod tests {
         // Previously enabled and overdue: still no run, just the transition.
         assert_eq!(
             decide(&seen(fresh.clone(), Some(true)), &disabled, 10_000),
-            Decision::Write(seen(fresh, Some(false)))
+            write_row(seen(fresh, Some(false)))
         );
     }
 
@@ -478,7 +553,7 @@ mod tests {
         let eff = effective(&DreamScheduleRow::default(), &cfg(true, 100));
         assert_eq!(
             decide(&row(None, None), &eff, 42),
-            Decision::Write(seen(row(Some(42), None), Some(true)))
+            write_row(seen(row(Some(42), None), Some(true)))
         );
     }
 
@@ -490,7 +565,7 @@ mod tests {
         let stale = seen(row(Some(10), Some(20)), Some(false));
         assert_eq!(
             decide(&stale, &eff, 5_000),
-            Decision::Write(DreamScheduleRow {
+            write_row(DreamScheduleRow {
                 anchor_at: Some(5_000),
                 last_seen_enabled: Some(true),
                 ..stale.clone()
@@ -519,7 +594,7 @@ mod tests {
         let legacy = row(Some(10), None);
         assert_eq!(
             decide(&legacy, &eff, 10_000),
-            Decision::Write(seen(legacy.clone(), Some(true)))
+            write_row(seen(legacy.clone(), Some(true)))
         );
         assert_eq!(
             decide(&seen(legacy, Some(true)), &eff, 10_000),
@@ -527,6 +602,106 @@ mod tests {
                 trigger: TRIGGER_SCHEDULE
             }
         );
+    }
+
+    /// G1: a run that became due while the engine was stopped runs once at
+    /// the first poll after start, then the normal interval applies.
+    #[test]
+    fn decide_overdue_row_runs_one_catch_up_then_waits_an_interval() {
+        let eff = effective(&DreamScheduleRow::default(), &cfg(true, 100));
+        let now = 10_000;
+        let overdue = seen(row(Some(10), Some(now - 3 * 100)), Some(true));
+        assert_eq!(
+            decide(&overdue, &eff, now),
+            Decision::Run {
+                trigger: TRIGGER_SCHEDULE
+            },
+            "one catch-up pass"
+        );
+        // The pass marker moves the base to now: idle until now + interval.
+        let marked = DreamScheduleRow {
+            last_run_at: Some(now),
+            ..overdue
+        };
+        assert_eq!(decide(&marked, &eff, now), Decision::Idle);
+        assert_eq!(decide(&marked, &eff, now + 99), Decision::Idle);
+        assert_eq!(
+            decide(&marked, &eff, now + 100),
+            Decision::Run {
+                trigger: TRIGGER_SCHEDULE
+            }
+        );
+    }
+
+    #[test]
+    fn is_running_compares_marker_with_recorded_outcome() {
+        let mut r = DreamScheduleRow::default();
+        assert!(!is_running(&r), "never started");
+        r.last_run_at = Some(100);
+        assert!(is_running(&r), "started, no outcome yet");
+        r.last_result = Some(DreamPassSummary::interrupted(50));
+        assert!(is_running(&r), "outcome belongs to an earlier pass");
+        r.last_result = Some(DreamPassSummary::interrupted(100));
+        assert!(!is_running(&r), "outcome of this pass recorded");
+        r.last_result = Some(DreamPassSummary::interrupted(150));
+        assert!(!is_running(&r));
+    }
+
+    #[test]
+    fn reconcile_interrupted_closes_a_started_pass_and_nothing_else() {
+        let mut idle = DreamScheduleRow::default();
+        assert!(!reconcile_interrupted(&mut idle));
+        assert_eq!(idle, DreamScheduleRow::default());
+
+        let mut done = DreamScheduleRow {
+            last_run_at: Some(100),
+            last_result: Some(DreamPassSummary::interrupted(100)),
+            ..DreamScheduleRow::default()
+        };
+        let before = done.clone();
+        assert!(!reconcile_interrupted(&mut done));
+        assert_eq!(done, before);
+
+        let mut interrupted = DreamScheduleRow {
+            last_run_at: Some(200),
+            last_result: Some(DreamPassSummary::interrupted(100)),
+            ..DreamScheduleRow::default()
+        };
+        assert!(reconcile_interrupted(&mut interrupted));
+        assert!(!is_running(&interrupted));
+        let result = interrupted.last_result.expect("summary written");
+        assert_eq!(result.status, STATUS_FAILED);
+        assert_eq!(result.started_at, 200);
+        assert_eq!(result.finished_at, 200);
+        assert_eq!(result.trigger, TRIGGER_SCHEDULE);
+        assert_eq!(result.streams_total, 0);
+        assert_eq!(result.facts_merged, 0);
+    }
+
+    #[test]
+    fn record_worker_state_reconciles_an_interrupted_pass_on_restart() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let store = open_store(&tmp);
+        update(&store, |r| r.last_run_at = Some(300))?;
+        assert!(is_running(&load(&store)?));
+
+        // Worker enabled: only the reconciliation is written.
+        record_worker_state(&store, true)?;
+        let row = load(&store)?;
+        assert!(!is_running(&row));
+        assert_eq!(row.last_seen_enabled, None);
+        let result = row.last_result.expect("interrupted pass closed");
+        assert_eq!(result.status, STATUS_FAILED);
+        assert_eq!(result.started_at, 300);
+
+        // Worker disabled with an interrupted pass: both are recorded.
+        update(&store, |r| r.last_run_at = Some(400))?;
+        record_worker_state(&store, false)?;
+        let row = load(&store)?;
+        assert!(!is_running(&row));
+        assert_eq!(row.last_seen_enabled, Some(false));
+        assert_eq!(row.last_result.map(|r| r.started_at), Some(400));
+        Ok(())
     }
 
     #[test]
@@ -601,6 +776,7 @@ mod tests {
                 status: STATUS_OK.to_string(),
             }),
             last_seen_enabled: Some(true),
+            resume_after: Some("stream-k".to_string()),
         };
         let written = update(&store, |r| *r = row.clone())?;
         assert_eq!(written, row);

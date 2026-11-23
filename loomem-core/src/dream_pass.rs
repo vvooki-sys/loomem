@@ -42,6 +42,39 @@ pub struct DreamPassContext<'a> {
     /// Soft deadline: no new stream is started at or after this instant.
     /// `None` = unbounded. Injected so tests can pass an already-reached one.
     pub deadline: Option<Instant>,
+    /// Epoch seconds of the start marker (`mark_started`); copied into the
+    /// summary unchanged so `last_result.started_at == last_run_at` exactly.
+    pub started_at: u64,
+}
+
+/// What one pass leaves behind for the schedule row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PassOutcome {
+    pub summary: DreamPassSummary,
+    /// First stream not started because of the soft deadline, `None` when
+    /// every stream was visited (see `DreamScheduleRow::resume_after`).
+    pub resume_after: Option<String>,
+}
+
+/// Order the (sorted) active streams for this pass: with a cursor, start at
+/// the first stream `>= cursor` and wrap around, so streams a deadline cut
+/// off last time come first; a cursor past every stream, or `None`, leaves
+/// the order unchanged.
+pub fn rotate_streams(mut streams: Vec<String>, resume_after: Option<&str>) -> Vec<String> {
+    let Some(cursor) = resume_after else {
+        return streams;
+    };
+    if let Some(start) = streams.iter().position(|s| s.as_str() >= cursor) {
+        streams.rotate_left(start);
+    }
+    streams
+}
+
+/// Active streams in the order this pass visits them.
+fn list_streams_for_pass(store: &RocksDbStore) -> Result<Vec<String>> {
+    let streams = store.list_active_streams()?;
+    let cursor = dream_schedule::load(store)?.resume_after;
+    Ok(rotate_streams(streams, cursor.as_deref()))
 }
 
 /// `true` when `now` has reached the (optional) deadline.
@@ -80,64 +113,78 @@ fn accumulate(summary: &mut DreamPassSummary, result: &DreamResult) {
     }
 }
 
-/// Run `dream_run` on every active stream (sorted, as `list_active_streams`
-/// returns them). A failing stream is logged and counted in `streams_failed`
-/// and the pass continues; a stream list that cannot be read yields a
-/// summary with `status = "failed"`.
-pub async fn dream_run_all_streams(ctx: DreamPassContext<'_>) -> DreamPassSummary {
-    let started_at = now_epoch();
-    let streams = match ctx.store.list_active_streams() {
+/// One stream of the pass; a failure is logged and counted, never fatal.
+async fn run_stream(ctx: &DreamPassContext<'_>, stream: &str, summary: &mut DreamPassSummary) {
+    let run_ctx = DreamRunContext {
+        pii_filter: ctx.run_ctx.pii_filter,
+        llm_config: ctx.run_ctx.llm_config,
+        dream_config: ctx.run_ctx.dream_config,
+        intent_log: ctx.run_ctx.intent_log,
+        embedding_queue: ctx.run_ctx.embedding_queue.clone(),
+    };
+    match dream_run(
+        ctx.store,
+        ctx.tantivy,
+        ctx.client,
+        run_ctx,
+        ctx.cost_tracker,
+        stream,
+    )
+    .await
+    {
+        Ok(result) => accumulate(summary, &result),
+        Err(e) => {
+            summary.streams_failed += 1;
+            warn!(trigger = ctx.trigger, "Dream pass: stream failed: {e:#}");
+        }
+    }
+}
+
+/// Run `dream_run` on every active stream, in the order [`rotate_streams`]
+/// gives (sorted, resumed after the stream a previous deadline cut off). A
+/// failing stream is logged and counted in `streams_failed` and the pass
+/// continues; a stream list that cannot be read yields a summary with
+/// `status = "failed"`. At the soft deadline the pass stops and reports the
+/// first stream it did not start as `resume_after`.
+pub async fn dream_run_all_streams(ctx: DreamPassContext<'_>) -> PassOutcome {
+    let streams = match list_streams_for_pass(ctx.store) {
         Ok(streams) => streams,
         Err(e) => {
             error!(
                 trigger = ctx.trigger,
                 "Dream pass: cannot list streams: {e:#}"
             );
-            let mut failed = new_summary(ctx.trigger, started_at, 0);
-            failed.status = STATUS_FAILED.to_string();
-            failed.finished_at = now_epoch();
-            return failed;
+            let mut summary = new_summary(ctx.trigger, ctx.started_at, 0);
+            summary.status = STATUS_FAILED.to_string();
+            summary.finished_at = now_epoch();
+            return PassOutcome {
+                summary,
+                resume_after: None,
+            };
         }
     };
-    let mut summary = new_summary(ctx.trigger, started_at, streams.len());
+    let mut summary = new_summary(ctx.trigger, ctx.started_at, streams.len());
+    let mut resume_after = None;
 
     for (visited, stream) in streams.iter().enumerate() {
         if deadline_reached(ctx.deadline, Instant::now()) {
             warn!(
                 trigger = ctx.trigger,
-                "Dream pass: soft deadline reached after {visited}/{} streams, not starting more",
+                "Dream pass: soft deadline reached after {visited}/{} streams, resuming at '{stream}' next time",
                 streams.len()
             );
             summary.status = STATUS_DEADLINE.to_string();
+            resume_after = Some(stream.clone());
             break;
         }
-        let run_ctx = DreamRunContext {
-            pii_filter: ctx.run_ctx.pii_filter,
-            llm_config: ctx.run_ctx.llm_config,
-            dream_config: ctx.run_ctx.dream_config,
-            intent_log: ctx.run_ctx.intent_log,
-            embedding_queue: ctx.run_ctx.embedding_queue.clone(),
-        };
-        match dream_run(
-            ctx.store,
-            ctx.tantivy,
-            ctx.client,
-            run_ctx,
-            ctx.cost_tracker,
-            stream,
-        )
-        .await
-        {
-            Ok(result) => accumulate(&mut summary, &result),
-            Err(e) => {
-                summary.streams_failed += 1;
-                warn!(trigger = ctx.trigger, "Dream pass: stream failed: {e:#}");
-            }
-        }
+        run_stream(&ctx, stream, &mut summary).await;
     }
 
     summary.finished_at = now_epoch();
-    summary
+    PassOutcome {
+        summary,
+        resume_after,
+    }
 }
 
 /// Owned handles for a scheduled pass, cloned from the scheduler before
@@ -207,7 +254,7 @@ pub async fn run_scheduled_pass(pass: ScheduledPass, trigger: &'static str) {
 
     let deadline =
         Instant::now().checked_add(Duration::from_secs(pass.dream_config.schedule_timeout_secs));
-    let summary = dream_run_all_streams(DreamPassContext {
+    let outcome = dream_run_all_streams(DreamPassContext {
         store: &pass.store,
         tantivy: &pass.tantivy,
         client: &pass.client,
@@ -221,12 +268,17 @@ pub async fn run_scheduled_pass(pass: ScheduledPass, trigger: &'static str) {
         cost_tracker: &pass.cost_tracker,
         trigger,
         deadline,
+        started_at,
     })
     .await;
-    record_outcome(&pass, summary);
+    record_outcome(&pass, outcome);
 }
 
-fn record_outcome(pass: &ScheduledPass, summary: DreamPassSummary) {
+fn record_outcome(pass: &ScheduledPass, outcome: PassOutcome) {
+    let PassOutcome {
+        summary,
+        resume_after,
+    } = outcome;
     info!(
         trigger = summary.trigger.as_str(),
         status = summary.status.as_str(),
@@ -249,7 +301,11 @@ fn record_outcome(pass: &ScheduledPass, summary: DreamPassSummary) {
             w.last_success_at.store(now_epoch(), Ordering::SeqCst);
         }
     }
-    if let Err(e) = dream_schedule::update(&pass.store, |row| row.last_result = Some(summary)) {
+    let written = dream_schedule::update(&pass.store, |row| {
+        row.last_result = Some(summary);
+        row.resume_after = resume_after;
+    });
+    if let Err(e) = written {
         error!("Dream pass: cannot write last_result: {e:#}");
     }
 }
@@ -380,7 +436,17 @@ mod tests {
         let row = dream_schedule::load(&store).expect("row");
         assert!(row.last_run_at.is_some(), "start marker persisted");
         assert_eq!(row.run_requested_at, None, "manual request consumed");
+        assert!(
+            !dream_schedule::is_running(&row),
+            "outcome recorded for this very pass"
+        );
+        assert_eq!(row.resume_after, None, "every stream visited");
         let result = row.last_result.expect("summary recorded");
+        assert_eq!(
+            Some(result.started_at),
+            row.last_run_at,
+            "summary carries the exact start marker"
+        );
         assert_eq!(result.status, STATUS_OK);
         assert_eq!(result.streams_total, 0);
         assert_eq!(result.streams_failed, 0);
@@ -401,7 +467,7 @@ mod tests {
     async fn all_streams_pass_with_reached_deadline_on_empty_store_is_ok() {
         let tmp = TempDir::new().expect("tempdir");
         let pass = scheduled_pass(&tmp);
-        let summary = dream_run_all_streams(DreamPassContext {
+        let outcome = dream_run_all_streams(DreamPassContext {
             store: &pass.store,
             tantivy: &pass.tantivy,
             client: &pass.client,
@@ -415,9 +481,77 @@ mod tests {
             cost_tracker: &pass.cost_tracker,
             trigger: dream_schedule::TRIGGER_SCHEDULE,
             deadline: Some(Instant::now()),
+            started_at: 7,
         })
         .await;
-        assert_eq!(summary.status, STATUS_OK);
-        assert_eq!(summary.streams_total, 0);
+        assert_eq!(outcome.summary.status, STATUS_OK);
+        assert_eq!(outcome.summary.streams_total, 0);
+        assert_eq!(outcome.summary.started_at, 7);
+        assert_eq!(outcome.resume_after, None);
+    }
+
+    fn names(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn rotate_streams_wraps_at_the_cursor() {
+        let sorted = names(&["a", "b", "c", "d"]);
+        assert_eq!(
+            rotate_streams(sorted.clone(), Some("c")),
+            names(&["c", "d", "a", "b"])
+        );
+        assert_eq!(rotate_streams(sorted.clone(), Some("a")), sorted);
+    }
+
+    #[test]
+    fn rotate_streams_with_a_vanished_cursor_starts_at_the_next_name() {
+        let sorted = names(&["a", "b", "d"]);
+        assert_eq!(
+            rotate_streams(sorted, Some("c")),
+            names(&["d", "a", "b"]),
+            "first stream >= cursor"
+        );
+    }
+
+    #[test]
+    fn rotate_streams_without_cursor_or_past_the_end_is_unchanged() {
+        let sorted = names(&["a", "b", "c"]);
+        assert_eq!(rotate_streams(sorted.clone(), None), sorted);
+        assert_eq!(rotate_streams(sorted.clone(), Some("z")), sorted);
+        assert_eq!(rotate_streams(Vec::new(), Some("a")), Vec::<String>::new());
+    }
+
+    /// A pass that stops at the deadline leaves its cursor in the row; a pass
+    /// that visits every stream clears it.
+    #[tokio::test]
+    async fn record_outcome_persists_and_clears_the_resume_cursor() {
+        let tmp = TempDir::new().expect("tempdir");
+        let pass = scheduled_pass(&tmp);
+        let mut cut = new_summary(dream_schedule::TRIGGER_SCHEDULE, 1, 3);
+        cut.status = STATUS_DEADLINE.to_string();
+        record_outcome(
+            &pass,
+            PassOutcome {
+                summary: cut,
+                resume_after: Some("stream-b".to_string()),
+            },
+        );
+        let row = dream_schedule::load(&pass.store).expect("row");
+        assert_eq!(row.resume_after.as_deref(), Some("stream-b"));
+        assert_eq!(
+            row.last_result.as_ref().map(|r| r.status.as_str()),
+            Some(STATUS_DEADLINE)
+        );
+
+        record_outcome(
+            &pass,
+            PassOutcome {
+                summary: new_summary(dream_schedule::TRIGGER_SCHEDULE, 2, 3),
+                resume_after: None,
+            },
+        );
+        let row = dream_schedule::load(&pass.store).expect("row");
+        assert_eq!(row.resume_after, None);
     }
 }

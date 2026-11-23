@@ -449,6 +449,10 @@ pub struct DreamScheduleResponse {
     pub queued: bool,
     /// `true` while the `dream` worker is paused via `/admin/workers`.
     pub paused: bool,
+    /// `true` while a pass has started and not yet recorded `last_result`
+    /// (derived from the persisted row; an engine restart closes an
+    /// interrupted pass as `"failed"`, so this never sticks).
+    pub running: bool,
     pub last_result: Option<loomem_core::dream_schedule::DreamPassSummary>,
 }
 

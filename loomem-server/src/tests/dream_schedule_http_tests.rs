@@ -46,6 +46,7 @@ async fn dream_schedule_get_returns_config_defaults() {
     );
     assert_eq!(v["queued"], serde_json::json!(false));
     assert_eq!(v["paused"], serde_json::json!(false));
+    assert_eq!(v["running"], serde_json::json!(false));
     assert!(v["last_run_at"].is_null(), "{v}");
     assert!(v["next_run_at"].is_null(), "{v}");
     assert!(v["run_requested_at"].is_null(), "{v}");
@@ -241,6 +242,41 @@ async fn dream_schedule_run_conflicts_when_worker_paused() {
     assert_eq!(status, StatusCode::OK);
     let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
     assert_eq!(v["paused"], serde_json::json!(true));
+}
+
+/// `running` follows the persisted row: true between the start marker and
+/// the recorded outcome of the same pass, false once that outcome is there.
+#[tokio::test]
+async fn dream_schedule_get_reports_running_from_the_row() {
+    let (app, state) = make_test_app();
+    loomem_core::dream_schedule::update(&state.store, |row| row.last_run_at = Some(500))
+        .expect("start marker");
+    let (status, body) = send(
+        app.clone(),
+        dream_schedule_req(Method::GET, "/v1/dream/schedule", None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert_eq!(v["running"], serde_json::json!(true));
+    assert_eq!(v["last_run_at"], serde_json::json!(500));
+    assert!(v["last_result"].is_null(), "{v}");
+
+    loomem_core::dream_schedule::update(&state.store, |row| {
+        row.last_result = Some(loomem_core::dream_schedule::DreamPassSummary::interrupted(
+            500,
+        ));
+    })
+    .expect("outcome");
+    let (status, body) = send(
+        app,
+        dream_schedule_req(Method::GET, "/v1/dream/schedule", None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert_eq!(v["running"], serde_json::json!(false));
+    assert_eq!(v["last_result"]["status"], serde_json::json!("failed"));
 }
 
 /// Without any bearer the auth middleware rejects the admin endpoints

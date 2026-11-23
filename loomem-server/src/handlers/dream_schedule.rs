@@ -32,6 +32,7 @@ fn response_from(state: &AppState, row: &DreamScheduleRow) -> DreamScheduleRespo
         poll_secs: DREAM_POLL_SECS,
         queued: row.run_requested_at.is_some(),
         paused: is_worker_paused(&state.workers, "dream"),
+        running: dream_schedule::is_running(row),
         last_result: row.last_result.clone(),
     }
 }
