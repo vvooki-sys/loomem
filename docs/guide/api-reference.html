@@ -634,6 +634,7 @@ a:hover{text-decoration:underline}
   &quot;poll_secs&quot;: 60,
   &quot;queued&quot;: false,
   &quot;paused&quot;: false,
+  &quot;running&quot;: false,
   &quot;last_result&quot;: {
     &quot;started_at&quot;: 1763851200,
     &quot;finished_at&quot;: 1763851460,
@@ -650,7 +651,7 @@ a:hover{text-decoration:underline}
   }
 }
 </code></pre>
-<p>Timestamps are epoch seconds, <code>null</code> when unknown. <code>source</code> is <code>&quot;config&quot;</code> when the values come from <code>[dream]</code> and <code>&quot;override&quot;</code> when an admin changed them. <code>paused</code> is <code>true</code> while the <code>dream</code> worker is paused via <code>/admin/workers</code>. <code>last_result</code> summarizes the last scheduled or manual pass: <code>trigger</code> is <code>&quot;schedule&quot;</code> or <code>&quot;manual&quot;</code>, <code>cost_cap_reached</code> counts streams that hit <code>cost_cap_usd_per_run</code>, <code>streams_skipped_busy</code> counts streams another dream run already held, and <code>status</code> is <code>&quot;ok&quot;</code>, <code>&quot;deadline&quot;</code> (the soft deadline <code>schedule_timeout_secs</code> stopped the pass before every stream was visited) or <code>&quot;failed&quot;</code> (the pass could not run, for example the stream list could not be read). The scheduled pass runs a dream over every active stream.</p>
+<p>Timestamps are epoch seconds, <code>null</code> when unknown. <code>source</code> is <code>&quot;config&quot;</code> when the values come from <code>[dream]</code> and <code>&quot;override&quot;</code> when an admin changed them. <code>paused</code> is <code>true</code> while the <code>dream</code> worker is paused via <code>/admin/workers</code>. <code>running</code> is <code>true</code> from the moment a pass wrote its start marker until it recorded <code>last_result</code>; an engine restart closes an interrupted pass as <code>last_result.status</code> <code>&quot;failed&quot;</code>, so it never stays true. The dashboard keeps refreshing while a run is queued or running. <code>last_result</code> summarizes the last scheduled or manual pass: <code>trigger</code> is <code>&quot;schedule&quot;</code> or <code>&quot;manual&quot;</code>, <code>cost_cap_reached</code> counts streams that hit <code>cost_cap_usd_per_run</code>, <code>streams_skipped_busy</code> counts streams another dream run already held, and <code>status</code> is <code>&quot;ok&quot;</code>, <code>&quot;deadline&quot;</code> (the soft deadline <code>schedule_timeout_secs</code> stopped the pass before every stream was visited) or <code>&quot;failed&quot;</code> (the pass could not run, for example the stream list could not be read). The scheduled pass runs a dream over every active stream.</p>
 <h3 id="put-v1dreamschedule">PUT /v1/dream/schedule</h3>
 <p>Override the schedule at runtime. Admin only. The override is stored in the engine's database and survives restarts.</p>
 <pre><code class="language-json">{ &quot;enabled&quot;: true, &quot;interval_secs&quot;: 86400 }

@@ -358,6 +358,7 @@ Current dream schedule and the result of the last pass. Admin only.
   "poll_secs": 60,
   "queued": false,
   "paused": false,
+  "running": false,
   "last_result": {
     "started_at": 1763851200,
     "finished_at": 1763851460,
@@ -375,7 +376,7 @@ Current dream schedule and the result of the last pass. Admin only.
 }
 ```
 
-Timestamps are epoch seconds, `null` when unknown. `source` is `"config"` when the values come from `[dream]` and `"override"` when an admin changed them. `paused` is `true` while the `dream` worker is paused via `/admin/workers`. `last_result` summarizes the last scheduled or manual pass: `trigger` is `"schedule"` or `"manual"`, `cost_cap_reached` counts streams that hit `cost_cap_usd_per_run`, `streams_skipped_busy` counts streams another dream run already held, and `status` is `"ok"`, `"deadline"` (the soft deadline `schedule_timeout_secs` stopped the pass before every stream was visited) or `"failed"` (the pass could not run, for example the stream list could not be read). The scheduled pass runs a dream over every active stream.
+Timestamps are epoch seconds, `null` when unknown. `source` is `"config"` when the values come from `[dream]` and `"override"` when an admin changed them. `paused` is `true` while the `dream` worker is paused via `/admin/workers`. `running` is `true` from the moment a pass wrote its start marker until it recorded `last_result`; an engine restart closes an interrupted pass as `last_result.status` `"failed"`, so it never stays true. The dashboard keeps refreshing while a run is queued or running. `last_result` summarizes the last scheduled or manual pass: `trigger` is `"schedule"` or `"manual"`, `cost_cap_reached` counts streams that hit `cost_cap_usd_per_run`, `streams_skipped_busy` counts streams another dream run already held, and `status` is `"ok"`, `"deadline"` (the soft deadline `schedule_timeout_secs` stopped the pass before every stream was visited) or `"failed"` (the pass could not run, for example the stream list could not be read). The scheduled pass runs a dream over every active stream.
 
 ### PUT /v1/dream/schedule
 

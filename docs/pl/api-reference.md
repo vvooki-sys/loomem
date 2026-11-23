@@ -402,6 +402,7 @@ Bieżący harmonogram dream i wynik ostatniego przebiegu. Tylko administrator.
   "poll_secs": 60,
   "queued": false,
   "paused": false,
+  "running": false,
   "last_result": {
     "started_at": 1763851200,
     "finished_at": 1763851460,
@@ -419,7 +420,7 @@ Bieżący harmonogram dream i wynik ostatniego przebiegu. Tylko administrator.
 }
 ```
 
-Znaczniki czasu to sekundy epoki, `null` gdy nieznane. `source` to `"config"`, gdy wartości pochodzą z `[dream]`, a `"override"`, gdy zmienił je administrator. `paused` ma wartość `true`, gdy proces `dream` jest wstrzymany przez `/admin/workers`. `last_result` podsumowuje ostatni zaplanowany lub ręczny przebieg: `trigger` to `"schedule"` lub `"manual"`, `cost_cap_reached` liczy strumienie, które osiągnęły `cost_cap_usd_per_run`, `streams_skipped_busy` liczy strumienie, które już przetwarzał inny przebieg dream, a `status` to `"ok"`, `"deadline"` (miękki termin `schedule_timeout_secs` przerwał przebieg przed odwiedzeniem wszystkich strumieni) lub `"failed"` (przebieg nie mógł się wykonać, np. nie udało się odczytać listy strumieni). Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia.
+Znaczniki czasu to sekundy epoki, `null` gdy nieznane. `source` to `"config"`, gdy wartości pochodzą z `[dream]`, a `"override"`, gdy zmienił je administrator. `paused` ma wartość `true`, gdy proces `dream` jest wstrzymany przez `/admin/workers`. `running` ma wartość `true` od chwili, gdy przebieg zapisał znacznik startu, do zapisania `last_result`; restart silnika zamyka przerwany przebieg jako `last_result.status` `"failed"`, więc flaga nigdy nie zostaje na `true`. Dashboard odświeża kartę, dopóki uruchomienie jest w kolejce lub trwa. `last_result` podsumowuje ostatni zaplanowany lub ręczny przebieg: `trigger` to `"schedule"` lub `"manual"`, `cost_cap_reached` liczy strumienie, które osiągnęły `cost_cap_usd_per_run`, `streams_skipped_busy` liczy strumienie, które już przetwarzał inny przebieg dream, a `status` to `"ok"`, `"deadline"` (miękki termin `schedule_timeout_secs` przerwał przebieg przed odwiedzeniem wszystkich strumieni) lub `"failed"` (przebieg nie mógł się wykonać, np. nie udało się odczytać listy strumieni). Zaplanowany przebieg uruchamia dream dla każdego aktywnego strumienia.
 
 <span id="put-v1dreamschedule"></span>
 

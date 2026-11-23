@@ -41,6 +41,10 @@ to the shipped `config.toml` only (see Changed).
   second run on a busy stream returns at once: `POST /v1/dream` reports
   `skipped_busy: true`, `memory_dream` says it was skipped, the scheduled pass
   counts it in `last_result.streams_skipped_busy`).
+  A run that became due while the engine was stopped runs once at the first
+  poll after start (a restart does not re-anchor), and a pass cut off by
+  `schedule_timeout_secs` resumes at the first unstarted stream next time.
+  The schedule response also carries `running` and `paused`.
   Upgrade note: the code default of `schedule_enabled` is `false`, so a config
   written before this key existed stays on-demand; the shipped `config.toml`
   sets it to `true`, which turns the daily pass on for new installs.
