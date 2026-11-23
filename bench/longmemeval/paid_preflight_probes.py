@@ -226,6 +226,21 @@ def transcript_tokens_check(env, holdout, histories, limit, render):
 
 
 # -- gold leak scan ----------------------------------------------------------------
+def _request_texts(raw):
+    """The saved request as the provider sees it: every message's DECODED content plus the raw
+    file. The file escapes quotes inside content (`\\"reference_answer\\"`), so the JSON-key
+    markers only match on the decoded strings."""
+    texts = [raw]
+    try:
+        wire = json.loads(raw)
+        for message in wire.get("messages") or []:
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                texts.append(message["content"])
+    except (ValueError, AttributeError):
+        pass
+    return texts
+
+
 def gold_scan(directory, journal_state, holdout):
     from paid_holdout import KEY_MARKERS, PRIVATE_FIELDS
     markers, excluded = list(KEY_MARKERS), {field: 0 for field in PRIVATE_FIELDS}
@@ -241,7 +256,9 @@ def gold_scan(directory, journal_state, holdout):
         if not path.is_file():
             continue
         scanned += 1
-        hits = leaks_gold(path.read_text(encoding="utf-8"), markers)
+        hits = set()
+        for text in _request_texts(path.read_text(encoding="utf-8")):
+            hits.update(leaks_gold(text, markers))
         if hits:
             leaks.append(f"{rid[:12]} ({intent.get('stage')}): {len(hits)} marker(s)")
     skipped = ", ".join(f"{field}={n}" for field, n in excluded.items() if n)
