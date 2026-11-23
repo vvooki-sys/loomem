@@ -326,6 +326,7 @@ fn probe_config() -> loomem_core::config::Config {
             rerank_sync: false,
             rerank_sync_timeout_ms: 2000,
             event_date_proximity_boost: 0.0,
+            content_dedup: Default::default(),
         },
         advisor: loomem_core::config::AdvisorConfig::default(),
         worker: loomem_core::config::WorkerConfig::default(),

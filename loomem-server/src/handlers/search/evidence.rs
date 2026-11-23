@@ -483,3 +483,7 @@ mod tests {
 #[cfg(test)]
 #[path = "evidence/final_tests.rs"]
 mod final_tests;
+
+#[cfg(test)]
+#[path = "evidence/dedup_tests.rs"]
+mod dedup_tests;

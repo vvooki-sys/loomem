@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `memory_search` can insert `## <key>` group headers (per source session or
   per day; order and numbering unchanged, none for aggregation queries),
   behind `[mcp] search_group_by` (default `"none"`, byte-identical).
+- `[search] content_dedup = "exact"` collapses only byte-identical search
+  results (plain chunks of at least 30 bytes, never fragments), so an update
+  or negation after a long shared opening is no longer hidden. The default
+  `"prefix"` keeps the previous rule (a leading run over 80% of the shorter
+  150-char lowercase prefix, both at least 30 bytes, with the fragment
+  exceptions) byte-identical; drops keep the `content_prefix_dedup` reason.
 - `[search] rerank_sync` reranks on the request path, so the fresh
   `/v1/search` response already carries the reranked order; on error or
   after `rerank_sync_timeout_ms` (default 2000) it keeps the fused order

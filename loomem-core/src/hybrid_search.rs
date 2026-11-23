@@ -139,6 +139,11 @@ pub struct SearchConfig {
     /// range. 0.0 == disabled (byte-identical).
     #[serde(default)]
     pub event_date_proximity_boost: f64,
+    /// Result dedup rule in `filter_candidates`. Default `prefix` (the
+    /// previous 150-char prefix rule, byte-identical); `exact` collapses
+    /// only byte-identical plain chunks.
+    #[serde(default)]
+    pub content_dedup: crate::search::ContentDedup,
 }
 
 fn default_rerank_candidates() -> usize {
@@ -743,6 +748,7 @@ mod tests {
                 rerank_sync: false,
                 rerank_sync_timeout_ms: 2000,
                 event_date_proximity_boost: 0.0,
+                content_dedup: Default::default(),
             },
             advisor: crate::config::AdvisorConfig::default(),
             worker: crate::config::WorkerConfig::default(),
