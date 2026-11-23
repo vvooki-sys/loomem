@@ -1,6 +1,6 @@
 //! `[search] content_dedup` end to end through `/v1/search`: the default
-//! envelope equals an explicit `prefix`, which hides an update that only
-//! differs after the first 150 chars; `exact` returns both chunks.
+//! resolves to `prefix`, which hides an update that only differs after the
+//! first 150 chars; `exact` returns both chunks.
 use crate::tests::{make_test_app, make_test_app_cfg, send};
 use axum::{body::Body, http::Request};
 use loomem_core::search::ContentDedup;
@@ -94,13 +94,23 @@ fn ids(response: &Value) -> Vec<&str> {
         .collect()
 }
 
+/// The default resolves to `Prefix` (the shipped config.toml is pinned by
+/// core's `shipped_config_keeps_every_lever_off`), so it keeps today's
+/// behaviour: the update shares the first 150 chars and is hidden.
+/// Byte-identity with main is the pinned snapshot in
+/// `evidence/dedup_tests.rs`, not this test.
 #[tokio::test]
-async fn http_explicit_prefix_is_identical_to_the_shipped_default() {
-    let expected = search(&app(None).await).await;
-    let actual = search(&app(Some(ContentDedup::Prefix)).await).await;
-    assert_eq!(actual, expected);
-    // Today's behaviour: the update shares the first 150 chars and is hidden.
-    assert_eq!(ids(&expected).len(), 1, "{expected}");
+async fn http_default_resolves_to_prefix_and_hides_the_update() {
+    assert_eq!(
+        make_test_app().1.config.search.content_dedup,
+        ContentDedup::Prefix
+    );
+    let default = search(&app(None).await).await;
+    assert_eq!(ids(&default).len(), 1, "{default}");
+    assert_eq!(
+        default,
+        search(&app(Some(ContentDedup::Prefix)).await).await
+    );
 }
 
 #[tokio::test]

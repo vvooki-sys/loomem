@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentDedup {
-    /// Collapse results sharing more than 80% of their first 150 lowercase
-    /// chars (the previous behaviour, byte-identical).
+    /// Drop a result whose first 150 lowercase chars share a leading run
+    /// longer than 80% of the shorter of the two (both at least 30 bytes),
+    /// except fragments of different sources and a fragment against its own
+    /// source (the previous behaviour, byte-identical).
     #[default]
     Prefix,
     /// Collapse only byte-identical plain chunks of at least 30 bytes and
