@@ -106,6 +106,77 @@ async fn stage_with_reranker_on_but_uncacheable_request_does_not_spawn() {
     assert_eq!(state.retrieval_counters.snapshot().rerank_invocations, 0);
 }
 
+/// Drive the current-thread runtime until the spawned rerank has reported
+/// a completion, without sleeping: the keyless LLM path performs no I/O,
+/// so the task finishes on its first poll and one yield is enough. The
+/// bound only turns a regression into a failure instead of a hang.
+async fn wait_for_completion(state: &Arc<AppState>) {
+    for _ in 0..1_000 {
+        if state.retrieval_counters.snapshot().rerank_completions == 1 {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("async rerank never completed");
+}
+
+/// Positive path of the W0 stage: reranker on, cacheable request, no ONNX
+/// model and no LLM key. The stage still returns the input unchanged (the
+/// fresh response keeps the fused order), records one invocation and
+/// spawns the model call. Keyless, `reranker::rerank` answers with the
+/// identity order instead of an error (it maps every provider failure to
+/// `Ok(identity)`; only a 2xx with malformed or truncated JSON is an
+/// `Err`), so the spawn publishes a reranked slot that merely repeats the
+/// fused head. The `Err` arm — no publish, no completion — needs a backend
+/// stub and is covered when the synchronous rerank lands.
+#[tokio::test]
+async fn stage_with_reranker_on_spawns_keyless_identity_rerank() {
+    let (_app, original) = make_test_app();
+    let mut config = original.config.clone();
+    config.search.rerank_enabled = true;
+    // Never resolve a real key from the developer's environment.
+    config.llm.api_key = None;
+    config.llm.api_key_env = "LOOMEM_W0_TEST_KEY_THAT_IS_NEVER_SET".into();
+    config.llm.providers.clear();
+    config.llm.provider = "openai".into();
+    assert!(
+        config.llm.active_provider().is_err(),
+        "test must stay keyless"
+    );
+    let (_app, state) = make_test_app_cfg(config);
+    #[cfg(feature = "onnx-rerank")]
+    assert!(state.onnx_reranker.is_none());
+    let payload = request("lantern");
+    let ctx = prepare_query_context(&state, &auth(), &payload).unwrap();
+    let key = ctx.cache_key.expect("plain request is cacheable");
+    let generation = state.query_cache.lock().await.generation();
+
+    let input = RerankInput {
+        ranked: pool(),
+        final_top_k: 2,
+        lane: None,
+        cache_generation: generation,
+    };
+    let out = stage(&state, &ctx, &payload, &auth(), input).await;
+
+    assert_eq!(as_json(&out), as_json(&pool()), "pool returned unchanged");
+    assert_eq!(state.retrieval_counters.snapshot().rerank_invocations, 1);
+
+    wait_for_completion(&state).await;
+    let (is_reranked, cached) = state
+        .query_cache
+        .lock()
+        .await
+        .get_best(key)
+        .expect("keyless rerank publishes the identity order");
+    assert!(is_reranked);
+    assert_eq!(
+        cached.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        ["a", "b"],
+        "identity order, cut to final_top_k"
+    );
+}
+
 fn chunk(id: &str, content: &str) -> Chunk {
     serde_json::from_value(json!({
         "id": id, "content": content, "stream": STREAM,
@@ -170,12 +241,16 @@ fn ids(response: &Value) -> Vec<&str> {
         .collect()
 }
 
-/// HTTP identity: the test defaults and the levers spelled out at their
-/// off values produce the same `/v1/search` envelope for the same corpus.
-/// Later waves extend this with the lever on where the response must stay
-/// identical (async-to-cache levers). Time decay is switched off in both
-/// arms because it reads the wall clock in whole seconds, which would make
-/// two responses differ across a second boundary regardless of the levers.
+/// HTTP identity scaffold for waves 1-2. In W0 both arms run the same
+/// effective config (defaults vs the levers spelled out at their off
+/// values), so this proves only that the harness is deterministic — the
+/// zero-change evidence for the extraction itself is the verbatim diff plus
+/// the existing rerank_cache / cache_hit / cache_policy tests. The lever PRs
+/// flip one flag in the second arm and keep the assertion where the fresh
+/// response must stay identical (async-to-cache levers). Time decay is
+/// switched off in both arms because it reads the wall clock in whole
+/// seconds, which would make two responses differ across a second boundary
+/// regardless of the levers.
 #[tokio::test]
 async fn http_responses_are_identical_with_every_lever_off() {
     let (_, original) = make_test_app();
