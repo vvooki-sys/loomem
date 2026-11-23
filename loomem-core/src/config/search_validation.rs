@@ -108,13 +108,14 @@ mod tests {
         assert_eq!(decoded.top_k, original.search.top_k);
     }
 
-    const LEVER_KEYS: [&str; 6] = [
+    const LEVER_KEYS: [&str; 7] = [
         "rerank_date_prefix",
         "rerank_llm_max_chars",
         "rerank_onnx_max_tokens",
         "rerank_sync",
         "rerank_sync_timeout_ms",
         "event_date_proximity_boost",
+        "content_dedup",
     ];
 
     fn assert_levers_off(search: &SearchConfig) {
@@ -124,6 +125,7 @@ mod tests {
         assert!(!search.rerank_sync);
         assert_eq!(search.rerank_sync_timeout_ms, 2000);
         assert_eq!(search.event_date_proximity_boost, 0.0);
+        assert_eq!(search.content_dedup, crate::search::ContentDedup::Prefix);
     }
 
     /// A pre-lever config file (none of the new keys) loads with every lever
@@ -146,6 +148,24 @@ mod tests {
         let config = config();
         assert_levers_off(&config.search);
         config.validate().unwrap();
+    }
+
+    /// `content_dedup` is a closed enum: an unknown value fails the load,
+    /// `"exact"` loads.
+    #[test]
+    fn content_dedup_rejects_unknown_value() {
+        let shipped = include_str!("../../../config.toml");
+        let line = "content_dedup = \"prefix\"";
+        assert_eq!(shipped.matches(line).count(), 1);
+        let bogus = shipped.replace(line, "content_dedup = \"bogus\"");
+        assert!(toml::from_str::<Config>(&bogus).is_err());
+        let exact: Config =
+            toml::from_str(&shipped.replace(line, "content_dedup = \"exact\"")).unwrap();
+        assert_eq!(
+            exact.search.content_dedup,
+            crate::search::ContentDedup::Exact
+        );
+        exact.validate().unwrap();
     }
 
     #[test]
