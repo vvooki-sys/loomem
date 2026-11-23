@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import paid_phases
 from paid_fake_engine import FakeEngine, FakeEngineError
 from paid_runner import main as _main
 from test_paid_preflight import build_fixture, runner_env, tokenizer_available
@@ -46,6 +47,18 @@ def factory_for(cls):
         profile = campaign.profile("extraction")
         return lambda url, token: cls(url, token, profile=profile, top_k=60)
     return outer
+
+
+class RunPhasesSelectionTests(unittest.TestCase):
+    def test_control_calls_no_phase_function_and_all_skips_control(self):
+        calls = []
+        fakes = {name: (lambda ctx, name=name: calls.append(name)) for name in paid_phases.PHASES}
+        self.assertNotIn("control", paid_phases.PHASES)
+        with mock.patch.dict(paid_phases.PHASES, fakes):
+            self.assertEqual(paid_phases.run_phases(object(), "control"), [])
+            self.assertEqual(calls, [])
+            self.assertEqual(paid_phases.run_phases(object(), "all"), ["extraction", "retrieval", "arms", "judge"])
+        self.assertEqual(calls, ["extraction", "retrieval", "arms", "judge"])
 
 
 class PhaseResumeTests(unittest.TestCase):
