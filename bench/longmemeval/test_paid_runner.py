@@ -210,7 +210,7 @@ class AcknowledgeUncertainTests(unittest.TestCase):
         probe = mock.patch("paid_preflight_engine.probe_engine",
                            return_value={"passed": True, "problems": [], "observed": {
                                "system_bytes": 1, "wire_overhead_bytes": 1, "sheet_system_extraction": 6000,
-                               "system_sha256": "0" * 64}})
+                               "system_sha256": "0" * 64, "readiness_bad_body_status": 422}})
         probe.start()
         self.addCleanup(probe.stop)
         self.env = runner_env(OPENAI_API_KEY=self.fake.token)

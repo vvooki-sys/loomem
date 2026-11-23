@@ -77,6 +77,10 @@ class ProbeEngineTests(unittest.TestCase):
         result = probe_engine(self.spec, self.sheet, mode="dry_run", engine_factory=factory(readiness=404))
         self.assertFalse(result["passed"])
         self.assertTrue(any("not an evaluation build" in p for p in result["problems"]))
+        # axum answers 422 to a body that fails deserialisation: still the evaluation route.
+        self.assertTrue(probe_engine(self.spec, self.sheet, mode="dry_run", engine_factory=factory(readiness=422))["passed"])
+        other = probe_engine(self.spec, self.sheet, mode="dry_run", engine_factory=factory(readiness=503))
+        self.assertTrue(any("expected 400/422" in p for p in other["problems"]))
 
     def test_missing_pin_fails_only_in_paid_mode(self):
         self.assertTrue(probe_engine(self.spec, self.sheet, mode="dry_run", engine_factory=factory())["passed"])

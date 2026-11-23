@@ -25,6 +25,7 @@ PROBE_SESSION = {"session_id": "preflight-probe", "conversation_date": "2026-01-
                            {"role": "assistant", "content": "Noted; nothing to remember."}]}
 ARTIFACT_KEYS = ("binary", "binary_sha256", "template", "template_sha256", "model_dir", "model_onnx_sha256",
                  "tokenizer_sha256")
+EVALUATION_REJECTIONS = (400, 422)   # what the evaluation route answers to a deliberately bad body
 
 
 class CaptureProvider:
@@ -108,10 +109,12 @@ def probe_engine(spec, sheet, *, mode, engine_factory=None):
             engine.start(Path(directory) / "engine", reuse=False)
             status = engine.readiness_probe()
             observed["readiness_bad_body_status"] = status
+            # axum rejects a body that fails deserialisation with 422 (400 for malformed JSON);
+            # only a build without `--features evaluation` has no such route at all (404).
             if status == 404:
                 problems.append("binary is not an evaluation build (ingest-readiness-v2 answers 404)")
-            elif status != 400:
-                problems.append(f"ingest-readiness-v2 answered HTTP {status} to a bad body (expected 400)")
+            elif status not in EVALUATION_REJECTIONS:
+                problems.append(f"ingest-readiness-v2 answered HTTP {status} to a bad body (expected 400/422)")
             try:
                 engine.ingest_session(PROBE_SESSION)
             except Exception:  # the capture provider answers 400: the engine's extraction fails by design
@@ -161,6 +164,7 @@ def format_probe(result):
     observed = result["observed"]
     if result["problems"]:
         return "; ".join(result["problems"])
-    return (f"evaluation build (bad readiness body -> 400); extraction system {observed['system_bytes']} B, "
+    return (f"evaluation build (bad readiness body -> {observed['readiness_bad_body_status']}); "
+            f"extraction system {observed['system_bytes']} B, "
             f"wire overhead {observed['wire_overhead_bytes']} <= SYSTEM[\"extraction\"] {observed['sheet_system_extraction']}; "
             f"fingerprint {observed['system_sha256'][:12]}")

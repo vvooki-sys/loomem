@@ -246,7 +246,7 @@ class EvaluationEngine:
         return self._json(status, raw, path)
 
     def readiness_probe(self):
-        """HTTP status of a deliberately bad readiness-v2 body: 400 on an evaluation build, 404 otherwise."""
+        """HTTP status of a deliberately bad readiness-v2 body: 400/422 on an evaluation build, 404 otherwise."""
         status, _, _ = self._request("POST", READINESS_PATH, {"schema_version": 1})
         return status
 
