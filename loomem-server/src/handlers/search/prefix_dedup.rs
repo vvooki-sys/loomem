@@ -12,7 +12,11 @@
 //! higher. Every other pairing — two plain chunks, two fragments of one
 //! source, a fragment against an unrelated non-fragment — keeps the
 //! pre-existing rule.
-use loomem_core::RocksDbStore;
+use loomem_core::search::ContentDedup;
+use loomem_core::{HybridSearchResult, RocksDbStore};
+
+use super::rejections::RejectionLog;
+use crate::handlers::types::RejectionReason;
 
 /// Dedup key of one ranked candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +81,51 @@ pub(super) fn fragment_source(store: &RocksDbStore, chunk_id: &str) -> Option<St
         .flatten()?
         .fragment
         .map(|fragment| fragment.source_id)
+}
+
+/// The content dedup pass of `filter_candidates`: drop duplicate results in
+/// rank order (the higher-ranked one is kept) under the configured `mode`,
+/// recording each dropped id as `content_prefix_dedup`.
+pub(super) fn apply(
+    results: &mut Vec<HybridSearchResult>,
+    store: &RocksDbStore,
+    mode: ContentDedup,
+    log: &mut RejectionLog,
+    stage: &'static str,
+) {
+    match mode {
+        // `Exact` is wired in the next change; until then both run the
+        // shipped prefix rule.
+        ContentDedup::Prefix | ContentDedup::Exact => prefix(results, store, log, stage),
+    }
+}
+
+/// Deduplicate near-identical results: keep highest-scored, collapse similar content.
+/// Uses first 150 chars as fingerprint — catches duplicate ingest from daily logs.
+/// Fragments of different sources are distinct evidence and never collapse,
+/// nor does a fragment collapse against its own source.
+fn prefix(
+    results: &mut Vec<HybridSearchResult>,
+    store: &RocksDbStore,
+    log: &mut RejectionLog,
+    stage: &'static str,
+) {
+    let mut seen_fingerprints: Vec<Fingerprint> = Vec::new();
+    let reason = RejectionReason::ContentPrefixDedup;
+    log.retain(results, stage, reason, |r| {
+        let source = fragment_source(store, &r.id);
+        let fp = Fingerprint::new(&r.id, &r.content, source.as_deref());
+        let dominated = seen_fingerprints
+            .iter()
+            .any(|existing| fp.dominated_by(existing));
+        if dominated {
+            tracing::debug!("Dedup: dropped duplicate result {}", r.id);
+            false
+        } else {
+            seen_fingerprints.push(fp);
+            true
+        }
+    });
 }
 
 #[cfg(test)]
