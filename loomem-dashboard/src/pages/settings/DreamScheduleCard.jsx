@@ -7,8 +7,9 @@ import { errorCopy } from "../../lib/errorCopy";
 // the single source of truth — every mutation re-renders from the response
 // (PUT returns the same shape as GET; POST .../run returns it with
 // `queued: true`). A queued run is executed by the scheduler at its next
-// poll (≤ `poll_secs`), so while a run is queued the card re-fetches until
-// the server reports the request consumed.
+// poll (≤ `poll_secs`) and `running` stays true until the pass has recorded
+// its `last_result`, so the card re-fetches while either is set and the
+// fresh result line appears without a reload.
 
 const PRESETS = [
   { value: 21600, label: "6 h" },
@@ -59,6 +60,12 @@ function isQueued(schedule) {
   return schedule?.queued === true || schedule?.run_requested_at != null;
 }
 
+// True from the pass's start marker until it records `last_result`. Missing
+// on an older server → not running.
+function isRunning(schedule) {
+  return schedule?.running === true;
+}
+
 function Row({ label, children }) {
   return (
     <div className="px-5 py-4">
@@ -94,20 +101,24 @@ export default function DreamScheduleCard({ push }) {
     };
   }, []);
 
-  // While a run is queued, re-fetch until the scheduler has picked it up
-  // (the server clears `run_requested_at` when the pass starts).
+  // While a run is queued or in progress, re-fetch until the pass has
+  // recorded its result (the server clears `run_requested_at` when the pass
+  // starts and `running` when it finishes), so `last_result` appears
+  // without a reload.
   const queued = isQueued(schedule);
+  const running = isRunning(schedule);
+  const polling = queued || running;
   useEffect(() => {
-    if (!queued) return undefined;
+    if (!polling) return undefined;
     const timer = window.setInterval(() => {
       getDreamSchedule()
         .then((data) => setSchedule(data))
         .catch(() => {
-          // Transient poll failure — keep the queued state and retry.
+          // Transient poll failure — keep the current state and retry.
         });
     }, QUEUED_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [queued]);
+  }, [polling]);
 
   const dreamOff = schedule?.dream_enabled === false;
   const schedulerOff = schedule?.scheduler_enabled === false;
@@ -231,7 +242,11 @@ export default function DreamScheduleCard({ push }) {
 
       <Row label="Next run">
         <div className="font-mono text-sm">
-          {queued ? "Queued — runs within a minute" : fmtEpoch(schedule?.next_run_at)}
+          {queued
+            ? "Queued — runs within a minute"
+            : running
+              ? "Running now…"
+              : fmtEpoch(schedule?.next_run_at)}
         </div>
       </Row>
 
@@ -247,10 +262,10 @@ export default function DreamScheduleCard({ push }) {
         <button
           type="button"
           onClick={runNow}
-          disabled={schedule == null || dreamOff || schedulerOff || paused || queued || queuing}
+          disabled={schedule == null || dreamOff || schedulerOff || paused || polling || queuing}
           className="px-3 py-1.5 rounded-full text-xs border border-(--border-strong) hover:bg-(--row-hover) disabled:opacity-50"
         >
-          {queuing ? "Queuing…" : queued ? "Queued" : "Run now"}
+          {queuing ? "Queuing…" : queued ? "Queued" : running ? "Running" : "Run now"}
         </button>
       </div>
     </section>

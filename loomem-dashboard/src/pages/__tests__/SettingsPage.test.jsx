@@ -256,7 +256,7 @@ describe("SettingsPage — Dream card", () => {
   });
 });
 
-describe("SettingsPage — queued polling", () => {
+describe("SettingsPage — queued/running polling", () => {
   const QUEUED = { ...SCHEDULE, run_requested_at: 1763900000, queued: true };
   const CONSUMED = { ...SCHEDULE, last_run_at: 1763900030, run_requested_at: null, queued: false };
 
@@ -298,6 +298,82 @@ describe("SettingsPage — queued polling", () => {
     // Polling has stopped: no further GETs.
     await tick(60_000);
     expect(api.getDreamSchedule).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps polling through running: true and renders the new result once the pass finishes", async () => {
+    const started = 1763900030;
+    const RUNNING = {
+      ...SCHEDULE,
+      last_run_at: started,
+      run_requested_at: null,
+      queued: false,
+      running: true,
+    };
+    const FINISHED = {
+      ...RUNNING,
+      running: false,
+      next_run_at: started + 86400,
+      last_result: { ...SCHEDULE.last_result, status: "ok", facts_merged: 11, contradictions_resolved: 0 },
+    };
+    api.getDreamSchedule
+      .mockResolvedValueOnce(QUEUED)
+      .mockResolvedValueOnce(RUNNING)
+      .mockResolvedValue(FINISHED);
+    render(<SettingsPage userCtx={ADMIN} />);
+
+    await tick(0);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Queued — runs within a minute")).toBeInTheDocument();
+
+    // Request consumed, pass in progress: still polling, Run now disabled.
+    await tick(15_000);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Queued — runs within a minute")).not.toBeInTheDocument();
+    expect(screen.getByText("Running now…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Running" })).toBeDisabled();
+    expect(screen.getByText(localStamp(started))).toBeInTheDocument();
+    // The previous pass's summary is still the one on screen.
+    expect(screen.getByText(/^7 facts merged/)).toBeInTheDocument();
+
+    // Pass finished: new result rendered without a reload, polling stops.
+    await tick(15_000);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText("Running now…")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("11 facts merged · 0 contradictions · $0.012 · 3 streams (1 failed)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(localStamp(started + 86400))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
+
+    await tick(60_000);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(3);
+  });
+
+  it("disables Run now and shows the running copy while a pass is in progress", async () => {
+    api.getDreamSchedule.mockResolvedValue({ ...SCHEDULE, running: true });
+    render(<SettingsPage userCtx={ADMIN} />);
+
+    await tick(0);
+    expect(screen.getByText("Running now…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Running" })).toBeDisabled();
+    // Still polling while running.
+    await tick(15_000);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats a missing running flag as false (older server): no polling", async () => {
+    // SCHEDULE carries no `running` key at all.
+    api.getDreamSchedule.mockResolvedValue(SCHEDULE);
+    render(<SettingsPage userCtx={ADMIN} />);
+
+    await tick(0);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Running now…")).not.toBeInTheDocument();
+    expect(screen.getByText(localStamp(NEXT_RUN))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
+
+    await tick(60_000);
+    expect(api.getDreamSchedule).toHaveBeenCalledTimes(1);
   });
 
   it("clears the polling interval on unmount", async () => {
