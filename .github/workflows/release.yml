@@ -53,7 +53,17 @@ jobs:
 
       # The dashboard SPA is embedded into loomem-server at compile time
       # (rust-embed over loomem-dashboard/dist), so the front end must be
-      # built BEFORE cargo. Node 20+ is preinstalled on GitHub runners.
+      # built BEFORE cargo. Node is pinned to 22 (npm 10) on every target so
+      # all four builds resolve the lockfile the same way as the CI dashboard
+      # job; the runner images' preinstalled Node differs per image (v0.5.5
+      # failed on npm 10 after passing CI on npm 11).
+      - name: Set up Node 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: loomem-dashboard/package-lock.json
+
       - name: Build dashboard SPA
         working-directory: loomem-dashboard
         run: |
