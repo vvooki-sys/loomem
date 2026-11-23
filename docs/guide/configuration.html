@@ -447,7 +447,7 @@ content_dedup = &quot;prefix&quot;
 <td><code>content_dedup</code></td>
 <td>string</td>
 <td><code>"prefix"</code></td>
-<td>How near-duplicate results are collapsed. <code>"prefix"</code> (the previous behaviour): drop a result whose first 150 lowercase characters share a leading run longer than 80% of the shorter one, when both are at least 30 bytes; fragments of different sources, and a fragment against its own source, never collapse. <code>"exact"</code>: collapse only byte-identical plain chunks of at least 30 bytes, and never fragments, so a negation or update after a shared prefix survives. Any other value fails config loading. In a trace, results dropped in either mode keep the rejection reason <code>content_prefix_dedup</code></td>
+<td>How near-duplicate results are collapsed. <code>"prefix"</code> (the previous behaviour): compare the first 150 characters of each result, lowercased, and drop the lower-ranked one when the two share a leading run longer than 80% of the shorter prefix, with both prefixes at least 30 bytes long. The run is counted in characters but the 80% is taken of the length in bytes, so text with many multi-byte characters (such as Polish letters) collapses less often, and two identical prefixes can both be kept. Fragments of different sources, and a fragment against its own source, never collapse. <code>"exact"</code>: collapse only byte-identical plain chunks of at least 30 bytes, and never fragments, so a negation or update after a shared prefix survives. Any other value fails config loading. In a trace, results dropped in either mode keep the rejection reason <code>content_prefix_dedup</code></td>
 </tr>
 </tbody>
 </table>
