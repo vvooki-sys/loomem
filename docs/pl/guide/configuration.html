@@ -325,6 +325,85 @@ evidence_fields = false
 </tr>
 </tbody>
 </table>
+<h3 id="quality-levers">Dźwignie jakości</h3>
+<pre><code class="language-toml">[search]
+rerank_date_prefix = false
+rerank_llm_max_chars = 200
+rerank_onnx_max_tokens = 0
+rerank_sync = false
+rerank_sync_timeout_ms = 2000
+event_date_proximity_boost = 0.0
+content_dedup = "prefix"
+</code></pre>
+<p>Te klucze <code>[search]</code>, klucze <code>memory_search</code> w <a href="#mcp"><code>[mcp]</code></a> oraz <code>temporal_grounding</code> w <a href="#knowledge_extraction"><code>[knowledge_extraction]</code></a> to dźwignie jakości. Wszystkie są domyślnie wyłączone lub neutralne: przy wartościach z dostarczanej konfiguracji wynik jest identyczny bajt po bajcie z wynikiem sprzed wprowadzenia klucza. Wartość domyślna zmienia się dopiero po zmierzonym teście A/B. Wartość odrzucona przez walidację zatrzymuje wczytanie konfiguracji.</p>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>Klucz</th>
+<th>Typ</th>
+<th>Domyślnie</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rerank_date_prefix</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>Poprzedza każdy dokument wysyłany do rerankera tym samym znacznikiem daty, który pokazują wiersze <code>memory_search</code> (<code>[event:YYYY-MM-DD]</code>, <code>[observed:…]</code> lub <code>[recorded:…]</code>, w przeciwnym razie wyodrębniona data zdarzenia, a w ostatniej kolejności znacznik czasu wyniku). Kosztuje jeden odczyt chunka na każdego kandydata do rerankingu. Przy rerankerze LLM prefiks wlicza się do <code>rerank_llm_max_chars</code>. <code>false</code>: reranker widzi surową treść</td>
+</tr>
+<tr>
+<td><code>rerank_llm_max_chars</code></td>
+<td>int</td>
+<td><code>200</code></td>
+<td>Liczba znaków (nie bajtów) każdego dokumentu wysyłanego do zapasowego rerankera LLM, używanego, gdy nie jest wczytany cross-encoder ONNX. Cross-encoder ONNX ją ignoruje. Musi być dodatnia. <code>200</code> to wartość wcześniej zapisana na stałe w kodzie</td>
+</tr>
+<tr>
+<td><code>rerank_onnx_max_tokens</code></td>
+<td>int</td>
+<td><code>0</code></td>
+<td>Limit tokenów dla każdej pary (zapytanie, dokument) ocenianej przez cross-encoder ONNX, łącznie z tokenami specjalnymi. Tokeny są usuwane najpierw z dłuższej sekwencji (zwykle dokumentu); gdy obie mają tę samą długość, przycinane są obie. <code>0</code>: bez przycinania, a para przekraczająca limit modelu powoduje błąd asynchronicznego rerankingu, jak dotąd. Każda inna wartość musi wynosić <strong>co najmniej 16</strong>; mniejsze wartości odrzuca walidacja. Ignorowany, z ostrzeżeniem w logu, gdy <code>tokenizer.json</code> modelu sam ustawia przycinanie</td>
+</tr>
+<tr>
+<td><code>rerank_sync</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>Uruchamia reranker na ścieżce żądania i zwraca jego kolejność w tej samej odpowiedzi. <code>false</code>: reranking działa w tle, jego kolejność trafia do pamięci podręcznej dla następnego identycznego zapytania, a bieżąca odpowiedź zachowuje kolejność po fuzji. Działa tylko przy <code>rerank_enabled = true</code> i gdy budżet kosztów dopuszcza reranker. Przy <code>true</code> rerankowane są także żądania, których nie da się zapisać w pamięci podręcznej. Przy błędzie modelu lub przekroczeniu czasu odpowiedź zachowuje kolejność po fuzji. Wynik wypchnięty przez reranker z top-k jest śledzony z powodem odrzucenia <code>reranked</code> (zobacz <a href="/pl/guide/api-reference.html#post-v1search">dokumentację API</a>). Przed włączeniem przeczytaj ostrzeżenie pod tabelą</td>
+</tr>
+<tr>
+<td><code>rerank_sync_timeout_ms</code></td>
+<td>int</td>
+<td><code>2000</code></td>
+<td>Budżet czasu w milisekundach wyłącznie na wywołanie modelu w synchronicznym rerankingu. Budowanie dokumentów, oczekiwanie na blokadę pamięci podręcznej i odczyty magazynu po oczekiwaniu dochodzą do tego czasu. Musi być dodatni. Nie działa bez <code>rerank_sync = true</code></td>
+</tr>
+<tr>
+<td><code>event_date_proximity_boost</code></td>
+<td>f64</td>
+<td><code>0.0</code></td>
+<td>Waga mnożnika wyniku dla trafień, których data zdarzenia leży w zakresie dat żądania lub blisko niego (<code>date_from</code>/<code>date_to</code> albo data odczytana z treści zapytania). W zakresie, łącznie z krańcami, wynik jest mnożony przez <code>1 + weight</code>. Poza nim wzmocnienie maleje liniowo co pełny dzień UTC i osiąga <code>1.0</code> po <code>n + 1</code> dniach od zakresu, gdzie <code>n</code> to długość zakresu w dniach, ograniczona do 365. Trafienia bez daty zdarzenia i żądania bez zakresu pozostają bez zmian. Musi być skończona i nieujemna; <code>0.0</code> wyłącza wzmocnienie. Filtr dat nadal działa później, więc spadek poza zakresem zmienia tylko kolejność trafień, które filtr zachowuje (starszych rekordów, których nie odrzuca według daty). Zapytania czasowe są po ocenie ponownie sortowane według znacznika czasu, więc dla nich wzmocnienie zmienia wyniki punktowe, ale nie kolejność</td>
+</tr>
+<tr>
+<td><code>content_dedup</code></td>
+<td>string</td>
+<td><code>"prefix"</code></td>
+<td>Sposób łączenia niemal identycznych wyników. <code>"prefix"</code> (dotychczasowe działanie): porównuje pierwsze 150 znaków każdego wyniku po zamianie na małe litery i usuwa wynik niżej w rankingu, gdy oba mają wspólny początek dłuższy niż 80% krótszego prefiksu, a oba prefiksy mają co najmniej 30 bajtów. Wspólny początek jest liczony w znakach, ale 80% liczy się od długości w bajtach, więc tekst z wieloma znakami wielobajtowymi (np. polskimi literami) jest łączony rzadziej, a dwa identyczne prefiksy mogą oba zostać zachowane. Fragmenty różnych źródeł oraz fragment i jego własne źródło nigdy nie są łączone. <code>"exact"</code>: łączy tylko identyczne bajt po bajcie zwykłe chunki o długości co najmniej 30 bajtów i nigdy fragmenty, więc zaprzeczenie lub aktualizacja po wspólnym początku przetrwa. Każda inna wartość powoduje błąd wczytania konfiguracji. W śledzeniu wyniki usunięte w obu trybach zachowują powód odrzucenia <code>content_prefix_dedup</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Ostrzeżenie: <code>rerank_sync</code>.</strong> Nie włączaj tego klucza, dopóki nie powstanie limit równoczesnych synchronicznych rerankingów (planowana kontynuacja).</p>
+<ul>
+<li>Po przekroczeniu czasu ocena ONNX nie jest anulowana: działa dalej w puli wątków blokujących, a jej wynik jest odrzucany. Przy <code>rerank_candidates = 20</code> i ~97 ms na parę (~1,94 s na wyszukiwanie) równoczesne wyszukiwania mogą gromadzić takie osierocone zadania.</li>
+<li><code>rerank_sync_timeout_ms</code> obejmuje tylko wywołanie modelu, a nie pracę wokół niego (zobacz tabelę).</li>
+<li>Przy rerankerze LLM tryb synchroniczny rerankuje także żądania, których nie da się zapisać w pamięci podręcznej, a tych wydatków na LLM nie liczy licznik kosztów.</li>
+</ul>
+</blockquote>
 <h3 id="searchcache">[search.cache]</h3>
 <pre><code class="language-toml">[search.cache]
 enabled = true
@@ -734,6 +813,78 @@ auth_token_env = "LOOMEM_AUTH_TOKEN"
 </tbody>
 </table>
 <hr/>
+<h2 id="mcp">[mcp]</h2>
+<pre><code class="language-toml">[mcp]
+search_default_top_k = 5
+search_max_top_k = 20
+aggregation_default_top_k = 30
+aggregation_max_top_k = 30
+search_include_predecessor = false
+predecessor_max_chars = 400
+search_group_by = "none"
+</code></pre>
+<p>Limity <code>top_k</code> i postać tekstu wyników narzędzia MCP <code>memory_search</code>. Trzy ostatnie klucze to dźwignie jakości (zobacz <a href="#quality-levers">Dźwignie jakości</a>). Żaden z nich nie dotyczy zapytań agregujących (wyliczeniowych), których wynik pozostaje płaską listą numerowaną.</p>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>Klucz</th>
+<th>Typ</th>
+<th>Domyślnie</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>search_default_top_k</code></td>
+<td>int</td>
+<td><code>5</code></td>
+<td><code>top_k</code>, gdy zwykłe zapytanie go nie podaje</td>
+</tr>
+<tr>
+<td><code>search_max_top_k</code></td>
+<td>int</td>
+<td><code>20</code></td>
+<td>Górny limit <code>top_k</code> dla zwykłych zapytań</td>
+</tr>
+<tr>
+<td><code>aggregation_default_top_k</code></td>
+<td>int</td>
+<td><code>30</code></td>
+<td><code>top_k</code>, gdy zapytanie agregujące go nie podaje</td>
+</tr>
+<tr>
+<td><code>aggregation_max_top_k</code></td>
+<td>int</td>
+<td><code>30</code></td>
+<td>Górny limit <code>top_k</code> dla zapytań agregujących</td>
+</tr>
+<tr>
+<td><code>search_include_predecessor</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>Pod trafieniem oznaczonym <code>[UPDATED]</code> dodaje jeden wiersz <code>↳ previously [&lt;data&gt;]: &lt;tekst&gt;</code> z wersją, którą to trafienie bezpośrednio zastąpiło (<code>supersedes_id</code>, jeden krok). Wiersz poprzednika <strong>nie</strong> podlega <code>time_filter</code> ani <code>valid_at</code>: jest pokazywany także wtedy, gdy jego własna data leży poza żądanym zakresem. Jest pomijany, gdy poprzednik jest usunięty, należy do innego strumienia, nie istnieje lub sam jest jednym z trafień. Jego tekst wlicza się do <code>max_context_tokens</code> wywołania</td>
+</tr>
+<tr>
+<td><code>predecessor_max_chars</code></td>
+<td>int</td>
+<td><code>400</code></td>
+<td>Limit znaków tekstu poprzednika; dłuższy tekst jest przycinany i kończy się <code>…</code>. Musi być dodatni. Nie działa bez <code>search_include_predecessor = true</code></td>
+</tr>
+<tr>
+<td><code>search_group_by</code></td>
+<td>string</td>
+<td><code>"none"</code></td>
+<td><code>"none"</code>, <code>"session"</code> lub <code>"day"</code>. Wstawia nagłówek <code>## &lt;klucz&gt;</code> przed każdym trafieniem, które zaczyna nową grupę. Kolejność i numeracja trafień się nie zmieniają, więc grupa, która nie jest ciągła, dostaje nagłówek ponownie. <code>"session"</code>: kluczem jest <code>session: &lt;id&gt;</code>, gdzie id to identyfikator źródła dla fragmentu, w przeciwnym razie sesja źródłowa trafienia, a w ostatniej kolejności trafienie jest grupowane według dnia. <code>"day"</code>: <code>YYYY-MM-DD</code> ze znacznika daty trafienia albo <code>unknown date</code>. Etykieta nagłówka jest sprowadzana do jednego wiersza i ograniczona do 80 znaków (dalej <code>…</code>). Nagłówki nie wliczają się do <code>max_context_tokens</code>: budżet przycina trafienia przed renderowaniem i liczy tylko tekst trafień i poprzedników. Każda inna wartość powoduje błąd wczytania konfiguracji</td>
+</tr>
+</tbody>
+</table>
+<hr/>
 <h2 id="resource_guards">[resource_guards]</h2>
 <pre><code class="language-toml">[resource_guards]
 max_cpu_cores = 1.0
@@ -820,6 +971,7 @@ max_facts_per_chunk = 20
 max_tokens = 16384
 input_chunk_tokens = 4000
 split_on_truncation = true
+temporal_grounding = "off"
 </code></pre>
 <p>Steruje procesem LLM <code>memory_ingest</code>.</p>
 <table>
@@ -859,6 +1011,31 @@ split_on_truncation = true
 </tbody>
 </table>
 <p>Te wartości są domyślne w dostarczanej konfiguracji od 2026-11-22 (decyzja właściciela, celowo bez testu A/B — pomiarem jest pilotaż walidacyjny). Wcześniej ekstrakcja wykonywała jedno wywołanie na transkrypcję do 20 tys. tokenów, z limitem odpowiedzi 2000 tokenów i 20 faktami na transkrypcję. Wartości domyślne w kodzie dla konfiguracji pomijającej te klucze pozostają przy poprzednich (<code>20</code> / <code>2000</code> / <code>0</code> / <code>false</code>), więc starsza konfiguracja zachowuje się jak dotąd; przy <code>input_chunk_tokens = 0</code> i <code>max_facts_per_transcript = 20</code> cała transkrypcja jest jednym fragmentem, a limit na fragment jest dawnym limitem, fakt po fakcie. Jedyna widoczna zmiana dla takiej konfiguracji: transkrypcja dłuższa niż <code>max_transcript_tokens</code>, którą poprzedni proces przetwarza jako nakładające się okna, dostaje teraz limit na każde okno. Obcięta odpowiedź nie jest przyjmowana w żadnym trybie; odpowiedź zakończona <code>finish_reason = "length"</code> jest jawnym błędem na każdej ścieżce czatu, nie tylko w ekstrakcji.</p>
+<p><code>temporal_grounding</code> to dźwignia jakości (zobacz <a href="#quality-levers">Dźwignie jakości</a>):</p>
+<table>
+<thead>
+<tr>
+<th>Klucz</th>
+<th>Typ</th>
+<th>Domyślnie</th>
+<th>Opis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>temporal_grounding</code></td>
+<td>string</td>
+<td><code>"off"</code></td>
+<td>Odrzuca wyodrębnione fakty, których czas względny (np. „three weeks ago” lub „yesterday”) albo <code>event_date_context</code> nie występuje we fragmencie źródłowym. <code>"off"</code>: bez kontroli; prompt i przyjęte fakty są identyczne bajt po bajcie z wcześniejszymi. <code>"filter"</code>: odrzuca takie fakty; prompt ekstrakcji się nie zmienia. <code>"prompt_and_filter"</code>: jak <code>"filter"</code>, a do promptu systemowego ekstrakcji dodawane jest na początku powiadomienie TEMPORAL GROUNDING, co zmienia prompt wysyłany do LLM. Każda inna wartość powoduje błąd wczytania konfiguracji</td>
+</tr>
+</tbody>
+</table>
+<p>Kontrola porównuje tekst po normalizacji białych znaków i zamianie na małe litery i obejmuje tylko część wyrażeń względnych: fakt, który używa innej formy, przechodzi kontrolę treści bez sprawdzenia. Znane formy, których nie obejmuje:</p>
+<ul>
+<li>angielskie: „last night”, „this morning”, „next week”, „in two weeks”, „last Friday/weekend/summer”, „a couple of weeks ago”, „a few/several days ago” oraz liczebniki słowne powyżej dziesięciu („eleven days ago”);</li>
+<li>polskie: „dziś”, „przedwczoraj”, „w zeszłym tygodniu”, „tydzień/miesiąc/rok temu” oraz liczebniki słowne powyżej pięciu („sześć dni temu” i wyższe).</li>
+</ul>
+<p>Kompilacja z funkcją cargo <code>evaluation</code> podaje liczbę faktów odrzuconych przez kontrolę jako <code>grounding_rejected_facts</code> w potwierdzeniu ekstrakcji <code>memory_ingest</code> (<code>extraction_receipt.outcome</code>). Pole jest pomijane, gdy kontrola jest wyłączona, a zwykłe kompilacje nie zawierają potwierdzenia.</p>
 <hr/>
 <h2 id="fragments">[fragments]</h2>
 <p><strong>Eksperymentalne, wymaga włączenia.</strong> Domyślnie wyłączone; istniejące wdrożenia i klienci zachowują działanie identyczne bajt po bajcie.</p>
