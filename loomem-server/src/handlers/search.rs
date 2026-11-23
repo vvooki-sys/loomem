@@ -3972,6 +3972,7 @@ mod tests {
                 rerank_sync: false,
                 rerank_sync_timeout_ms: 2000,
                 event_date_proximity_boost: 0.0,
+                content_dedup: Default::default(),
             }
         }
 
