@@ -372,6 +372,7 @@ max_facts_per_chunk = 20         # Cap on admitted facts per transcript chunk (o
 max_tokens = 16384               # Completion cap per extraction call, sent as max_completion_tokens through the openai entry (reasoning tokens share it); a reply that hits it (finish_reason "length") is rejected, never partially admitted
 input_chunk_tokens = 4000        # Split at line boundaries into chunks of at most min(this, max_transcript_tokens) tokens, one call each. 0 = one call per transcript up to max_transcript_tokens (legacy)
 split_on_truncation = true       # true = re-extract a truncated chunk as two line-aligned halves (at most 4 extra calls per chunk, depth 2). false = reject and report, no retry
+temporal_grounding = "off"       # Reject extracted facts whose relative time ("three weeks ago", "yesterday") or event_date_context is not in the source chunk. "off" = byte-identical prompt and admission; "filter" = drop such facts, prompt unchanged; "prompt_and_filter" = also prepend a TEMPORAL GROUNDING notice to the extraction system prompt (changes LLM prompt bytes)
 
 [entity_extraction]
 enabled = true               # Phase 4: entity linking for cross-session retrieval

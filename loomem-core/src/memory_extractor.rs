@@ -15,10 +15,12 @@ mod completion;
 mod config_validation;
 mod http;
 mod reply;
+mod temporal_grounding;
 use chunking::extract_chunk_with_split;
 pub use completion::ExtractionOutcome;
 use config_validation::transcript_chunks;
 pub use http::HttpExtractionChat;
+pub use temporal_grounding::TemporalGrounding;
 
 /// /153: an operator-defined extraction category. `fact_type` is the wire key
 /// used in the `## Types` list and the JSON `fact_type` enum; when absent,
@@ -83,6 +85,13 @@ pub struct KnowledgeExtractionConfig {
     /// a config without this field deserializing unchanged).
     #[serde(default)]
     pub topics: Option<Vec<ExtractionTopic>>,
+    /// Reject extracted facts whose relative time ("three weeks ago",
+    /// "yesterday") or `event_date_context` is not in the source chunk.
+    /// `Off` (default) keeps the prompt bytes and admission byte-identical;
+    /// `Filter` drops such facts with the prompt unchanged; `PromptAndFilter`
+    /// also prepends a TEMPORAL GROUNDING notice to the system prompt.
+    #[serde(default)]
+    pub temporal_grounding: TemporalGrounding,
 }
 
 fn default_extraction_max_tokens() -> u32 {
@@ -110,6 +119,7 @@ impl Default for KnowledgeExtractionConfig {
             input_chunk_tokens: 0,
             split_on_truncation: false,
             topics: None,
+            temporal_grounding: TemporalGrounding::Off,
         }
     }
 }
@@ -161,11 +171,12 @@ pub fn build_extraction_prompt(
     let topics = match config.topics.as_ref() {
         Some(t) if !t.is_empty() => t,
         _ => {
-            return prefix_untrusted_notice(
-                &EXTRACTION_PROMPT
+            return prefix_untrusted_notice(&temporal_grounding::with_notice(
+                config.temporal_grounding,
+                EXTRACTION_PROMPT
                     .replace("{conversation_date}", conversation_date)
                     .replace("{max_facts}", &max_facts.to_string()),
-            )
+            ))
         }
     };
 
@@ -187,8 +198,10 @@ pub fn build_extraction_prompt(
         .collect::<Vec<_>>()
         .join("|");
 
-    prefix_untrusted_notice(&format!(
-        r#"Extract factual knowledge from this conversation. Each fact is a self-contained sentence.
+    prefix_untrusted_notice(&temporal_grounding::with_notice(
+        config.temporal_grounding,
+        format!(
+            r#"Extract factual knowledge from this conversation. Each fact is a self-contained sentence.
 
 Facts may be authored by any party in the conversation. Extract them from the user's statements AND from the assistant's (or agent's) recommendations, plans, schedules, and researched answers — assistant-authored content carries first-class facts that the user is likely to reference later.
 
@@ -214,6 +227,7 @@ The conversation_date is: {conversation_date}
 
 Return ONLY valid JSON (no markdown, no code blocks):
 {{"facts": [{{"content": "...", "fact_type": {enum_values}, "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "attributed_to": "user"|"assistant"|null, "confidence": 0.9}}]}}"#,
+        ),
     ))
 }
 
@@ -491,7 +505,12 @@ pub async fn extract_knowledge_with(
         outcome.record_input_chunk(&run);
         raw_facts_seen += run.facts.len();
         let admitted = outcome.admit_chunk_facts(
-            run.facts.into_iter().filter(|f| f.confidence >= 0.5),
+            temporal_grounding::admissible(
+                run.facts,
+                chunk_text,
+                extraction_config.temporal_grounding,
+            )
+            .into_iter(),
             max_facts,
         );
         debug!(

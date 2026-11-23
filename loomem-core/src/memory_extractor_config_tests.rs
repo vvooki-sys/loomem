@@ -199,3 +199,203 @@ fn extraction_system_prompt_bytes_are_pinned() {
         assert_eq!(prompt_sha256(&prompt), expected, "{name} prompt drifted");
     }
 }
+
+// ---- temporal grounding (`[knowledge_extraction] temporal_grounding`) ------
+
+fn with_grounding(
+    config: KnowledgeExtractionConfig,
+    mode: TemporalGrounding,
+) -> KnowledgeExtractionConfig {
+    KnowledgeExtractionConfig {
+        temporal_grounding: mode,
+        ..config
+    }
+}
+
+#[test]
+fn temporal_grounding_defaults_to_off_when_key_is_missing() {
+    assert_eq!(
+        KnowledgeExtractionConfig::default().temporal_grounding,
+        TemporalGrounding::Off
+    );
+    let legacy = "enabled = true\nmax_transcript_tokens = 20000\ndedup_cosine_threshold = 0.92\ncontradiction_check = true\ncontradiction_cosine_min = 0.5\n";
+    let parsed: KnowledgeExtractionConfig = toml::from_str(legacy).unwrap();
+    assert_eq!(parsed.temporal_grounding, TemporalGrounding::Off);
+}
+
+#[test]
+fn temporal_grounding_parses_every_mode_and_rejects_unknown_values() {
+    let base = "enabled = true\nmax_transcript_tokens = 20000\ndedup_cosine_threshold = 0.92\ncontradiction_check = true\ncontradiction_cosine_min = 0.5\n";
+    for (value, mode) in [
+        ("off", TemporalGrounding::Off),
+        ("filter", TemporalGrounding::Filter),
+        ("prompt_and_filter", TemporalGrounding::PromptAndFilter),
+    ] {
+        let text = format!("{base}temporal_grounding = \"{value}\"\n");
+        let parsed: KnowledgeExtractionConfig = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.temporal_grounding, mode);
+    }
+    let bogus = format!("{base}temporal_grounding = \"bogus\"\n");
+    assert!(toml::from_str::<KnowledgeExtractionConfig>(&bogus).is_err());
+}
+
+#[test]
+fn shipped_config_keeps_temporal_grounding_off() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+    let content = std::fs::read_to_string(path).unwrap();
+    let table: toml::Table = toml::from_str(&content).unwrap();
+    assert_eq!(
+        table["knowledge_extraction"]["temporal_grounding"].as_str(),
+        Some("off"),
+        "the shipped config spells the key out"
+    );
+    assert_eq!(
+        shipped_extraction_config().temporal_grounding,
+        TemporalGrounding::Off
+    );
+}
+
+/// `filter` never touches the prompt: both variants stay byte-identical to
+/// `off`, whose bytes are pinned above.
+#[test]
+fn filter_mode_keeps_prompt_bytes_identical() {
+    let date = "2024-03-20";
+    for config in [KnowledgeExtractionConfig::default(), golden_topics_config()] {
+        let off = build_extraction_prompt(&config, date);
+        let filter = build_extraction_prompt(
+            &with_grounding(config.clone(), TemporalGrounding::Filter),
+            date,
+        );
+        assert_eq!(filter, off);
+    }
+}
+
+/// `prompt_and_filter` prepends the grounding notice after the untrusted-data
+/// notice, in both prompt variants, and changes nothing else.
+#[test]
+fn prompt_and_filter_prepends_notice_in_every_variant() {
+    let date = "2024-03-20";
+    let head = format!(
+        "{}\n\nTEMPORAL GROUNDING: ",
+        crate::sanitizer::UNTRUSTED_DATA_NOTICE
+    );
+    for config in [KnowledgeExtractionConfig::default(), golden_topics_config()] {
+        let off = build_extraction_prompt(&config, date);
+        let on = build_extraction_prompt(
+            &with_grounding(config.clone(), TemporalGrounding::PromptAndFilter),
+            date,
+        );
+        assert!(on.starts_with(&head), "{on}");
+        let body = off
+            .strip_prefix(&format!("{}\n\n", crate::sanitizer::UNTRUSTED_DATA_NOTICE))
+            .unwrap();
+        assert!(on.ends_with(&format!("\n\n{body}")));
+        assert_eq!(
+            on,
+            prefix_untrusted_notice(&temporal_grounding::with_notice(
+                TemporalGrounding::PromptAndFilter,
+                body.to_string()
+            ))
+        );
+    }
+}
+
+/// Stub transport: records every request body, returns one fixed reply.
+struct Recording {
+    reply: String,
+    requests: std::sync::Mutex<Vec<serde_json::Value>>,
+}
+
+impl Recording {
+    fn new(facts: serde_json::Value) -> Self {
+        let content = serde_json::json!({ "facts": facts }).to_string();
+        Self {
+            reply: serde_json::json!({"choices": [{"message": {"content": content}}]}).to_string(),
+            requests: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn requests(&self) -> Vec<serde_json::Value> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+impl ExtractionChat for Recording {
+    async fn chat(&self, request_body: &serde_json::Value) -> Result<ChatHttpReply> {
+        self.requests.lock().unwrap().push(request_body.clone());
+        Ok(ChatHttpReply {
+            status: 200,
+            body: self.reply.clone(),
+        })
+    }
+}
+
+const GROUNDING_SOURCE: &str =
+    "user: I just got back from the synthetic festival. I met Anna yesterday.";
+
+fn grounding_reply() -> serde_json::Value {
+    let fact = |content: &str, cue: Option<&str>, confidence: f64| {
+        serde_json::json!({
+            "content": content, "fact_type": "event", "subject": null,
+            "event_date": null, "event_date_context": cue,
+            "attributed_to": "user", "confidence": confidence
+        })
+    };
+    serde_json::json!([
+        fact(
+            "The user visited the synthetic festival three weeks ago.",
+            None,
+            0.9
+        ),
+        fact("The user likes festivals.", None, 0.4),
+        fact("The user met Anna yesterday.", Some("yesterday"), 0.9),
+    ])
+}
+
+async fn run_grounding(mode: TemporalGrounding) -> (Vec<String>, Vec<serde_json::Value>) {
+    let config = with_grounding(KnowledgeExtractionConfig::default(), mode);
+    let chat = Recording::new(grounding_reply());
+    let outcome = extract_knowledge_with(&chat, &config, GROUNDING_SOURCE, "2024-03-20")
+        .await
+        .unwrap();
+    let facts = outcome.facts.into_iter().map(|f| f.content).collect();
+    (facts, chat.requests())
+}
+
+/// `off`: the request is exactly the pre-option request and admission is the
+/// plain confidence filter (the invented "three weeks ago" fact is kept).
+#[tokio::test]
+async fn grounding_off_request_and_admission_are_unchanged() {
+    let (facts, requests) = run_grounding(TemporalGrounding::Off).await;
+    assert_eq!(
+        facts,
+        [
+            "The user visited the synthetic festival three weeks ago.",
+            "The user met Anna yesterday."
+        ]
+    );
+    let config = KnowledgeExtractionConfig::default();
+    let expected = build_extraction_request(
+        &config.model,
+        &build_extraction_prompt(&config, "2024-03-20"),
+        0,
+        GROUNDING_SOURCE,
+        config.max_tokens,
+    );
+    assert_eq!(requests, [expected]);
+}
+
+/// `filter` / `prompt_and_filter`: the invented relative time is dropped, the
+/// verbatim cue is kept; only `prompt_and_filter` sends the notice.
+#[tokio::test]
+async fn grounding_on_drops_invented_relative_time() {
+    for (mode, sends_notice) in [
+        (TemporalGrounding::Filter, false),
+        (TemporalGrounding::PromptAndFilter, true),
+    ] {
+        let (facts, requests) = run_grounding(mode).await;
+        assert_eq!(facts, ["The user met Anna yesterday."]);
+        let system = requests[0]["messages"][0]["content"].as_str().unwrap();
+        assert_eq!(system.contains("TEMPORAL GROUNDING"), sends_notice);
+    }
+}
