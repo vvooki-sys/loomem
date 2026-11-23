@@ -58,3 +58,6 @@ hosted-engine = []
 
 [dev-dependencies]
 tempfile = "3.8"
+# `test-util`: paused clock (`tokio::time::pause`/`advance`) for the
+# synchronous-rerank timeout test. Same crate, tests only.
+tokio = { workspace = true, features = ["test-util"] }
