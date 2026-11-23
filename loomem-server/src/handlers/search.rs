@@ -2284,7 +2284,8 @@ fn filter_superseded(
 
 /// Filter + truncate pipeline: bitemporal validity filter, superseded
 /// filter (is_latest), extraction_meta filter (fact_type/subject/min_confidence),
-/// content-prefix dedup (150-char fingerprint, 80% prefix overlap), aggregation
+/// content dedup (`[search] content_dedup`: 150-char fingerprint with 80%
+/// prefix overlap by default, or exact content), aggregation
 /// dedup (keep highest-scored chunk per subject), source_agent include/exclude
 /// filters, and calculate final top-K (30 for Aggregation, config.top_k
 /// otherwise, overridable via payload.top_k).
@@ -2317,29 +2318,10 @@ fn filter_candidates(
         });
     }
 
-    // Deduplicate near-identical results: keep highest-scored, collapse similar content.
-    // Uses first 150 chars as fingerprint — catches duplicate ingest from daily logs.
-    // Fragments of different sources are distinct evidence and never collapse,
-    // nor does a fragment collapse against its own source.
+    // Content dedup ([search] content_dedup): keep the highest-scored duplicate.
     let count_before_dedup = hybrid_results.len();
-    {
-        let mut seen_fingerprints: Vec<prefix_dedup::Fingerprint> = Vec::new();
-        let reason = super::types::RejectionReason::ContentPrefixDedup;
-        log.retain(&mut hybrid_results, stage, reason, |r| {
-            let source = prefix_dedup::fragment_source(&state.store, &r.id);
-            let fp = prefix_dedup::Fingerprint::new(&r.id, &r.content, source.as_deref());
-            let dominated = seen_fingerprints
-                .iter()
-                .any(|existing| fp.dominated_by(existing));
-            if dominated {
-                tracing::debug!("Dedup: dropped duplicate result {}", r.id);
-                false
-            } else {
-                seen_fingerprints.push(fp);
-                true
-            }
-        });
-    }
+    let mode = state.config.search.content_dedup;
+    prefix_dedup::apply(&mut hybrid_results, &state.store, mode, &mut log, stage);
     // Aggregation dedup: keep only the highest-scored chunk per subject
     if matches!(ctx.complexity, QueryComplexity::Aggregation) {
         let mut seen_subjects: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -3972,6 +3954,7 @@ mod tests {
                 rerank_sync: false,
                 rerank_sync_timeout_ms: 2000,
                 event_date_proximity_boost: 0.0,
+                content_dedup: Default::default(),
             }
         }
 
