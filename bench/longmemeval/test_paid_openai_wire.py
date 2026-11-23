@@ -162,7 +162,7 @@ class PaidCompletionTests(unittest.TestCase):
         self.assertEqual((done.outcome, done.replayed, done.provider_request_id), ("ok", False, "prov-1"))
 
     def test_budget_exhausted_means_zero_transports(self):
-        tiny = {letter: "0.0000002" for letter in "EFSAR"}
+        tiny = {**{letter: "0.0000002" for letter in "EFSAR"}, "K": "0"}
         self.open(make_campaign(Path(self.directory.name) / "tiny", self.sheet, limit_usd="0.000001",
                                 sublimits_usd=tiny))
         transport = FakeTransport([ok()])
@@ -172,7 +172,7 @@ class PaidCompletionTests(unittest.TestCase):
         self.assertEqual(list(self.calls.glob("*.intent.json")), [])
 
     def test_sublimit_stops_before_reserve(self):
-        sub = {"E": "10", "F": "0.000001", "S": "30", "A": "10", "R": "10"}
+        sub = {"E": "10", "F": "0.000001", "S": "30", "A": "10", "R": "10", "K": "0.2374"}
         self.open(make_campaign(Path(self.directory.name) / "sub", self.sheet, sublimits_usd=sub))
         transport = FakeTransport([ok()])
         with self.assertRaises(SublimitExceeded):

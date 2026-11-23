@@ -140,6 +140,19 @@ class FakeOpenAITests(unittest.TestCase):
             self.assertEqual(ask("answer", {"evidence": {}, "question": "q"}, "answer"), "Synthetic answer.")
         self.assertEqual(json.loads(content_for("judge", json.dumps({"candidate": "abc"}), "ok"))["answer_span"], "abc")
 
+    def test_role_by_normalised_extraction_fingerprint(self):
+        from paid_provider_proxy import system_fingerprint
+        prompt = "Extract facts.\nThe conversation_date is: {date}\nReturn JSON."
+        normalised = system_fingerprint(prompt.format(date="2025-07-10"))
+        self.assertEqual(normalised, system_fingerprint(prompt.format(date="2025-07-11")))
+        with FakeOpenAI({"extraction": "empty_facts"}, model_by_role={"a": "gpt-6-luna", "b": "gpt-6-luna"},
+                        role_by_system_sha256={normalised: "extraction"}, token="t") as fake:
+            for day in ("2025-07-10", "2025-07-11"):
+                status, _, body = self.post(fake, wire_for(system=prompt.format(date=day), profile="extraction"))
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(parse_completion(body)["text"]), {"facts": []})
+            self.assertEqual([entry["role"] for entry in fake.log], ["extraction", "extraction"])
+
     def test_usage_is_deterministic_and_bounded_by_bytes(self):
         wire = wire_for()
         with FakeOpenAI({"default": "ok"}, model_by_role=LUNA, token="t") as fake:

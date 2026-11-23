@@ -38,7 +38,7 @@ class SublimitTests(unittest.TestCase):
                                response_format=None, transport=transport, bound=self.bound, clock=self.clock, **args)
 
     def test_letter_sublimit_stops_before_reserve_despite_free_global_limit(self):
-        self.open("f", sublimits_usd={"E": "10", "F": "0.000001", "S": "30", "A": "10", "R": "10"})
+        self.open("f", sublimits_usd={"E": "10", "F": "0.000001", "S": "30", "A": "10", "R": "10", "K": "0.2374"})
         self.assertEqual(self.max_usd, Decimal("0.0049728"))
         transport = FakeTransport([OK])
         with self.assertRaises(SublimitExceeded):

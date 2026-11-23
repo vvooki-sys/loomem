@@ -177,7 +177,7 @@ class JournalStateTests(unittest.TestCase):
     def test_committed_sums(self):
         self.assertEqual(self.state.committed_by_letter(),
                          {"E": Decimal("1.75"), "F": Decimal("3"), "S": Decimal("0.75"),
-                          "A": Decimal("0.5"), "R": Decimal("4")})
+                          "A": Decimal("0.5"), "R": Decimal("4"), "K": Decimal("0")})
         self.assertEqual(self.state.committed_total(), Decimal("10"))
 
     def test_reconcile_against_ledger_totals(self):

@@ -20,6 +20,13 @@ import threading
 SCENARIOS = ("ok", "empty_facts", "length", "http500", "timeout", "model_drift",
              "missing_usage", "malformed_json", "bad_request_400", "usage_over_bound", "redirect")
 PATH = "/v1/chat/completions"
+# OpenAI Responses API token counter (developers.openai.com/api/docs/api-reference/
+# responses/input-tokens, read 2026-11-22): POST {model, input} ->
+# {"object": "response.input_tokens", "input_tokens": N}. The fake counts with the
+# same deterministic rule as `usage.prompt_tokens`, so a preflight count equals the
+# billed prompt size of the matching chat call; `count_over_bound` (per role, via
+# `count_scenarios`) answers with an absurd count to exercise the pre-send stop.
+INPUT_TOKENS_PATH = "/v1/responses/input_tokens"
 
 
 def _tokens(data):
@@ -60,16 +67,21 @@ def content_for(role, user, scenario):
 
 
 class FakeOpenAI:
-    def __init__(self, scenarios, *, model_by_role, role_by_system_sha256=None, token=None):
+    def __init__(self, scenarios, *, model_by_role, role_by_system_sha256=None, token=None,
+                 count_scenarios=None):
         flat = [s for value in scenarios.values() for s in (value if isinstance(value, list) else [value])]
         unknown = set(flat) - set(SCENARIOS)
         if unknown or any(isinstance(v, list) and not v for v in scenarios.values()):
             raise ValueError(f"unknown or empty scenarios {sorted(unknown)}")
+        if any(v not in ("ok", "count_over_bound") for v in (count_scenarios or {}).values()):
+            raise ValueError("count_scenarios values must be ok or count_over_bound")
         self.scenarios = dict(scenarios)
+        self.count_scenarios = dict(count_scenarios or {})
         self.model_by_role = dict(model_by_role)
         self.role_by_system = dict(role_by_system_sha256 or {})
         self.token = token
         self.log = []
+        self.count_log = []
         self._lock = threading.Lock()
         self._server = None
         self._thread = None
@@ -112,6 +124,13 @@ class FakeOpenAI:
         digest = hashlib.sha256(system.encode("utf-8")).hexdigest()
         if digest in self.role_by_system:
             return self.role_by_system[digest]
+        # The engine's extraction prompt embeds the session's conversation_date; the
+        # proxy freezes the date-normalised fingerprint, so a registration under that
+        # value must match every session (lazy import: the proxy imports this module's peers).
+        from paid_provider_proxy import system_fingerprint
+        normalised = system_fingerprint(system)
+        if normalised in self.role_by_system:
+            return self.role_by_system[normalised]
         matches = [r for r, m in self.model_by_role.items() if m == wire.get("model")]
         if len(matches) == 1:
             return matches[0]
@@ -127,7 +146,7 @@ class FakeOpenAI:
     def _handle(self, handler):
         if self.token is not None and handler.headers.get("Authorization") != "Bearer " + self.token:
             return _send(handler, 401, {"error": {"message": "invalid token", "type": "invalid_request_error"}})
-        if handler.path != PATH:
+        if handler.path not in (PATH, INPUT_TOKENS_PATH):
             return _send(handler, 404, {"error": {"message": "not found", "type": "invalid_request_error"}})
         length = int(handler.headers.get("Content-Length") or 0)
         raw = handler.rfile.read(length)
@@ -135,6 +154,8 @@ class FakeOpenAI:
             wire = json.loads(raw.decode("utf-8"))
         except ValueError:
             return _send(handler, 400, {"error": {"message": "invalid json", "type": "invalid_request_error"}})
+        if handler.path == INPUT_TOKENS_PATH:
+            return self._count(handler, wire)
         if "max_tokens" in wire or "max_completion_tokens" not in wire or "reasoning_effort" not in wire:
             return _send(handler, 400, {"error": {"message": "legacy or incomplete wire", "type": "invalid_request_error"}})
         role = self.role_of(wire)
@@ -142,6 +163,22 @@ class FakeOpenAI:
             scenario = self.scenario_of(role)
             self.log.append({"role": role, "scenario": scenario, "wire": wire, "bytes": len(raw)})
         self._respond(handler, role, scenario, wire)
+
+    def _count(self, handler, body):
+        """Responses token counter: `input` is a string or a list of {role, content} items."""
+        items = body.get("input")
+        if isinstance(items, str):
+            items = [{"role": "user", "content": items}]
+        if (not isinstance(body.get("model"), str) or not isinstance(items, list)
+                or any(not isinstance(i, dict) or not isinstance(i.get("content"), str) for i in items)):
+            return _send(handler, 400, {"error": {"message": "invalid input", "type": "invalid_request_error"}})
+        role = self.role_of({"messages": [{"content": items[0]["content"]}], "model": body["model"]}) if items else "default"
+        count = sum(_tokens(i["content"]) for i in items)
+        if self.count_scenarios.get(role, self.count_scenarios.get("default", "ok")) == "count_over_bound":
+            count = 10 ** 7
+        with self._lock:
+            self.count_log.append({"role": role, "model": body["model"], "input_tokens": count})
+        return _send(handler, 200, {"object": "response.input_tokens", "input_tokens": count})
 
     def _respond(self, handler, role, scenario, wire):
         if scenario == "http500":
