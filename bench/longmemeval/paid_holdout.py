@@ -56,13 +56,22 @@ class Holdout:
         return {key: question[key] for key in GOLD_FIELDS}
 
     def gold_markers(self, qid):
-        """Non-trivial gold strings used to scan non-judge requests for leaks."""
+        """Non-trivial gold strings used to scan non-judge requests for leaks.
+
+        A gold string that occurs verbatim in the question's own source sessions
+        (an ``evidence`` quote, an answer atom that is a name from the transcript)
+        is source content, not a leak: the engine's extraction requests and the
+        originals menu legitimately carry it. Such strings are not markers.
+        """
         question = self._question(qid)
+        # The scan is global (every non-judge request against every question's markers),
+        # so a string present in ANY holdout session is source content for the scan.
+        sources = [turn["content"] for h in self.histories.values() for s in h["sessions"] for turn in s["turns"]]
         markers = []
         for key in PRIVATE_FIELDS:
             value = question.get(key)
             for text in _strings(value):
-                if len(text) >= 12:
+                if len(text) >= 12 and not any(text in source for source in sources):
                     markers.append(text)
         return markers
 

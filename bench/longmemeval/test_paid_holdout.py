@@ -125,6 +125,20 @@ class HoldoutTests(unittest.TestCase):
         self.assertEqual(leaks_gold(json.dumps(execution), markers), [])
         self.assertTrue(leaks_gold(json.dumps(judge), markers))
 
+    def test_gold_strings_that_are_source_text_are_not_markers(self):
+        """An evidence quote or an atom that occurs verbatim in a holdout session is source content
+        (extraction requests and the originals menu carry it legitimately), never a leak marker."""
+        holdout = self.verify()
+        question = holdout.questions["h1-q01"]
+        turn = holdout.histories["h1"]["sessions"][0]["turns"][0]["content"]
+        question["evidence"] = [{"session_id": "h1-s1", "turn_index": 0, "quote": turn}]
+        question["required_answer_atoms"] = [turn[:14], "GOLD-ATOM-h1-q01-SECRET"]
+        markers = holdout.gold_markers("h1-q01")
+        self.assertNotIn(turn, markers)
+        self.assertNotIn(turn[:14], markers)
+        self.assertIn("GOLD-ATOM-h1-q01-SECRET", markers)
+        self.assertIn("GOLD-REFERENCE-h1-q01-SECRET", markers)
+
     def test_static_gold_blindness(self):
         self.assertFalse(set(paid_holdout.EXECUTION_FIELDS) & set(paid_holdout.GOLD_FIELDS))
         for name in ("paid_openai_wire.py", "paid_call_journal.py"):
