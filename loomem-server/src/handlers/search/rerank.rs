@@ -2,8 +2,10 @@
 //! document text handed to the model and the model call itself. Extracted
 //! verbatim from the orchestrator so the rerank levers (date-prefixed
 //! documents, synchronous rerank, truncation) can evolve here without
-//! touching `search.rs`. Today the stage is async-to-cache only: it spawns
-//! the model call and hands the ranked pool back unchanged.
+//! touching `search.rs`. By default the stage is async-to-cache only: it
+//! spawns the model call and hands the ranked pool back unchanged. With
+//! `[search] rerank_sync` on it awaits the model on the request path, within
+//! `rerank_sync_timeout_ms`, and returns the reranked order.
 use super::{cache_policy, prepare_llm_input, LaneOutcome, QueryContext};
 use crate::auth::AuthContext;
 use crate::handlers::types::SearchRequest;
@@ -13,7 +15,9 @@ use loomem_core::config::{LlmConfig, SearchConfig};
 use loomem_core::onnx_reranker::OnnxReranker;
 use loomem_core::storage::RocksDbStore;
 use loomem_core::{reranker, HybridSearchResult};
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[cfg(test)]
 mod tests;
@@ -32,6 +36,10 @@ pub(super) struct RerankInput<'a> {
 /// request cacheable — spawns the background rerank whose ordering lands in
 /// the reranked cache slot for the next identical query. Returns the ranked
 /// pool unchanged: the fresh response keeps the fused order.
+///
+/// With `[search] rerank_sync` on, the same gate leads to [`sync_rerank`]
+/// instead: the model runs on the request path (cacheable or not) and the
+/// fresh response carries its order, or the fused order on error/timeout.
 pub(super) async fn stage(
     state: &Arc<AppState>,
     ctx: &QueryContext,
@@ -44,11 +52,133 @@ pub(super) async fn stage(
 
     // Async reranking: spawn in background, results cached for next identical query
     if state.config.search.rerank_enabled && rerank_cost_ok && !input.ranked.is_empty() {
+        // W2a: inline instead, behind the same gate.
+        if state.config.search.rerank_sync {
+            let backend = Backend::from_state(state);
+            return sync_rerank(state, payload, input, ctx.cache_key, backend).await;
+        }
         if let Some(key) = ctx.cache_key {
             spawn_async(state, payload, &input, key);
         }
     }
     input.ranked
+}
+
+/// Synchronous rerank (`rerank_sync`): await the model within
+/// `rerank_sync_timeout_ms`. On success the reordered pool (cut to
+/// `final_top_k`, membership unchanged) is returned and — cacheable request
+/// only — also published to the reranked cache slot, exactly what the async
+/// path would publish. On a model error or timeout the fused pool is
+/// returned unchanged and no async rerank is started in its place.
+///
+/// "Error" in practice means the ONNX cross-encoder or its blocking task:
+/// `reranker::rerank` maps every LLM provider failure (no key, HTTP error,
+/// timeout) to `Ok(identity)`, so a failing LLM reranker yields the fused
+/// order with no warning here.
+///
+/// On timeout the model future is dropped: an LLM request is cancelled, but
+/// an ONNX `spawn_blocking` scoring call cannot be and runs on as an orphan
+/// until it finishes. It owns only the query, the documents and the
+/// `Arc<OnnxReranker>` (see [`Backend`]) — never `AppState` or the store —
+/// and its result is discarded.
+///
+/// The soft-delete filter ran before the wait, so every path re-applies it
+/// afterwards ([`still_visible`]): a chunk deleted or purged while the model
+/// ran never reaches the fresh response. (The cache needs no such pass: a
+/// delete clears the cache and bumps its generation, so the publish below
+/// is refused.)
+async fn sync_rerank<B: RerankBackend>(
+    state: &Arc<AppState>,
+    payload: &SearchRequest,
+    input: RerankInput<'_>,
+    cache_key: Option<u64>,
+    backend: B,
+) -> Vec<HybridSearchResult> {
+    let job = RerankJob::prepare(state, payload, &input);
+    let top_k = input.final_top_k;
+    let timeout_ms = state.config.search.rerank_sync_timeout_ms;
+    let counters = &state.retrieval_counters;
+    counters.record_rerank_invocation();
+    let call = backend.run_model(job.query, job.documents, top_k);
+    let indices = match tokio::time::timeout(Duration::from_millis(timeout_ms), call).await {
+        Ok(Ok(indices)) => indices,
+        Ok(Err(e)) => {
+            tracing::warn!("Sync rerank failed, keeping fused order: {}", e);
+            return still_visible(state, input.ranked);
+        }
+        Err(_) => {
+            tracing::warn!(timeout_ms, "Sync rerank timed out, keeping fused order");
+            return still_visible(state, input.ranked);
+        }
+    };
+    counters.record_rerank_completion();
+    if let Some(key) = cache_key {
+        cache_policy::publish_reranked(
+            &state.query_cache,
+            (key, input.cache_generation),
+            indices.clone(),
+            &job.candidates,
+            &input.ranked,
+            top_k,
+        )
+        .await;
+    }
+    // The whole pool in model order, so a hit deleted during the wait is
+    // replaced by the next fused one before the `final_top_k` cut.
+    let pool_len = input.ranked.len();
+    let reordered =
+        cache_policy::reranked_results(indices, &job.candidates, &input.ranked, pool_len);
+    let mut visible = still_visible(state, reordered);
+    visible.truncate(top_k);
+    visible
+}
+
+/// The pre-rerank soft-delete filter again (same predicate: deleted, purged
+/// or unreadable chunks go), for results held across the model wait.
+fn still_visible(
+    state: &Arc<AppState>,
+    mut results: Vec<HybridSearchResult>,
+) -> Vec<HybridSearchResult> {
+    results.retain(|r| !crate::handlers::delete::is_deleted_in_store(state, &r.id));
+    results
+}
+
+/// One model call's inputs, built on the request path: the candidate slice,
+/// the document text scored for each, and the sanitized query.
+struct RerankJob {
+    candidates: Vec<HybridSearchResult>,
+    documents: Vec<String>,
+    query: String,
+}
+
+impl RerankJob {
+    fn prepare(state: &AppState, payload: &SearchRequest, input: &RerankInput<'_>) -> Self {
+        let head = input
+            .ranked
+            .len()
+            .min(state.config.search.rerank_candidates);
+        // Cycle/012: the reranker slice is the head of the ranked pool
+        // plus — when the rare-term lane is active — any guaranteed ids
+        // that survived the pool cut but fell below the head. Lane off
+        // (`lane == None`) → exactly the pre-cycle `[..candidates]`.
+        let candidates = rerank_slice_with_lane(
+            &input.ranked,
+            head,
+            input.lane,
+            state.config.search.rare_term_lane.candidate_cap,
+        );
+        // Built here, not in a spawned task: a detached task must not hold
+        // the store (hosted scopes close and reopen their database while a
+        // rerank can still be scoring). With `rerank_date_prefix` on this is
+        // one chunk read per candidate (`rerank_candidates`, default 10).
+        let documents = documents(&candidates, &state.store, &state.config.search);
+        let query = prepare_llm_input(&payload.query, "reranker::rerank");
+        Self {
+            candidates,
+            documents,
+            query,
+        }
+    }
 }
 
 /// The text the reranker scores for each candidate. Default: the raw
@@ -83,28 +213,13 @@ fn dated_document(store: &RocksDbStore, r: &HybridSearchResult) -> String {
 }
 
 fn spawn_async(state: &Arc<AppState>, payload: &SearchRequest, input: &RerankInput<'_>, key: u64) {
-    let candidates = input
-        .ranked
-        .len()
-        .min(state.config.search.rerank_candidates);
     let top_k = input.final_top_k;
-    // Cycle/012: the reranker slice is the head of the ranked pool
-    // plus — when the rare-term lane is active — any guaranteed ids
-    // that survived the pool cut but fell below the head. Lane off
-    // (`lane == None`) → exactly the pre-cycle `[..candidates]`.
-    let results_for_rerank = rerank_slice_with_lane(
-        &input.ranked,
-        candidates,
-        input.lane,
-        state.config.search.rare_term_lane.candidate_cap,
-    );
+    let RerankJob {
+        candidates: results_for_rerank,
+        documents: chunks,
+        query: query_for_rerank,
+    } = RerankJob::prepare(state, payload, input);
     let eligible_results = input.ranked.clone();
-    // Built here, not in the task: the detached task must not hold the
-    // store (hosted scopes close and reopen their database while a rerank
-    // can still be scoring). With `rerank_date_prefix` on this is one
-    // chunk read per candidate (`rerank_candidates`, default 10).
-    let chunks = documents(&results_for_rerank, &state.store, &state.config.search);
-    let query_for_rerank = prepare_llm_input(&payload.query, "reranker::rerank");
     let cache = state.query_cache.clone();
     let backend = Backend::from_state(state);
     let cache_generation = input.cache_generation;
@@ -153,9 +268,22 @@ impl Backend {
             onnx: state.onnx_reranker.as_ref().map(Arc::clone),
         }
     }
+}
 
+/// The model call as a seam: [`Backend`] in production, stubs in tests
+/// (a fixed order, a failure, a call that never returns).
+trait RerankBackend {
     /// Score `documents` against `query`; returns the reordered indices
     /// (best first) of the top `top_k`.
+    fn run_model(
+        self,
+        query: String,
+        documents: Vec<String>,
+        top_k: usize,
+    ) -> impl Future<Output = anyhow::Result<Vec<usize>>> + Send;
+}
+
+impl RerankBackend for Backend {
     async fn run_model(
         self,
         query: String,

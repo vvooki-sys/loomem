@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"prefix"` keeps the previous rule (a leading run over 80% of the shorter
   150-char lowercase prefix, both at least 30 bytes, with the fragment
   exceptions) byte-identical; drops keep the `content_prefix_dedup` reason.
+- `[search] rerank_sync` reranks on the request path, so the fresh
+  `/v1/search` response already carries the reranked order; on error or
+  after `rerank_sync_timeout_ms` (default 2000) it keeps the fused order
+  (default off = async-to-cache only, byte-identical).
 - `[knowledge_extraction] temporal_grounding` drops extracted facts whose
   relative time ("three weeks ago", "yesterday") or `event_date_context` is
   not in the source chunk: `"filter"` keeps the prompt unchanged,

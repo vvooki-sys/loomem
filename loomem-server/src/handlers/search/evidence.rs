@@ -82,6 +82,44 @@ pub(super) fn finish(
     (results, metrics)
 }
 
+/// Observe the synchronous reranker (`[search] rerank_sync`) without
+/// changing it: `results` is the reranked response cut to `final_top_k`.
+/// Hits it pushed out of the provisional response are rejected as
+/// `Reranked` — or `SoftDeleted` when the post-wait visibility check removed
+/// them (deleted while the model ran, whatever the model answered) — and
+/// [`reconcile`] then blames operation finalization only for what the lane
+/// drops after it. Flag off: nothing (the stage passes the pool through and
+/// the async rerank is not observed, as before).
+pub(super) fn after_rerank(
+    trace: &mut Option<EvidenceTrace>,
+    results: &[HybridSearchResult],
+    ctx: &QueryContext,
+    state: &Arc<AppState>,
+) {
+    if !state.config.search.rerank_sync {
+        return;
+    }
+    capture(trace, STAGE_AFTER_RERANK, results, ctx, state);
+    let Some(trace) = trace.as_mut() else { return };
+    record_stage_loss(
+        trace,
+        "response",
+        STAGE_AFTER_RERANK,
+        RejectionReason::Reranked,
+    );
+    // `Reranked` entries come only from the call above.
+    for rejection in &mut trace.rejections {
+        if rejection.reason == RejectionReason::Reranked
+            && crate::handlers::delete::is_deleted_in_store(state, &rejection.chunk_id)
+        {
+            rejection.reason = RejectionReason::SoftDeleted;
+        }
+    }
+}
+
+/// Internal snapshot, dropped with the other temporary stages in [`finish`].
+const STAGE_AFTER_RERANK: &str = "after_rerank";
+
 fn reconcile(
     trace: &mut Option<EvidenceTrace>,
     results: &[HybridSearchResult],
@@ -89,6 +127,12 @@ fn reconcile(
     state: &Arc<AppState>,
 ) {
     let Some(trace) = trace else { return };
+    // With a synchronous rerank the lane starts from the reranked response.
+    let lane_input = if trace.stages.iter().any(|s| s.stage == STAGE_AFTER_RERANK) {
+        STAGE_AFTER_RERANK
+    } else {
+        "response"
+    };
     let returned = |id: &str| results.iter().any(|result| result.id == id);
     // A lane may restore a candidate previously filtered or cut by top-k.
     // Historical snapshots preserve that loss; terminal rejections must not lie.
@@ -103,7 +147,7 @@ fn reconcile(
         .retain(|entry| !returned(&entry.chunk_id) && !admitted.contains(&entry.chunk_id));
     record_stage_loss(
         trace,
-        "response",
+        lane_input,
         "after_operation",
         RejectionReason::OperationFinalization,
     );
