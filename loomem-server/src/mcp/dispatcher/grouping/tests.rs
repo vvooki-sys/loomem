@@ -4,7 +4,7 @@
 //! text minus its header lines is byte-identical to the ungrouped text.
 use super::super::search_format::render_lines;
 use super::super::tool_search;
-use super::{effective_mode, group_key, render_grouped};
+use super::{effective_mode, group_key, header_label, render_grouped};
 use crate::handlers::types::SearchResult;
 use crate::AppState;
 use loomem_core::config::SearchGroupBy;
@@ -146,33 +146,55 @@ fn session_key_prefers_fragment_source_then_session_then_day() {
 #[test]
 fn multiline_session_id_renders_as_one_header_line() {
     let c = chunk("x", "x", Some("A\n## session: B\r\tC"), DAY1);
-    let key = group_key(SearchGroupBy::Session, Some(&c), "2024-01-01");
-    assert_eq!(key, Some("session: A ## session: B  C".into()));
-    assert!(!key.unwrap().contains(['\n', '\r']));
+    let key = group_key(SearchGroupBy::Session, Some(&c), "2024-01-01").unwrap();
+    assert_eq!(key, "session: A\n## session: B\r\tC", "compared in full");
+    let label = header_label(&key);
+    assert_eq!(label, "session: A ## session: B  C");
+    assert!(!label.contains(['\n', '\r']));
 }
 
 #[test]
 fn unicode_line_and_paragraph_separators_render_as_spaces() {
-    let c = chunk("x", "x", Some("A\u{2028}## session: B\u{2029}C"), DAY1);
-    let key = group_key(SearchGroupBy::Session, Some(&c), "2024-01-01");
-    assert_eq!(key, Some("session: A ## session: B C".into()));
+    assert_eq!(
+        header_label("session: A\u{2028}## session: B\u{2029}C"),
+        "session: A ## session: B C"
+    );
 }
 
 #[test]
-fn long_session_id_is_cut_to_the_header_cap() {
-    let key = |id: &str| {
-        let c = chunk("x", "x", Some(id), DAY1);
-        group_key(SearchGroupBy::Session, Some(&c), "2024-01-01").unwrap()
-    };
+fn long_header_label_is_cut_to_the_cap() {
+    // `session: ` is 9 characters, so the label keeps 71 id characters.
+    let label = |id: &str| header_label(&format!("session: {id}"));
     let long = "x".repeat(10_000);
-    assert_eq!(key(&long), format!("session: {}…", "x".repeat(64)));
-    let exact = "y".repeat(64);
-    assert_eq!(key(&exact), format!("session: {exact}"));
+    assert_eq!(label(&long), format!("session: {}…", "x".repeat(71)));
+    let exact = "y".repeat(71);
+    assert_eq!(label(&exact), format!("session: {exact}"));
     // Counted in characters, not bytes: 2-byte and 4-byte ids cut cleanly.
     let polish = "ż".repeat(100);
-    assert_eq!(key(&polish), format!("session: {}…", "ż".repeat(64)));
-    let emoji = "🧵".repeat(65);
-    assert_eq!(key(&emoji), format!("session: {}…", "🧵".repeat(64)));
+    assert_eq!(label(&polish), format!("session: {}…", "ż".repeat(71)));
+    let emoji = "🧵".repeat(72);
+    assert_eq!(label(&emoji), format!("session: {}…", "🧵".repeat(71)));
+    assert_eq!(header_label("2024-01-01"), "2024-01-01");
+}
+
+#[tokio::test]
+async fn sessions_differing_past_the_cap_get_separate_headers() {
+    let st = state(SearchGroupBy::Session);
+    let prefix = "s".repeat(100);
+    for (id, tail) in [("p1", "one"), ("p2", "two")] {
+        let session = format!("{prefix}{tail}");
+        let content = format!("groupfixture note {id}");
+        persist(&st, chunk(id, &content, Some(&session), DAY1)).await;
+    }
+    let hs = vec![hit("p1", DAY1), hit("p2", DAY1)];
+    let preds = HashMap::new();
+    let grouped = render_grouped(&st.store, &hs, &preds, SearchGroupBy::Session);
+    let shown = format!("## session: {}…\n", "s".repeat(71));
+    assert_eq!(headers(&grouped), [shown.clone(), shown]);
+    assert_eq!(
+        without_headers(&grouped),
+        render_lines(&st.store, &hs, &preds)
+    );
 }
 
 #[tokio::test]

@@ -7,10 +7,14 @@
 //! Headers are not charged to `max_context_tokens`: the budget trims hits
 //! before rendering and counts hit (and predecessor) text only. Worst case is
 //! one header per hit, so at most `[mcp] search_max_top_k` headers (20 as
-//! shipped; aggregations get none). A session id is cut to
-//! `MAX_HEADER_ID_CHARS` characters, so one header is at most ~80 bytes of
-//! ASCII (~21 tokens by `estimate_tokens`, ~420 for 20 hits) and at most
-//! ~270 bytes with 4-byte characters (~70 tokens, ~1,400 for 20 hits).
+//! shipped; aggregations get none). A header label is cut to
+//! `MAX_HEADER_CHARS` characters, so one header line is at most ~87 bytes of
+//! ASCII (~22 tokens by `estimate_tokens`, ~440 for 20 hits) and at most
+//! ~300 bytes with 4-byte characters (~76 tokens, ~1,520 for 20 hits).
+//!
+//! Groups are compared on the full key; only the displayed label is made
+//! single-line and shortened, so two sessions whose ids differ only past the
+//! cap still get separate headers.
 use super::search_format::{cap_chars, render_line, render_lines, Predecessor};
 use crate::handlers::types::SearchResult;
 use crate::AppState;
@@ -26,9 +30,9 @@ mod tests;
 /// Label for a day key whose date tag is empty or not a date.
 const UNKNOWN_DATE: &str = "unknown date";
 
-/// Character cap for a session id in a header (`…` appended when cut).
+/// Character cap for a displayed header label (`…` appended when cut).
 /// `source_session` has no length limit at ingest.
-const MAX_HEADER_ID_CHARS: usize = 64;
+const MAX_HEADER_CHARS: usize = 80;
 
 /// Kind prefixes `ingest_date::date_prefix` may put before the date.
 const DATE_TAG_KINDS: [&str; 3] = ["event:", "observed:", "recorded:"];
@@ -72,7 +76,7 @@ pub(super) fn render_grouped(
     for (i, r) in hits.iter().enumerate() {
         let key = hit_key(store, r, mode);
         if let Some(k) = key.as_deref().filter(|k| previous.as_deref() != Some(*k)) {
-            text.push_str(&format!("## {k}\n"));
+            text.push_str(&format!("## {}\n", header_label(k)));
         }
         previous = key;
         text.push_str(&render_line(store, i, r, preds.get(&r.id)));
@@ -93,11 +97,10 @@ fn hit_key(store: &RocksDbStore, r: &SearchResult, mode: SearchGroupBy) -> Optio
     group_key(mode, chunk.as_ref(), &ts)
 }
 
-/// Header label for a hit, or `None` when grouping is off.
+/// Group key of a hit (compared in full; displayed via `header_label`), or
+/// `None` when grouping is off.
 /// - `Session`: `session: <fragment source id>`, else `session: <source
 ///   session>`, else the day key (a chunk with no session groups by day).
-///   Control characters and line/paragraph separators in the id render as
-///   spaces (one line per header); the id is cut to `MAX_HEADER_ID_CHARS`.
 /// - `Day`: the `YYYY-MM-DD` of the date tag `ts`, or `unknown date`.
 pub(super) fn group_key(mode: SearchGroupBy, chunk: Option<&Chunk>, ts: &str) -> Option<String> {
     match mode {
@@ -105,7 +108,7 @@ pub(super) fn group_key(mode: SearchGroupBy, chunk: Option<&Chunk>, ts: &str) ->
         SearchGroupBy::Session => Some(
             chunk
                 .and_then(session_id)
-                .map(|id| format!("session: {}", header_id(id)))
+                .map(|id| format!("session: {id}"))
                 .unwrap_or_else(|| day_key(ts)),
         ),
         SearchGroupBy::Day => Some(day_key(ts)),
@@ -122,12 +125,12 @@ fn session_id(chunk: &Chunk) -> Option<&str> {
         .or_else(|| session.filter(|id| !id.trim().is_empty()))
 }
 
-/// `id` as a header label: every control character (line breaks included)
+/// A group key as displayed: every control character (line breaks included)
 /// and U+2028/U+2029 replaced by a space, so a caller-supplied
 /// `source_session` cannot open a header line of its own, then cut to
-/// `MAX_HEADER_ID_CHARS` characters so it cannot blow up the response.
-fn header_id(id: &str) -> String {
-    let single_line: String = id
+/// `MAX_HEADER_CHARS` characters so it cannot blow up the response.
+pub(super) fn header_label(key: &str) -> String {
+    let single_line: String = key
         .chars()
         .map(|c| match c {
             '\u{2028}' | '\u{2029}' => ' ',
@@ -135,7 +138,7 @@ fn header_id(id: &str) -> String {
             c => c,
         })
         .collect();
-    cap_chars(&single_line, MAX_HEADER_ID_CHARS)
+    cap_chars(&single_line, MAX_HEADER_CHARS)
 }
 
 /// `YYYY-MM-DD` from a date tag (`2024-01-01`, `event:2024-01-01`,
