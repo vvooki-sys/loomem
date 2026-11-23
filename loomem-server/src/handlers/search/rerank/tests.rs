@@ -447,3 +447,102 @@ async fn http_responses_are_identical_with_document_text_levers_on() {
     }
     assert_eq!(on_state.retrieval_counters.snapshot().rerank_invocations, 2);
 }
+
+/// Local keyless chat-completions mock: forwards each request body to the
+/// test and answers with a fixed reranker reply.
+async fn fake_rerank_provider() -> (String, tokio::sync::mpsc::UnboundedReceiver<Value>) {
+    use axum::{extract::State, routing::post, Json};
+    async fn complete(
+        State(tx): State<tokio::sync::mpsc::UnboundedSender<Value>>,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        tx.send(body).unwrap();
+        Json(json!({"choices": [{
+            "finish_reason": "stop",
+            "message": {"content": "{\"indices\": [1, 0]}"}
+        }]}))
+    }
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let mock = axum::Router::new()
+        .route("/v1/chat/completions", post(complete))
+        .with_state(tx);
+    tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    (base_url, rx)
+}
+
+/// Reranker on against the local mock: a provider entry without
+/// `api_key_env`, so no key is read from the environment and no
+/// `Authorization` header is sent; nothing leaves 127.0.0.1.
+fn local_rerank_config(base_url: &str) -> loomem_core::config::Config {
+    let (_, original) = make_test_app();
+    let mut config = keyless_rerank_config(original.config.clone());
+    config.llm.providers.insert(
+        "local-fake".into(),
+        serde_json::from_value(json!({"base_url": base_url})).unwrap(),
+    );
+    config.llm.provider = "local-fake".into();
+    let provider = config.llm.active_provider().expect("local provider");
+    assert!(
+        provider.api_key.is_none(),
+        "mock provider must stay keyless"
+    );
+    assert!(provider.base_url.starts_with("http://127.0.0.1:"));
+    config
+}
+
+/// The levers reach the model: with the date prefix on and a 16-character
+/// LLM cap, the prompt the reranker sends numbers the dated, capped
+/// documents (`[i] [YYYY-MM-DD] lan`), and the reply's order lands in the
+/// reranked cache slot.
+#[tokio::test]
+async fn llm_prompt_carries_dated_capped_documents() {
+    let (base_url, mut requests) = fake_rerank_provider().await;
+    let mut config = local_rerank_config(&base_url);
+    config.search.rerank_date_prefix = true;
+    config.search.rerank_llm_max_chars = 16;
+    let (_app, state) = make_test_app_cfg(config);
+    #[cfg(feature = "onnx-rerank")]
+    assert!(state.onnx_reranker.is_none());
+    state
+        .store
+        .store_chunk(&legacy_event_chunk("a", "2023-05-06"))
+        .unwrap();
+    let payload = request("lantern");
+    let ctx = prepare_query_context(&state, &auth(), &payload).unwrap();
+    let key = ctx.cache_key.expect("plain request is cacheable");
+    let generation = state.query_cache.lock().await.generation();
+    let input = RerankInput {
+        ranked: vec![hit("a", 0.9), hit("b", 0.8)],
+        final_top_k: 2,
+        lane: None,
+        cache_generation: generation,
+    };
+    stage(&state, &ctx, &payload, &auth(), input).await;
+
+    let deadline = std::time::Duration::from_secs(5);
+    let body = tokio::time::timeout(deadline, requests.recv())
+        .await
+        .expect("reranker called the mock")
+        .unwrap();
+    let prompt = body["messages"][1]["content"].as_str().unwrap();
+    assert!(
+        prompt.contains("Results:\n[0] [2023-05-06] lan\n\n[1] [2024-01-01] lan\n\n"),
+        "{prompt}"
+    );
+    // Real loopback I/O: spin (no sleep) until the reply is processed,
+    // bounded by the deadline rather than a yield count.
+    let completed = async {
+        while state.retrieval_counters.snapshot().rerank_completions == 0 {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(deadline, completed)
+        .await
+        .expect("rerank completed");
+    let (is_reranked, cached) = state.query_cache.lock().await.get_best(key).unwrap();
+    assert!(is_reranked);
+    let ids: Vec<_> = cached.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, ["b", "a"], "mock order published");
+}
