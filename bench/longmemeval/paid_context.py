@@ -137,6 +137,8 @@ def pack_evidence(facts, originals_menu, selected_ids, cap_bytes, max_selected=M
         candidate = originals + [by_id[identity]]
         if byte_size({"facts": facts, "originals": candidate}) <= cap_bytes:
             originals = candidate
+        else:  # did not fit under the cap: rejected with its id, never silently dropped
+            rejected.append(identity)
     return {"facts": facts, "originals": originals, "rejected_ids": rejected,
             "bytes": byte_size({"facts": facts, "originals": originals})}
 

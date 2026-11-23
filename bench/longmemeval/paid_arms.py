@@ -168,7 +168,9 @@ def _evidence(deps, ctx, arm, outcome, selected):
     packed = pack_evidence(ctx["facts"], ctx["menu"], selected, cap, max_selected=limit)
     outcome.selected_ids = [r["record_id"] for r in packed["originals"]]
     outcome.rejected_ids = list(packed["rejected_ids"])
-    return packed
+    # The prompt sees exactly the object pack_evidence measured against EVIDENCE_CAP;
+    # the bookkeeping keys (rejected_ids, bytes) stay in the outcome.
+    return {"facts": packed["facts"], "originals": packed["originals"]}
 
 
 def run_arm(arm, ctx, deps, attempt=1):
@@ -189,6 +191,8 @@ def run_arm(arm, ctx, deps, attempt=1):
         outcome.answer = _answer(deps, ctx, arm, outcome, diagnostic, evidence, attempt)
     except StageFailure as failure:
         outcome.status, outcome.error = failure.status, str(failure)
+    except ContextError as exc:  # a byte cap or evidence shape: this arm's technical error, not a run stop
+        outcome.status, outcome.error = "technical_error", f"ContextError: {exc}"
     return outcome
 
 

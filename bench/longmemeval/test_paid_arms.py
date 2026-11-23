@@ -137,6 +137,33 @@ class ArmTests(unittest.TestCase):
         self.assertEqual(outcome.selected_ids, [r["record_id"] for r in ctx["menu"]])
         self.assertEqual(len(outcome.selected_ids), 24)
 
+    def test_evidence_at_the_cap_is_exactly_what_the_prompt_sees(self):
+        """Regression (pilot dry-run): the answer payload carried pack_evidence's bookkeeping keys and
+        came out above EVIDENCE_CAP although the packer had measured the cap without them."""
+        from paid_context import byte_size
+        h = ArmHarness(self)
+        qid = next(iter(h.holdout.always_ids))
+        ctx = h.context(qid, extra_fragments=400)
+        cap = h.sheet.caps()["EVIDENCE_CAP"]
+        outcome = run_arm("always_originals", ctx, h.deps)
+        self.assertEqual(outcome.status, "ok", outcome.error)
+        self.assertTrue(outcome.rejected_ids, "the menu must overflow the evidence cap for this test")
+        answer = [e for e in h.fake.log if e["role"] == "answer"][0]
+        evidence = json.loads(answer["wire"]["messages"][1]["content"])["evidence"]
+        self.assertEqual(set(evidence), {"facts", "originals"})
+        self.assertLessEqual(byte_size(evidence), cap)
+        self.assertGreater(byte_size(evidence), cap - 2048)
+
+    def test_context_error_inside_an_arm_is_a_technical_error_not_a_stop(self):
+        h = ArmHarness(self)
+        qid = h.holdout.question_order[0]
+        ctx = h.context(qid)
+        ctx["facts"] = [{**ctx["facts"][0], "content": "x" * (h.sheet.caps()["FACTS_JSON_CAP"] + 1)}]
+        outcome = run_arm("facts_retry", ctx, h.deps)
+        self.assertEqual(outcome.status, "technical_error")
+        self.assertIn("ContextError", outcome.error)
+        self.assertEqual(h.intents(), [], "nothing is reserved for an over-cap context")
+
     def test_length_in_answer_means_status_length_and_later_stages_skipped(self):
         h = ArmHarness(self, scenarios={"answer": "length"})
         outcome = run_arm("facts_retry", h.context("h1-q01"), h.deps)

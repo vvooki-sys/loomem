@@ -140,7 +140,9 @@ class ContextTests(unittest.TestCase):
         menu = originals_menu(self.search, self.sources, self.caps["ORIGINALS_MENU_CAP"])
         facts_only = byte_size({"facts": facts, "originals": []})
         packed = pack_evidence(facts, menu, [r["record_id"] for r in menu], facts_only + 1)
-        self.assertEqual((packed["facts"], packed["originals"], packed["rejected_ids"]), (facts, [], []))
+        # Facts stay; every selected original that did not fit is rejected WITH its id.
+        self.assertEqual((packed["facts"], packed["originals"], packed["rejected_ids"]),
+                         (facts, [], [r["record_id"] for r in menu]))
         self.assertEqual(packed["bytes"], facts_only)
         with self.assertRaisesRegex(ContextError, "facts alone exceed"):
             pack_evidence(facts, menu, [], facts_only - 1)
