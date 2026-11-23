@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `memory_search`, `rerank_llm_max_chars` sets the LLM reranker's
   per-document cap (200 = previous), `rerank_onnx_max_tokens` truncates ONNX
   cross-encoder pairs (0 = none, otherwise at least 16).
+- `memory_search` can insert `## <key>` group headers (per source session or
+  per day; order and numbering unchanged, none for aggregation queries),
+  behind `[mcp] search_group_by` (default `"none"`, byte-identical).
 - `[knowledge_extraction] temporal_grounding` drops extracted facts whose
   relative time ("three weeks ago", "yesterday") or `event_date_context` is
   not in the source chunk: `"filter"` keeps the prompt unchanged,
