@@ -1,22 +1,128 @@
 //! `memory_search` result-line rendering. Extracted verbatim from
 //! `tool_search` so the MCP text levers (predecessor lines, group headers)
 //! can grow here; the header, footer and token budget stay in the
-//! dispatcher. One result → one line, the id always last.
+//! dispatcher. One result → one line, the id always last; with
+//! `[mcp] search_include_predecessor` on, an updated hit may be followed by
+//! one `↳ previously` line carrying the version it superseded.
 use crate::handlers::types::SearchResult;
+use crate::AppState;
 use loomem_core::storage::RocksDbStore;
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 
-/// Render every hit, numbered from 1, in order.
-pub(super) fn render_lines(store: &RocksDbStore, hits: &[SearchResult]) -> String {
+#[cfg(test)]
+mod predecessor_tests;
+
+/// The direct predecessor (`supersedes_id`, one hop) of an updated hit, as
+/// rendered under it: its date tag and its content capped at
+/// `[mcp] predecessor_max_chars` characters.
+pub(super) struct Predecessor {
+    pub(super) ts: String,
+    pub(super) text: String,
+}
+
+/// Predecessors keyed by hit id, or none at all when the lever is off or the
+/// query is an aggregation (enumerations must not gain extra lines). Runs
+/// before the token budget so the predecessor text is charged to its hit.
+pub(super) fn predecessors_for(
+    state: &AppState,
+    stream_id: &str,
+    hits: &[SearchResult],
+    is_aggregation: bool,
+) -> HashMap<String, Predecessor> {
+    let mcp = &state.config.mcp;
+    if !mcp.search_include_predecessor || is_aggregation {
+        return HashMap::new();
+    }
+    predecessors(&state.store, stream_id, hits, mcp.predecessor_max_chars)
+}
+
+/// For each hit whose chunk supersedes another, load that predecessor in the
+/// same stream. Skipped when it is soft-deleted, in another stream, missing,
+/// or already one of the hits (e.g. `include_superseded = true`), so no
+/// memory is shown twice.
+pub(super) fn predecessors(
+    store: &RocksDbStore,
+    stream_id: &str,
+    hits: &[SearchResult],
+    max_chars: usize,
+) -> HashMap<String, Predecessor> {
+    let hit_ids: HashSet<&str> = hits.iter().map(|r| r.id.as_str()).collect();
+    let mut out = HashMap::new();
+    for r in hits {
+        let Some(pid) = store
+            .get_chunk(&r.id)
+            .ok()
+            .flatten()
+            .and_then(|c| c.supersedes_id)
+        else {
+            continue;
+        };
+        if hit_ids.contains(pid.as_str()) {
+            continue;
+        }
+        let Some(pred) = store.get_chunk_scoped(&pid, stream_id).ok().flatten() else {
+            continue;
+        };
+        if pred.deleted_at.is_some() {
+            continue;
+        }
+        let timestamp = i64::try_from(pred.timestamp).ok();
+        let ts = crate::handlers::ingest_date::date_prefix(Some(&pred), timestamp);
+        let text = cap_chars(&pred.content, max_chars);
+        out.insert(r.id.clone(), Predecessor { ts, text });
+    }
+    out
+}
+
+/// `text` cut to at most `max_chars` characters, with `…` appended when cut.
+pub(super) fn cap_chars(text: &str, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_string(),
+    }
+}
+
+/// Estimated token cost of one rendered hit for `max_context_tokens`: its
+/// content plus per-line overhead, and the same again for its predecessor
+/// line when one is rendered. Equals the pre-lever cost when `preds` is empty.
+pub(super) fn token_cost(r: &SearchResult, preds: &HashMap<String, Predecessor>) -> usize {
+    let line = |text: &str| {
+        loomem_core::llm_ner::estimate_tokens(text) + super::RESULT_FORMAT_TOKEN_OVERHEAD
+    };
+    line(&r.content) + preds.get(&r.id).map_or(0, |p| line(&p.text))
+}
+
+/// Render every hit, numbered from 1, in order, each followed by its
+/// predecessor line when `preds` holds one for it.
+pub(super) fn render_lines(
+    store: &RocksDbStore,
+    hits: &[SearchResult],
+    preds: &HashMap<String, Predecessor>,
+) -> String {
     let mut text = String::new();
     for (i, r) in hits.iter().enumerate() {
-        text.push_str(&render_line(store, i, r));
+        text.push_str(&render_line(store, i, r, preds.get(&r.id)));
     }
     text
 }
 
-/// One `memory_search` line for the hit at zero-based `index`.
-pub(super) fn render_line(store: &RocksDbStore, index: usize, r: &SearchResult) -> String {
+/// One `memory_search` line for the hit at zero-based `index`, plus the
+/// `↳ previously` line when a predecessor is given.
+pub(super) fn render_line(
+    store: &RocksDbStore,
+    index: usize,
+    r: &SearchResult,
+    predecessor: Option<&Predecessor>,
+) -> String {
+    let mut line = render_hit_line(store, index, r);
+    if let Some(p) = predecessor {
+        line.push_str(&format!("   ↳ previously [{}]: {}\n", p.ts, p.text));
+    }
+    line
+}
+
+fn render_hit_line(store: &RocksDbStore, index: usize, r: &SearchResult) -> String {
     let chunk_opt = store.get_chunk(&r.id).ok().flatten();
     let timestamp = r
         .metadata

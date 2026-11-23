@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `memory_search` can render the direct predecessor of an updated hit on a
+  `↳ previously [date]: …` line under it, charged to `max_context_tokens`,
+  behind `[mcp] search_include_predecessor` (default off, byte-identical).
+
 ## [0.5.5] - 2026-11-22
 
 Everything on `main` since v0.5.4: every LLM chat call goes through the active
