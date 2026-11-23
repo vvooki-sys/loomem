@@ -2144,6 +2144,7 @@ fn score_and_rank(
         .map(|mut r| {
             if let Ok(Some(chunk)) = state.store.get_chunk(&r.id) {
                 apply_chunk_score_adjustments(&mut r, &chunk, &state.config.search);
+                r.score *= event_date::proximity_multiplier(&chunk, ctx, state);
             }
             r
         })

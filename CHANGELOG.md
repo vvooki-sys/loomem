@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `memory_search` can render the direct predecessor of an updated hit on a
   `↳ previously [date]: …` line under it, charged to `max_context_tokens`,
   behind `[mcp] search_include_predecessor` (default off, byte-identical).
+- `[search] event_date_proximity_boost` boosts chunks whose event date is
+  inside or near the query date range (default 0.0 = off, byte-identical).
 
 ## [0.5.5] - 2026-11-22
 
