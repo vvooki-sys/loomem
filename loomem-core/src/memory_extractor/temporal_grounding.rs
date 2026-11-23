@@ -9,9 +9,17 @@
 //!
 //! The check compares whitespace-normalized, lowercased text. It fails closed:
 //! if the relative-cue pattern ever failed to compile, every fact would be
-//! rejected while grounding is on. Known coverage gaps of the cue pattern, not
-//! handled here: "last night", "a couple of weeks ago", and the Polish
-//! "tydzień/miesiąc/rok temu".
+//! rejected while grounding is on.
+//!
+//! The cue pattern ([`RELATIVE_CUE_PATTERN`], kept verbatim from the original
+//! port) covers only some relative expressions; a fact using any other form
+//! passes the content check unexamined. Known forms it does not cover:
+//! - English: "last night", "this morning", "next week", "in two weeks",
+//!   "last Friday/weekend/summer", "a couple of weeks ago", "a few/several
+//!   days ago", and number words above ten ("eleven days ago").
+//! - Polish: "dziś", "przedwczoraj", "w zeszłym tygodniu",
+//!   "tydzień/miesiąc/rok temu", and number words above five ("sześć dni
+//!   temu" and up).
 
 use super::ExtractedFact;
 use regex::Regex;
@@ -36,6 +44,8 @@ pub enum TemporalGrounding {
 
 const NOTICE: &str = "TEMPORAL GROUNDING: Preserve the source's temporal wording. Never introduce a relative duration (such as 'three weeks ago') or convert an absolute date to a relative expression. Copy event_date_context verbatim from the source, or leave it null. Resolve an absolute event_date only from a source cue and the supplied conversation_date. 'Just got back' does not establish an exact number of days or weeks. Keep unknown dates unknown. Never use the current date, the reader's question date, or information absent from this transcript.";
 
+/// Relative-time cues checked in a fact's content. Not exhaustive: see the
+/// module docs for the forms it does not match.
 const RELATIVE_CUE_PATTERN: &str = r"(?i)\b(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\s+(?:days?|weeks?|months?|years?|hours?)\s+ago|yesterday|tomorrow|today|last\s+(?:week|month|year)|(?:\d+|jeden|dwa|trzy|cztery|pięć)\s+(?:dni|tygodnie|tygodni|miesiące|miesięcy|lata|lat)\s+temu|wczoraj|dzisiaj|jutro)\b";
 
 /// Prepend the grounding notice to a prompt body under
@@ -50,22 +60,23 @@ pub(super) fn with_notice(mode: TemporalGrounding, body: String) -> String {
 
 /// Facts admitted from one chunk's run: the confidence filter (`>= 0.5`),
 /// plus the grounding check against `source` unless `mode` is `Off`. Order is
-/// preserved.
+/// preserved. The second value counts confident facts rejected by grounding:
+/// `None` when `mode` is `Off` (no check ran), otherwise `Some(n)`.
 pub(super) fn admissible(
     facts: Vec<ExtractedFact>,
     source: &str,
     mode: TemporalGrounding,
-) -> Vec<ExtractedFact> {
+) -> (Vec<ExtractedFact>, Option<usize>) {
     let confident = facts.into_iter().filter(|f| f.confidence >= 0.5);
     if mode == TemporalGrounding::Off {
-        return confident.collect();
+        return (confident.collect(), None);
     }
     let grounding = Grounding::new(source);
     let (kept, rejected): (Vec<_>, Vec<_>) = confident.partition(|f| grounding.admits(f));
     if !rejected.is_empty() {
         debug!("temporal grounding rejected {} fact(s)", rejected.len());
     }
-    kept
+    (kept, Some(rejected.len()))
 }
 
 fn normalized(text: &str) -> String {
@@ -107,27 +118,67 @@ impl Grounding {
         };
         pattern
             .find_iter(&fact.content)
-            .all(|cue| self.supports(cue.as_str()))
+            .all(|cue| self.supports(widened_cue(&fact.content, cue.start(), cue.end())))
     }
 
-    /// The source contains `cue` as a complete expression: a match whose
-    /// alphanumeric edges are not glued to further letters or digits, so
-    /// "3 weeks ago" is not supported by "13 weeks ago".
+    /// The source contains `cue` as a complete expression (see
+    /// [`contains_phrase`]), so "3 weeks ago" is not supported by
+    /// "13 weeks ago", "2-3 weeks ago" or "1.5 weeks ago".
     fn supports(&self, cue: &str) -> bool {
         contains_phrase(&self.source, &normalized(cue))
     }
 }
 
+/// The cue at `content[start..end]`, widened back over the decimal or range
+/// its leading number belongs to: the pattern starts a numeric cue at the
+/// last digit run, so "1.5 weeks ago" or "2-3 weeks ago" would otherwise be
+/// checked as "5 weeks ago" or "3 weeks ago", which [`glued`] never finds in
+/// a source that says the same thing.
+fn widened_cue(content: &str, start: usize, end: usize) -> &str {
+    let cue = content.get(start..end).unwrap_or("");
+    if !cue.starts_with(|c: char| c.is_ascii_digit()) {
+        return cue;
+    }
+    let numeric = |c: &char| c.is_ascii_digit() || matches!(c, '.' | ',' | '-');
+    let head = content.get(..start).unwrap_or("");
+    let prefix: usize = head
+        .chars()
+        .rev()
+        .take_while(numeric)
+        .map(char::len_utf8)
+        .sum();
+    content
+        .get(start.saturating_sub(prefix)..end)
+        .unwrap_or(cue)
+        .trim_start_matches(['.', ',', '-'])
+}
+
+/// `needle` occurs in `haystack` with neither alphanumeric edge glued to the
+/// surrounding text (see [`glued`]).
 fn contains_phrase(haystack: &str, needle: &str) -> bool {
-    let glued = |edge: Option<char>, outer: Option<char>| {
-        edge.is_some_and(char::is_alphanumeric) && outer.is_some_and(char::is_alphanumeric)
-    };
     haystack.match_indices(needle).any(|(start, _)| {
         let end = start + needle.len();
-        let before = haystack.get(..start).and_then(|s| s.chars().next_back());
-        let after = haystack.get(end..).and_then(|s| s.chars().next());
-        !glued(needle.chars().next(), before) && !glued(needle.chars().next_back(), after)
+        let mut before = haystack.get(..start).unwrap_or("").chars().rev();
+        let mut after = haystack.get(end..).unwrap_or("").chars();
+        let first = needle.chars().next();
+        let last = needle.chars().next_back();
+        !glued(first, before.next(), before.next()) && !glued(last, after.next(), after.next())
     })
+}
+
+/// A match edge `edge` is glued to the text outside it when the adjacent
+/// character `outer` is a letter or digit, or when `outer` is `.`, `,` or `-`
+/// with a digit `beyond` it (a decimal, a thousands group or a range such as
+/// "1.5", "1,5" or "2-3"). Non-alphanumeric edges never glue.
+fn glued(edge: Option<char>, outer: Option<char>, beyond: Option<char>) -> bool {
+    if !edge.is_some_and(char::is_alphanumeric) {
+        return false;
+    }
+    match outer {
+        Some(c) if c.is_alphanumeric() => true,
+        Some('.' | ',' | '-') => beyond.is_some_and(|c| c.is_ascii_digit()),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -241,6 +292,53 @@ mod tests {
         assert!(contains_phrase("a 12 x, then 2 x", "2 x"));
     }
 
+    /// A decimal, a digit group or a numeric range glues the cue to the
+    /// number before or after it; the same punctuation next to words does not.
+    #[test]
+    fn decimals_and_ranges_do_not_support_a_different_number() {
+        let source = "user: it was 1.5 weeks ago, or 2-3 weeks ago, not 4,5 weeks ago.";
+        for cue in ["5 weeks ago", "3 weeks ago"] {
+            assert!(!contains_phrase(&normalized(source), cue), "{cue}");
+            assert!(!admits(
+                &fact(&format!("The user left {cue}."), None),
+                source
+            ));
+            assert!(!admits(&fact("The user left.", Some(cue)), source));
+        }
+        assert!(!contains_phrase("about 2.5", "2"));
+        assert!(!contains_phrase("2-3 days", "2"));
+        assert!(contains_phrase("i was there - 3 weeks ago.", "3 weeks ago"));
+        assert!(contains_phrase("we met.yesterday", "yesterday"));
+        assert!(contains_phrase("two weeks ago-ish", "two weeks ago"));
+        assert!(contains_phrase("3 weeks ago, then 2", "3 weeks ago"));
+        // The same decimal or range in the fact and the source is supported.
+        assert!(admits(
+            &fact("The user left 1.5 weeks ago.", None),
+            "user: I left 1.5 weeks ago."
+        ));
+        assert!(admits(
+            &fact("The user left 2-3 weeks ago.", Some("2-3 weeks ago")),
+            "user: I left 2-3 weeks ago."
+        ));
+        assert!(!admits(
+            &fact("The user left 1.5 weeks ago.", None),
+            "user: I left 2.5 weeks ago."
+        ));
+    }
+
+    #[test]
+    fn widened_cue_covers_the_whole_number() {
+        let cue = |content: &str, needle: &str| {
+            let start = content.find(needle).unwrap();
+            widened_cue(content, start, start + needle.len()).to_string()
+        };
+        assert_eq!(cue("left 1.5 weeks ago", "5 weeks ago"), "1.5 weeks ago");
+        assert_eq!(cue("left 2-3 weeks ago", "3 weeks ago"), "2-3 weeks ago");
+        assert_eq!(cue("left ,-3 weeks ago", "3 weeks ago"), "3 weeks ago");
+        assert_eq!(cue("left 3 weeks ago", "3 weeks ago"), "3 weeks ago");
+        assert_eq!(cue("2-yesterday", "yesterday"), "yesterday");
+    }
+
     #[test]
     fn pattern_compiles() {
         assert!(Regex::new(RELATIVE_CUE_PATTERN).is_ok());
@@ -253,9 +351,10 @@ mod tests {
             .into_iter()
             .filter(|f| f.confidence >= 0.5)
             .collect();
-        let off = admissible(mixed(), SOURCE, TemporalGrounding::Off);
+        let (off, rejected) = admissible(mixed(), SOURCE, TemporalGrounding::Off);
         assert_eq!(contents(&off), contents(&reference));
         assert_eq!(off.len(), 4);
+        assert_eq!(rejected, None);
     }
 
     #[test]
@@ -264,11 +363,14 @@ mod tests {
             TemporalGrounding::Filter,
             TemporalGrounding::PromptAndFilter,
         ] {
-            let kept = admissible(mixed(), SOURCE, mode);
+            let (kept, rejected) = admissible(mixed(), SOURCE, mode);
             assert_eq!(
                 contents(&kept),
                 ["The user met Anna yesterday.", "The user is back home."]
             );
+            // The 0.4-confidence fact is dropped by the confidence filter and
+            // is not counted as a grounding rejection.
+            assert_eq!(rejected, Some(2));
         }
     }
 

@@ -399,3 +399,65 @@ async fn grounding_on_drops_invented_relative_time() {
         assert_eq!(system.contains("TEMPORAL GROUNDING"), sends_notice);
     }
 }
+
+/// Off keeps the pre-option empty-run classification (both causes count as
+/// `extraction_empty`); grounding on with zero rejections does too. Only a
+/// run emptied by grounding rejections is not counted.
+#[test]
+fn empty_extraction_cause_separates_grounding_from_degradation() {
+    for grounding in [None, Some(0)] {
+        assert_eq!(
+            empty_extraction_cause(0, grounding),
+            EmptyCause::NoFactsInBody
+        );
+        assert_eq!(
+            empty_extraction_cause(3, grounding),
+            EmptyCause::BelowConfidence
+        );
+    }
+    assert_eq!(
+        empty_extraction_cause(3, Some(2)),
+        EmptyCause::TemporalGrounding(2)
+    );
+    assert_eq!(
+        empty_extraction_cause(0, Some(2)),
+        EmptyCause::NoFactsInBody
+    );
+}
+
+async fn outcome_for(mode: TemporalGrounding, facts: serde_json::Value) -> ExtractionOutcome {
+    let config = with_grounding(KnowledgeExtractionConfig::default(), mode);
+    let chat = Recording::new(facts);
+    extract_knowledge_with(&chat, &config, GROUNDING_SOURCE, "2024-03-20")
+        .await
+        .unwrap()
+}
+
+/// Off: no grounding count at all. On: every rejection is counted, and a run
+/// whose facts were all rejected is classified as grounding, not as an empty
+/// (possibly degraded) extraction.
+#[tokio::test]
+async fn grounding_rejections_are_counted_on_the_outcome() {
+    let off = outcome_for(TemporalGrounding::Off, grounding_reply()).await;
+    assert_eq!(off.grounding_rejected_facts, None);
+
+    let on = outcome_for(TemporalGrounding::Filter, grounding_reply()).await;
+    assert_eq!(on.grounding_rejected_facts, Some(1));
+    assert_eq!(on.discarded_facts, 0);
+
+    let invented = serde_json::json!([{
+        "content": "The user visited the synthetic festival three weeks ago.",
+        "fact_type": "event", "subject": null, "event_date": null,
+        "event_date_context": null, "attributed_to": "user", "confidence": 0.9
+    }]);
+    let emptied = outcome_for(TemporalGrounding::Filter, invented.clone()).await;
+    assert!(emptied.facts.is_empty());
+    assert_eq!(emptied.grounding_rejected_facts, Some(1));
+    assert_eq!(
+        empty_extraction_cause(1, emptied.grounding_rejected_facts),
+        EmptyCause::TemporalGrounding(1)
+    );
+    let kept = outcome_for(TemporalGrounding::Off, invented).await;
+    assert_eq!(kept.facts.len(), 1);
+    assert_eq!(kept.grounding_rejected_facts, None);
+}

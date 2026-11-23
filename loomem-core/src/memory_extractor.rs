@@ -504,15 +504,13 @@ pub async fn extract_knowledge_with(
             extract_chunk_with_split(chat, extraction_config, &system_prompt, i, chunk_text).await;
         outcome.record_input_chunk(&run);
         raw_facts_seen += run.facts.len();
-        let admitted = outcome.admit_chunk_facts(
-            temporal_grounding::admissible(
-                run.facts,
-                chunk_text,
-                extraction_config.temporal_grounding,
-            )
-            .into_iter(),
-            max_facts,
+        let (admissible, grounding_rejected) = temporal_grounding::admissible(
+            run.facts,
+            chunk_text,
+            extraction_config.temporal_grounding,
         );
+        outcome.record_grounding_rejections(grounding_rejected);
+        let admitted = outcome.admit_chunk_facts(admissible.into_iter(), max_facts);
         debug!(
             "Extracted {admitted} facts (filtered by confidence >= 0.5, capped at {max_facts} per chunk)"
         );
@@ -543,23 +541,59 @@ pub async fn extract_knowledge_with(
     // failures (server-degradation brief A2) so silent ingest degradation is
     // visible in llm_failures_recent without masquerading as a transport error.
     if succeeded_chunks > 0 && outcome.facts.is_empty() {
-        // Coherent with the counter: every increment leaves a log naming the
-        // cause. raw_facts_seen == 0 → nothing in the response body (pair with
-        // the per-chunk body_len log to spot degraded transport); > 0 → facts
-        // were returned but all scored below the confidence threshold.
-        if raw_facts_seen == 0 {
-            debug!(
-                "Extraction empty: {succeeded_chunks} chunk(s) succeeded with no facts in the response body (see per-chunk body_len logs)"
-            );
-        } else {
-            debug!(
-                "Extraction empty: {succeeded_chunks} chunk(s) succeeded, {raw_facts_seen} raw fact(s) all filtered below confidence 0.5"
-            );
-        }
-        crate::llm_failures::global().record(crate::llm_failures::LlmFailureKind::ExtractionEmpty);
+        report_empty_extraction(
+            succeeded_chunks,
+            raw_facts_seen,
+            outcome.grounding_rejected_facts,
+        );
     }
 
     Ok(outcome)
+}
+
+/// Why a run with at least one completed call admitted no facts.
+#[derive(Debug, PartialEq, Eq)]
+enum EmptyCause {
+    /// Nothing in the response body: a transport-degradation signal.
+    NoFactsInBody,
+    /// Facts were returned but all scored below the confidence threshold.
+    BelowConfidence,
+    /// Temporal grounding rejected at least one confident fact: deliberate
+    /// filtering, not degradation.
+    TemporalGrounding(usize),
+}
+
+fn empty_extraction_cause(raw_facts_seen: usize, grounding_rejected: Option<usize>) -> EmptyCause {
+    match grounding_rejected {
+        _ if raw_facts_seen == 0 => EmptyCause::NoFactsInBody,
+        Some(rejected) if rejected > 0 => EmptyCause::TemporalGrounding(rejected),
+        _ => EmptyCause::BelowConfidence,
+    }
+}
+
+/// Coherent with the `extraction_empty` counter: every increment leaves a log
+/// naming the cause. A run emptied by temporal grounding is logged but not
+/// counted, so the counter keeps meaning possible degradation.
+fn report_empty_extraction(
+    succeeded_chunks: usize,
+    raw_facts_seen: usize,
+    grounding_rejected: Option<usize>,
+) {
+    match empty_extraction_cause(raw_facts_seen, grounding_rejected) {
+        EmptyCause::NoFactsInBody => debug!(
+            "Extraction empty: {succeeded_chunks} chunk(s) succeeded with no facts in the response body (see per-chunk body_len logs)"
+        ),
+        EmptyCause::BelowConfidence => debug!(
+            "Extraction empty: {succeeded_chunks} chunk(s) succeeded, {raw_facts_seen} raw fact(s) all filtered below confidence 0.5"
+        ),
+        EmptyCause::TemporalGrounding(rejected) => {
+            debug!(
+                "Extraction empty: {succeeded_chunks} chunk(s) succeeded, {raw_facts_seen} raw fact(s) filtered by confidence or temporal grounding ({rejected} rejected by temporal grounding); not counted as extraction_empty"
+            );
+            return;
+        }
+    }
+    crate::llm_failures::global().record(crate::llm_failures::LlmFailureKind::ExtractionEmpty);
 }
 
 /// Legacy wrapper — calls extract_knowledge with today's date.
