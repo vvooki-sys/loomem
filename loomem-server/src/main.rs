@@ -591,8 +591,11 @@ async fn main() -> Result<()> {
     // Load ONNX reranker if configured
     #[cfg(feature = "onnx-rerank")]
     let onnx_reranker = if config.search.rerank_enabled {
-        loomem_core::onnx_reranker::try_load(config.search.rerank_model_dir.as_deref())
-            .map(Arc::new)
+        loomem_core::onnx_reranker::try_load(
+            config.search.rerank_model_dir.as_deref(),
+            config.search.rerank_onnx_max_tokens,
+        )
+        .map(Arc::new)
     } else {
         None
     };
