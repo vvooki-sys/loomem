@@ -231,7 +231,7 @@ class ArmTests(unittest.TestCase):
         with self.assertRaises(RunStopped):
             run_arm("facts_retry", blocked.context("h1-q01"), blocked.deps)
         self.assertTrue(blocked.journal.state.has_uncertain)
-        tiny = ArmHarness(self, sublimits_usd={"E": "10", "F": "0.000001", "S": "30", "A": "10", "R": "10"})
+        tiny = ArmHarness(self, sublimits_usd={"E": "10", "F": "0.000001", "S": "30", "A": "10", "R": "10", "K": "0.2374"})
         with self.assertRaises(SublimitExceeded):
             run_arm("facts_retry", tiny.context("h1-q01"), tiny.deps)
         self.assertEqual(tiny.fake.log, [])

@@ -112,8 +112,12 @@ def _ingest(ctx, engine, hid, session):
     proof = engine.prove_readiness_v2(hid, receipt, session, ctx.readiness_deadline_s)
     engine.fetch_source(receipt.source_id)
     if receipt.zero_facts:
-        write_create_only(ctx.directory / "events" / f"{hid}.{sid}.zero_facts.json",
-                          {"history_id": hid, "session_id": sid, "source_id": receipt.source_id, "at": ctx.clock()})
+        # Keyed by history/session, not by the engine's source id: a history that is redone after an
+        # interrupted run gets fresh source ids, and the event must be safe to repeat.
+        event = ctx.directory / "events" / f"{hid}.{sid}.zero_facts.json"
+        if not event.exists():
+            write_create_only(event, {"history_id": hid, "session_id": sid, "source_id": receipt.source_id,
+                                      "at": ctx.clock()})
     return {"session_id": sid, "source_id": receipt.source_id, "conversation_date": session["conversation_date"],
             "fragment_ids": list(receipt.fragment_ids), "fact_ids": list(receipt.fact_ids),
             "zero_facts": bool(receipt.zero_facts), "requests": [r["request_id"] for r in records if r.get("request_id")],
@@ -145,8 +149,8 @@ def phase_extraction(ctx):
         work = ctx.directory / "engine" / hid
         _move_aside(ctx, work)
         engine = ctx.engine_factory(ctx.proxy.url, ctx.proxy.token)
-        engine.start(work, reuse=False)
-        try:
+        try:  # start() inside the cleanup block: a failed start must not leave a live child
+            engine.start(work, reuse=False)
             sessions = [_ingest(ctx, engine, hid, s) for s in ctx.holdout.histories[hid]["sessions"]]
             write_create_only(_extraction_path(ctx, hid), {
                 "history_id": hid, "sessions": sessions, "halted": False,
@@ -154,7 +158,14 @@ def phase_extraction(ctx):
                 "system_sha256": ctx.proxy.system_sha256})
         finally:
             engine.close()
+        _stop_if_halted(ctx, hid)
         ctx.emit(f"E {hid}: {len(sessions)} session(s), {sum(len(s['requests']) for s in sessions)} request(s)")
+
+
+def _stop_if_halted(ctx, hid):
+    """A halted proxy after an engine process ended is a stop, even when the engine reported success."""
+    if ctx.proxy.halted:
+        raise RunStopped(f"proxy halted while working on {hid}: {ctx.proxy.halt_reason}")
 
 
 # -- retrieval ---------------------------------------------------------------
@@ -201,11 +212,12 @@ def phase_retrieval(ctx):
                 _context_error(ctx, qid, hid, f"extraction_halted: {extraction.get('error')}")
             continue
         engine = ctx.engine_factory(ctx.proxy.url, ctx.proxy.token)
-        engine.start(ctx.directory / "engine" / hid, reuse=True)
         try:
+            engine.start(ctx.directory / "engine" / hid, reuse=True)
             _retrieve(ctx, engine, extraction, hid, pending)
         finally:
             engine.close()
+        _stop_if_halted(ctx, hid)
         ctx.emit(f"retrieval {hid}: {len(pending)} question(s)")
 
 

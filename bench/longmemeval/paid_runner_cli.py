@@ -58,6 +58,8 @@ def add_campaign_flags(parser, dry_run=False):
     add("--api-key-env", default="OPENAI_API_KEY")
     add("--top-k", type=int, default=60)
     add("--timeout-s", type=float, default=600.0)
+    add("--extraction-system-sha256", default=None,
+        help="pin of the engine's extraction system fingerprint observed by the dry-run (required in mode=paid)")
     add("--max-transcript-tokens", "--extraction-max-transcript-tokens", dest="max_transcript_tokens",
         type=int, default=DEFAULT_MAX_TRANSCRIPT_TOKENS)
 
@@ -180,6 +182,17 @@ def compose_spec(args, prompts, *, mode, created_at, provider_base_url=None, api
     }
     if judge is not None:
         spec["judge_prompt"] = {"path": judge[0], "sha256": judge[1]}
+    # The binding-independent effective-config fingerprint is pinned at creation; preflight #10
+    # re-renders the config and compares.
+    from paid_engine_config import config_fingerprint
+    artifacts = {k: spec["engine"][k] for k in ("binary", "binary_sha256", "template", "template_sha256",
+                                                "model_dir", "model_onnx_sha256", "tokenizer_sha256")}
+    spec["engine"]["effective_config_sha256"] = config_fingerprint(artifacts, spec["extraction"])
+    pin = getattr(args, "extraction_system_sha256", None)
+    if pin is not None:
+        if not isinstance(pin, str) or len(pin) != 64:
+            raise CampaignError("--extraction-system-sha256 must be a 64-hex SHA-256 (from the dry-run)")
+        spec["extraction_system_sha256"] = pin
     return spec
 
 

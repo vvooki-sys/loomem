@@ -16,8 +16,8 @@ from paid_campaign import CampaignError
 from paid_openai_wire import paid_completion
 from paid_price_sheet import CONTROL_STAGE
 
-LETTER = "R"
-RESERVE_CAP_USD = Decimal("0.24")
+LETTER = "K"                         # its own letter and sublimit (owner/coordinator 2026-11-23)
+RESERVE_CAP_USD = Decimal("0.2374")  # the control reservation and the K sublimit may not exceed this
 SYSTEM = "Reply with the single word OK."
 USER = "OK?"
 
@@ -42,6 +42,9 @@ def control_reservation(campaign, sheet):
     if max_usd > RESERVE_CAP_USD:
         raise CampaignError(f"control call would reserve {max_usd} USD under policy {campaign.policy}, "
                             f"above the pilot cap {RESERVE_CAP_USD}")
+    if campaign.sublimits[LETTER] > RESERVE_CAP_USD:
+        raise CampaignError(f"sublimit {LETTER} is {campaign.sublimits[LETTER]} USD; the control letter may not "
+                            f"exceed {RESERVE_CAP_USD}")
     return bound, max_usd
 
 

@@ -99,7 +99,7 @@ ZERO64 = "0" * 64
 def spec(**overrides):
     base = {
         "schema": 1, "mode": "paid", "created_at": "2026-11-22T00:00:00Z",
-        "limit_usd": "100", "sublimits_usd": {"E": "10", "F": "30", "S": "30", "A": "10", "R": "10"},
+        "limit_usd": "100", "sublimits_usd": {"E": "10", "F": "30", "S": "30", "A": "10", "R": "10", "K": "0.2374"},
         "bound_policy": "p1", "p1_framing_accepted": True,
         "cost_sheet": {"path": "fixture", "sha256": ZERO64},
         "plan_json": {"path": "fixture", "sha256": ZERO64, "stage_sha256": {}},

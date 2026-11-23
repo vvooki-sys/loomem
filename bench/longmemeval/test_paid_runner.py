@@ -132,20 +132,20 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(summary["observed"]["pins"], {"gpt-6-luna": "gpt-6-luna", "gpt-6.2-astra": "gpt-6.2-astra"})
         maximum = summary["predicted_maximum"]
         self.assertEqual(maximum["policy_chosen"], "p1")
-        self.assertEqual({r["letter"] for r in maximum["rows"]}, {"F", "S", "A", "R"})
+        self.assertEqual({r["letter"] for r in maximum["rows"]}, {"F", "S", "A", "K"})
         self.assertEqual(len(maximum["extraction_sessions"]), 2)
         self.assertEqual(maximum["extraction_sessions"][0]["max_requests"], 5)
         judge = next(r for r in maximum["rows"] if r["letter"] == "F" and r["stage"] == "judge")
         self.assertEqual(judge["calls"], 2)
         self.assertEqual(set(judge["usd_max"]), {"p1", "p2"})
         self.assertNotEqual(judge["usd_max"]["p1"], "unpriced")
-        self.assertEqual(maximum["sublimits_sum"], "90")
+        self.assertEqual(maximum["sublimits_sum"], "90.2374")
         self.assertEqual(maximum["letters_over_sublimit"]["p1"], [])
         per_arm = summary["report"]["per_arm"]
         self.assertEqual((per_arm["facts_retry"]["expected"], per_arm["always_originals"]["expected"]), (2, 1))
         self.assertEqual(per_arm["selective_originals"]["correct"], 2)
-        self.assertEqual(summary["report"]["money"]["by_letter"]["R"]["calls"], 1)
-        self.assertLessEqual(Decimal(summary["report"]["money"]["by_letter"]["R"]["reserved_max_usd"]), Decimal("0.24"))
+        self.assertEqual(summary["report"]["money"]["by_letter"]["K"]["calls"], 1)
+        self.assertLessEqual(Decimal(summary["report"]["money"]["by_letter"]["K"]["reserved_max_usd"]), Decimal("0.24"))
         self.assertEqual(json.loads((d / "campaign.json").read_text())["provider"]["api_key_env"], KEY_ENV)
         before = open_campaign(d).ledger.totals()
         # second invocation with --resume: every artifact exists, every request replays -> zero transport calls
@@ -183,8 +183,8 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(summary["observed"]["requests_by_role_this_invocation"], {"control": 1})
         self.assertFalse((self.campaign_dir / "arms").exists())
         money = summary["report"]["money"]["by_letter"]
-        self.assertEqual((money["R"]["calls"], money["R"]["rejected_4xx"], money["R"]["actual_usd"]), (1, 1, "0"))
-        self.assertEqual(sum(row["calls"] for letter, row in money.items() if letter != "R"), 0)
+        self.assertEqual((money["K"]["calls"], money["K"]["rejected_4xx"], money["K"]["actual_usd"]), (1, 1, "0"))
+        self.assertEqual(sum(row["calls"] for letter, row in money.items() if letter != "K"), 0)
 
 
 @unittest.skipUnless(SANDBOX_PRESENT, "sandbox-exec absent: paid-mode preflight cannot pass here")
@@ -206,6 +206,13 @@ class AcknowledgeUncertainTests(unittest.TestCase):
         self.fake = fake_provider(self.fixture.prompts(), PROFILES, {})
         self.fake.__enter__()
         self.addCleanup(self.fake.__exit__, None, None, None)
+        # Preflight #16 would launch the fixture's stand-in binary; the live probe has its own tests.
+        probe = mock.patch("paid_preflight_engine.probe_engine",
+                           return_value={"passed": True, "problems": [], "observed": {
+                               "system_bytes": 1, "wire_overhead_bytes": 1, "sheet_system_extraction": 6000,
+                               "system_sha256": "0" * 64}})
+        probe.start()
+        self.addCleanup(probe.stop)
         self.env = runner_env(OPENAI_API_KEY=self.fake.token)
         env_patch = mock.patch.dict(os.environ, {"OPENAI_API_KEY": self.fake.token})
         env_patch.start()

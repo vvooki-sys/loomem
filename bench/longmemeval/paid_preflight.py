@@ -28,7 +28,8 @@ from paid_prompts import load_prompts
 PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 MIN_FREE_BYTES = 2 * 1024 ** 3
 ENGINE_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "RUST_LOG", "LOOMEM_CONFIG", "LOOMEM_AUTH_TOKEN",
-                   "LOOMEM_EVALUATION_READINESS", "LOOMEM_BENCH_PROXY_TOKEN")
+                   "LOOMEM_EVALUATION_READINESS", "LOOMEM_BENCH_PROXY_TOKEN",
+                   "LOOMEM_EVALUATION_EXTRACTION_TIMEOUT_SECS")
 
 
 @dataclass
@@ -48,7 +49,8 @@ def engine_env_template(env):
     return {"PATH": os.defpath, "HOME": "<engine work dir>", "TMPDIR": "<engine work dir>/tmp",
             "RUST_LOG": "error", "LOOMEM_CONFIG": "<engine work dir>/config.toml",
             "LOOMEM_AUTH_TOKEN": "<random at start>", "LOOMEM_EVALUATION_READINESS": "1",
-            "LOOMEM_BENCH_PROXY_TOKEN": "<random proxy bearer>"}
+            "LOOMEM_BENCH_PROXY_TOKEN": "<random proxy bearer>",
+            "LOOMEM_EVALUATION_EXTRACTION_TIMEOUT_SECS": "<campaign timeout_s>"}
 
 
 class _Preflight:
@@ -247,7 +249,19 @@ class _Preflight:
                 return False, "control profile missing (required for the pilot's first paid step)"
             return True, "control profile absent (dry-run)"
         bound, max_usd = control_reservation(self.campaign, self.sheet)
-        return True, f"control reserves {max_usd} USD <= 0.24 (R={bound.r_tokens}, O={bound.o_tokens})"
+        return True, (f"control (letter K) reserves {max_usd} USD <= 0.2374, sublimit K "
+                      f"{self.campaign.sublimits['K']} <= 0.2374 (R={bound.r_tokens}, O={bound.o_tokens})")
+
+    def check_live_engine(self):
+        if not self.engine_probe:
+            return True, "skipped by caller (no engine in this run)"
+        from paid_preflight_engine import format_probe, probe_engine
+        result = probe_engine(self.campaign.spec, self.sheet, mode=self.mode)
+        return result["passed"], format_probe(result)
+
+    def check_chunking(self):
+        from paid_preflight_engine import chunking_matches_sheet
+        return chunking_matches_sheet(self.sheet, self.campaign.spec["extraction"])
 
     def run(self):
         if not self.guarded("1 campaign registry/ledger/journal", self.check_campaign):
@@ -267,6 +281,8 @@ class _Preflight:
         self.guarded("14 max_transcript_tokens vs o200k", lambda: self.check_transcript_tokens() if self.holdout
                      else (False, "no holdout"))
         self.guarded("15 control profile", lambda: self.check_control() if self.sheet else (False, "no sheet"))
+        self.guarded("16 live engine probe", lambda: self.check_live_engine() if self.sheet else (False, "no sheet"))
+        self.guarded("17 sheet chunking vs engine", lambda: self.check_chunking() if self.sheet else (False, "no sheet"))
         return self.checks
 
 

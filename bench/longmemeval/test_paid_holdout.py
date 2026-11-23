@@ -138,6 +138,14 @@ class HoldoutTests(unittest.TestCase):
         self.assertNotIn(turn[:14], markers)
         self.assertIn("GOLD-ATOM-h1-q01-SECRET", markers)
         self.assertIn("GOLD-REFERENCE-h1-q01-SECRET", markers)
+        report = holdout.gold_marker_report("h1-q01")
+        self.assertEqual(report["evidence"], {"kept": 0, "excluded_as_source": 1})
+        self.assertEqual(report["required_answer_atoms"], {"kept": 1, "excluded_as_source": 1})
+        self.assertEqual(report["reference_answer"], {"kept": 1, "excluded_as_source": 0})
+        from paid_holdout import KEY_MARKERS
+        self.assertIn('"reference_answer"', KEY_MARKERS)
+        self.assertEqual(leaks_gold(json.dumps(holdout.judge_view("h1-q01")), list(KEY_MARKERS)),
+                         ['"reference_answer"', '"required_answer_atoms"', '"equivalence_rule"', '"unanswerable_explanation"'])
 
     def test_static_gold_blindness(self):
         self.assertFalse(set(paid_holdout.EXECUTION_FIELDS) & set(paid_holdout.GOLD_FIELDS))

@@ -19,6 +19,10 @@ GOLD_FIELDS = ("reference_answer", "required_answer_atoms", "equivalence_rule",
 # appear in configuration or prompt text, so it is a judge field but not a marker.
 PRIVATE_FIELDS = ("reference_answer", "required_answer_atoms", "equivalence_rule",
                   "unanswerable_explanation", "evidence", "critical_risk", "author_notes")
+# The gold field NAMES as JSON keys: a non-judge request that serialises a gold object leaks
+# these even when every value happens to be source text.
+KEY_MARKERS = tuple(f'"{name}"' for name in ("reference_answer", "required_answer_atoms", "equivalence_rule",
+                                              "unanswerable_explanation", "author_notes", "critical_risk"))
 HASH_SECTIONS = ("files_sha256", "fix_logs_sha256", "reviews_sha256", "tooling_sha256")
 MANIFEST_REQUIRED = HASH_SECTIONS + ("histories", "questions", "ordered_question_ids", "question_to_history")
 
@@ -63,17 +67,24 @@ class Holdout:
         is source content, not a leak: the engine's extraction requests and the
         originals menu legitimately carry it. Such strings are not markers.
         """
+        return [text for field in PRIVATE_FIELDS for text in self._field_markers(qid, field)["kept"]]
+
+    def gold_marker_report(self, qid):
+        """Per gold field: how many strings are markers and how many were excluded as source text."""
+        return {field: {"kept": len(m["kept"]), "excluded_as_source": len(m["excluded"])}
+                for field in PRIVATE_FIELDS for m in [self._field_markers(qid, field)]}
+
+    def _field_markers(self, qid, field):
         question = self._question(qid)
         # The scan is global (every non-judge request against every question's markers),
         # so a string present in ANY holdout session is source content for the scan.
         sources = [turn["content"] for h in self.histories.values() for s in h["sessions"] for turn in s["turns"]]
-        markers = []
-        for key in PRIVATE_FIELDS:
-            value = question.get(key)
-            for text in _strings(value):
-                if len(text) >= 12 and not any(text in source for source in sources):
-                    markers.append(text)
-        return markers
+        kept, excluded = [], []
+        for text in _strings(question.get(field)):
+            if len(text) < 12:
+                continue
+            (excluded if any(text in source for source in sources) else kept).append(text)
+        return {"kept": kept, "excluded": excluded}
 
     def session_bytes(self):
         return [session_bytes_of(s) for hid in sorted(self.histories)

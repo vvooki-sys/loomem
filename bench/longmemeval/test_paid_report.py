@@ -17,6 +17,8 @@ class ReportTests(unittest.TestCase):
         q02: zero-facts context, F ok + invalid_judge verdict, S pending."""
         directory = Path(h.campaign.directory)
         q1, q2 = h.context("h1-q01"), h.context("h1-q02", facts_per_session=0)
+        # q02's history extracted nothing: the owner's zero_facts state (not a mere empty retrieval).
+        q2.update(zero_facts=True, zero_facts_extraction=True, empty_retrieval=False)
         for ctx in (q1, q2):
             write_create_only(directory / "contexts" / f"{ctx['question_id']}.json", ctx)
         f1 = run_arm("facts_retry", q1, h.deps)

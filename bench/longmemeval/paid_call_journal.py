@@ -24,7 +24,8 @@ import json
 import os
 from pathlib import Path
 
-LETTERS = ("E", "F", "S", "A", "R")
+# E extraction, F/S/A arms, R semantic review (outside the runner), K the pilot's control call.
+LETTERS = ("E", "F", "S", "A", "R", "K")
 _SUFFIXES = ("intent", "request", "sent", "response", "settled", "uncertain", "void")
 
 

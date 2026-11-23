@@ -139,8 +139,15 @@ def _toml_problems(config, extraction):
                 ("llm.providers.bench.completion_tokens_floor", get("llm", "providers", "bench", "completion_tokens_floor"), extraction["completion_tokens_floor"]),
                 ("llm.providers.bench.reasoning_effort", get("llm", "providers", "bench", "reasoning_effort"), "low"),
                 ("llm.providers.bench.api_key_env", get("llm", "providers", "bench", "api_key_env"), "LOOMEM_BENCH_PROXY_TOKEN"),
-                ("server.host", get("server", "host"), "127.0.0.1")]
-    from paid_engine_config import W0_FLAGS
+                ("server.host", get("server", "host"), "127.0.0.1"),
+                ("search.rerank_enabled", get("search", "rerank_enabled"), False),
+                ("search.multi_query_enabled", get("search", "multi_query_enabled"), False),
+                ("fragments.enabled", get("fragments", "enabled"), True),
+                ("search.evidence_fields", get("search", "evidence_fields"), True),
+                ("dream.schedule_enabled", get("dream", "schedule_enabled"), False),
+                ("dream.auto_trigger_threshold", get("dream", "auto_trigger_threshold"), 0)]
+    from paid_engine_config import DISABLED_SECTIONS, W0_FLAGS
+    expected += [(f"{section}.enabled", get(*section.split("."), "enabled"), False) for section in DISABLED_SECTIONS]
     expected += [(f"{section}.{key}", get(section, key), want) for section, key, want in W0_FLAGS]
     problems = [f"{name}={value!r} (expected {want!r})" for name, value, want in expected
                 if value != want or type(value) is not type(want)]
@@ -174,7 +181,7 @@ def effective_config_check(engine, extraction):
         return False, "TOML assertions failed: " + "; ".join(problems)
     return True, (f"TOML: NER off, provider bench, extraction {extraction['max_completion_tokens']}/"
                   f"{extraction['input_chunk_tokens']}/split/{extraction['max_facts_per_chunk']}, floor recorded, "
-                  f"W0 levers off/neutral, port free; effective_config_sha256 {digest[:12]}")
+                  f"every mutator section off, fragments+evidence on, dream schedule off, W0 levers off/neutral, port free; effective_config_sha256 {digest[:12]}")
 
 
 # -- tokenizer -------------------------------------------------------------------
@@ -220,9 +227,12 @@ def transcript_tokens_check(env, holdout, histories, limit, render):
 
 # -- gold leak scan ----------------------------------------------------------------
 def gold_scan(directory, journal_state, holdout):
-    markers = []
+    from paid_holdout import KEY_MARKERS, PRIVATE_FIELDS
+    markers, excluded = list(KEY_MARKERS), {field: 0 for field in PRIVATE_FIELDS}
     for qid in holdout.questions:
         markers.extend(holdout.gold_markers(qid))
+        for field, counts in holdout.gold_marker_report(qid).items():
+            excluded[field] += counts["excluded_as_source"]
     leaks, scanned = [], 0
     for rid, intent in journal_state.intents.items():
         if intent.get("stage") == "judge":
@@ -234,9 +244,11 @@ def gold_scan(directory, journal_state, holdout):
         hits = leaks_gold(path.read_text(encoding="utf-8"), markers)
         if hits:
             leaks.append(f"{rid[:12]} ({intent.get('stage')}): {len(hits)} marker(s)")
+    skipped = ", ".join(f"{field}={n}" for field, n in excluded.items() if n)
     if leaks:
         return False, "gold markers in non-judge requests: " + "; ".join(leaks[:5])
-    return True, f"{scanned} non-judge request(s) scanned against {len(markers)} gold marker(s): 0 hits"
+    return True, (f"{scanned} non-judge request(s) scanned against {len(markers)} gold marker(s) "
+                  f"(incl. {len(KEY_MARKERS)} key names): 0 hits; excluded as source text: {skipped or 'none'}")
 
 
 def write_json(path, obj):

@@ -61,7 +61,7 @@ def _arm_table(expected, contexts, arms, verdicts):
     per_arm, states = {}, {}
     for arm, ids in expected.items():
         row = {state: 0 for state in ARM_STATES}
-        row.update(expected=len(ids), judged=0, zero_facts=0, context_missing=0)
+        row.update(expected=len(ids), judged=0, zero_facts=0, empty_retrieval=0, context_missing=0)
         for qid in ids:
             state = _state(qid, arm, arms, verdicts)
             row[state] = row.get(state, 0) + 1
@@ -73,7 +73,9 @@ def _arm_table(expected, contexts, arms, verdicts):
             if context is None:
                 row["context_missing"] += 1
             elif context.get("zero_facts"):
-                row["zero_facts"] += 1
+                row["zero_facts"] += 1          # extraction produced no fact for the history
+            elif context.get("empty_retrieval"):
+                row["empty_retrieval"] += 1     # facts exist, retrieval returned none for this question
         row["accuracy_over_expected"] = str(Decimal(row["correct"]) / Decimal(len(ids))) if ids else None
         per_arm[arm] = row
     return per_arm, states

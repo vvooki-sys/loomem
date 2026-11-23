@@ -65,6 +65,9 @@ class FakeEngine:
     def close(self):
         pass
 
+    def readiness_probe(self):
+        return 400  # the fake behaves like an evaluation build
+
     def fingerprints(self):
         return {"binary_sha256": "fake", "template_sha256": "fake", "model_onnx_sha256": "fake",
                 "tokenizer_sha256": "fake", "effective_config_sha256": self.effective_config_sha256,

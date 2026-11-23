@@ -101,7 +101,7 @@ def _stage_rows(sheet, holdout, questions, always):
                          "tokens_max": (bound.r_tokens + bound.o_tokens) * calls,
                          "usd": _times(_usd(sheet, bound), calls)})
     control = sheet.control_bound()
-    rows.append({"letter": "R", "stage": control.stage, "model": control.model, "calls": 1,
+    rows.append({"letter": "K", "stage": control.stage, "model": control.model, "calls": 1,
                  "r_tokens": control.r_tokens, "o_tokens": control.o_tokens,
                  "tokens_max": control.r_tokens + control.o_tokens, "usd": _usd(sheet, control)})
     return rows

@@ -118,6 +118,9 @@ def evaluation_config(artifacts, work, *, port, proxy_url, extraction):
                  ("fragments", "enabled", True), ("fragments", "provenance_role", "claim"),
                  ("fragments", "token_counter", "embedder"), ("search", "evidence_fields", True),
                  ("search", "rerank_enabled", False), ("search", "multi_query_enabled", False),
+                 # PR #177 keys: the dream schedule and its auto trigger stay off even on a build that
+                 # knows them (the config has no deny_unknown_fields, so this is harmless before #177).
+                 ("dream", "schedule_enabled", False), ("dream", "auto_trigger_threshold", 0),
                  *W0_FLAGS]
     for section, key, value in overrides:
         text = replace_setting(text, section, key, value)

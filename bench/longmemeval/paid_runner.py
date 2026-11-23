@@ -76,7 +76,8 @@ def default_engine_factory(campaign):
         artifacts = {k: engine[k] for k in ("binary", "binary_sha256", "template", "template_sha256",
                                             "model_dir", "model_onnx_sha256", "tokenizer_sha256")}
         return EvaluationEngine(artifacts, proxy_url=proxy_url, proxy_token=proxy_token,
-                                extraction=campaign.spec["extraction"], top_k=campaign.spec["search"]["top_k"])
+                                extraction=campaign.spec["extraction"], top_k=campaign.spec["search"]["top_k"],
+                                extraction_timeout_s=int(campaign.spec["timeout_s"]))
     return factory
 
 

@@ -56,7 +56,7 @@ class ControlCallTests(unittest.TestCase):
         self.assertIsNotNone(row["actual_usd"])
         self.assertLess(Decimal(row["actual_usd"]), Decimal(row["max_usd"]))
         intent = journal.state.intents[done.request_id]
-        self.assertEqual((intent["letter"], intent["stage"], intent["binding"]["stage"]), ("R", "control", "control"))
+        self.assertEqual((intent["letter"], intent["stage"], intent["binding"]["stage"]), ("K", "control", "control"))
         self.assertEqual(intent["binding"]["attempt"], 1)
         self.assertEqual(intent["binding"]["manifest_sha256"], campaign.spec["holdout"]["manifest_sha256"])
         self.assertTrue(has_settled_control(journal.state))
@@ -95,7 +95,7 @@ class ControlCallTests(unittest.TestCase):
         p2 = make_campaign(other.name, self.sheet, bound_policy="p2")
         with self.assertRaises(CampaignError) as refused:
             control_reservation(p2, self.sheet)
-        self.assertIn("0.24", str(refused.exception))
+        self.assertIn("0.2374", str(refused.exception))
         with self.assertRaises(CampaignError):
             control_call(p2, CallJournal(p2.directory), self.sheet, transport=None)
         self.assertEqual(p2.ledger.totals()["request_count"], 0)

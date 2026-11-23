@@ -174,7 +174,10 @@ def build_context(view, search_json, sources, caps, zero_facts):
     facts = facts_records(search_json, set(sources))
     byte_caps_ok("retrieval", {"facts": facts}, caps)
     menu = originals_menu(search_json, sources, caps["ORIGINALS_MENU_CAP"])
+    # Two distinct states: extraction accepted no facts for the history (owner's `zero_facts`),
+    # versus retrieval returning no fact for this question although facts exist.
     context = {**{k: view[k] for k in EXECUTION_KEYS}, "facts": facts, "menu": menu,
-               "source_ids": sorted(sources), "zero_facts": bool(zero_facts) or not facts}
+               "source_ids": sorted(sources), "zero_facts": bool(zero_facts),
+               "zero_facts_extraction": bool(zero_facts), "empty_retrieval": not facts and not zero_facts}
     context["context_sha256"] = context_sha256(context)
     return context

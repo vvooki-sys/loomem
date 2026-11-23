@@ -24,7 +24,7 @@ from paid_test_support import PROFILES, binding, messages, write_holdout, write_
 HERE = Path(__file__).resolve().parent
 TEMPLATE = HERE.parents[1] / "config.toml"
 SOURCE = "https://example.invalid/docs@2026-11-22"
-SUBLIMITS = {"E": "10", "F": "30", "S": "30", "A": "10", "R": "10"}
+SUBLIMITS = {"E": "10", "F": "30", "S": "30", "A": "10", "R": "10", "K": "0.2374"}
 
 
 @dataclass
@@ -93,9 +93,10 @@ def build_fixture(root, **holdout_kw):
                    always_sha, binary, template, engine / "model")
 
 
-def main(argv):
-    """paid_runner.main with stdout captured (keeps the test output clean)."""
-    return _main(argv, stdout=io.StringIO())
+def main(argv, env=None):
+    """paid_runner.main with stdout captured (keeps the test output clean); `env` never defaults
+    to the machine environment, which may carry a real OPENAI_API_KEY."""
+    return _main(argv, stdout=io.StringIO(), env=runner_env() if env is None else env)
 
 
 def runner_env(**extra):
@@ -138,14 +139,14 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(self.create(), 0)
         with mock.patch("paid_preflight.MIN_FREE_BYTES", 1):  # the 2 GiB rule itself is checked below
             checks = self.preflight()
-        self.assertEqual(len(checks), 15)
+        self.assertEqual(len(checks), 17)
         self.assertTrue(all_passed(checks), format_checks(checks))
         with mock.patch("paid_preflight.MIN_FREE_BYTES", 2 ** 62):
             self.assertIn("free disk", by_number(self.preflight())["13"].detail)
         self.assertIn("skipped by caller", by_number(checks)["9"].detail)
         self.assertIn("TOML check skipped", by_number(checks)["10"].detail)
         with mock.patch("paid_preflight.MIN_FREE_BYTES", 1):
-            self.assertEqual(main(["preflight", "--campaign-dir", str(self.campaign_dir), "--no-engine-probe"]), 0)
+            self.assertEqual(main(["preflight", "--campaign-dir", str(self.campaign_dir), "--no-engine-probe"], env=self.env), 0)
 
     def test_registry_refusals(self):
         """Pins and limits rejected at creation (validate_spec) or by preflight #4/#5."""

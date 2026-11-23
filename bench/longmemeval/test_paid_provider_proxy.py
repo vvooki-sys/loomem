@@ -179,6 +179,59 @@ class ProviderProxyTests(unittest.TestCase):
             self.assertTrue(proxy.halted)
         self.assertEqual(len(self.journal.state.intents), 1)
 
+    def test_exit_waits_for_the_request_in_flight(self):
+        """Tearing the proxy down must not leave a `sent` request without its settlement."""
+        import threading
+        started, gate = threading.Event(), threading.Event()
+        inner = self.transport(reply())
+
+        class Blocking:
+            host = "127.0.0.1"
+
+            def __call__(self, body, timeout_s):
+                started.set()
+                gate.wait(5)
+                return inner(body, timeout_s)
+
+        proxy = self.proxy(Blocking())
+        proxy.__enter__()
+        proxy.bind("h1", "h1-s1", 5)
+        outcome = {}
+        poster = threading.Thread(target=lambda: outcome.update(status=post(proxy, body())[0]))
+        poster.start()
+        self.assertTrue(started.wait(5))
+        closer = threading.Thread(target=proxy.__exit__, args=(None, None, None))
+        closer.start()
+        closer.join(0.2)
+        self.assertTrue(closer.is_alive(), "__exit__ must wait for the request in flight")
+        gate.set()
+        poster.join(5)
+        closer.join(5)
+        self.assertFalse(closer.is_alive())
+        self.assertEqual(outcome.get("status"), 200)
+        self.assertEqual(len(self.journal.state.settled), 1)
+        self.assertEqual(self.journal.state.unsettled_sent, [])
+
+    def test_bad_content_length_is_400_and_halt(self):
+        import http.client
+        for value in ("abc", "-5"):
+            with self.proxy(self.transport(reply())) as proxy:
+                proxy.bind("h1", "h1-s1", 5)
+                port = int(proxy.url.rsplit(":", 1)[1].split("/")[0])
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                try:
+                    connection.request("POST", "/v1/chat/completions", body=b"{}",
+                                       headers={"Content-Type": "application/json", "Content-Length": value,
+                                                "Authorization": "Bearer " + proxy.token})
+                    response = connection.getresponse()
+                    status = response.status
+                    response.read()
+                finally:
+                    connection.close()
+                self.assertEqual((status, proxy.halted), (400, True), value)
+                self.assertIn("Content-Length", str(proxy.halt_reason))
+        self.assertEqual(len(self.journal.state.intents), 0)
+
     def test_bad_bearer_is_401_not_a_halt(self):
         transport = self.transport(reply())
         with self.proxy(transport) as proxy:

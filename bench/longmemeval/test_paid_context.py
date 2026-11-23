@@ -188,7 +188,8 @@ class ContextTests(unittest.TestCase):
     def test_build_context_shape_and_hash(self):
         ctx = build_context(self.view, self.search, self.sources, self.caps, zero_facts=False)
         self.assertEqual(set(ctx), {"question_id", "history_id", "question", "question_date", "facts", "menu",
-                                    "source_ids", "zero_facts", "context_sha256"})
+                                    "source_ids", "zero_facts", "zero_facts_extraction", "empty_retrieval",
+                                    "context_sha256"})
         self.assertEqual((ctx["question_id"], ctx["zero_facts"], ctx["source_ids"]), ("h1-q01", False, sorted(self.sources)))
         self.assertEqual(ctx["context_sha256"], context_sha256(ctx))
         again = build_context(self.view, self.search, self.sources, self.caps, zero_facts=False)
@@ -201,7 +202,11 @@ class ContextTests(unittest.TestCase):
     def test_build_context_zero_facts_and_caps(self):
         empty = synthetic_search(self.history, facts_per_session=0)
         ctx = build_context(self.view, empty, self.sources, self.caps, zero_facts=False)
-        self.assertEqual((ctx["facts"], ctx["zero_facts"], len(ctx["menu"])), ([], True, 4))
+        # No fact retrieved while extraction did produce facts: empty_retrieval, NOT zero_facts.
+        self.assertEqual((ctx["facts"], ctx["zero_facts"], ctx["zero_facts_extraction"], ctx["empty_retrieval"],
+                          len(ctx["menu"])), ([], False, False, True, 4))
+        zero = build_context(self.view, empty, self.sources, self.caps, zero_facts=True)
+        self.assertEqual((zero["zero_facts"], zero["zero_facts_extraction"], zero["empty_retrieval"]), (True, True, False))
         tight = {**self.caps, "FACTS_JSON_CAP": 10}
         with self.assertRaisesRegex(ContextError, "FACTS_JSON_CAP"):
             build_context(self.view, self.search, self.sources, tight, zero_facts=False)

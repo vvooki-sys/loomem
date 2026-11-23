@@ -38,6 +38,7 @@ from runner_local_e1 import render_transcript as _render_turns
 from smoke_local_e1 import PROFILE, SANDBOX
 
 STREAM = "__user_default__"
+MAX_EXTRACTION_TIMEOUT_S = 600
 READINESS_PATH = "/v1/evaluation/ingest-readiness-v2"
 MAX_RECORDS, MAX_READINESS_BYTES = 1024, 2 * 1024 * 1024
 MCP_CLIENT = {"name": "loomem-longmemeval-paid", "version": "1"}
@@ -113,11 +114,17 @@ def _check_proof(response, scope, expected_ids):
 
 
 class EvaluationEngine:
-    def __init__(self, artifacts, *, proxy_url, proxy_token, extraction, top_k, port=None):
+    def __init__(self, artifacts, *, proxy_url, proxy_token, extraction, top_k, port=None,
+                 extraction_timeout_s=MAX_EXTRACTION_TIMEOUT_S):
         self.artifacts = check_artifacts(artifacts)
         self.extraction = check_extraction(extraction)
         if type(top_k) is not int or top_k <= 0:
             raise EngineError("top_k must be a positive int")
+        # The evaluation build reads LOOMEM_EVALUATION_EXTRACTION_TIMEOUT_SECS (memory_extractor/http.rs);
+        # without it the engine gives up on a paid completion after 30 s while the proxy still waits.
+        if type(extraction_timeout_s) is not int or not 1 <= extraction_timeout_s <= MAX_EXTRACTION_TIMEOUT_S:
+            raise EngineError(f"extraction_timeout_s must be an int in 1..{MAX_EXTRACTION_TIMEOUT_S}")
+        self.extraction_timeout_s = extraction_timeout_s
         if not isinstance(proxy_token, str) or len(proxy_token) < 32:
             raise EngineError("proxy_token must be the proxy's random bearer")
         self.proxy_url, self.proxy_token, self.top_k = proxy_url, proxy_token, top_k
@@ -134,7 +141,8 @@ class EvaluationEngine:
         work = Path(work)
         return {"PATH": os.defpath, "HOME": str(work), "TMPDIR": str(work / "tmp"), "RUST_LOG": "error",
                 "LOOMEM_CONFIG": str(work / "config.toml"), "LOOMEM_AUTH_TOKEN": self.token,
-                "LOOMEM_EVALUATION_READINESS": "1", KEY_ENV: self.proxy_token}
+                "LOOMEM_EVALUATION_READINESS": "1", KEY_ENV: self.proxy_token,
+                "LOOMEM_EVALUATION_EXTRACTION_TIMEOUT_SECS": str(self.extraction_timeout_s)}
 
     def start(self, work, reuse=False):
         if platform.system() != "Darwin" or not Path(SANDBOX).is_file():
@@ -163,7 +171,11 @@ class EvaluationEngine:
         with (work / "engine.log").open("ab") as log:
             self.process = subprocess.Popen([str(wrapper)], cwd=work, env=self.engine_env(work),
                                             stdout=subprocess.DEVNULL, stderr=log)
-        self._wait_ready(reuse)
+        try:
+            self._wait_ready(reuse)
+        except BaseException:  # a failed start never leaves a live child holding the database
+            self.close()
+            raise
 
     def _wait_ready(self, reuse):
         deadline = time.monotonic() + START_DEADLINE_S
@@ -232,6 +244,11 @@ class EvaluationEngine:
     def _post(self, path, body):
         status, _, raw = self._request("POST", path, body)
         return self._json(status, raw, path)
+
+    def readiness_probe(self):
+        """HTTP status of a deliberately bad readiness-v2 body: 400 on an evaluation build, 404 otherwise."""
+        status, _, _ = self._request("POST", READINESS_PATH, {"schema_version": 1})
+        return status
 
     def _get(self, path):
         status, _, raw = self._request("GET", path)

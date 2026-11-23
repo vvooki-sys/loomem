@@ -36,7 +36,7 @@ class CreateCampaignTests(unittest.TestCase):
             "no limit": without("limit_usd"),
             "no sublimit E": without("E", "sublimits_usd"),
             "no sublimit R": without("R", "sublimits_usd"),
-            "sum over limit": spec(sublimits_usd={"E": "10", "F": "30", "S": "30", "A": "10", "R": "20.01"}),
+            "sum over limit": spec(sublimits_usd={"E": "10", "F": "30", "S": "30", "A": "10", "R": "20.01", "K": "0.2374"}),
             "bad mode": spec(mode="free"),
             "p1 not accepted": spec(bound_policy="p1", p1_framing_accepted=False),
             "judge blind": spec(judge_sees_sources=False),
@@ -122,7 +122,7 @@ class OpenCampaignTests(unittest.TestCase):
 
     def test_ledger_limit_must_match_registry(self):
         other = make_campaign(self.root / "other", limit_usd="50",
-                              sublimits_usd={"E": "10", "F": "10", "S": "10", "A": "10", "R": "10"})
+                              sublimits_usd={"E": "10", "F": "10", "S": "10", "A": "10", "R": "9", "K": "0.2374"})
         mixed = self.root / "mixed"
         mixed.mkdir()
         shutil.copy(self.target / "campaign.json", mixed / "campaign.json")

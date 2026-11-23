@@ -151,9 +151,17 @@ class ProviderProxy:
         return self
 
     def __exit__(self, *_):
-        self._server.shutdown()
-        self._server.server_close()
-        self._thread.join()
+        # Never tear the server down under a request in flight: a paid call that has
+        # reached `sent` must settle (or be recorded uncertain) before the socket goes.
+        grace = float(self.campaign.spec.get("timeout_s", 0)) + 5.0
+        acquired = self._busy.acquire(timeout=grace)
+        try:
+            self._server.shutdown()
+            self._server.server_close()
+            self._thread.join()
+        finally:
+            if acquired:
+                self._busy.release()
 
     @property
     def url(self):
@@ -224,7 +232,12 @@ class ProviderProxy:
             return _send(handler, 400, _error_body(f"proxy halted: {self.halt_reason}", "invalid_request_error"))
         if handler.path != PATH:
             return self._refuse(handler, None, ProxyHalted(f"unexpected path {handler.path!r}"))
-        length = int(handler.headers.get("Content-Length") or 0)
+        try:
+            length = int(handler.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0:
+            return self._refuse(handler, None, ProxyHalted("Content-Length is not a nonnegative integer"))
         if length > BODY_CAP:
             return self._refuse(handler, None, ProxyHalted(f"request body {length} bytes exceeds the cap"))
         raw = handler.rfile.read(length)

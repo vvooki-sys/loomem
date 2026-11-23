@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import tempfile
 import tomllib
 import unittest
@@ -168,6 +169,32 @@ class ConfigTests(unittest.TestCase):
                 EvaluationEngine(self.artifacts, **{**dict(proxy_url="http://127.0.0.1:1/v1", proxy_token=PROXY_TOKEN,
                                                            extraction=EXTRACTION, top_k=60, port=40123), **kwargs})
 
+    def test_extraction_timeout_reaches_the_engine_env_and_is_bounded(self):
+        engine = EvaluationEngine(self.artifacts, proxy_url="http://127.0.0.1:1/v1", proxy_token=PROXY_TOKEN,
+                                  extraction=EXTRACTION, top_k=60, port=40123, extraction_timeout_s=300)
+        self.assertEqual(engine.engine_env(self.work)["LOOMEM_EVALUATION_EXTRACTION_TIMEOUT_SECS"], "300")
+        default = EvaluationEngine(self.artifacts, proxy_url="http://127.0.0.1:1/v1", proxy_token=PROXY_TOKEN,
+                                   extraction=EXTRACTION, top_k=60, port=40123)
+        self.assertEqual(default.engine_env(self.work)["LOOMEM_EVALUATION_EXTRACTION_TIMEOUT_SECS"], "600")
+        for bad in (0, 601, 5.0, "60"):
+            with self.assertRaises(EngineError):
+                EvaluationEngine(self.artifacts, proxy_url="http://127.0.0.1:1/v1", proxy_token=PROXY_TOKEN,
+                                 extraction=EXTRACTION, top_k=60, port=40123, extraction_timeout_s=bad)
+
+    @unittest.skipUnless(platform.system() == "Darwin" and Path("/usr/bin/sandbox-exec").is_file(),
+                         "needs macOS sandbox-exec to launch the fake binary")
+    def test_failed_start_closes_the_child(self):
+        binary = self.root / "never-ready"
+        binary.write_text("#!/bin/sh\nsleep 30\n")
+        binary.chmod(0o700)
+        artifacts = {**self.artifacts, "binary": str(binary), "binary_sha256": sha(binary.read_bytes())}
+        engine = EvaluationEngine(artifacts, proxy_url="http://127.0.0.1:1/v1", proxy_token=PROXY_TOKEN,
+                                  extraction=EXTRACTION, top_k=60)
+        with patch("paid_engine.START_DEADLINE_S", 0.3):
+            with self.assertRaisesRegex(EngineError, "startup timeout"):
+                engine.start(self.root / "work-never-ready")
+        self.assertIsNone(engine.process, "a failed start terminates and forgets the child")
+
     def test_engine_env_never_carries_a_provider_key(self):
         engine = EvaluationEngine(self.artifacts, proxy_url="http://127.0.0.1:1/v1", proxy_token=PROXY_TOKEN,
                                   extraction=EXTRACTION, top_k=60, port=40123)
@@ -185,7 +212,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual((env["LOOMEM_EVALUATION_READINESS"], env["RUST_LOG"], env["PATH"]), ("1", "error", os.defpath))
         self.assertEqual(env["LOOMEM_CONFIG"], str(self.work / "config.toml"))
         self.assertEqual(set(env), {"PATH", "HOME", "TMPDIR", "RUST_LOG", "LOOMEM_CONFIG", "LOOMEM_AUTH_TOKEN",
-                                    "LOOMEM_EVALUATION_READINESS", KEY_ENV})
+                                    "LOOMEM_EVALUATION_READINESS", KEY_ENV, "LOOMEM_EVALUATION_EXTRACTION_TIMEOUT_SECS"})
 
     def test_sandbox_wrapper(self):
         wrapper = sandbox_wrapper(self.root, Path(self.artifacts["binary"]))
