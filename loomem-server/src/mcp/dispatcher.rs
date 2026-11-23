@@ -12,6 +12,7 @@ use dream::tool_dream;
 use ingest::tool_ingest;
 #[cfg(feature = "evaluation")]
 pub(crate) use ingest::{expected_bytes, ExpectedFact};
+use search_format::{predecessors_for, render_lines, token_cost};
 
 use axum::extract::State;
 use axum::Json;
@@ -902,15 +903,12 @@ async fn tool_search(
             // Skipped for aggregation/enumeration queries: those boost top_k and
             // instruct the model to count ALL items, so truncating them would
             // cause silent undercounts (Greptile #26 P1).
+            // A rendered predecessor line (`[mcp] search_include_predecessor`)
+            // is charged to its hit; with the lever off `preds` is empty.
+            let preds = predecessors_for(state, stream_id, &resp.results, is_aggregation);
             if let (Some(max_tokens), false) = (args.max_context_tokens, is_aggregation) {
-                let keep = budget_keep_count(
-                    resp.results.iter().map(|r| {
-                        loomem_core::llm_ner::estimate_tokens(&r.content)
-                            + RESULT_FORMAT_TOKEN_OVERHEAD
-                    }),
-                    max_tokens,
-                );
-                resp.results.truncate(keep);
+                let costs = resp.results.iter().map(|r| token_cost(r, &preds));
+                resp.results.truncate(budget_keep_count(costs, max_tokens));
             }
             // WS-1(c) (Spectron gap brief 2026-07-09): surface the retrieval
             // tier on the MCP text surface too (REST carries `"tier": 1`), so
@@ -931,7 +929,7 @@ async fn tool_search(
             // One line per hit (date tag, content-type/trust tags, content,
             // [UPDATED] note, evidence suffix, score, id) — see
             // `search_format::render_line`.
-            text.push_str(&search_format::render_lines(&state.store, &resp.results));
+            text.push_str(&render_lines(&state.store, &resp.results, &preds));
             text.push_str("\nNote: When facts have dates, ALWAYS prefer the most recent version. Items marked [UPDATED] supersede older versions.");
             Ok(ToolResult::text(text))
         }

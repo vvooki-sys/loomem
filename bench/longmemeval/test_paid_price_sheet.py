@@ -100,7 +100,7 @@ class SheetTests(unittest.TestCase):
     def test_extraction_bound_is_per_session(self):
         bound = self.sheet.extraction_bound(1_000)
         self.assertEqual((bound.stage, bound.model, bound.r_tokens, bound.o_tokens),
-                         ("extraction", "gpt-6-luna", 6_000 + 1_000 + 8_192, 2_000))
+                         ("extraction", "gpt-6-luna", 6_000 + 1_000 + 8_192, 16_384))
         self.assertEqual(self.sheet.extraction_bound(0).r_tokens, 6_000 + 8_192)
         for bad in (-1, 1.5, "1000", True, None):
             with self.subTest(session_bytes=bad), self.assertRaises(SheetError):

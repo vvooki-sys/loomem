@@ -18,6 +18,7 @@ import time
 
 from budget import BudgetLedger
 from paid_call_journal import LETTERS, canonical_bytes, sha256_hex, write_create_only
+from paid_price_sheet import CONTROL_MAX_COMPLETION_TOKENS, CONTROL_STAGE
 
 MODES = ("paid", "dry_run")
 POLICIES = ("p1", "p2")
@@ -61,8 +62,8 @@ def _pinned(section, label, keys):
 
 
 def _validate_profiles(profiles, sheet):
-    if not isinstance(profiles, dict) or set(profiles) != set(PROFILE_STAGES):
-        raise CampaignError(f"profiles must cover exactly {PROFILE_STAGES}")
+    if not isinstance(profiles, dict) or set(profiles) - {CONTROL_STAGE} != set(PROFILE_STAGES):
+        raise CampaignError(f"profiles must cover exactly {PROFILE_STAGES} (plus the optional {CONTROL_STAGE!r})")
     for stage, profile in profiles.items():
         if not isinstance(profile, dict) or set(profile) != {"model", "reasoning_effort", "max_completion_tokens"}:
             raise CampaignError(f"profile {stage!r} needs model, reasoning_effort, max_completion_tokens")
@@ -70,6 +71,14 @@ def _validate_profiles(profiles, sheet):
             raise CampaignError(f"profile {stage!r}: reasoning_effort must be one of {REASONING_EFFORTS}")
         if type(profile["max_completion_tokens"]) is not int or profile["max_completion_tokens"] <= 0:
             raise CampaignError(f"profile {stage!r}: max_completion_tokens must be a positive int")
+        if stage == CONTROL_STAGE:
+            # The pilot's first paid step: judge model, effort high, O = 4096 (not a sheet stage).
+            if profile["reasoning_effort"] != "high" or profile["max_completion_tokens"] != CONTROL_MAX_COMPLETION_TOKENS:
+                raise CampaignError(f"profile {CONTROL_STAGE!r} must be reasoning_effort=high, "
+                                    f"max_completion_tokens={CONTROL_MAX_COMPLETION_TOKENS}")
+            if sheet is not None and profile["model"] != sheet.module.JUDGE_MODEL:
+                raise CampaignError(f"profile {CONTROL_STAGE!r}: model must be the sheet's judge model")
+            continue
         if sheet is not None:
             sheet.require_priced(profile["model"])
             if profile["model"] != sheet.models()[stage]:
@@ -143,6 +152,9 @@ class Campaign:
     def require_paid_mode(self):
         if self.mode != "paid":
             raise CampaignError(f"campaign mode is {self.mode!r}: a paid run is refused")
+
+    def has_control_profile(self):
+        return CONTROL_STAGE in self.spec["profiles"]
 
     def check_sublimit(self, letter, committed, add):
         """committed = journal sum for the letter; add = this reservation's maximum."""

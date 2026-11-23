@@ -8,6 +8,7 @@ use crate::handlers::types::SearchResult;
 use crate::AppState;
 use loomem_core::storage::Chunk;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const STREAM: &str = "search-format";
@@ -116,18 +117,18 @@ fn hit(id: &str, timestamp: Option<i64>, content_type: Option<&str>) -> SearchRe
 fn render_line_marks_a_missing_chunk_with_the_trust_sentinel() {
     let (_, state) = crate::tests::make_test_app();
     assert_eq!(
-        render_line(&state.store, 0, &hit("g1", Some(RECORDED), None)),
+        render_line(&state.store, 0, &hit("g1", Some(RECORDED), None), None),
         "1. [2024-01-01] [trust:?] ghost g1 (score: 0.50) (id: g1)\n"
     );
     assert_eq!(
-        render_line(&state.store, 4, &hit("g2", None, Some("case_study"))),
+        render_line(&state.store, 4, &hit("g2", None, Some("case_study")), None),
         "5. [] [case_study] [trust:?] ghost g2 (score: 0.50) (id: g2)\n"
     );
     let both = [hit("g1", Some(RECORDED), None), hit("g2", None, None)];
     assert_eq!(
-        render_lines(&state.store, &both),
+        render_lines(&state.store, &both, &HashMap::new()),
         "1. [2024-01-01] [trust:?] ghost g1 (score: 0.50) (id: g1)\n\
          2. [] [trust:?] ghost g2 (score: 0.50) (id: g2)\n"
     );
-    assert_eq!(render_lines(&state.store, &[]), "");
+    assert_eq!(render_lines(&state.store, &[], &HashMap::new()), "");
 }

@@ -37,6 +37,9 @@ SYSTEM = {"diagnostic": 1_600, "audit": 2_400, "selection": 3_000, "answer": 800
           "judge": 3_200, "review": 4_000, "extraction": 6_000}
 OUT = {"extraction": 2_000, "diagnostic": 1_024, "audit": 512, "selection": 512,
        "answer": 1_024, "judge": 512, "review": 1_024}
+E_CHUNK_TOKENS = 4000
+E_CHUNK_OUT = 16_384
+E_CALLS_PER_CHUNK = 5
 MODEL = {"extraction": "gpt-6-luna", "diagnostic": "gpt-6-luna", "audit": "gpt-6-luna",
          "selection": "gpt-6-luna", "answer": "gpt-6-luna", "judge": JUDGE_MODEL, "review": JUDGE_MODEL}
 
@@ -81,7 +84,8 @@ def load_fixture_sheet(directory):
 
 
 PROFILES = {
-    "extraction": {"model": "gpt-6-luna", "reasoning_effort": "low", "max_completion_tokens": 2000},
+    "extraction": {"model": "gpt-6-luna", "reasoning_effort": "low", "max_completion_tokens": 16384},
+    "control": {"model": "gpt-6.2-astra", "reasoning_effort": "high", "max_completion_tokens": 4096},
     "diagnostic": {"model": "gpt-6-luna", "reasoning_effort": "low", "max_completion_tokens": 1024},
     "audit": {"model": "gpt-6-luna", "reasoning_effort": "low", "max_completion_tokens": 512},
     "selection": {"model": "gpt-6-luna", "reasoning_effort": "low", "max_completion_tokens": 512},
@@ -95,7 +99,7 @@ ZERO64 = "0" * 64
 def spec(**overrides):
     base = {
         "schema": 1, "mode": "paid", "created_at": "2026-11-22T00:00:00Z",
-        "limit_usd": "100", "sublimits_usd": {"E": "10", "F": "30", "S": "30", "A": "10", "R": "10"},
+        "limit_usd": "100", "sublimits_usd": {"E": "10", "F": "30", "S": "30", "A": "10", "R": "10", "K": "0.2374"},
         "bound_policy": "p1", "p1_framing_accepted": True,
         "cost_sheet": {"path": "fixture", "sha256": ZERO64},
         "plan_json": {"path": "fixture", "sha256": ZERO64, "stage_sha256": {}},
