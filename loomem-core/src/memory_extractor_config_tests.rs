@@ -140,3 +140,62 @@ fn unknown_reference_never_authorizes_current_date_relative_resolution() {
         assert!(prompt.contains("explicit absolute source dates are allowed"));
     }
 }
+
+/// Lowercase hex sha256 of a prompt string.
+fn prompt_sha256(prompt: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    Sha256::digest(prompt.as_bytes())
+        .iter()
+        .fold(String::with_capacity(64), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
+
+fn golden_topics_config() -> KnowledgeExtractionConfig {
+    KnowledgeExtractionConfig {
+        topics: Some(vec![ExtractionTopic {
+            name: "milestone".to_string(),
+            description: "Project milestone".to_string(),
+            fact_type: None,
+        }]),
+        ..KnowledgeExtractionConfig::default()
+    }
+}
+
+fn shipped_extraction_config() -> KnowledgeExtractionConfig {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
+    let content = std::fs::read_to_string(path).unwrap();
+    let table: toml::Table = toml::from_str(&content).unwrap();
+    table["knowledge_extraction"].clone().try_into().unwrap()
+}
+
+/// Golden pin of the extraction system-prompt bytes, captured on origin/main
+/// af9468bd. Any change to the prompt text, including a default-off option
+/// leaking into it, changes these digests. Downstream prompt pins (a frozen
+/// system-prompt sha in an evaluation proxy) rely on them.
+#[test]
+fn extraction_system_prompt_bytes_are_pinned() {
+    let date = "2024-03-20";
+    let cases = [
+        (
+            "default",
+            build_extraction_prompt(&KnowledgeExtractionConfig::default(), date),
+            "573876af7f38228ba4a8ed5a23ee3712818287ac78ea7bdb2254ceb93fb68a3f",
+        ),
+        (
+            "topics",
+            build_extraction_prompt(&golden_topics_config(), date),
+            "80d5a6e5f56cb4fbd75a4573b7d07626ac297ec17681932e60d3f4e1f56af12e",
+        ),
+        (
+            "shipped",
+            build_extraction_prompt(&shipped_extraction_config(), date),
+            "573876af7f38228ba4a8ed5a23ee3712818287ac78ea7bdb2254ceb93fb68a3f",
+        ),
+    ];
+    for (name, prompt, expected) in cases {
+        assert_eq!(prompt_sha256(&prompt), expected, "{name} prompt drifted");
+    }
+}
