@@ -46,6 +46,10 @@ class BoundBreach(RunStopped):
     """Billed usage exceeded R_i/O_i; the call is paid and recorded, the run stops."""
 
 
+class InputTokensBreach(RunStopped):
+    """The provider's exact pre-send input count exceeds R_i: refused before any reservation."""
+
+
 @dataclass(frozen=True)
 class Completion:
     request_id: str
@@ -273,7 +277,11 @@ def _admit(campaign, transport, letter, stage):
 
 
 def paid_completion(campaign, journal, sheet, *, letter, stage, binding, messages, response_format,
-                    transport, bound, acknowledged=frozenset(), clock=time.time):
+                    transport, bound, acknowledged=frozenset(), clock=time.time, precount=None):
+    """``precount(wire) -> int`` (optional): the provider's exact input-token count
+    (``POST /v1/responses/input_tokens``), consulted after the wire checks and
+    before any reservation; a count above R_i stops without spending or reserving.
+    A replayed request is never counted again."""
     state = journal.state
     blocking = state.blocking(acknowledged)
     if blocking:
@@ -294,6 +302,13 @@ def paid_completion(campaign, journal, sheet, *, letter, stage, binding, message
         return _replayed(campaign, journal, rid, replay, max_usd)
     if rid in state.intents:
         raise RunStopped(f"request {rid} was attempted before without settlement; use a new attempt")
+    if precount is not None:
+        counted = precount(wire)
+        if type(counted) is not int or counted < 0:
+            raise WireError("input token count must be a nonnegative int")
+        if counted > bound.r_tokens:
+            raise InputTokensBreach(f"request {rid}: provider counts {counted} input tokens, "
+                                    f"above R_i {bound.r_tokens}; nothing reserved or sent")
     campaign.check_sublimit(letter, state.committed_by_letter()[letter], max_usd)
     token = campaign.ledger.reserve(rid, str(max_usd))
     journal.intent({"schema": 1, "request_id": rid, "campaign_id": campaign.campaign_id,

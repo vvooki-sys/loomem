@@ -24,7 +24,13 @@ STAGES = ("extraction", "diagnostic", "audit", "selection", "answer", "judge", "
 CAP_NAMES = ("FACTS_JSON_CAP", "EVIDENCE_CAP", "DIAG_CAP", "ANSWER_CAP",
              "ORIGINALS_MENU_CAP", "QUESTION_CAP")
 _REQUIRED = ("PRICES", "CONTEXT_WINDOW", "FRAMING", "OUT", "JUDGE_OUT", "JUDGE_MODEL",
-             "MODEL", "SYSTEM", "cost", "bounds") + CAP_NAMES
+             "MODEL", "SYSTEM", "E_CHUNK_OUT", "E_CHUNK_TOKENS", "cost", "bounds") + CAP_NAMES
+# Owner decision 2026-11-22 (pilot protocol): the first paid step is one minimal
+# control call to the judge model with reasoning_effort=high and this output cap;
+# its input is a fixed short probe, bounded by CONTROL_STATIC_TOKENS + FRAMING.
+CONTROL_STAGE = "control"
+CONTROL_MAX_COMPLETION_TOKENS = 4096
+CONTROL_STATIC_TOKENS = 1000
 
 
 class SheetError(ValueError):
@@ -87,12 +93,30 @@ class Sheet:
 
     # -- bounds --------------------------------------------------------
     def output_bound(self, stage, model):
-        """O_i: JUDGE_OUT for the judge model's stages, otherwise OUT (mirrors scope())."""
+        """O_i: JUDGE_OUT for the judge model's stages, otherwise OUT (mirrors scope()).
+
+        Extraction is the engine's chunked call: its cap is the sheet's
+        ``E_CHUNK_OUT`` (the shipped ``[knowledge_extraction] max_tokens``), not
+        the legacy single-call ``OUT["extraction"]`` (owner decision 2026-11-22).
+        """
         if stage not in STAGES:
             raise SheetError(f"unknown stage {stage!r}")
+        if stage == "extraction":
+            return int(self.module.E_CHUNK_OUT)
         if model == self.module.JUDGE_MODEL and stage in self.module.JUDGE_OUT:
             return int(self.module.JUDGE_OUT[stage])
         return int(self.module.OUT[stage])
+
+    def extraction_chunk_chars(self):
+        """Engine chunker width in characters: input_chunk_tokens x 4 (chunking.rs)."""
+        return int(self.module.E_CHUNK_TOKENS) * 4
+
+    def control_bound(self):
+        """The judge-model control call: fixed short probe, O = 4096 (pilot protocol)."""
+        model = self.module.JUDGE_MODEL
+        self.require_priced(model)
+        return StageBound(CONTROL_STAGE, model, CONTROL_STATIC_TOKENS + int(self.module.FRAMING),
+                          CONTROL_MAX_COMPLETION_TOKENS)
 
     def stage_profile(self, stage, sources_bytes_max, judge_sees_sources):
         if stage == "extraction":
@@ -105,6 +129,9 @@ class Sheet:
         return StageBound(stage, model, int(rq[stage]), self.output_bound(stage, model))
 
     def extraction_bound(self, session_bytes):
+        """Per extraction request: R = SYSTEM + bytes of the chunk the engine sends + FRAMING,
+        O = E_CHUNK_OUT. One session may yield several chunk (and split-retry) requests;
+        each is bounded and reserved on its own."""
         if type(session_bytes) is not int or session_bytes < 0:
             raise SheetError("session_bytes must be a nonnegative int")
         model = self.module.MODEL["extraction"]
