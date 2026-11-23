@@ -109,9 +109,11 @@ pub(super) fn proximity_multiplier(chunk: &Chunk, ctx: &QueryContext, state: &Ap
 /// like `ExtractionMeta::event_date_unix` but signed, so legacy chunks
 /// carrying the field and pre-1970 dates count too) falls inside or near the query's date range, weighted by
 /// `weight`. The curve lives in
-/// `loomem_core::search::date_proximity::multiplier`; a weight of `0.0` (the
-/// default), no range, or no event date returns exactly `1.0`, which leaves
-/// the score bit-for-bit unchanged. The event date is only parsed when the
+/// `loomem_core::search::date_proximity::multiplier`, which compares whole
+/// UTC days (the range's `23:59:59` end and the event's midnight fall on the
+/// same day) and caps the outside fall-off at 365 days for open-ended
+/// ranges. A weight of `0.0` (the default), no range, or no event date
+/// returns exactly `1.0`, which leaves the score bit-for-bit unchanged. The event date is only parsed when the
 /// lever is on and the request has a range.
 ///
 /// Applied in `score_and_rank` after `apply_chunk_score_adjustments`.

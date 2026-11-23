@@ -80,12 +80,12 @@ fn score(response: &Value, id: &str) -> f64 {
         .unwrap()
 }
 
-/// The 2024 range exactly as the handler parses it from the request.
-fn range_2024() -> DateFilter {
+/// The range exactly as the handler parses it from `date_from`/`date_to`.
+fn handler_range(from: &str, to: &str) -> DateFilter {
     let (_, state) = make_test_app();
     let payload: SearchRequest = serde_json::from_value(json!({
         "query":"orchard","streams":["streamA"],"top_k":20,
-        "date_from":"2024-01-01","date_to":"2024-12-31"
+        "date_from":from,"date_to":to
     }))
     .unwrap();
     let auth = AuthContext::single_stream("streamA", UserRole::Admin, KeyScope::Shared, None, true);
@@ -93,6 +93,38 @@ fn range_2024() -> DateFilter {
         .unwrap()
         .date_filter
         .unwrap()
+}
+
+fn range_2024() -> DateFilter {
+    handler_range("2024-01-01", "2024-12-31")
+}
+
+/// A test app on the shipped defaults (or `weight`) with three legacy
+/// chunks whose BM25 scores for "orchard" all differ, so the raw response
+/// order is fully determined by score.
+async fn untied_app(weight: Option<f64>) -> axum::Router {
+    let (_, original) = make_test_app();
+    let mut config = original.config.clone();
+    config.search.decay.l0_lambda = 0.0;
+    config.search.decay.l1_lambda = 0.0;
+    if let Some(weight) = weight {
+        config.search.event_date_proximity_boost = weight;
+    }
+    let (app, state) = make_test_app_cfg(config);
+    for (id, event, content) in [
+        ("short", "2024-03-01", "orchard"),
+        ("double", "2025-01-15", "orchard orchard pears"),
+        (
+            "long",
+            "2023-07-01",
+            "orchard with many more words after it",
+        ),
+    ] {
+        let mut item = chunk(id, Some(event), false);
+        item.content = content.into();
+        seed(&state, &item).await;
+    }
+    app
 }
 
 #[tokio::test]
@@ -133,6 +165,40 @@ async fn http_weight_one_ranks_the_in_range_chunk_first_with_double_score() {
     let m = proximity_multiplier_for(after, Some(&range_2024()), 1.0);
     assert!(m > 1.0 && m < 2.0, "{m}");
     assert!((score(&on, AFTER) - score(&off, AFTER) * m).abs() < 1e-9);
+}
+
+/// No tie-break canonicalisation: distinct scores, raw order and the full
+/// envelope compared as served, with and without the 2024 range.
+#[tokio::test]
+async fn http_weight_zero_keeps_raw_order_and_json_with_untied_scores() {
+    let default_app = untied_app(None).await;
+    let off_app = untied_app(Some(0.0)).await;
+    for dates in [true, false] {
+        let expected = search(&default_app, dates).await;
+        assert_eq!(search(&off_app, dates).await, expected, "dates={dates}");
+        let scores: Vec<f64> = ranked(&expected).into_iter().map(|(_, s)| s).collect();
+        assert_eq!(scores.len(), 3, "dates={dates}");
+        assert!(
+            scores.windows(2).all(|p| p[0] > p[1]),
+            "dates={dates}: {scores:?}"
+        );
+    }
+}
+
+#[test]
+fn adapter_single_day_range_from_the_handler_is_symmetric() {
+    let range = handler_range("2024-06-01", "2024-06-01");
+    let at = |date: &str| {
+        let mut item = corpus()[1].clone();
+        item.extraction_meta.as_mut().unwrap().event_date = Some(date.into());
+        proximity_multiplier_for(&item, Some(&range), 1.0)
+    };
+    assert_eq!(at("2024-06-01"), 2.0);
+    let (before, after) = (at("2024-05-31"), at("2024-06-02"));
+    assert_eq!(before, after);
+    assert!(before > 1.0 && before < 2.0, "{before}");
+    assert_eq!(at("2024-05-30"), 1.0);
+    assert_eq!(at("2024-06-03"), 1.0);
 }
 
 #[test]
