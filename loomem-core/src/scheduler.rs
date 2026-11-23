@@ -206,16 +206,21 @@ impl Scheduler {
         info!("🚀 Scheduler started");
 
         // A disabled dream worker never polls: record it so re-enabling later
-        // re-anchors the schedule instead of running a catch-up pass. Runs
-        // first and skips while a pass is in flight (a hosted trigger can
-        // start one before this task is polled), so only a pass interrupted
-        // by a previous process is closed as failed.
-        if !self.dream_running.load(Ordering::SeqCst) {
+        // re-anchors the schedule instead of running a catch-up pass. The
+        // check holds the dream running flag, so a hosted trigger cannot start
+        // a pass in the middle of it, and it is skipped when a pass is already
+        // in flight: only a pass interrupted by a previous process is closed.
+        if self
+            .dream_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             if let Err(e) =
                 dream_schedule::record_worker_state(&self.storage, self.config.dream.enabled)
             {
                 error!("Dream schedule: cannot record worker state: {e:#}");
             }
+            self.dream_running.store(false, Ordering::SeqCst);
         }
         // Recover orphaned chunks first
         if let Err(e) = self.recover_orphaned().await {
