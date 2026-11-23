@@ -4,7 +4,7 @@ use loomem_core::query_expansion::polish_stem;
 use loomem_core::sanitizer::sanitize_for_llm;
 use loomem_core::sanitizer::sanitize_with_sources;
 use loomem_core::search::{classify, ClassifiedQuery};
-use loomem_core::{embeddings, multi_query, reranker};
+use loomem_core::{embeddings, multi_query};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
@@ -29,6 +29,7 @@ mod operation_lane;
 mod prefix_dedup;
 mod rejections;
 mod request_scope;
+mod rerank;
 mod telemetry;
 use request_scope::validated_search_streams;
 
@@ -713,97 +714,26 @@ pub async fn search_handler(
         telemetry::filter_with_telemetry(hybrid_results, &ctx, &payload, &state);
     let metrics = ResponseMetrics::full(&ctx, &outcome, evidence, operation_metrics);
     let FilterOutcome {
-        results: mut hybrid_results,
+        results: hybrid_results,
         final_top_k,
         ..
     } = outcome;
 
-    // ECA-31: Check cost budget for reranker
-    let rerank_cost_ok = rerank_budget_allows(&state, &auth);
-
-    // Async reranking: spawn in background, results cached for next identical query
-    if state.config.search.rerank_enabled && rerank_cost_ok && !hybrid_results.is_empty() {
-        if let Some(key) = ctx.cache_key {
-            let candidates = hybrid_results
-                .len()
-                .min(state.config.search.rerank_candidates);
-            let top_k = final_top_k;
-            // Cycle/012: the reranker slice is the head of the ranked pool
-            // plus — when the rare-term lane is active — any guaranteed ids
-            // that survived the pool cut but fell below the head. Lane off
-            // (`lane == None`) → exactly the pre-cycle `[..candidates]`.
-            let results_for_rerank = rerank_slice_with_lane(
-                &hybrid_results,
-                candidates,
-                lane.as_ref(),
-                state.config.search.rare_term_lane.candidate_cap,
-            );
-            let eligible_results = hybrid_results.clone();
-            let chunks: Vec<String> = results_for_rerank
-                .iter()
-                .map(|r| r.content.clone())
-                .collect();
-            let query_for_rerank = prepare_llm_input(&payload.query, "reranker::rerank");
-            let cache = state.query_cache.clone();
-            let http_client = state.http_client.clone();
-            let llm_config = state.config.llm.clone();
-
-            #[cfg(feature = "onnx-rerank")]
-            let onnx_reranker = state.onnx_reranker.as_ref().map(Arc::clone);
-            let counters = Arc::clone(&state.retrieval_counters);
-            counters.record_rerank_invocation();
-
-            tokio::spawn(async move {
-                #[cfg(feature = "onnx-rerank")]
-                let rerank_result = match onnx_reranker {
-                    Some(onnx) => {
-                        let query = query_for_rerank.clone();
-                        let documents = chunks.clone();
-                        match tokio::task::spawn_blocking(move || {
-                            onnx.rerank(&query, &documents, top_k)
-                        })
-                        .await
-                        {
-                            Ok(result) => result,
-                            Err(error) => Err(anyhow::anyhow!("ONNX rerank task failed: {error}")),
-                        }
-                    }
-                    None => {
-                        reranker::rerank(
-                            &http_client,
-                            &llm_config,
-                            &query_for_rerank,
-                            &chunks,
-                            top_k,
-                        )
-                        .await
-                    }
-                };
-                #[cfg(not(feature = "onnx-rerank"))]
-                let rerank_result =
-                    reranker::rerank(&http_client, &llm_config, &query_for_rerank, &chunks, top_k)
-                        .await;
-
-                match rerank_result {
-                    Ok(indices) => {
-                        counters.record_rerank_completion();
-                        cache_policy::publish_reranked(
-                            &cache,
-                            (key, cache_generation),
-                            indices,
-                            &results_for_rerank,
-                            &eligible_results,
-                            top_k,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Async rerank failed (non-blocking): {}", e);
-                    }
-                }
-            });
-        }
-    }
+    // Rerank stage (cost gate + async rerank-to-cache); hands the ranked
+    // pool back unchanged. See `rerank::stage`.
+    let mut hybrid_results = rerank::stage(
+        &state,
+        &ctx,
+        &payload,
+        &auth,
+        rerank::RerankInput {
+            ranked: hybrid_results,
+            final_top_k,
+            lane: lane.as_ref(),
+            cache_generation,
+        },
+    )
+    .await;
 
     hybrid_results.truncate(final_top_k);
     let lane = operation_lane::finalize(
@@ -1780,32 +1710,6 @@ fn merge_lane_candidates(
         }
     }
     bm25_results
-}
-
-/// Reranker slice: the ranked head (`[..head]`, pre-cycle behaviour) plus —
-/// lane only — guaranteed ids that survived the pool cut but sit below the
-/// head, capped at `cap` extras. Lane off → exactly the pre-cycle slice.
-fn rerank_slice_with_lane(
-    ranked: &[loomem_core::HybridSearchResult],
-    head: usize,
-    lane: Option<&LaneOutcome>,
-    cap: usize,
-) -> Vec<loomem_core::HybridSearchResult> {
-    let mut slice: Vec<_> = ranked[..head].to_vec();
-    let Some(lane) = lane else {
-        return slice;
-    };
-    let mut appended = 0usize;
-    for r in ranked.iter().skip(head) {
-        if appended >= cap {
-            break;
-        }
-        if lane.ids.contains(&r.id) {
-            slice.push(r.clone());
-            appended += 1;
-        }
-    }
-    slice
 }
 
 /// Pre-fusion BM25 channel snapshot (score-desc top-N).
@@ -4061,6 +3965,12 @@ mod tests {
                 tier1: loomem_core::search::tier1::Tier1Config::default(),
                 operation: loomem_core::hybrid_search::OperationSearchConfig::default(),
                 evidence_fields: false,
+                rerank_date_prefix: false,
+                rerank_llm_max_chars: 200,
+                rerank_onnx_max_tokens: 0,
+                rerank_sync: false,
+                rerank_sync_timeout_ms: 2000,
+                event_date_proximity_boost: 0.0,
             }
         }
 
@@ -4935,20 +4845,4 @@ mod stream_scoping_e2e_tests {
             response_projection(&state, oversized).await
         );
     }
-}
-
-fn rerank_budget_allows(state: &Arc<AppState>, auth: &AuthContext) -> bool {
-    let cost_status = loomem_core::cost_tracker::check_cost_budget_for_stream(
-        &state.store,
-        &auth.stream_id,
-        state.config.cost.daily_cap_usd,
-    );
-    if !cost_status.allow_reranker() {
-        tracing::warn!(
-            "Reranker disabled for stream {}: cost budget tier={} (ECA-31)",
-            auth.stream_id,
-            cost_status.description()
-        );
-    }
-    cost_status.allow_reranker()
 }

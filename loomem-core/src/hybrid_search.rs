@@ -113,10 +113,44 @@ pub struct SearchConfig {
     /// byte-identical to pre-flag output.
     #[serde(default)]
     pub evidence_fields: bool,
+    /// Prefix each reranker document with its date (`[event:YYYY-MM-DD]` /
+    /// `observed:` / `recorded:`, the same source as `memory_search` lines).
+    /// Default off: the reranker sees the raw content, byte-identical.
+    #[serde(default)]
+    pub rerank_date_prefix: bool,
+    /// Per-document character cap sent to the LLM fallback reranker (the
+    /// ONNX cross-encoder ignores it). 200 == the previous hardcoded value.
+    #[serde(default = "default_rerank_llm_max_chars")]
+    pub rerank_llm_max_chars: usize,
+    /// Tokenizer truncation for the ONNX cross-encoder (query + document
+    /// pair). 0 == none (byte-identical; pairs over the model limit fail the
+    /// async rerank as today).
+    #[serde(default)]
+    pub rerank_onnx_max_tokens: usize,
+    /// Rerank on the request path and return the reranked order in the
+    /// fresh response. Default off: async-to-cache only, byte-identical.
+    #[serde(default)]
+    pub rerank_sync: bool,
+    /// Budget for a synchronous rerank; on timeout/error the fresh response
+    /// keeps the fused order. Inert unless `rerank_sync` is on.
+    #[serde(default = "default_rerank_sync_timeout_ms")]
+    pub rerank_sync_timeout_ms: u64,
+    /// Score multiplier weight for `event_date` inside/near the query date
+    /// range. 0.0 == disabled (byte-identical).
+    #[serde(default)]
+    pub event_date_proximity_boost: f64,
 }
 
 fn default_rerank_candidates() -> usize {
     10
+}
+
+fn default_rerank_llm_max_chars() -> usize {
+    200
+}
+
+fn default_rerank_sync_timeout_ms() -> u64 {
+    2000
 }
 
 fn default_implicit_access_boost_weight() -> f64 {
@@ -703,6 +737,12 @@ mod tests {
                 tier1: crate::search::tier1::Tier1Config::default(),
                 operation: OperationSearchConfig::default(),
                 evidence_fields: false,
+                rerank_date_prefix: false,
+                rerank_llm_max_chars: 200,
+                rerank_onnx_max_tokens: 0,
+                rerank_sync: false,
+                rerank_sync_timeout_ms: 2000,
+                event_date_proximity_boost: 0.0,
             },
             advisor: crate::config::AdvisorConfig::default(),
             worker: crate::config::WorkerConfig::default(),

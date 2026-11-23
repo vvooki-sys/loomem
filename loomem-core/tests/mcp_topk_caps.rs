@@ -53,6 +53,7 @@ fn raised_cap_returns_more_than_twenty_results() {
         search_max_top_k: 40,
         aggregation_default_top_k: 30,
         aggregation_max_top_k: 30,
+        ..McpConfig::default()
     };
 
     let top_k = mcp.effective_search_top_k(Some(40), false);

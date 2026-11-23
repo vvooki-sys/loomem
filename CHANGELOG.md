@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Search quality-lever flags, all off/neutral by default and byte-identical
+  when left so: `[search] rerank_date_prefix`, `rerank_llm_max_chars` (200),
+  `rerank_onnx_max_tokens` (0 = none), `rerank_sync`, `rerank_sync_timeout_ms`
+  (2000), `event_date_proximity_boost` (0.0); `[mcp] search_include_predecessor`,
+  `predecessor_max_chars` (400), `search_group_by` (`none`). Only the config
+  surface lands here; the levers themselves follow in separate PRs.
 - Scheduled dream: a periodic dream pass over every active stream, once a day
   by default, editable from the dashboard Settings page (admin only; the
   override is stored in the engine's database and survives restarts). New
