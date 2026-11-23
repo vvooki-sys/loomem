@@ -337,7 +337,8 @@ fn load_reranker(
     let dir = search.rerank_model_dir.as_deref().context(
         "Hosted scope has rerank_enabled without search.rerank_model_dir; refusing silent degradation",
     )?;
-    let reranker = loomem_core::onnx_reranker::try_load(Some(dir)).with_context(|| {
+    let cap = search.rerank_onnx_max_tokens;
+    let reranker = loomem_core::onnx_reranker::try_load(Some(dir), cap).with_context(|| {
         format!(
             "Hosted scope could not load the ONNX reranker from {dir}; refusing silent degradation"
         )

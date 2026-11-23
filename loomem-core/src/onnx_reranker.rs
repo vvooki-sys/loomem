@@ -9,8 +9,8 @@
 mod inner {
     use anyhow::{Context, Result};
     use std::path::Path;
-    use tokenizers::Tokenizer;
-    use tracing::{debug, info};
+    use tokenizers::{PostProcessor, Tokenizer, TruncationParams};
+    use tracing::{debug, info, warn};
     use tract_onnx::prelude::*;
 
     type Model = std::sync::Arc<TypedRunnableModel>;
@@ -24,7 +24,12 @@ mod inner {
         /// Load model and tokenizer from a directory containing:
         /// - model.onnx (the cross-encoder)
         /// - tokenizer.json (HuggingFace tokenizer)
-        pub fn load(model_dir: &Path) -> Result<Self> {
+        ///
+        /// `max_tokens` (`[search] rerank_onnx_max_tokens`): `Some(n)` caps
+        /// each (query, document) pair at `n` tokens when `tokenizer.json`
+        /// declares no truncation of its own; `None` or `Some(0)` leaves the
+        /// tokenizer as shipped (pre-flag behaviour).
+        pub fn load(model_dir: &Path, max_tokens: Option<usize>) -> Result<Self> {
             let model_path = model_dir.join("model.onnx");
             let tokenizer_path = model_dir.join("tokenizer.json");
 
@@ -45,8 +50,9 @@ mod inner {
                 .into_runnable()
                 .context("Failed to create runnable model")?;
 
-            let tokenizer = Tokenizer::from_file(&tokenizer_path)
+            let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
                 .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
+            apply_truncation(&mut tokenizer, max_tokens)?;
 
             info!("Tract reranker loaded successfully");
             Ok(Self { model, tokenizer })
@@ -80,6 +86,17 @@ mod inner {
                 indices.len()
             );
             Ok(indices)
+        }
+
+        /// Token count of the encoded (query, document) pair, special
+        /// tokens included — what `score_pair` feeds the model.
+        #[cfg(test)]
+        pub(super) fn pair_len(&self, query: &str, document: &str) -> Result<usize> {
+            let encoding = self
+                .tokenizer
+                .encode((query, document), true)
+                .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
+            Ok(encoding.get_ids().len())
         }
 
         fn score_pair(&self, query: &str, document: &str) -> Result<f32> {
@@ -126,17 +143,66 @@ mod inner {
             Ok(score)
         }
     }
+
+    /// Cap (query, document) pairs at `max_tokens` with the tokenizer's
+    /// default longest-first strategy: tokens come off the longer sequence
+    /// first — normally the document — and once both are the same length
+    /// both are cut, the query included. Doing it on the tokenizer keeps the
+    /// special tokens correct — `max_length` counts them. A tokenizer that
+    /// already truncates (logged), and `None` / `Some(0)`, are left
+    /// untouched. A cap that does not exceed the special tokens a pair gets
+    /// is an error: the tokenizer would subtract them unchecked and panic.
+    pub(super) fn apply_truncation(
+        tokenizer: &mut Tokenizer,
+        max_tokens: Option<usize>,
+    ) -> Result<()> {
+        let Some(max_length) = max_tokens.filter(|&n| n > 0) else {
+            return Ok(());
+        };
+        if let Some(own) = tokenizer.get_truncation() {
+            warn!(
+                "Reranker tokenizer.json already truncates at {} tokens; ignoring rerank_onnx_max_tokens = {}",
+                own.max_length, max_length
+            );
+            return Ok(());
+        }
+        let special = tokenizer
+            .get_post_processor()
+            .map_or(0, |processor| processor.added_tokens(true));
+        anyhow::ensure!(
+            max_length > special,
+            "rerank_onnx_max_tokens = {max_length} leaves no room for the {special} special tokens of a pair"
+        );
+        tokenizer
+            .with_truncation(Some(TruncationParams {
+                max_length,
+                ..Default::default()
+            }))
+            .map_err(|e| anyhow::anyhow!("Failed to set reranker truncation: {}", e))?;
+        info!(
+            "Reranker tokenizer truncates pairs at {} tokens",
+            max_length
+        );
+        Ok(())
+    }
 }
 
 #[cfg(feature = "onnx-rerank")]
 pub use inner::OnnxReranker;
+
+/// `[search] rerank_onnx_max_tokens` -> the cap handed to the loader:
+/// `0` means no truncation.
+pub fn truncation_limit(max_tokens: usize) -> Option<usize> {
+    (max_tokens > 0).then_some(max_tokens)
+}
 
 /// Stub type when feature is disabled
 #[cfg(not(feature = "onnx-rerank"))]
 pub struct OnnxReranker;
 
 /// Try to load the reranker. Returns None if model dir doesn't exist
-/// or feature is disabled.
+/// or feature is disabled. `max_tokens` is `[search] rerank_onnx_max_tokens`
+/// (0 = no truncation).
 // Args used only in #[cfg(feature = "onnx-rerank")] branch below.
 // needless_return required by cfg-branch control flow (each cfg-block
 // must return independently; clippy can't see across cfg boundaries).
@@ -144,7 +210,7 @@ pub struct OnnxReranker;
     not(feature = "onnx-rerank"),
     allow(unused_variables, clippy::needless_return)
 )]
-pub fn try_load(model_dir: Option<&str>) -> Option<OnnxReranker> {
+pub fn try_load(model_dir: Option<&str>, max_tokens: usize) -> Option<OnnxReranker> {
     #[cfg(not(feature = "onnx-rerank"))]
     {
         if model_dir.is_some() {
@@ -161,7 +227,7 @@ pub fn try_load(model_dir: Option<&str>) -> Option<OnnxReranker> {
             tracing::info!("Reranker model dir not found ({}), skipping", dir);
             return None;
         }
-        match OnnxReranker::load(path) {
+        match OnnxReranker::load(path, truncation_limit(max_tokens)) {
             Ok(reranker) => Some(reranker),
             Err(e) => {
                 tracing::warn!("Failed to load reranker: {}", e);
@@ -171,17 +237,153 @@ pub fn try_load(model_dir: Option<&str>) -> Option<OnnxReranker> {
     }
 }
 
+#[cfg(test)]
+mod limit_tests {
+    use super::truncation_limit;
+
+    #[test]
+    fn zero_means_no_truncation() {
+        assert_eq!(truncation_limit(0), None);
+        assert_eq!(truncation_limit(512), Some(512));
+    }
+}
+
 #[cfg(all(test, feature = "onnx-rerank"))]
 mod tests {
     use super::*;
     use std::path::Path;
+    use std::str::FromStr;
+    use tokenizers::Tokenizer;
+
+    /// A whitespace word-level tokenizer with no post-processor, so a pair
+    /// encodes to exactly `words(query) + words(document)` tokens.
+    fn word_tokenizer(truncation: &str) -> Tokenizer {
+        tokenizer_with(truncation, "null")
+    }
+
+    /// The same tokenizer with BERT special tokens (`[CLS] q [SEP] d
+    /// [SEP]`: 3 for a pair), like the ms-marco cross-encoder.
+    fn bert_word_tokenizer() -> Tokenizer {
+        tokenizer_with(
+            "null",
+            r#"{"type":"BertProcessing","sep":["[SEP]",3],"cls":["[CLS]",4]}"#,
+        )
+    }
+
+    fn tokenizer_with(truncation: &str, post_processor: &str) -> Tokenizer {
+        let json = format!(
+            r#"{{"version":"1.0","truncation":{truncation},"padding":null,
+            "added_tokens":[],"normalizer":null,
+            "pre_tokenizer":{{"type":"WhitespaceSplit"}},
+            "post_processor":{post_processor},
+            "decoder":null,"model":{{"type":"WordLevel",
+            "vocab":{{"[UNK]":0,"q":1,"d":2,"[SEP]":3,"[CLS]":4}},
+            "unk_token":"[UNK]"}}}}"#
+        );
+        Tokenizer::from_str(&json).expect("build word tokenizer")
+    }
+
+    fn pair_ids(tokenizer: &Tokenizer, query: &str, document: &str) -> Vec<u32> {
+        tokenizer
+            .encode((query, document), true)
+            .expect("encode pair")
+            .get_ids()
+            .to_vec()
+    }
+
+    #[test]
+    fn no_cap_leaves_the_tokenizer_untouched() {
+        let document = "d ".repeat(40);
+        for cap in [None, Some(0)] {
+            let mut tokenizer = word_tokenizer("null");
+            inner::apply_truncation(&mut tokenizer, cap).expect("apply");
+            assert!(tokenizer.get_truncation().is_none(), "{cap:?}");
+            assert_eq!(pair_ids(&tokenizer, "q q", &document).len(), 42);
+        }
+    }
+
+    #[test]
+    fn cap_cuts_the_longer_sequence_first() {
+        let mut tokenizer = word_tokenizer("null");
+        inner::apply_truncation(&mut tokenizer, Some(8)).expect("apply");
+        // Longest-first: a short query survives while the 40-token
+        // document shrinks to fill the rest of the cap...
+        let ids = pair_ids(&tokenizer, "q q", &"d ".repeat(40));
+        assert_eq!(ids, vec![1, 1, 2, 2, 2, 2, 2, 2]);
+        // ...but once the document is down to the query's length, both are
+        // cut: a long query loses tokens too.
+        let ids = pair_ids(&tokenizer, &"q ".repeat(10), &"d ".repeat(40));
+        assert_eq!(ids, vec![1, 1, 1, 1, 2, 2, 2, 2]);
+    }
+
+    /// A cap at or below the special tokens of a pair would make the
+    /// tokenizer subtract past zero (a panic in debug builds); it is
+    /// refused with an error instead. One token above is accepted.
+    #[test]
+    fn cap_within_the_special_tokens_is_an_error_not_a_panic() {
+        for cap in [1, 2, 3] {
+            let mut tokenizer = bert_word_tokenizer();
+            let error = inner::apply_truncation(&mut tokenizer, Some(cap)).unwrap_err();
+            assert!(error.to_string().contains("special tokens"), "{error}");
+            assert!(tokenizer.get_truncation().is_none(), "{cap}");
+        }
+        let mut tokenizer = bert_word_tokenizer();
+        inner::apply_truncation(&mut tokenizer, Some(8)).expect("apply");
+        let ids = pair_ids(&tokenizer, "q q", &"d ".repeat(40));
+        assert_eq!(ids, vec![4, 1, 1, 3, 2, 2, 2, 3]);
+    }
+
+    #[test]
+    fn tokenizer_with_its_own_truncation_is_not_overridden() {
+        let own = r#"{"direction":"Right","max_length":4,"strategy":"LongestFirst","stride":0}"#;
+        let mut tokenizer = word_tokenizer(own);
+        inner::apply_truncation(&mut tokenizer, Some(8)).expect("apply");
+        assert_eq!(tokenizer.get_truncation().map(|t| t.max_length), Some(4));
+        assert_eq!(pair_ids(&tokenizer, "q q", &"d ".repeat(40)).len(), 4);
+    }
+
+    #[test]
+    #[ignore = "requires LOOMEM_TEST_RERANK_MODEL pointing to the ms-marco cross-encoder"]
+    fn real_model_truncates_long_pairs_only_when_capped() {
+        let model_dir = std::env::var("LOOMEM_TEST_RERANK_MODEL")
+            .expect("set LOOMEM_TEST_RERANK_MODEL to the cross-encoder model directory");
+        let query = "What is the capital of France?";
+        let long_doc = "Paris is the capital of France. ".repeat(200);
+
+        let uncapped = OnnxReranker::load(Path::new(&model_dir), None).expect("load");
+        assert!(uncapped.pair_len(query, &long_doc).expect("encode") > 512);
+
+        // The real BERT post-processor adds 3 tokens to a pair: a cap within
+        // them fails the load instead of panicking.
+        for tiny in [1, 2, 3] {
+            assert!(OnnxReranker::load(Path::new(&model_dir), Some(tiny)).is_err());
+        }
+
+        let capped = OnnxReranker::load(Path::new(&model_dir), Some(512)).expect("load");
+        assert_eq!(capped.pair_len(query, &long_doc).expect("encode"), 512);
+        let short_doc = "Paris is the capital of France.";
+        assert_eq!(
+            capped.pair_len(query, short_doc).expect("encode"),
+            uncapped.pair_len(query, short_doc).expect("encode"),
+            "short pairs are unchanged"
+        );
+        let docs = vec![long_doc, "Chocolate cake is a dessert.".to_string()];
+        assert!(
+            uncapped.rerank(query, &docs, 2).is_err(),
+            "over-length pair fails without a cap (pre-flag behaviour)"
+        );
+        assert_eq!(
+            capped.rerank(query, &docs, 2).expect("capped rerank"),
+            [0, 1]
+        );
+    }
 
     #[test]
     #[ignore = "requires LOOMEM_TEST_RERANK_MODEL pointing to the ms-marco cross-encoder"]
     fn real_model_ranks_relevant_document_first() {
         let model_dir = std::env::var("LOOMEM_TEST_RERANK_MODEL")
             .expect("set LOOMEM_TEST_RERANK_MODEL to the cross-encoder model directory");
-        let reranker = OnnxReranker::load(Path::new(&model_dir)).expect("load reranker");
+        let reranker = OnnxReranker::load(Path::new(&model_dir), None).expect("load reranker");
         let documents = vec![
             "Berlin is the capital of Germany.".to_string(),
             "Paris is the capital of France.".to_string(),
@@ -209,7 +411,7 @@ mod tests {
             return;
         };
 
-        let reranker = OnnxReranker::load(&model_dir).expect("Failed to load reranker");
+        let reranker = OnnxReranker::load(&model_dir, None).expect("Failed to load reranker");
 
         let query = "What is the capital of France?";
         let docs: Vec<String> = (0..20).map(|i| {

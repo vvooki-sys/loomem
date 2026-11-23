@@ -45,14 +45,124 @@ fn as_json(results: &[HybridSearchResult]) -> Value {
     serde_json::to_value(results).unwrap()
 }
 
+/// Flag off: the raw content one to one, even for ids the store does not
+/// hold (the store is never read) — the pre-flag documents byte for byte.
 #[test]
-fn documents_are_the_raw_content_one_to_one() {
+fn documents_with_date_prefix_off_are_the_raw_content_one_to_one() {
+    let (_app, state) = make_test_app();
+    assert!(!state.config.search.rerank_date_prefix);
     let pool = pool();
+    assert!(state.store.get_chunk("a").unwrap().is_none());
     assert_eq!(
-        documents(&pool),
+        documents(&pool, &state.store, &state.config.search),
         pool.iter().map(|r| r.content.clone()).collect::<Vec<_>>()
     );
-    assert!(documents(&[]).is_empty());
+    assert!(documents(&[], &state.store, &state.config.search).is_empty());
+}
+
+fn date_prefix_on() -> SearchConfig {
+    let (_app, state) = make_test_app();
+    let mut search = state.config.search.clone();
+    search.rerank_date_prefix = true;
+    search
+}
+
+fn event_meta(
+    content: &str,
+    event_date: &str,
+    source_id: Option<String>,
+) -> loomem_core::storage::ExtractionMeta {
+    loomem_core::memory_extractor::ExtractedFact {
+        content: content.into(),
+        fact_type: "event".into(),
+        subject: None,
+        event_date: Some(event_date.into()),
+        event_date_context: None,
+        confidence: 0.9,
+        attributed_to: None,
+    }
+    .to_extraction_meta(source_id, "test")
+}
+
+/// A legacy chunk with an extracted event date (no ingest marker).
+fn legacy_event_chunk(id: &str, event_date: &str) -> Chunk {
+    let mut chunk = chunk(id, &format!("lantern {id}"));
+    chunk.extraction_meta = Some(event_meta(&chunk.content, event_date, None));
+    chunk
+}
+
+const SOURCE_ID: &str = "00000000-0000-4000-8000-000000000001";
+
+/// The server-owned `memory_ingest` source a fact links to (the store
+/// refuses a fact whose lineage ancestor is missing).
+fn ingest_source_chunk() -> Chunk {
+    let mut chunk = chunk(SOURCE_ID, "raw transcript");
+    chunk.metadata = Some(json!({"_loomem_ingest": {
+        "version": 1, "kind": "source", "conversation_date": "2026-10-20"
+    }}));
+    chunk.consolidated = true;
+    chunk.trust_level = Some("a2".into());
+    chunk.persistent = true;
+    chunk.provenance_role = loomem_core::storage::ProvenanceRole::Evidence;
+    chunk.source = Some(loomem_core::source_tag::SourceTag::from_agent(
+        "mcp-ingest-source",
+    ));
+    chunk
+}
+
+/// A server-owned `memory_ingest` fact (marker + linked source), the shape
+/// `memory_search` renders as `[event:YYYY-MM-DD]`.
+fn ingest_fact_chunk(id: &str, event_date: &str) -> Chunk {
+    let mut chunk = chunk(id, &format!("lantern {id}"));
+    let source_id = SOURCE_ID.to_string();
+    chunk.metadata = Some(json!({"_loomem_ingest": {
+        "version": 1, "kind": "fact", "conversation_date": "2026-10-20"
+    }}));
+    chunk.level = 1;
+    chunk.trust_level = Some("a2".into());
+    chunk.persistent = true;
+    chunk.source_ids = Some(vec![source_id.clone()]);
+    chunk.source = Some(loomem_core::source_tag::SourceTag::from_agent("mcp-ingest"));
+    chunk.extraction_meta = Some(event_meta(&chunk.content, event_date, Some(source_id)));
+    chunk
+}
+
+/// Flag on: each document carries the `memory_search` date — the extracted
+/// event date of a legacy chunk, the `event:` label of an ingest fact, and
+/// the hit's own timestamp when the store has no chunk for the id.
+#[test]
+fn documents_with_date_prefix_on_carry_the_memory_search_date() {
+    let (_app, state) = make_test_app();
+    let legacy = legacy_event_chunk("a", "2023-05-06");
+    let ingest = ingest_fact_chunk("b", "2022-02-03");
+    assert!(crate::handlers::ingest_date::new_ingest_date_prefix(&legacy).is_none());
+    assert!(crate::handlers::ingest_date::new_ingest_date_prefix(&ingest).is_some());
+    state.store.store_chunk(&legacy).unwrap();
+    state.store.store_chunk(&ingest_source_chunk()).unwrap();
+    state.store.store_chunk(&ingest).unwrap();
+    assert!(state.store.get_chunk("c").unwrap().is_none());
+
+    let docs = documents(&pool(), &state.store, &date_prefix_on());
+
+    assert_eq!(
+        docs,
+        [
+            "[2023-05-06] lantern a",
+            "[event:2022-02-03] lantern b",
+            "[2024-01-01] lantern c",
+        ]
+    );
+}
+
+/// A timestamp that maps to no date (and no chunk) leaves the bare content
+/// rather than an empty `[] ` prefix.
+#[test]
+fn documents_with_date_prefix_on_and_no_date_keep_the_bare_content() {
+    let (_app, state) = make_test_app();
+    let mut orphan = hit("x", 0.5);
+    orphan.timestamp = i64::MAX;
+    let docs = documents(&[orphan], &state.store, &date_prefix_on());
+    assert_eq!(docs, ["lantern x"]);
 }
 
 #[tokio::test]
@@ -104,6 +214,86 @@ async fn stage_with_reranker_on_but_uncacheable_request_does_not_spawn() {
 
     assert_eq!(as_json(&out), as_json(&pool()));
     assert_eq!(state.retrieval_counters.snapshot().rerank_invocations, 0);
+}
+
+/// Drive the current-thread runtime until the spawned rerank has reported
+/// a completion, without sleeping: the keyless LLM path performs no I/O,
+/// so the task finishes on its first poll and one yield is enough. The
+/// bound only turns a regression into a failure instead of a hang.
+async fn wait_for_completion(state: &Arc<AppState>) {
+    wait_for_completions(state, 1).await;
+}
+
+async fn wait_for_completions(state: &Arc<AppState>, expected: u64) {
+    for _ in 0..1_000 {
+        if state.retrieval_counters.snapshot().rerank_completions == expected {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("async rerank never completed");
+}
+
+/// Reranker on, keyless (the developer's real key can never be resolved).
+fn keyless_rerank_config(mut config: loomem_core::config::Config) -> loomem_core::config::Config {
+    config.search.rerank_enabled = true;
+    config.llm.api_key = None;
+    config.llm.api_key_env = "LOOMEM_TEST_KEY_THAT_IS_NEVER_SET".into();
+    config.llm.providers.clear();
+    config.llm.provider = "openai".into();
+    assert!(
+        config.llm.active_provider().is_err(),
+        "test must stay keyless"
+    );
+    config
+}
+
+/// Positive path of the W0 stage: reranker on, cacheable request, no ONNX
+/// model and no LLM key. The stage still returns the input unchanged (the
+/// fresh response keeps the fused order), records one invocation and
+/// spawns the model call. Keyless, `reranker::rerank` answers with the
+/// identity order instead of an error (it maps every provider failure to
+/// `Ok(identity)`; only a 2xx with malformed or truncated JSON is an
+/// `Err`), so the spawn publishes a reranked slot that merely repeats the
+/// fused head. The `Err` arm — no publish, no completion — needs a backend
+/// stub and is covered when the synchronous rerank lands.
+#[tokio::test]
+async fn stage_with_reranker_on_spawns_keyless_identity_rerank() {
+    let (_app, original) = make_test_app();
+    // Never resolve a real key from the developer's environment.
+    let config = keyless_rerank_config(original.config.clone());
+    let (_app, state) = make_test_app_cfg(config);
+    #[cfg(feature = "onnx-rerank")]
+    assert!(state.onnx_reranker.is_none());
+    let payload = request("lantern");
+    let ctx = prepare_query_context(&state, &auth(), &payload).unwrap();
+    let key = ctx.cache_key.expect("plain request is cacheable");
+    let generation = state.query_cache.lock().await.generation();
+
+    let input = RerankInput {
+        ranked: pool(),
+        final_top_k: 2,
+        lane: None,
+        cache_generation: generation,
+    };
+    let out = stage(&state, &ctx, &payload, &auth(), input).await;
+
+    assert_eq!(as_json(&out), as_json(&pool()), "pool returned unchanged");
+    assert_eq!(state.retrieval_counters.snapshot().rerank_invocations, 1);
+
+    wait_for_completion(&state).await;
+    let (is_reranked, cached) = state
+        .query_cache
+        .lock()
+        .await
+        .get_best(key)
+        .expect("keyless rerank publishes the identity order");
+    assert!(is_reranked);
+    assert_eq!(
+        cached.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        ["a", "b"],
+        "identity order, cut to final_top_k"
+    );
 }
 
 fn chunk(id: &str, content: &str) -> Chunk {
@@ -170,12 +360,16 @@ fn ids(response: &Value) -> Vec<&str> {
         .collect()
 }
 
-/// HTTP identity: the test defaults and the levers spelled out at their
-/// off values produce the same `/v1/search` envelope for the same corpus.
-/// Later waves extend this with the lever on where the response must stay
-/// identical (async-to-cache levers). Time decay is switched off in both
-/// arms because it reads the wall clock in whole seconds, which would make
-/// two responses differ across a second boundary regardless of the levers.
+/// HTTP identity scaffold for waves 1-2. In W0 both arms run the same
+/// effective config (defaults vs the levers spelled out at their off
+/// values), so this proves only that the harness is deterministic — the
+/// zero-change evidence for the extraction itself is the verbatim diff plus
+/// the existing rerank_cache / cache_hit / cache_policy tests. The lever PRs
+/// flip one flag in the second arm and keep the assertion where the fresh
+/// response must stay identical (async-to-cache levers). Time decay is
+/// switched off in both arms because it reads the wall clock in whole
+/// seconds, which would make two responses differ across a second boundary
+/// regardless of the levers.
 #[tokio::test]
 async fn http_responses_are_identical_with_every_lever_off() {
     let (_, original) = make_test_app();
@@ -209,4 +403,139 @@ async fn http_responses_are_identical_with_every_lever_off() {
             .rerank_invocations,
         0
     );
+}
+
+/// W2b levers on (date prefix, a smaller LLM cap, an ONNX token cap) with
+/// the reranker on and keyless: the rerank stays async-to-cache, so the
+/// fresh responses are identical to the levers-off arm, and so are the
+/// cache hits served after the spawned reranks complete (keyless, both
+/// arms publish the identity order whatever the document text).
+#[tokio::test]
+async fn http_responses_are_identical_with_document_text_levers_on() {
+    let (_, original) = make_test_app();
+    let mut base = keyless_rerank_config(original.config.clone());
+    base.search.decay.l0_lambda = 0.0;
+    base.search.decay.l1_lambda = 0.0;
+    let (off_app, off_state) = make_test_app_cfg(base.clone());
+    let mut config = base;
+    config.search.rerank_date_prefix = true;
+    config.search.rerank_llm_max_chars = 50;
+    config.search.rerank_onnx_max_tokens = 256;
+    let (on_app, on_state) = make_test_app_cfg(config);
+    #[cfg(feature = "onnx-rerank")]
+    assert!(off_state.onnx_reranker.is_none() && on_state.onnx_reranker.is_none());
+    seed(&off_state).await;
+    seed(&on_state).await;
+
+    let queries = ["lantern", "lantern b"];
+    for query in queries {
+        let expected = http(&off_app, query).await;
+        assert_eq!(http(&on_app, query).await, expected, "fresh {query:?}");
+    }
+    wait_for_completions(&off_state, 2).await;
+    wait_for_completions(&on_state, 2).await;
+    for query in queries {
+        let expected = http(&off_app, query).await;
+        assert_eq!(http(&on_app, query).await, expected, "cached {query:?}");
+    }
+    assert_eq!(on_state.retrieval_counters.snapshot().rerank_invocations, 2);
+}
+
+/// Local keyless chat-completions mock: forwards each request body to the
+/// test and answers with a fixed reranker reply.
+async fn fake_rerank_provider() -> (String, tokio::sync::mpsc::UnboundedReceiver<Value>) {
+    use axum::{extract::State, routing::post, Json};
+    async fn complete(
+        State(tx): State<tokio::sync::mpsc::UnboundedSender<Value>>,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        tx.send(body).unwrap();
+        Json(json!({"choices": [{
+            "finish_reason": "stop",
+            "message": {"content": "{\"indices\": [1, 0]}"}
+        }]}))
+    }
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let mock = axum::Router::new()
+        .route("/v1/chat/completions", post(complete))
+        .with_state(tx);
+    tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    (base_url, rx)
+}
+
+/// Reranker on against the local mock: a provider entry without
+/// `api_key_env`, so no key is read from the environment and no
+/// `Authorization` header is sent; nothing leaves 127.0.0.1.
+fn local_rerank_config(base_url: &str) -> loomem_core::config::Config {
+    let (_, original) = make_test_app();
+    let mut config = keyless_rerank_config(original.config.clone());
+    config.llm.providers.insert(
+        "local-fake".into(),
+        serde_json::from_value(json!({"base_url": base_url})).unwrap(),
+    );
+    config.llm.provider = "local-fake".into();
+    let provider = config.llm.active_provider().expect("local provider");
+    assert!(
+        provider.api_key.is_none(),
+        "mock provider must stay keyless"
+    );
+    assert!(provider.base_url.starts_with("http://127.0.0.1:"));
+    config
+}
+
+/// The levers reach the model: with the date prefix on and a 16-character
+/// LLM cap, the prompt the reranker sends numbers the dated, capped
+/// documents (`[i] [YYYY-MM-DD] lan`), and the reply's order lands in the
+/// reranked cache slot.
+#[tokio::test]
+async fn llm_prompt_carries_dated_capped_documents() {
+    let (base_url, mut requests) = fake_rerank_provider().await;
+    let mut config = local_rerank_config(&base_url);
+    config.search.rerank_date_prefix = true;
+    config.search.rerank_llm_max_chars = 16;
+    let (_app, state) = make_test_app_cfg(config);
+    #[cfg(feature = "onnx-rerank")]
+    assert!(state.onnx_reranker.is_none());
+    state
+        .store
+        .store_chunk(&legacy_event_chunk("a", "2023-05-06"))
+        .unwrap();
+    let payload = request("lantern");
+    let ctx = prepare_query_context(&state, &auth(), &payload).unwrap();
+    let key = ctx.cache_key.expect("plain request is cacheable");
+    let generation = state.query_cache.lock().await.generation();
+    let input = RerankInput {
+        ranked: vec![hit("a", 0.9), hit("b", 0.8)],
+        final_top_k: 2,
+        lane: None,
+        cache_generation: generation,
+    };
+    stage(&state, &ctx, &payload, &auth(), input).await;
+
+    let deadline = std::time::Duration::from_secs(5);
+    let body = tokio::time::timeout(deadline, requests.recv())
+        .await
+        .expect("reranker called the mock")
+        .unwrap();
+    let prompt = body["messages"][1]["content"].as_str().unwrap();
+    assert!(
+        prompt.contains("Results:\n[0] [2023-05-06] lan\n\n[1] [2024-01-01] lan\n\n"),
+        "{prompt}"
+    );
+    // Real loopback I/O: spin (no sleep) until the reply is processed,
+    // bounded by the deadline rather than a yield count.
+    let completed = async {
+        while state.retrieval_counters.snapshot().rerank_completions == 0 {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(deadline, completed)
+        .await
+        .expect("rerank completed");
+    let (is_reranked, cached) = state.query_cache.lock().await.get_best(key).unwrap();
+    assert!(is_reranked);
+    let ids: Vec<_> = cached.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, ["b", "a"], "mock order published");
 }
