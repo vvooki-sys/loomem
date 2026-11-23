@@ -935,3 +935,44 @@ async fn traced_sync_rerank_blames_the_reranker_not_finalization() {
     assert!(!stages.contains(&"after_rerank"), "internal stage dropped");
     assert_eq!(counts(&state), (1, 1));
 }
+
+/// Trace attribution after a sync rerank: a provisional hit missing from
+/// the reranked response is `reranked`, unless the post-wait visibility
+/// check removed it — deleted while the model ran, whether the model
+/// answered, failed or timed out — in which case it is `soft_deleted`.
+#[tokio::test]
+async fn after_rerank_tells_deleted_hits_from_outranked_ones() {
+    use crate::handlers::types::{EvidenceStage, EvidenceTrace, RejectionReason};
+    let state = sync_state(2000);
+    let mut deleted = chunk("b", "lantern b");
+    deleted.deleted_at = Some(1);
+    state.store.store_chunk(&deleted).unwrap();
+    let mut payload = request("lantern");
+    payload.trace = true;
+    let ctx = prepare_query_context(&state, &auth(), &payload).unwrap();
+    let mut trace = Some(EvidenceTrace {
+        schema_version: 1,
+        coverage: "post_rank_to_response",
+        stages: vec![EvidenceStage {
+            stage: "response",
+            chunk_ids: vec!["a".into(), "b".into(), "c".into()],
+        }],
+        rejections: Vec::new(),
+    });
+
+    super::super::evidence::after_rerank(&mut trace, &[hit("a", 0.9)], &ctx, &state);
+
+    let trace = trace.unwrap();
+    let reasons: Vec<_> = trace
+        .rejections
+        .iter()
+        .map(|r| (r.chunk_id.as_str(), r.reason))
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            ("b", RejectionReason::SoftDeleted),
+            ("c", RejectionReason::Reranked)
+        ]
+    );
+}

@@ -85,9 +85,11 @@ pub(super) fn finish(
 /// Observe the synchronous reranker (`[search] rerank_sync`) without
 /// changing it: `results` is the reranked response cut to `final_top_k`.
 /// Hits it pushed out of the provisional response are rejected as
-/// `Reranked`, and [`reconcile`] then blames operation finalization only for
-/// what the lane drops after it. Flag off: nothing (the stage passes the
-/// pool through and the async rerank is not observed, as before).
+/// `Reranked` — or `SoftDeleted` when the post-wait visibility check removed
+/// them (deleted while the model ran, whatever the model answered) — and
+/// [`reconcile`] then blames operation finalization only for what the lane
+/// drops after it. Flag off: nothing (the stage passes the pool through and
+/// the async rerank is not observed, as before).
 pub(super) fn after_rerank(
     trace: &mut Option<EvidenceTrace>,
     results: &[HybridSearchResult],
@@ -98,13 +100,20 @@ pub(super) fn after_rerank(
         return;
     }
     capture(trace, STAGE_AFTER_RERANK, results, ctx, state);
-    if let Some(trace) = trace.as_mut() {
-        record_stage_loss(
-            trace,
-            "response",
-            STAGE_AFTER_RERANK,
-            RejectionReason::Reranked,
-        );
+    let Some(trace) = trace.as_mut() else { return };
+    record_stage_loss(
+        trace,
+        "response",
+        STAGE_AFTER_RERANK,
+        RejectionReason::Reranked,
+    );
+    // `Reranked` entries come only from the call above.
+    for rejection in &mut trace.rejections {
+        if rejection.reason == RejectionReason::Reranked
+            && crate::handlers::delete::is_deleted_in_store(state, &rejection.chunk_id)
+        {
+            rejection.reason = RejectionReason::SoftDeleted;
+        }
     }
 }
 
