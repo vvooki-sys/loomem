@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `memory_search`, `rerank_llm_max_chars` sets the LLM reranker's
   per-document cap (200 = previous), `rerank_onnx_max_tokens` truncates ONNX
   cross-encoder pairs (0 = none, otherwise at least 16).
+- `[knowledge_extraction] temporal_grounding` drops extracted facts whose
+  relative time ("three weeks ago", "yesterday") or `event_date_context` is
+  not in the source chunk: `"filter"` keeps the prompt unchanged,
+  `"prompt_and_filter"` also adds a grounding notice to the extraction prompt
+  (default `"off"`, byte-identical).
 
 ## [0.5.5] - 2026-11-22
 
