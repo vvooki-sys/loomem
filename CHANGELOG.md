@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `memory_search` can render the direct predecessor of an updated hit on a
   `↳ previously [date]: …` line under it, charged to `max_context_tokens`,
   behind `[mcp] search_include_predecessor` (default off, byte-identical).
+- `memory_search` can insert `## <key>` group headers (per source session or
+  per day; order and numbering unchanged, none for aggregation queries),
+  behind `[mcp] search_group_by` (default `"none"`, byte-identical).
 
 ## [0.5.5] - 2026-11-22
 

@@ -4,6 +4,7 @@ mod delete_notice;
 mod dream;
 #[cfg(test)]
 mod evidence_suffix_tests;
+mod grouping;
 mod ingest;
 mod search_format;
 #[cfg(test)]
@@ -12,7 +13,7 @@ use dream::tool_dream;
 use ingest::tool_ingest;
 #[cfg(feature = "evaluation")]
 pub(crate) use ingest::{expected_bytes, ExpectedFact};
-use search_format::{predecessors_for, render_lines, token_cost};
+use search_format::{predecessors_for, token_cost};
 
 use axum::extract::State;
 use axum::Json;
@@ -928,8 +929,11 @@ async fn tool_search(
             };
             // One line per hit (date tag, content-type/trust tags, content,
             // [UPDATED] note, evidence suffix, score, id) — see
-            // `search_format::render_line`.
-            text.push_str(&render_lines(&state.store, &resp.results, &preds));
+            // `search_format::render_line`; `## <key>` group headers between
+            // them with `[mcp] search_group_by` (never for aggregations).
+            let mode = grouping::effective_mode(state.config.mcp.search_group_by, is_aggregation);
+            let lines = grouping::render_grouped(&state.store, &resp.results, &preds, mode);
+            text.push_str(&lines);
             text.push_str("\nNote: When facts have dates, ALWAYS prefer the most recent version. Items marked [UPDATED] supersede older versions.");
             Ok(ToolResult::text(text))
         }
