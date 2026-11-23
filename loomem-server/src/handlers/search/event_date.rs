@@ -1,4 +1,5 @@
 //! Authoritative event-date admission for versioned ingest, independent of stale indexes.
+use loomem_core::search::date_proximity;
 use loomem_core::storage::{is_ingest_fact_shape, is_ingest_fragment, is_ingest_source, Chunk};
 use loomem_core::{tantivy_index::event_timestamp_for_chunk, HybridSearchResult};
 use std::collections::HashSet;
@@ -94,6 +95,59 @@ pub(super) fn apply(
         super::filter_superseded(results, &state.store);
         log.record_dropped(before, results, stage, RejectionReason::Superseded);
     }
+}
+
+/// Score multiplier for `[search] event_date_proximity_boost` at the
+/// `score_and_rank` call site: [`proximity_multiplier_for`] with the
+/// request's date range and the configured weight.
+pub(super) fn proximity_multiplier(chunk: &Chunk, ctx: &QueryContext, state: &AppState) -> f64 {
+    let weight = state.config.search.event_date_proximity_boost;
+    proximity_multiplier_for(chunk, ctx.date_filter.as_ref(), weight)
+}
+
+/// Boost for a chunk whose event date (`extraction_meta.event_date`, parsed
+/// like `ExtractionMeta::event_date_unix` but signed, so legacy chunks
+/// carrying the field and pre-1970 dates count too) falls inside or near the query's date range, weighted by
+/// `weight`. The curve lives in
+/// `loomem_core::search::date_proximity::multiplier`, which compares whole
+/// UTC days (the range's `23:59:59` end and the event's midnight fall on the
+/// same day) and caps the outside fall-off at 365 days for open-ended
+/// ranges. A weight of `0.0` (the default), no range, or no event date
+/// returns exactly `1.0`, which leaves the score bit-for-bit unchanged. The event date is only parsed when the
+/// lever is on and the request has a range.
+///
+/// Applied in `score_and_rank` after `apply_chunk_score_adjustments`.
+/// Interactions:
+/// - [`apply`] (the authoritative date filter) runs later, in
+///   `filter_candidates`; it still drops out-of-range ingest-owned chunks, so
+///   the fall-off outside the range only reorders chunks the filter keeps
+///   (legacy chunks, which it never drops by date).
+/// - `QueryComplexity::Temporal` queries are re-sorted by timestamp right
+///   after scoring, so the boost changes their scores but not their order.
+/// - The query cache key includes the date range, so boosted results are
+///   never served to a request with a different range; the weight itself is
+///   server config and not part of the key (a restart clears the cache).
+pub(super) fn proximity_multiplier_for(
+    chunk: &Chunk,
+    filter: Option<&DateFilter>,
+    weight: f64,
+) -> f64 {
+    let Some(DateFilter::Range(start, end)) = filter else {
+        return 1.0;
+    };
+    if !date_proximity::enabled(weight) {
+        return 1.0;
+    }
+    date_proximity::multiplier(event_unix(chunk), Some((*start, *end)), weight)
+}
+
+/// `extraction_meta.event_date` (`YYYY-MM-DD`) as a signed UTC-midnight unix
+/// timestamp. Same parse as `ExtractionMeta::event_date_unix`, minus its
+/// `u64` narrowing, so pre-1970 event dates are boosted like any other.
+fn event_unix(chunk: &Chunk) -> Option<i64> {
+    let raw = chunk.extraction_meta.as_ref()?.event_date.as_deref()?;
+    let day = chrono::NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d").ok()?;
+    Some(day.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
 }
 
 /// A supplemental operation lane cannot reintroduce a stale indexed event date.
