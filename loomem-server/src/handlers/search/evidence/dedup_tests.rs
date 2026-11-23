@@ -155,3 +155,21 @@ fn default_dedup_outcome_is_pinned() {
     );
     assert_eq!(removed, 5);
 }
+
+/// `exact`: only the byte-identical long twin is dropped, still under
+/// `content_prefix_dedup`; the prefix twin, the negated update, every
+/// fragment and the case-only variant survive.
+#[test]
+fn exact_dedup_keeps_negated_update() {
+    let mut config = default_config();
+    config.search.content_dedup = loomem_core::search::ContentDedup::Exact;
+    let (kept, rejected, removed) = run(&keyless(config));
+    let expected: Vec<_> = corpus()
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .filter(|id| *id != "exact-b")
+        .collect();
+    assert_eq!(kept, expected);
+    assert_eq!(rejected, dropped(&["exact-b"]));
+    assert_eq!(removed, 1);
+}

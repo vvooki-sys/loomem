@@ -1,8 +1,10 @@
-//! Content-prefix dedup key for `filter_candidates`.
+//! Content dedup pass of `filter_candidates`, selected by
+//! `[search] content_dedup`. Both modes keep the higher-ranked result and
+//! record each drop as `content_prefix_dedup`.
 //!
-//! The dedup pass collapses near-identical results (first 150 lowercase
-//! chars, >80% shared prefix) to absorb repeated ingests of the same daily
-//! log. Source fragments break that assumption in two ways: two
+//! **`prefix`** (default): collapses near-identical results (first 150
+//! lowercase chars, >80% shared prefix) to absorb repeated ingests of the
+//! same daily log. Source fragments break that assumption in two ways: two
 //! conversations can hold a byte-identical turn and each is distinct
 //! evidence (its own source, its own date), so fragments of *different*
 //! sources are never collapsed into each other; and a source's content
@@ -12,8 +14,16 @@
 //! higher. Every other pairing — two plain chunks, two fragments of one
 //! source, a fragment against an unrelated non-fragment — keeps the
 //! pre-existing rule.
+//!
+//! **`exact`**: a shared prefix is not evidence of duplication: a later
+//! clause can change a preference, negate a claim, or describe another
+//! event. Plain chunks only collapse when their complete content is
+//! byte-identical and at least 30 bytes long. Distinct fragment ids always
+//! survive, including identical text at different source offsets. Dedup
+//! borrows text rather than cloning the pool.
 use loomem_core::search::ContentDedup;
 use loomem_core::{HybridSearchResult, RocksDbStore};
+use std::collections::HashSet;
 
 use super::rejections::RejectionLog;
 use crate::handlers::types::RejectionReason;
@@ -94,9 +104,8 @@ pub(super) fn apply(
     stage: &'static str,
 ) {
     match mode {
-        // `Exact` is wired in the next change; until then both run the
-        // shipped prefix rule.
-        ContentDedup::Prefix | ContentDedup::Exact => prefix(results, store, log, stage),
+        ContentDedup::Prefix => prefix(results, store, log, stage),
+        ContentDedup::Exact => exact(results, store, log, stage),
     }
 }
 
@@ -126,6 +135,56 @@ fn prefix(
             true
         }
     });
+}
+
+/// Exact-content dedup: drop a candidate only when `keep_candidates` marks
+/// its position as a duplicate.
+fn exact(
+    results: &mut Vec<HybridSearchResult>,
+    store: &RocksDbStore,
+    log: &mut RejectionLog,
+    stage: &'static str,
+) {
+    let mut keep = keep_candidates(results, store).into_iter();
+    let reason = RejectionReason::ContentPrefixDedup;
+    log.retain(results, stage, reason, |r| {
+        let retain = keep.next().unwrap_or(true);
+        if !retain {
+            tracing::debug!("Dedup: dropped duplicate result {}", r.id);
+        }
+        retain
+    });
+}
+
+/// Compute one retention flag per candidate, preserving the first occurrence
+/// of a repeated id. Flags are positional: a set of rejected ids would also
+/// remove the first occurrence. Only the small flag vector escapes this call;
+/// the temporary sets borrow ids and content from `results`.
+fn keep_candidates(results: &[HybridSearchResult], store: &RocksDbStore) -> Vec<bool> {
+    retention_mask(results.iter().map(|result| {
+        let is_fragment = store
+            .get_chunk(&result.id)
+            .ok()
+            .flatten()
+            .is_some_and(|chunk| chunk.fragment.is_some());
+        (result.id.as_str(), result.content.as_str(), is_fragment)
+    }))
+}
+
+fn retention_mask<'a>(records: impl Iterator<Item = (&'a str, &'a str, bool)>) -> Vec<bool> {
+    let mut seen_ids = HashSet::new();
+    let mut plain_contents = HashSet::new();
+    records
+        .map(|(id, content, is_fragment)| {
+            if !seen_ids.insert(id) {
+                return false;
+            }
+            // Keep the existing short-text exemption. Identical brief facts
+            // can be separate dated events, and text alone cannot prove that
+            // they are duplicates. Fragments retain every distinct occurrence.
+            is_fragment || content.len() < 30 || plain_contents.insert(content)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -192,4 +251,140 @@ mod tests {
         let unrelated = plain("other", TURN);
         assert!(fragment("src-2:f0", TURN, "src-2").dominated_by(&unrelated));
     }
+
+    fn keep(records: &[(&str, &str, bool)]) -> Vec<bool> {
+        retention_mask(records.iter().copied())
+    }
+
+    #[test]
+    fn exact_plain_duplicates_collapse() {
+        assert_eq!(
+            keep(&[("a", TURN, false), ("b", TURN, false)]),
+            [true, false]
+        );
+    }
+
+    #[test]
+    fn repeated_ids_keep_only_the_first_position() {
+        assert_eq!(
+            keep(&[
+                ("a", TURN, false),
+                ("a", TURN, false),
+                ("b", "short", false)
+            ]),
+            [true, false, true]
+        );
+        assert_eq!(
+            keep(&[("src:f0", TURN, true), ("src:f0", TURN, true)]),
+            [true, false]
+        );
+    }
+
+    #[test]
+    fn short_identical_events_on_different_dates_survive() {
+        // Timestamp metadata differs between these records; content alone is
+        // insufficient to collapse repeated brief events.
+        assert_eq!(
+            keep(&[
+                ("2026-01-01", "Ran five miles.", false),
+                ("2026-01-02", "Ran five miles.", false)
+            ]),
+            [true, true]
+        );
+        let below_threshold = "a".repeat(29);
+        let at_threshold = "a".repeat(30);
+        assert_eq!(
+            keep(&[
+                ("a", &below_threshold, false),
+                ("b", &below_threshold, false)
+            ]),
+            [true, true]
+        );
+        assert_eq!(
+            keep(&[("a", &at_threshold, false), ("b", &at_threshold, false)]),
+            [true, false]
+        );
+    }
+
+    #[test]
+    fn case_can_change_meaning() {
+        assert_eq!(
+            keep(&[
+                ("a", "The support team is preparing a report for US.", false),
+                ("b", "The support team is preparing a report for us.", false)
+            ]),
+            [true, true]
+        );
+    }
+
+    #[test]
+    fn negation_after_the_old_prefix_limit_survives() {
+        let prefix = "For our autumn project planning conversation, I want to record my current \
+                      travel preference for the upcoming conference and the accommodation arrangements. ";
+        assert!(prefix.chars().count() > 150);
+        let old = format!("{prefix}I want a lively hotel.");
+        let updated = format!("{prefix}I do not want a lively hotel.");
+        assert_eq!(
+            keep(&[("a", &old, false), ("b", &updated, false)]),
+            [true, true]
+        );
+        assert_eq!(
+            keep(&[("b", &updated, false), ("a", &old, false)]),
+            [true, true]
+        );
+    }
+
+    #[test]
+    fn a_shared_prefix_does_not_prove_duplication() {
+        let updated = format!("{TURN} The decision has changed.");
+        assert_eq!(
+            keep(&[
+                ("a", TURN, false),
+                ("b", &updated, false),
+                ("c", &TURN[..80], false)
+            ]),
+            [true, true, true]
+        );
+    }
+
+    #[test]
+    fn identical_fragments_at_distinct_offsets_and_sources_survive() {
+        assert_eq!(
+            keep(&[
+                ("src-1:f0", TURN, true),
+                ("src-1:f1", TURN, true),
+                ("src-2:f0", TURN, true)
+            ]),
+            [true, true, true]
+        );
+    }
+
+    #[test]
+    fn distinct_event_values_in_one_source_both_survive() {
+        let prefix = "During this monthly procurement review for the same renovation project, \
+                      we recorded the invoice from the same building supplier for ordered materials. ";
+        let first = format!("{prefix}The amount paid was 100.");
+        let second = format!("{prefix}The amount paid was 200.");
+        assert_eq!(
+            keep(&[("src-1:f0", &first, true), ("src-1:f1", &second, true)]),
+            [true, true]
+        );
+    }
+
+    #[test]
+    fn fragment_and_plain_chunk_preserve_their_provenance_in_either_order() {
+        for id in ["src-1", "unrelated"] {
+            assert_eq!(
+                keep(&[("src-1:f0", TURN, true), (id, TURN, false)]),
+                [true, true]
+            );
+            assert_eq!(
+                keep(&[(id, TURN, false), ("src-1:f0", TURN, true)]),
+                [true, true]
+            );
+        }
+    }
 }
+
+#[cfg(test)]
+mod http_tests;
