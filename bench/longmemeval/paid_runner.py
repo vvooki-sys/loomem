@@ -6,10 +6,11 @@ campaign is ``mode=paid``, every preflight check passes, ``run.lock`` is free
 and the journal has no unsettled/uncertain request that is not explicitly
 acknowledged. It then makes the pilot's control call once (skipped when a
 settled control request exists) and executes the requested phases through
-``paid_phases``; every provider request goes through ``paid_completion`` with
-the exact pre-send input count as ``precount``. ``dry-run`` lives in
-``paid_dry_run`` and talks only to a loopback fake. Exit codes: 0 ok, 2
-refused/FAIL, 3 stopped mid-run (journal and report say where).
+``paid_phases`` (``--phase control`` stops after that call); every provider
+request goes through ``paid_completion`` with the exact pre-send input count as
+``precount``. ``dry-run`` lives in ``paid_dry_run`` and talks only to a loopback
+fake. Exit codes: 0 ok, 2 refused/FAIL, 3 stopped mid-run (journal and report
+say where).
 """
 from dataclasses import dataclass
 import os

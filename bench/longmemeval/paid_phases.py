@@ -303,6 +303,8 @@ PHASES = {"extraction": phase_extraction, "retrieval": phase_retrieval, "arms": 
 
 
 def run_phases(ctx, phase="all"):
+    if phase == "control":
+        return []  # the control call K, sent by the caller before this, is the whole invocation
     names = list(PHASES) if phase == "all" else [phase]
     for name in names:
         PHASES[name](ctx)

@@ -338,5 +338,68 @@ class AcknowledgeUncertainTests(unittest.TestCase):
         self.assertTrue((self.campaign_dir / "reports" / "report-1.json").is_file())
 
 
+class ControlPhaseTests(unittest.TestCase):
+    """`run --phase control` on a paid campaign whose provider is the loopback fake: only the control
+    call K leaves, the report is written and the engine is never started; a rerun sends nothing."""
+
+    def setUp(self):
+        if not tokenizer_available():
+            self.skipTest("o200k cache unavailable (TIKTOKEN_CACHE_DIR)")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.fixture = build_fixture(self.root)
+        self.campaign_dir = self.root / "paid"
+        patch = mock.patch("paid_preflight.MIN_FREE_BYTES", 1)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.fake = fake_provider(self.fixture.prompts(), PROFILES, {})
+        self.fake.__enter__()
+        self.addCleanup(self.fake.__exit__, None, None, None)
+        probe = mock.patch("paid_preflight_engine.probe_engine",
+                           return_value={"passed": True, "problems": [], "observed": {
+                               "system_bytes": 1, "wire_overhead_bytes": 1, "sheet_system_extraction": 6000,
+                               "system_sha256": "0" * 64, "readiness_bad_body_status": 422}})
+        probe.start()
+        self.addCleanup(probe.stop)
+        self.env = runner_env(OPENAI_API_KEY=self.fake.token)
+        env_patch = mock.patch.dict(os.environ, {"OPENAI_API_KEY": self.fake.token})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        code, out = main(["create-campaign", *self.fixture.flags(self.campaign_dir, extra=[
+            "--provider-base-url", self.fake.url, "--api-key-env", "OPENAI_API_KEY"])], env=self.env)
+        self.assertEqual(code, 0, out)
+
+    def run_control(self):
+        from paid_fake_engine import fake_engine_factory
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stderr", err):
+            code = _main(["run", "--campaign-dir", str(self.campaign_dir), "--phase", "control"],
+                         factories={"engine": fake_engine_factory}, stdout=out, env=self.env,
+                         clock=itertools.count(1_700_000_000).__next__)
+        return code, out.getvalue() + err.getvalue()
+
+    def test_control_sends_only_k_then_nothing_on_rerun(self):
+        code, out = self.run_control()
+        self.assertEqual(code, 0, out)
+        self.assertIn("control call", out)
+        journal = CallJournal(self.campaign_dir)
+        self.assertEqual([i["letter"] for i in journal.state.intents.values()], ["K"])
+        self.assertEqual(journal.state.blocking(), [])
+        self.assertEqual([e["role"] for e in self.fake.log], ["control"])
+        self.assertEqual(len(json.loads((self.campaign_dir / "budget.json").read_text())["requests"]), 1)
+        for artifact in ("extraction", "contexts", "arms", "verdicts"):
+            self.assertFalse((self.campaign_dir / artifact).exists(), artifact)
+        self.assertTrue((self.campaign_dir / "reports" / "report-1.json").is_file())
+        self.assertFalse((self.campaign_dir / "run.lock").exists())
+        # a settled K is not repeated: the second invocation sends nothing and still writes a report
+        code, out = self.run_control()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("control call", out)
+        self.assertEqual(len(self.fake.log), 1)
+        self.assertEqual(len(CallJournal(self.campaign_dir).state.intents), 1)
+        self.assertTrue((self.campaign_dir / "reports" / "report-2.json").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()

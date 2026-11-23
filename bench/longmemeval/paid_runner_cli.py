@@ -18,7 +18,7 @@ from paid_preflight import harness_sha256
 from paid_preflight_probes import sha256_text
 from smoke_local_e1 import PROFILE
 
-PHASES = ("extraction", "retrieval", "arms", "judge", "all")
+PHASES = ("control", "extraction", "retrieval", "arms", "judge", "all")
 EXTRACTION_DEFAULTS = {"max_completion_tokens": 16384, "input_chunk_tokens": 4000, "split_on_truncation": True,
                        "max_facts_per_chunk": 20, "completion_tokens_floor": 0}
 DEFAULT_MAX_TRANSCRIPT_TOKENS = 20000
@@ -84,7 +84,8 @@ def build_parser():
                      help="paid_fake_engine instead of the sandboxed binary (no process; exercises proxy/journal only)")
     run = sub.add_parser("run", help="paid phases (mode=paid only)")
     run.add_argument("--campaign-dir", required=True)
-    run.add_argument("--phase", choices=PHASES, default="all")
+    run.add_argument("--phase", choices=PHASES, default="all",
+                     help="control = only the control call K (then check the usage dashboard)")
     run.add_argument("--acknowledge-uncertain", action="append", default=[], metavar="RID")
     rep = sub.add_parser("report", help="write reports/report-<n>.json")
     rep.add_argument("--campaign-dir", required=True)
