@@ -205,16 +205,21 @@ impl Scheduler {
         let mut shutdown_rx = self.shutdown_rx.lock().await;
         info!("🚀 Scheduler started");
 
+        // A disabled dream worker never polls: record it so re-enabling later
+        // re-anchors the schedule instead of running a catch-up pass. Runs
+        // first and skips while a pass is in flight (a hosted trigger can
+        // start one before this task is polled), so only a pass interrupted
+        // by a previous process is closed as failed.
+        if !self.dream_running.load(Ordering::SeqCst) {
+            if let Err(e) =
+                dream_schedule::record_worker_state(&self.storage, self.config.dream.enabled)
+            {
+                error!("Dream schedule: cannot record worker state: {e:#}");
+            }
+        }
         // Recover orphaned chunks first
         if let Err(e) = self.recover_orphaned().await {
             error!("Failed to recover orphaned chunks: {}", e);
-        }
-        // A disabled dream worker never polls: record it so re-enabling later
-        // re-anchors the schedule instead of running a catch-up pass.
-        if let Err(e) =
-            dream_schedule::record_worker_state(&self.storage, self.config.dream.enabled)
-        {
-            error!("Dream schedule: cannot record worker state: {e:#}");
         }
 
         let consolidation_interval = self.config.worker.consolidation.interval_secs;

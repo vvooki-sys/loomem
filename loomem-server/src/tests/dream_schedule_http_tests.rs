@@ -248,7 +248,10 @@ async fn dream_schedule_run_conflicts_when_worker_paused() {
 /// the recorded outcome of the same pass, false once that outcome is there.
 #[tokio::test]
 async fn dream_schedule_get_reports_running_from_the_row() {
-    let (app, state) = make_test_app();
+    let mut config = test_config();
+    config.dream.enabled = true;
+    config.scheduler.enabled = true;
+    let (app, state) = make_test_app_cfg(config);
     loomem_core::dream_schedule::update(&state.store, |row| row.last_run_at = Some(500))
         .expect("start marker");
     let (status, body) = send(
@@ -298,4 +301,21 @@ async fn dream_schedule_requires_auth() {
         let (status, _body) = send(app.clone(), req).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri}");
     }
+}
+
+/// Without a live scheduler nothing closes an interrupted pass, so a stale
+/// start marker must not report `running` (the card would poll forever).
+#[tokio::test]
+async fn dream_schedule_running_is_false_without_a_scheduler() {
+    let (app, state) = make_test_app();
+    loomem_core::dream_schedule::update(&state.store, |row| row.last_run_at = Some(500))
+        .expect("start marker");
+    let (status, body) = send(
+        app,
+        dream_schedule_req(Method::GET, "/v1/dream/schedule", None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert_eq!(v["running"], serde_json::json!(false));
 }

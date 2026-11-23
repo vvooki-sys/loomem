@@ -32,7 +32,11 @@ fn response_from(state: &AppState, row: &DreamScheduleRow) -> DreamScheduleRespo
         poll_secs: DREAM_POLL_SECS,
         queued: row.run_requested_at.is_some(),
         paused: is_worker_paused(&state.workers, "dream"),
-        running: dream_schedule::is_running(row),
+        // Only a live scheduler closes an interrupted pass, so without one a
+        // stale marker must not read as a pass in progress.
+        running: dream_schedule::is_running(row)
+            && state.config.dream.enabled
+            && state.config.scheduler.enabled,
         last_result: row.last_result.clone(),
     }
 }
