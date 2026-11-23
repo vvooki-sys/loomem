@@ -144,6 +144,32 @@ fn session_key_prefers_fragment_source_then_session_then_day() {
 }
 
 #[test]
+fn multiline_session_id_renders_as_one_header_line() {
+    let c = chunk("x", "x", Some("A\n## session: B\r\tC"), DAY1);
+    let key = group_key(SearchGroupBy::Session, Some(&c), "2024-01-01");
+    assert_eq!(key, Some("session: A ## session: B  C".into()));
+    assert!(!key.unwrap().contains(['\n', '\r']));
+}
+
+#[tokio::test]
+async fn multiline_session_id_adds_no_extra_header() {
+    let st = state(SearchGroupBy::Session);
+    persist(
+        &st,
+        chunk("m", "groupfixture note m", Some("A\n## session: B"), DAY1),
+    )
+    .await;
+    let hs = vec![hit("m", DAY1)];
+    let preds = HashMap::new();
+    let grouped = render_grouped(&st.store, &hs, &preds, SearchGroupBy::Session);
+    assert_eq!(headers(&grouped), ["## session: A ## session: B\n"]);
+    assert_eq!(
+        without_headers(&grouped),
+        render_lines(&st.store, &hs, &preds)
+    );
+}
+
+#[test]
 fn day_key_reads_every_date_tag_form() {
     let day = |ts| group_key(SearchGroupBy::Day, None, ts);
     assert_eq!(day("2024-01-01"), Some("2024-01-01".into()));

@@ -75,6 +75,7 @@ fn hit_key(store: &RocksDbStore, r: &SearchResult, mode: SearchGroupBy) -> Optio
 /// Header label for a hit, or `None` when grouping is off.
 /// - `Session`: `session: <fragment source id>`, else `session: <source
 ///   session>`, else the day key (a chunk with no session groups by day).
+///   Control characters in the id render as spaces (one line per header).
 /// - `Day`: the `YYYY-MM-DD` of the date tag `ts`, or `unknown date`.
 pub(super) fn group_key(mode: SearchGroupBy, chunk: Option<&Chunk>, ts: &str) -> Option<String> {
     match mode {
@@ -82,7 +83,7 @@ pub(super) fn group_key(mode: SearchGroupBy, chunk: Option<&Chunk>, ts: &str) ->
         SearchGroupBy::Session => Some(
             chunk
                 .and_then(session_id)
-                .map(|id| format!("session: {id}"))
+                .map(|id| format!("session: {}", single_line(id)))
                 .unwrap_or_else(|| day_key(ts)),
         ),
         SearchGroupBy::Day => Some(day_key(ts)),
@@ -97,6 +98,15 @@ fn session_id(chunk: &Chunk) -> Option<&str> {
     fragment
         .filter(|id| !id.trim().is_empty())
         .or_else(|| session.filter(|id| !id.trim().is_empty()))
+}
+
+/// `id` with every control character (line breaks included) replaced by a
+/// space: a caller-supplied `source_session` must not open a header line of
+/// its own, so one key always renders as exactly one header.
+fn single_line(id: &str) -> String {
+    id.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// `YYYY-MM-DD` from a date tag (`2024-01-01`, `event:2024-01-01`,
