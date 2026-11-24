@@ -9,6 +9,10 @@ body, missing usage) is recorded ``uncertain``, keeps its full reservation and
 stops the run; the next call refuses until the ID is explicitly acknowledged.
 One HTTP 400 is not a rejection: OpenAI's output-limit error (``is_output_limit_400``)
 settles as outcome ``length`` at 0 USD, exactly like ``finish_reason=length``.
+A settled ``rejected_4xx`` replays as a stop unless the owner names its request id
+in ``retry_rejected`` (``run --retry-rejected``): the same frozen binding is then sent
+again as ``attempt + 1`` (a new request id and reservation). Once that later attempt
+is in the journal it is followed on every resume, with or without the flag.
 """
 from dataclasses import dataclass
 from decimal import Decimal
@@ -304,11 +308,13 @@ def _admit(campaign, transport, letter, stage):
 
 
 def paid_completion(campaign, journal, sheet, *, letter, stage, binding, messages, response_format,
-                    transport, bound, acknowledged=frozenset(), clock=time.time, precount=None):
+                    transport, bound, acknowledged=frozenset(), clock=time.time, precount=None,
+                    retry_rejected=frozenset()):
     """``precount(wire) -> int`` (optional): the provider's exact input-token count
     (``POST /v1/responses/input_tokens``), consulted after the wire checks and
     before any reservation; a count above R_i stops without spending or reserving.
-    A replayed request is never counted again."""
+    A replayed request is never counted again. ``retry_rejected``: request ids of settled
+    ``rejected_4xx`` requests the owner allows to be sent again (see ``current_attempt``)."""
     state = journal.state
     blocking = state.blocking(acknowledged)
     if blocking:
@@ -322,7 +328,7 @@ def paid_completion(campaign, journal, sheet, *, letter, stage, binding, message
     check_wire(wire, bound, sheet, campaign.policy)
     body = wire_bytes(wire)
     wire_sha = sha256_hex(body)
-    rid = request_id(campaign.campaign_id, binding, wire_sha)
+    binding, rid = current_attempt(campaign.campaign_id, state, binding, wire_sha, retry_rejected)
     max_usd = sheet.max_usd(bound, campaign.policy)
     replay = journal.replay(rid)
     if replay is not None:
@@ -355,6 +361,22 @@ def paid_completion(campaign, journal, sheet, *, letter, stage, binding, message
                 "model_alias": profile["model"], "bound": bound, "started": started,
                 "provider_rid": headers.get("x-request-id") if isinstance(headers, dict) else None}
     return _settle_exchange(campaign, journal, sheet, exchange, clock)
+
+
+def current_attempt(campaign_id, state, binding, wire_sha, retry_rejected=frozenset()):
+    """(binding, request id) to use for this frozen wire. While the request id is settled
+    ``rejected_4xx`` and either the owner named it in ``retry_rejected`` or the same binding with
+    ``attempt + 1`` and the same wire is already in the journal, move on to that next attempt:
+    a new request on the first run, a plain replay on every later one. Anything else is unchanged
+    (the rejected record replays as a stop)."""
+    rid = request_id(campaign_id, binding, wire_sha)
+    while state.settled.get(rid, {}).get("outcome") == "rejected_4xx" and type(binding.get("attempt")) is int:
+        following = {**binding, "attempt": binding["attempt"] + 1}
+        following_rid = request_id(campaign_id, following, wire_sha)
+        if rid not in retry_rejected and following_rid not in state.intents:
+            break
+        binding, rid = following, following_rid
+    return binding, rid
 
 
 def _settle_exchange(campaign, journal, sheet, ex, clock):

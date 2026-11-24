@@ -243,6 +243,64 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual((money["K"]["calls"], money["K"]["rejected_4xx"], money["K"]["actual_usd"]), (1, 1, "0"))
         self.assertEqual(sum(row["calls"] for letter, row in money.items() if letter != "K"), 0)
 
+    def rejected_ids(self):
+        state = CallJournal(self.campaign_dir).state
+        return sorted(r for r, s in state.settled.items() if s["outcome"] == "rejected_4xx")
+
+    def test_rejected_judge_is_sent_again_only_with_retry_rejected(self):
+        code, out = self.dry_run("--scenario", "judge=rejected_4xx,ok")
+        self.assertEqual(code, 3, out)
+        self.assertIn("Rejected4xx", self.summary()["stop"])
+        [rid] = self.rejected_ids()
+        ok_rid = next(r for r, s in CallJournal(self.campaign_dir).state.settled.items() if s["outcome"] == "ok")
+        refusals = {("--retry-rejected", "not-a-known-rid"): "unknown request ids",
+                    ("--retry-rejected", ok_rid): "not settled as rejected_4xx"}
+        for flags, message in refusals.items():
+            with self.subTest(flags=flags):
+                code, out = self.dry_run("--resume", *flags)
+                self.assertEqual(code, 2, out)
+                self.assertIn(message, out)
+        code, out = self.dry_run("--retry-rejected", rid)  # never on a new campaign
+        self.assertEqual(code, 2, out)
+        self.assertIn("needs --resume", out)
+        code, out = self.dry_run("--resume")  # without the flag the replayed rejection still stops
+        self.assertEqual(code, 3, out)
+        self.assertEqual(self.summary()["observed"]["requests_by_role_this_invocation"], {})
+        code, out = self.dry_run("--resume", "--retry-rejected", rid)
+        self.assertEqual(code, 0, out)
+        summary = self.summary()
+        self.assertEqual((summary["stop"], summary["retry_rejected"]), (None, [rid]))
+        self.assertEqual(summary["observed"]["requests_by_role_this_invocation"], {"judge": 5})
+        judge = summary["report"]["money"]["by_stage"]["judge"]
+        self.assertEqual((judge["calls"], judge["rejected_4xx"], judge["retried"], judge["max_attempt"], judge["settled"]),
+                         (6, 1, 1, 2, 6))
+        self.assertEqual(sum(row["judged"] for row in summary["report"]["per_arm"].values()), 5)
+        self.assertEqual(sum(row["pending"] + row["ok_unjudged"] for row in summary["report"]["per_arm"].values()), 0)
+        self.assertEqual(summary["report"]["money"]["by_stage"]["diagnostic"]["max_attempt"], 1)
+        code, out = self.dry_run("--resume")  # later resume without the flag: attempt 2 replays, nothing is sent
+        self.assertEqual(code, 0, out)
+        resumed = self.summary()
+        self.assertEqual(resumed["observed"]["requests_by_role_this_invocation"], {})
+        self.assertEqual(resumed["observed"]["input_token_probes_this_invocation"], 0)
+        self.assertEqual(resumed["report"]["money"]["by_stage"]["judge"]["retried"], 1)
+
+    def test_retry_rejected_covers_control_extraction_and_arm_stages(self):
+        for role, stage in (("control", "control"), ("extraction", "extraction"), ("diagnostic", "diagnostic")):
+            with self.subTest(role=role):
+                self.campaign_dir = self.root / f"dry-{role}"
+                code, out = self.dry_run("--scenario", f"{role}=rejected_4xx,ok")
+                self.assertEqual(code, 3, out)
+                [rid] = self.rejected_ids()
+                code, out = self.dry_run("--resume", "--retry-rejected", rid)
+                self.assertEqual(code, 0, out)
+                summary = self.summary()
+                row = summary["report"]["money"]["by_stage"][stage]
+                self.assertEqual((row["rejected_4xx"], row["retried"], row["max_attempt"]), (1, 1, 2))
+                self.assertEqual(len(list((self.campaign_dir / "verdicts").glob("*.json"))), 5)
+                code, out = self.dry_run("--resume")
+                self.assertEqual(code, 0, out)
+                self.assertEqual(self.summary()["observed"]["requests_by_role_this_invocation"], {})
+
 
 @unittest.skipUnless(SANDBOX_PRESENT, "sandbox-exec absent: paid-mode preflight cannot pass here")
 class PinnedFingerprintTests(unittest.TestCase):
@@ -370,6 +428,14 @@ class AcknowledgeUncertainTests(unittest.TestCase):
                           "--acknowledge-uncertain", "not-a-known-rid"], env=self.env)
         self.assertEqual(code, 2)
         self.assertIn("unknown request ids", out)
+        for rid, message in (("not-a-known-rid", "unknown request ids"),
+                             (self.rid, "not settled as rejected_4xx")):  # an unsettled request is not a rejection
+            code, out = main(["run", "--campaign-dir", str(self.campaign_dir), "--phase", "arms",
+                              "--acknowledge-uncertain", self.rid, "--retry-rejected", rid], env=self.env)
+            self.assertEqual(code, 2, out)
+            self.assertIn(message, out)
+            self.assertNotIn("PASS", out, "refused before preflight")
+        self.assertEqual(self.fake.log, [])
         code, out = main(["run", "--campaign-dir", str(self.campaign_dir), "--phase", "arms",
                           "--acknowledge-uncertain", self.rid], env=self.env)
         self.assertEqual(code, 0, out)

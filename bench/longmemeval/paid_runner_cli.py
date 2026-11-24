@@ -82,11 +82,15 @@ def build_parser():
     dry.add_argument("--no-engine-probe", action="store_true")
     dry.add_argument("--fake-engine", action="store_true",
                      help="paid_fake_engine instead of the sandboxed binary (no process; exercises proxy/journal only)")
+    dry.add_argument("--retry-rejected", action="append", default=[], metavar="RID",
+                     help="with --resume: send this rejected_4xx request again as the next attempt")
     run = sub.add_parser("run", help="paid phases (mode=paid only)")
     run.add_argument("--campaign-dir", required=True)
     run.add_argument("--phase", choices=PHASES, default="all",
                      help="control = only the control call K (then check the usage dashboard)")
     run.add_argument("--acknowledge-uncertain", action="append", default=[], metavar="RID")
+    run.add_argument("--retry-rejected", action="append", default=[], metavar="RID",
+                     help="send this settled rejected_4xx request again as the next attempt (new reservation)")
     rep = sub.add_parser("report", help="write reports/report-<n>.json")
     rep.add_argument("--campaign-dir", required=True)
     return parser

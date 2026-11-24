@@ -39,7 +39,8 @@ class FakeOpenAITests(unittest.TestCase):
     def test_every_scenario_is_covered(self):
         self.assertEqual(set(SCENARIOS), {"ok", "empty_facts", "length", "http500", "timeout", "model_drift",
                                           "missing_usage", "malformed_json", "bad_request_400", "usage_over_bound",
-                                          "redirect", "capped", "capped_failed_attempt", "length_http400"})
+                                          "redirect", "capped", "capped_failed_attempt", "length_http400",
+                                          "rejected_4xx"})
 
     def test_length_http400_only_for_strict_json_schema(self):
         schema = {"type": "json_schema", "json_schema": {"name": "x", "strict": True, "schema": {"type": "object"}}}
@@ -84,6 +85,11 @@ class FakeOpenAITests(unittest.TestCase):
                 status, _, body = self.run_scenario(scenario)
                 self.assertEqual(status, code)
                 self.assertIn("message", json.loads(body)["error"])
+
+    def test_rejected_4xx_is_openai_insufficient_quota_429(self):
+        status, _, body = self.run_scenario("rejected_4xx")
+        error = json.loads(body)["error"]
+        self.assertEqual((status, error["type"], error["code"]), (429, "insufficient_quota", "insufficient_quota"))
 
     def test_timeout_raises_transport_error(self):
         with self.assertRaises(TransportError):

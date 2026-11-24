@@ -61,7 +61,7 @@ def has_settled_control(journal_state):
 
 
 def control_call(campaign, journal, sheet, transport, *, precount=None, acknowledged=frozenset(),
-                 clock=time.time):
+                 clock=time.time, retry_rejected=frozenset()):
     if not campaign.has_control_profile():
         raise CampaignError(f"campaign has no {CONTROL_STAGE!r} profile: the pilot control call is refused")
     bound, _ = control_reservation(campaign, sheet)
@@ -71,4 +71,5 @@ def control_call(campaign, journal, sheet, transport, *, precount=None, acknowle
     return paid_completion(campaign, journal, sheet, letter=LETTER, stage=CONTROL_STAGE,
                            binding=control_binding(campaign), messages=control_messages(),
                            response_format=None, transport=transport, bound=bound,
-                           acknowledged=acknowledged, clock=clock, precount=precount)
+                           acknowledged=acknowledged, clock=clock, precount=precount,
+                           retry_rejected=retry_rejected)

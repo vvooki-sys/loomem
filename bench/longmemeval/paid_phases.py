@@ -48,6 +48,7 @@ class RunContext:
     clock: object = time.time
     readiness_deadline_s: float = 60.0
     after_session: object = None    # optional callable(proxy) after each session (dry-run role registration)
+    retry_rejected: frozenset = frozenset()  # rejected_4xx request ids the owner allows to send again
 
     @property
     def directory(self):
@@ -240,7 +241,7 @@ def _deps(ctx):
     from paid_arms import ArmDeps
     return ArmDeps(ctx.campaign, ctx.journal, ctx.sheet, ctx.prompts, ctx.transport,
                    ctx.holdout.sources_bytes_max(), ctx.campaign.spec["holdout"]["manifest_sha256"],
-                   frozenset(ctx.acknowledged), ctx.precount, ctx.clock)
+                   frozenset(ctx.acknowledged), ctx.precount, ctx.clock, frozenset(ctx.retry_rejected))
 
 
 def _arm_reserved_before(ctx, qid, arm):

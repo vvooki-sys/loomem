@@ -51,6 +51,7 @@ class ArmDeps:
     acknowledged: frozenset = frozenset()
     precount: object = None
     clock: object = time.time
+    retry_rejected: frozenset = frozenset()
 
 
 @dataclass
@@ -95,7 +96,8 @@ def call_stage(deps, ctx, arm, stage, parts, attempt=1):
                            binding=stage_binding(deps, ctx, arm, stage, prompts.stage(stage).sha256, attempt),
                            messages=prompts.messages(stage, parts), response_format=prompts.response_format(stage),
                            transport=deps.transport, bound=deps.sheet.stage_profile(stage, deps.sources_bytes_max, True),
-                           acknowledged=deps.acknowledged, clock=deps.clock, precount=deps.precount)
+                           acknowledged=deps.acknowledged, clock=deps.clock, precount=deps.precount,
+                           retry_rejected=deps.retry_rejected)
 
 
 def _stage_record(completion):

@@ -144,7 +144,8 @@ def judge_arm(deps, holdout, ctx, arm, outcome):
         binding=stage_binding(deps, ctx, arm, "judge", prompts.stage("judge").sha256),
         messages=prompts.messages("judge", parts), response_format=prompts.response_format("judge"),
         transport=deps.transport, bound=deps.sheet.stage_profile("judge", deps.sources_bytes_max, True),
-        acknowledged=deps.acknowledged, clock=deps.clock, precount=deps.precount)
+        acknowledged=deps.acknowledged, clock=deps.clock, precount=deps.precount,
+        retry_rejected=deps.retry_rejected)
     record["request_id"], record["usage"] = completion.request_id, completion.usage
     if completion.outcome == "length":
         verdict = _invalid("judge output truncated (finish_reason=length or output-limit HTTP 400)")

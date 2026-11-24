@@ -10,7 +10,7 @@ import unittest
 from budget import BudgetExceeded
 from paid_call_journal import CallJournal, JournalError, ModelDrift
 from paid_campaign import CampaignError, SublimitExceeded, open_campaign
-from paid_fake_openai import OUTPUT_LIMIT_400, FakeOpenAI
+from paid_fake_openai import INSUFFICIENT_QUOTA_429, OUTPUT_LIMIT_400, FakeOpenAI
 from paid_openai_wire import (BoundBreach, Rejected4xx, RunStopped, Transport, TransportError, WireError,
                               actual_cost, build_wire, check_wire, is_output_limit_400, paid_completion,
                               parse_completion)
@@ -31,6 +31,10 @@ OUTPUT_LIMIT_BODY = json.dumps(OUTPUT_LIMIT_400, indent=2).encode("utf-8")
 
 def output_limit(body=OUTPUT_LIMIT_BODY, status=400):
     return (status, {"x-request-id": "prov-400"}, body)
+
+
+def quota_429():
+    return (429, {"x-request-id": "prov-429"}, json.dumps(INSUFFICIENT_QUOTA_429).encode("utf-8"))
 
 
 def without_usage():
@@ -307,6 +311,62 @@ class PaidCompletionTests(unittest.TestCase):
         with self.assertRaisesRegex(RunStopped, "rejected_4xx"):
             self.call(transport)
         self.assertEqual(len(transport.calls), 1)
+
+    def restart(self):
+        self.open(open_campaign(self.campaign.directory, self.sheet))
+
+    def test_retry_rejected_sends_the_next_attempt_and_a_restart_replays_it(self):
+        transport = FakeTransport([quota_429(), ok()])
+        with self.assertRaises(Rejected4xx):
+            self.call(transport)
+        [rejected] = self.journal.state.settled
+        self.restart()
+        with self.assertRaisesRegex(RunStopped, "rejected_4xx"):  # without the flag: still a stop
+            self.call(transport)
+        done = self.call(transport, retry_rejected=frozenset({rejected}))
+        self.assertNotEqual(done.request_id, rejected)
+        self.assertEqual((done.outcome, done.replayed, len(transport.calls)), ("ok", False, 2))
+        intent = self.journal.state.intents[done.request_id]
+        self.assertEqual(intent["binding"], {**binding(), "attempt": 2})
+        self.assertEqual(intent["wire_sha256"], self.journal.state.intents[rejected]["wire_sha256"])
+        self.assertEqual(self.settled(rejected)["outcome"], "rejected_4xx")  # the old record stays
+        totals = self.campaign.ledger.totals()
+        self.assertEqual((totals["request_count"], totals["pending_count"]), (2, 0))
+        self.restart()  # a later run without the flag follows attempt 2 and replays it
+        again = self.call(transport)
+        self.assertEqual((again.request_id, again.replayed, again.outcome), (done.request_id, True, "ok"))
+        self.assertEqual((len(transport.calls), self.campaign.ledger.totals()["request_count"]), (2, 2))
+
+    def test_retry_rejected_chains_attempts(self):
+        transport = FakeTransport([quota_429(), quota_429(), ok()])
+        with self.assertRaises(Rejected4xx):
+            self.call(transport)
+        [first] = self.journal.state.settled
+        with self.assertRaises(Rejected4xx):
+            self.call(transport, retry_rejected=frozenset({first}))
+        [second] = set(self.journal.state.settled) - {first}
+        self.assertEqual(self.journal.state.intents[second]["binding"]["attempt"], 2)
+        self.restart()
+        for retry in (frozenset(), frozenset({first})):  # attempt 2 is followed, and it replays as a stop
+            with self.subTest(retry=sorted(retry)), self.assertRaisesRegex(RunStopped, second):
+                self.call(transport, retry_rejected=retry)
+        done = self.call(transport, retry_rejected=frozenset({second}))
+        self.assertEqual((self.journal.state.intents[done.request_id]["binding"]["attempt"], done.outcome), (3, "ok"))
+        self.restart()
+        self.assertEqual(self.call(transport).request_id, done.request_id)
+        self.assertEqual(len(transport.calls), 3)
+
+    def test_retry_rejected_leaves_other_requests_alone(self):
+        transport = FakeTransport([quota_429(), ok(), ok()])
+        with self.assertRaises(Rejected4xx):
+            self.call(transport)
+        [rejected] = self.journal.state.settled
+        other = self.call(transport, binding=binding(qid="q2"), retry_rejected=frozenset({rejected}))
+        self.assertEqual(self.journal.state.intents[other.request_id]["binding"]["attempt"], 1)
+        replay = self.call(transport, binding=binding(qid="q2"), retry_rejected=frozenset({rejected, other.request_id}))
+        self.assertEqual((replay.request_id, replay.replayed), (other.request_id, True))
+        self.assertEqual(len(transport.calls), 2)
+        self.assertEqual(len(transport.replies), 1, "only the named rejected request may be sent again")
 
     def test_bound_breaches(self):
         with self.assertRaises(BoundBreach):
