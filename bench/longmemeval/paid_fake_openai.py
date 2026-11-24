@@ -6,7 +6,8 @@ system-message SHA-256 (``role_by_system_sha256``), else from the wire model
 alias when it names exactly one role, else ``default``.
 
 Scenarios: ok | empty_facts | length | http500 | timeout | model_drift |
-missing_usage | malformed_json | bad_request_400 | usage_over_bound.
+missing_usage | malformed_json | bad_request_400 | usage_over_bound | redirect |
+capped | capped_failed_attempt.
 ``timeout`` closes the connection without any response, which is what a client
 sees as an unknown outcome; no real sleeping happens anywhere.
 Usage is deterministic from byte counts (tokens <= bytes, as P1 assumes).
@@ -18,7 +19,9 @@ import socket
 import threading
 
 SCENARIOS = ("ok", "empty_facts", "length", "http500", "timeout", "model_drift",
-             "missing_usage", "malformed_json", "bad_request_400", "usage_over_bound", "redirect")
+             "missing_usage", "malformed_json", "bad_request_400", "usage_over_bound", "redirect",
+             "capped", "capped_failed_attempt")
+CAPPED_FACTS = 22  # above the frozen max_facts_per_chunk = 20: the engine keeps 20 and discards 2
 PATH = "/v1/chat/completions"
 # OpenAI Responses API token counter (developers.openai.com/api/docs/api-reference/
 # responses/input-tokens, read 2026-11-22): POST {model, input} ->
@@ -42,12 +45,17 @@ def _first_ids(user, key, limit):
 
 
 def content_for(role, user, scenario):
-    """Schema-shaped text per stage; `empty_facts` yields an extraction with zero facts."""
+    """Schema-shaped text per stage; `empty_facts` yields an extraction with zero facts, `capped` one with
+    CAPPED_FACTS distinct facts, `capped_failed_attempt` the same plus a fake-engine-only outcome override."""
     if role == "extraction":
-        facts = [] if scenario == "empty_facts" else [
-            {"content": "A synthetic fact.", "fact_type": "fact", "subject": None, "event_date": None,
-             "event_date_context": None, "confidence": 0.9, "topic": None, "attributed_to": None}]
-        return json.dumps({"facts": facts})
+        fact = {"content": "A synthetic fact.", "fact_type": "fact", "subject": None, "event_date": None,
+                "event_date_context": None, "confidence": 0.9, "topic": None, "attributed_to": None}
+        if scenario in ("capped", "capped_failed_attempt"):
+            body = {"facts": [{**fact, "content": f"Synthetic fact {i}."} for i in range(CAPPED_FACTS)]}
+            if scenario == "capped_failed_attempt":
+                body["_fake_outcome"] = {"failed_attempts": 1}
+            return json.dumps(body)
+        return json.dumps({"facts": [] if scenario == "empty_facts" else [fact]})
     if role == "diagnostic":
         return json.dumps({"answer": "Synthetic answer.", "coverage": "complete", "missing_parts": [],
                            "conflict_fact_ids": [], "supporting_fact_ids": _first_ids(user, "facts", 1)})

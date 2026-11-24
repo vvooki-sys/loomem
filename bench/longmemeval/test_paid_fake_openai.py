@@ -39,7 +39,15 @@ class FakeOpenAITests(unittest.TestCase):
     def test_every_scenario_is_covered(self):
         self.assertEqual(set(SCENARIOS), {"ok", "empty_facts", "length", "http500", "timeout", "model_drift",
                                           "missing_usage", "malformed_json", "bad_request_400", "usage_over_bound",
-                                          "redirect"})
+                                          "redirect", "capped", "capped_failed_attempt"})
+
+    def test_capped_extraction_answers_distinct_facts(self):
+        capped = json.loads(content_for("extraction", "", "capped"))
+        self.assertEqual(len({f["content"] for f in capped["facts"]}), 22)
+        self.assertNotIn("_fake_outcome", capped)
+        failed = json.loads(content_for("extraction", "", "capped_failed_attempt"))
+        self.assertEqual((failed["facts"], failed["_fake_outcome"]), (capped["facts"], {"failed_attempts": 1}))
+        self.assertEqual(json.loads(content_for("extraction", "", "ok"))["facts"][0]["content"], "A synthetic fact.")
 
     def test_ok(self):
         status, headers, body = self.run_scenario("ok")

@@ -10,7 +10,9 @@ settled control request exists) and executes the requested phases through
 request goes through ``paid_completion`` with the exact pre-send input count as
 ``precount``. ``dry-run`` lives in ``paid_dry_run`` and talks only to a loopback
 fake. Exit codes: 0 ok, 2 refused/FAIL, 3 stopped mid-run (journal and report
-say where).
+say where). An extraction the product capped (facts above ``max_facts_per_chunk``
+dropped, engine status ``partial``) is the state ``extraction_capped``, not a
+stop: the session stays in the denominator and the report counts it.
 """
 from dataclasses import dataclass
 import os

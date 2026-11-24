@@ -3,7 +3,8 @@
 Pure aggregation over the campaign directory and the journal state; nothing
 here calls a provider or touches money. Every state is counted separately
 (``correct``, ``incorrect``, ``invalid_judge``, ``technical_error``, ``length``,
-``not_started_budget``, ``zero_facts``, ``pending``) against a frozen
+``not_started_budget``, ``zero_facts``, ``pending``; ``extraction_capped`` sessions are
+counted under ``extraction`` and ``capped_questions`` and stay in every arm) against a frozen
 denominator: every holdout question for F and S, the always-originals list
 for A. Missing directories are tolerated (an interrupted campaign still
 reports). Money is reported as exact Decimal strings: the reserved maximum
@@ -21,13 +22,14 @@ ARM_STATES = ("correct", "incorrect", "invalid_judge", "technical_error", "lengt
               "not_started_budget", "ok_unjudged", "pending")
 
 
-def _read_dir(directory, name):
+def _read_dir(directory, name, skip=()):
+    """Every ``<name>/*.json`` except dot files and names ending in one of ``skip``."""
     folder = Path(directory) / name
     if not folder.is_dir():
         return []
     out = []
     for path in sorted(folder.glob("*.json")):
-        if path.name.startswith("."):
+        if path.name.startswith(".") or path.name.endswith(tuple(skip)):
             continue
         try:
             out.append(json.loads(path.read_text(encoding="utf-8")))
@@ -134,6 +136,8 @@ def _extraction(files):
     configs = sorted({f.get("effective_config_sha256") for f in files if f.get("effective_config_sha256")})
     return {"histories": len(files), "sessions": len(sessions),
             "zero_facts_sessions": sum(bool(s.get("zero_facts")) for s in sessions),
+            "capped_sessions": sum(bool(s.get("capped")) for s in sessions),
+            "discarded_facts_total": sum(int(s.get("discarded_facts") or 0) for s in sessions),
             "requests_total": sum(requests),
             "requests_per_session": {"min": min(requests) if requests else None,
                                      "median": statistics.median(requests) if requests else None,
@@ -142,6 +146,16 @@ def _extraction(files):
             "fingerprints": fingerprints[0] if fingerprints else None,
             "fingerprints_consistent": all(fp == fingerprints[0] for fp in fingerprints),
             "effective_config_sha256": configs}
+
+
+def _capped_questions(files, contexts, holdout):
+    """Questions whose history has at least one ``extraction_capped`` session (from the holdout when given)."""
+    capped = {f.get("history_id") for f in files if any(s.get("capped") for s in (f.get("sessions") or []))}
+    if holdout is not None:
+        histories = {q: row.get("history_id") for q, row in holdout.questions.items()}
+    else:
+        histories = {q: c.get("history_id") for q, c in contexts.items()}
+    return sorted(q for q, hid in histories.items() if hid in capped)
 
 
 def _input_tokens(probes):
@@ -162,14 +176,16 @@ def build_report(campaign, journal_state, directory, holdout=None, clock=None):
     if not pins:
         pins = {p.get("alias"): p.get("model") for p in _read_dir(directory, "pins") if "alias" in p}
     totals = campaign.ledger.totals()
+    extraction = _read_dir(directory, "extraction")
     report = {"schema": 1, "campaign_id": campaign.campaign_id, "mode": campaign.mode,
               "bound_policy": campaign.policy, "limit_usd": str(campaign.limit),
               "sublimits_usd": {k: str(v) for k, v in campaign.sublimits.items()},
               "ledger": {k: (str(v) if isinstance(v, Decimal) else v) for k, v in totals.items()},
               "per_arm": per_arm, "states": states, "contexts": len(contexts),
               "zero_facts_questions": sorted(q for q, c in contexts.items() if c.get("zero_facts")),
-              "money": _money_rows(journal_state), "extraction": _extraction(_read_dir(directory, "extraction")),
-              "zero_facts_events": len(_read_dir(directory, "events")),
+              "capped_questions": _capped_questions(extraction, contexts, holdout),
+              "money": _money_rows(journal_state), "extraction": _extraction(extraction),
+              "zero_facts_events": len(_read_dir(directory, "events", skip=(".extraction_capped.json",))),
               "input_tokens": _input_tokens(_read_dir(directory, "counts")), "pins": pins}
     if clock is not None:
         report["generated_at"] = clock()

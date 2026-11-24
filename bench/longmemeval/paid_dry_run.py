@@ -99,6 +99,7 @@ def _observed(campaign, journal, holdout, fake, counter, prompts, sheet):
             "system_fingerprints": {"extraction": _frozen(directory),
                                     **{s: _sha(prompts.stage(s).system) for s in STAGES}, "control": _sha(CONTROL_SYSTEM)},
             "zero_facts_events": [e for e in events if e.endswith(".zero_facts.json")],
+            "extraction_capped_events": [e for e in events if e.endswith(".extraction_capped.json")],
             "context_errors": [e for e in events if e.endswith(".context_error.json")],
             "pins": {alias: pin["model"] for alias, pin in sorted(journal.state.pins.items())}}
 

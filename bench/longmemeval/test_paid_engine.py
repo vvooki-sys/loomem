@@ -313,6 +313,26 @@ class EngineOperationTests(unittest.TestCase):
         self.assertIsNone(self.engine.ingest_session(undated).conversation_date)
         self.assertNotIn("conversation_date", mcp.calls[1][0]["params"]["arguments"])
 
+    def test_ingest_session_fact_limit_cap_is_a_state_not_an_error(self):
+        capped = mcp_result()
+        extraction = capped["structuredContent"]["extraction_receipt"]
+        extraction["status"] = "partial"
+        extraction["outcome"].update(fact_limit_reached=True, discarded_facts=2)
+        self.ingest(capped)
+        receipt = self.engine.ingest_session(self.session)
+        self.assertEqual((receipt.capped, receipt.discarded_facts, receipt.zero_facts, receipt.fact_ids),
+                         (True, 2, False, [FACT]))
+        self.ingest(mcp_result())
+        self.engine.session_id, self.engine.sources = None, {}
+        receipt = self.engine.ingest_session(self.session)
+        self.assertEqual((receipt.capped, receipt.discarded_facts), (False, 0))
+        failed = copy.deepcopy(capped)
+        failed["structuredContent"]["extraction_receipt"]["outcome"]["failed_attempts"] = 1
+        self.ingest(failed)
+        self.engine.session_id, self.engine.sources = None, {}
+        with self.assertRaises(EngineError):
+            self.engine.ingest_session(self.session)
+
     def receipt(self, facts=1):
         self.ingest(mcp_result(facts=facts))
         return self.engine.ingest_session(self.session)

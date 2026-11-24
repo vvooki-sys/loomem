@@ -5,6 +5,7 @@ It is intentionally separate from the extraction-disabled E1 adapter.
 """
 import math
 from copy import deepcopy
+from dataclasses import dataclass
 from uuid import UUID
 
 from ingest_receipt import ReceiptError, _counter, _object
@@ -23,11 +24,29 @@ def _uuid(value):
         return False
 
 
+@dataclass(frozen=True)
+class ExtractionCap:
+    """``capped``: the per-chunk fact cap discarded ``discarded_facts`` otherwise eligible facts."""
+    capped: bool
+    discarded_facts: int
+
+
 def confirmed_facts(receipt, source_id):
     """Return detached fact rows from a complete process/write receipt.
 
     Caller must still prove storage/index/vector readiness before using these rows as benchmark evidence.
     """
+    return _confirmed(receipt, source_id, False)[0]
+
+
+def confirmed_facts_with_cap(receipt, source_id):
+    """``confirmed_facts`` that also accepts the engine's fact-cap ``partial``: no error code, every input
+    chunk processed, no failed attempt, ``fact_limit_reached`` with ``discarded_facts > 0`` and every other
+    check as for ``complete``. Returns ``(rows, ExtractionCap)``; any other ``partial`` still raises."""
+    return _confirmed(receipt, source_id, True)
+
+
+def _confirmed(receipt, source_id, allow_fact_limit):
     _object(receipt, ('version', 'scope', 'evidence', 'source_id', 'status',
                      'outcome', 'persistence', 'facts', 'error_code'), 'extraction_receipt')
     if type(receipt['version']) is not int or receipt['version'] != 1:
@@ -37,7 +56,8 @@ def confirmed_facts(receipt, source_id):
         raise ReceiptError('unsupported extraction evidence')
     if not _uuid(source_id) or receipt['source_id'] != source_id:
         raise ReceiptError('extraction source binding mismatch')
-    if receipt['status'] != 'complete' or receipt['error_code'] is not None:
+    capped = allow_fact_limit and receipt['status'] == 'partial' and receipt['error_code'] is None
+    if not capped and (receipt['status'] != 'complete' or receipt['error_code'] is not None):
         raise ReceiptError('extraction process is not complete')
     outcome = _object(receipt['outcome'], OUTCOME_FIELDS, 'outcome')
     for key in OUTCOME_FIELDS:
@@ -46,8 +66,10 @@ def confirmed_facts(receipt, source_id):
     if type(outcome['fact_limit_reached']) is not bool:
         raise ReceiptError('invalid cap flag')
     if (outcome['input_chunks_processed'] != outcome['input_chunks_total'] or
-            outcome['failed_attempts'] or outcome['discarded_facts']):
+            outcome['failed_attempts'] or (outcome['discarded_facts'] and not capped)):
         raise ReceiptError('incomplete input or discarded facts')
+    if capped and not (outcome['fact_limit_reached'] and outcome['discarded_facts']):
+        raise ReceiptError('partial extraction is not a fact-limit cap')
     if (outcome['input_chunks_total'] < 1 or
             outcome['calls_completed'] != outcome['input_chunks_processed'] + outcome['calls_truncated'] or
             outcome['calls_truncated'] > 2 * outcome['input_chunks_processed'] or
@@ -76,7 +98,7 @@ def confirmed_facts(receipt, source_id):
             raise ReceiptError('fact identity mismatch or duplicate')
         seen.add(fact['id'])
         _projection(fact['expected'], source_id)
-    return tuple(deepcopy(facts))
+    return tuple(deepcopy(facts)), ExtractionCap(capped, outcome['discarded_facts'])
 
 
 PROJECTION_FIELDS = (
