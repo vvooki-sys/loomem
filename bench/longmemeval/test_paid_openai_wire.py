@@ -134,10 +134,14 @@ class OutputLimitRuleTests(unittest.TestCase):
     def test_only_the_output_limit_400_matches(self):
         error = OUTPUT_LIMIT_400["error"]
         self.assertTrue(is_output_limit_400(400, error))
+        self.assertTrue(is_output_limit_400(400, json.loads(OUTPUT_LIMIT_BODY)["error"]))  # the r2 evidence body
         cases = {"429": (429, error), "401": (401, error), "500": (500, error), "no error object": (400, None),
                  "other type": (400, {**error, "type": "rate_limit_error"}),
                  "other message": (400, {**error, "message": "Invalid schema for response_format"}),
                  "only max_tokens": (400, {**error, "message": "max_tokens is too large"}),
+                 "param set": (400, {**error, "param": "max_tokens"}),
+                 "code set": (400, {**error, "code": "invalid_value"}),
+                 "parts without the prefix": (400, {**error, "message": "Invalid max_tokens; model output limit is 4096"}),
                  "message not a string": (400, {**error, "message": None})}
         for label, (status, err) in cases.items():
             with self.subTest(case=label):
@@ -282,6 +286,18 @@ class PaidCompletionTests(unittest.TestCase):
         self.assertEqual((again.request_id, again.replayed, again.outcome, again.usage, again.model, again.text),
                          (first.request_id, True, "length", None, None, ""))
         self.assertEqual((len(transport.calls), self.campaign.ledger.totals()["request_count"]), (1, 1))
+
+    def test_tampered_stored_output_limit_body_is_not_replayed(self):
+        transport = FakeTransport([output_limit()])
+        first = self.call(transport)
+        path = self.calls / f"{first.request_id}.response.json"
+        stored = json.loads(path.read_text())
+        stored["body_text"] = json.dumps({"error": {**OUTPUT_LIMIT_400["error"], "message": "rejected"}})
+        path.write_text(json.dumps(stored))
+        self.open(open_campaign(self.campaign.directory, self.sheet))
+        with self.assertRaisesRegex(RunStopped, "no longer matches"):
+            self.call(transport)
+        self.assertEqual(len(transport.calls), 1)
 
     def test_replayed_rejected_4xx_still_stops(self):
         transport = FakeTransport([(400, {}, b'{"error": {"message": "rejected", "type": "invalid_request_error"}}')])

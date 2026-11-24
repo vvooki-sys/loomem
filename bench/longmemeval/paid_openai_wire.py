@@ -30,9 +30,11 @@ FORBIDDEN_WIRE_KEYS = frozenset({"max_tokens", "temperature", "seed", "top_p", "
                                  "functions", "stream_options", "logprobs"})
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 BODY_CAP = 4 * 1024 * 1024
-# OpenAI answers HTTP 400 invalid_request_error "Could not finish the message because max_tokens or
-# model output limit was reached. ..." instead of 200 + finish_reason=length when a strict json_schema
-# response_format cannot be completed within max_completion_tokens (holdout r2, 2026-11-24).
+# OpenAI answers HTTP 400 invalid_request_error (param null, code null) "Could not finish the message
+# because max_tokens or model output limit was reached. ..." instead of 200 + finish_reason=length when a
+# strict json_schema response_format cannot be completed within max_completion_tokens (holdout r2, 2026-11-24).
+OUTPUT_LIMIT_ERROR_TYPE = "invalid_request_error"
+OUTPUT_LIMIT_MESSAGE_PREFIX = "Could not finish the message because"
 OUTPUT_LIMIT_MESSAGE_PARTS = ("max_tokens", "output limit")
 
 
@@ -60,9 +62,9 @@ class InputTokensBreach(RunStopped):
 class Completion:
     request_id: str
     text: str
-    usage: dict
-    finish_reason: str
-    model: str
+    usage: dict | None
+    finish_reason: str | None
+    model: str | None
     provider_request_id: str | None
     outcome: str            # ok | length (an output-limit HTTP 400 is length with usage/model/finish_reason None)
     actual_usd: str
@@ -253,12 +255,16 @@ def _error_object(body):
 
 def is_output_limit_400(status, error):
     """True only for OpenAI's strict-json_schema output-limit error: HTTP 400, an error object of
-    type ``invalid_request_error`` whose message contains every OUTPUT_LIMIT_MESSAGE_PARTS. It is
+    type OUTPUT_LIMIT_ERROR_TYPE with ``param`` and ``code`` null, whose message starts with
+    OUTPUT_LIMIT_MESSAGE_PREFIX and contains every OUTPUT_LIMIT_MESSAGE_PARTS. It is
     ``finish_reason=length`` in disguise (truncated JSON cannot be returned); every other 4xx is a rejection."""
-    if status != 400 or not isinstance(error, dict) or error.get("type") != "invalid_request_error":
+    if status != 400 or not isinstance(error, dict) or error.get("type") != OUTPUT_LIMIT_ERROR_TYPE:
+        return False
+    if error.get("param") is not None or error.get("code") is not None:
         return False
     message = error.get("message")
-    return isinstance(message, str) and all(part in message for part in OUTPUT_LIMIT_MESSAGE_PARTS)
+    return (isinstance(message, str) and message.startswith(OUTPUT_LIMIT_MESSAGE_PREFIX)
+            and all(part in message for part in OUTPUT_LIMIT_MESSAGE_PARTS))
 
 
 def _output_limit_completion(rid, provider_rid, replayed=False):
@@ -415,6 +421,9 @@ def _replayed(campaign, journal, rid, replay, max_usd):
     if settled["outcome"] not in ("ok", "length"):
         raise RunStopped(f"request {rid} settled with outcome {settled['outcome']!r}; cannot replay")
     if settled["outcome"] == "length" and settled.get("http_status") == 400:
+        if not is_output_limit_400(400, _error_object(response["body_text"].encode("utf-8"))):
+            raise RunStopped(f"request {rid} settled as an output-limit HTTP 400 but its stored response "
+                             "no longer matches the rule; cannot replay")
         return _output_limit_completion(rid, settled.get("provider_request_id"), replayed=True)
     parsed = parse_completion(response["body_text"].encode("utf-8"))
     return Completion(rid, parsed["text"], settled["usage"], settled["finish_reason"],

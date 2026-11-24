@@ -147,7 +147,7 @@ def judge_arm(deps, holdout, ctx, arm, outcome):
         acknowledged=deps.acknowledged, clock=deps.clock, precount=deps.precount)
     record["request_id"], record["usage"] = completion.request_id, completion.usage
     if completion.outcome == "length":
-        verdict = _invalid("judge output truncated (finish_reason=length)")
+        verdict = _invalid("judge output truncated (finish_reason=length or output-limit HTTP 400)")
     else:
         verdict = parse_verdict(completion.text, outcome.answer, _status_enum(prompts))
     record["verdict"], record["score"] = verdict.to_dict(), score(verdict)

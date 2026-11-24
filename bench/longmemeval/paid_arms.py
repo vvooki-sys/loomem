@@ -105,7 +105,7 @@ def _stage_record(completion):
 
 def _json_object(completion, stage):
     if completion.outcome == "length":
-        raise StageFailure("length", stage, "finish_reason=length")
+        raise StageFailure("length", stage, "finish_reason=length or output-limit HTTP 400")
     try:
         data = json.loads(completion.text)
     except ValueError as exc:
@@ -155,7 +155,7 @@ def _answer(deps, ctx, arm, outcome, diagnostic, evidence, attempt):
     completion = call_stage(deps, ctx, arm, "answer", parts, attempt)
     outcome.stages["answer"] = _stage_record(completion)
     if completion.outcome == "length":
-        raise StageFailure("length", "answer", "finish_reason=length")
+        raise StageFailure("length", "answer", "finish_reason=length or output-limit HTTP 400")
     cap = deps.sheet.caps()["ANSWER_CAP"]
     if byte_size(completion.text) > cap:
         raise StageFailure("technical_error", "answer", f"answer longer than ANSWER_CAP {cap}")

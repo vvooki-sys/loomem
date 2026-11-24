@@ -16,6 +16,9 @@ The fingerprint normalises the one line of the extraction system prompt that
 ``memory_extractor.rs`` substitutes per session (``The conversation_date is:
 <date>``), so the same prompt is recognised across sessions while any other
 system text differs.
+
+An output-limit HTTP 400 settled as ``length`` (no usage, no text) has no
+completion to forward, so the proxy halts on it, also when it replays on resume.
 """
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -273,7 +276,8 @@ class ProviderProxy:
             return self._stop(handler, ordinal, exc, wire_bytes)
         except Exception as exc:  # fail closed on anything unexpected, never answer a fabricated completion
             return self._stop(handler, ordinal, exc, wire_bytes)
-        if completion.usage is None:  # output-limit HTTP 400 settled as length: no completion to forward
+        # output-limit HTTP 400 settled as length: no completion to forward
+        if completion.outcome == "length" and completion.usage is None:
             return self._stop(handler, ordinal, ProxyHalted(
                 f"request {completion.request_id} ended as an output-limit HTTP 400 (length, no usage)"), wire_bytes)
         self._record(ordinal, completion.outcome, request_id=completion.request_id, usage=completion.usage,
