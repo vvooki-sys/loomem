@@ -519,7 +519,7 @@ class AcknowledgeUncertainTests(unittest.TestCase):
         code, out = main([*control, "--retry-rejected", rid], env=self.env)
         self.assertEqual(code, 0, out)
         self.assertEqual([e["role"] for e in self.fake.log], ["control"])
-        self.assertIn(f"retry-rejected: sent again ['{rid[:12]}']; not reached []", out)
+        self.assertIn(f"retry-rejected: sent again ['{rid[:12]}']; journaled unsent []; not reached []", out)
         journal = CallJournal(self.campaign_dir)
         [retried] = [r for r, i in journal.state.intents.items() if i["stage"] == "control" and r != rid]
         self.assertEqual(journal.state.intents[retried]["binding"], {**journal.state.intents[rid]["binding"], "attempt": 2})
@@ -542,8 +542,22 @@ class AcknowledgeUncertainTests(unittest.TestCase):
             code, out = main(["run", "--campaign-dir", str(self.campaign_dir), "--phase", "control",
                               "--acknowledge-uncertain", self.rid, "--retry-rejected", rid], env=self.env)
         self.assertEqual(code, 0, out)
-        self.assertIn(f"retry-rejected: sent again []; not reached ['{rid[:12]}']", out)
+        self.assertIn(f"retry-rejected: sent again []; journaled unsent []; not reached ['{rid[:12]}']", out)
         self.assertEqual(self.fake.log, [])
+
+    def test_retry_whose_next_attempt_was_never_sent_is_journaled_unsent(self):
+        """Crash window: the attempt-2 intent is written, then ``journal.sent`` fails; the run stops and
+        the summary must not claim the request was sent again."""
+        rid = self.forge_rejected_control()
+        with mock.patch.object(CallJournal, "sent", side_effect=OSError("crash before sent")):
+            code, out = main(["run", "--campaign-dir", str(self.campaign_dir), "--phase", "control",
+                              "--acknowledge-uncertain", self.rid, "--retry-rejected", rid], env=self.env)
+        self.assertEqual(code, 3, out)
+        self.assertIn(f"retry-rejected: sent again []; journaled unsent ['{rid[:12]}']; not reached []", out)
+        self.assertEqual(self.fake.log, [], "the provider was never called")
+        state = CallJournal(self.campaign_dir).state
+        [unsent] = [r for r, i in state.intents.items() if i["stage"] == "control" and r != rid]
+        self.assertEqual((state.intents[unsent]["binding"]["attempt"], unsent in state.sent), (2, False))
 
 
 class ControlPhaseTests(unittest.TestCase):

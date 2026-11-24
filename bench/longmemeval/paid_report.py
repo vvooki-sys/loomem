@@ -12,7 +12,7 @@ reports). Money is reported as exact Decimal strings: the reserved maximum
 counts the ``length`` calls that came as OpenAI's output-limit HTTP 400. ``retried`` counts the
 calls sent as a later attempt of a ``rejected_4xx`` request (``run --retry-rejected``) and
 ``max_attempt`` is the highest attempt in the row; the rejected attempt itself stays counted in
-``calls`` and ``rejected_4xx``.
+``calls`` and ``rejected_4xx``. Like ``calls``, ``retried`` counts intents (attempt > 1), sent or not.
 """
 from decimal import Decimal
 import json

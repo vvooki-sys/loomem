@@ -159,16 +159,23 @@ def retry_rejected_ids(requested, journal, acknowledged=frozenset()):
 
 
 def retry_summary(campaign_id, state, retry):
-    """One line: which --retry-rejected ids now have a next attempt in the journal and which were not
-    reached by this invocation (e.g. their stage is outside --phase, or the run stopped earlier)."""
+    """One line: which --retry-rejected ids had their next attempt sent, which have only a journaled
+    intent for it that was never sent (crash window: investigate manually), and which were not reached
+    by this invocation (e.g. their stage is outside --phase, or the run stopped earlier)."""
     from paid_call_journal import request_id
-    used, unused = [], []
+    buckets = {"sent again": [], "journaled unsent": [], "not reached": []}
     for rid in sorted(retry):
         intent = state.intents[rid]
         following = {**intent["binding"], "attempt": intent["binding"].get("attempt", 1) + 1}
-        sent_again = request_id(campaign_id, following, intent["wire_sha256"]) in state.intents
-        (used if sent_again else unused).append(rid[:12])
-    return f"retry-rejected: sent again {used}; not reached {unused}"
+        next_rid = request_id(campaign_id, following, intent["wire_sha256"])
+        if next_rid in state.sent:
+            bucket = "sent again"
+        elif next_rid in state.intents:
+            bucket = "journaled unsent"
+        else:
+            bucket = "not reached"
+        buckets[bucket].append(rid[:12])
+    return "retry-rejected: " + "; ".join(f"{name} {ids}" for name, ids in buckets.items())
 
 
 def cmd_run(args, factories, clock, env, out):
