@@ -7,7 +7,9 @@ alias when it names exactly one role, else ``default``.
 
 Scenarios: ok | empty_facts | length | http500 | timeout | model_drift |
 missing_usage | malformed_json | bad_request_400 | usage_over_bound | redirect |
-capped | capped_failed_attempt.
+capped | capped_failed_attempt | length_http400.
+``length_http400`` answers a strict json_schema request with OpenAI's output-limit HTTP 400
+(``OUTPUT_LIMIT_400``) and any other request with an ordinary ``length``.
 ``timeout`` closes the connection without any response, which is what a client
 sees as an unknown outcome; no real sleeping happens anywhere.
 Usage is deterministic from byte counts (tokens <= bytes, as P1 assumes).
@@ -20,9 +22,13 @@ import threading
 
 SCENARIOS = ("ok", "empty_facts", "length", "http500", "timeout", "model_drift",
              "missing_usage", "malformed_json", "bad_request_400", "usage_over_bound", "redirect",
-             "capped", "capped_failed_attempt")
+             "capped", "capped_failed_attempt", "length_http400")
 CAPPED_FACTS = 22  # above the frozen max_facts_per_chunk = 20: the engine keeps 20 and discards 2
 PATH = "/v1/chat/completions"
+# Verbatim error OpenAI returned for a strict json_schema selection at max_completion_tokens 512 (holdout r2).
+OUTPUT_LIMIT_400 = {"error": {"message": "Could not finish the message because max_tokens or model output limit "
+                                         "was reached. Please try again with higher max_tokens.",
+                              "type": "invalid_request_error", "param": None, "code": None}}
 # OpenAI Responses API token counter (developers.openai.com/api/docs/api-reference/
 # responses/input-tokens, read 2026-11-22): POST {model, input} ->
 # {"object": "response.input_tokens", "input_tokens": N}. The fake counts with the
@@ -193,6 +199,11 @@ class FakeOpenAI:
             return _send(handler, 500, {"error": {"message": "upstream failure", "type": "server_error"}})
         if scenario == "bad_request_400":
             return _send(handler, 400, {"error": {"message": "rejected", "type": "invalid_request_error"}})
+        if scenario == "length_http400":
+            response_format = wire.get("response_format") or {}
+            if response_format.get("type") == "json_schema" and (response_format.get("json_schema") or {}).get("strict"):
+                return _send(handler, 400, OUTPUT_LIMIT_400, {"x-request-id": f"fake-req-{len(self.log)}"})
+            scenario = "length"
         if scenario == "timeout":
             # No response at all: the client sees a closed connection (unknown outcome).
             handler.close_connection = True

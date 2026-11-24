@@ -5,7 +5,7 @@ import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from paid_fake_openai import SCENARIOS, FakeOpenAI, content_for
+from paid_fake_openai import OUTPUT_LIMIT_400, SCENARIOS, FakeOpenAI, content_for
 from paid_openai_wire import Transport, TransportError, WireError, build_wire, parse_completion
 from paid_test_support import PROFILES
 
@@ -39,7 +39,17 @@ class FakeOpenAITests(unittest.TestCase):
     def test_every_scenario_is_covered(self):
         self.assertEqual(set(SCENARIOS), {"ok", "empty_facts", "length", "http500", "timeout", "model_drift",
                                           "missing_usage", "malformed_json", "bad_request_400", "usage_over_bound",
-                                          "redirect", "capped", "capped_failed_attempt"})
+                                          "redirect", "capped", "capped_failed_attempt", "length_http400"})
+
+    def test_length_http400_only_for_strict_json_schema(self):
+        schema = {"type": "json_schema", "json_schema": {"name": "x", "strict": True, "schema": {"type": "object"}}}
+        strict = build_wire(PROFILES["diagnostic"], [{"role": "system", "content": "S"}, {"role": "user", "content": "{}"}],
+                            schema)
+        with FakeOpenAI({"default": "length_http400"}, model_by_role=LUNA, token="t") as fake:
+            status, _, body = self.post(fake, strict)
+            self.assertEqual((status, json.loads(body)), (400, OUTPUT_LIMIT_400))
+            status, _, body = self.post(fake)  # no response_format: OpenAI's ordinary 200 + length
+            self.assertEqual((status, parse_completion(body)["outcome"]), (200, "length"))
 
     def test_capped_extraction_answers_distinct_facts(self):
         capped = json.loads(content_for("extraction", "", "capped"))

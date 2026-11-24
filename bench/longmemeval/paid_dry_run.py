@@ -46,6 +46,8 @@ def fake_provider(prompts, profiles, scenarios):
     roles = {_sha(prompts.stage(stage).system): stage for stage in STAGES}
     roles[_sha(CONTROL_SYSTEM)] = "control"
     models = {"extraction": profiles["extraction"]["model"], "judge": profiles["judge"]["model"]}
+    # "a,b": a FIFO per role (the last entry repeats), e.g. selection=length_http400,ok hits one request
+    scenarios = {role: value.split(",") if "," in value else value for role, value in scenarios.items()}
     return FakeOpenAI({"default": "ok", **scenarios}, model_by_role=models, role_by_system_sha256=roles,
                       token=secrets.token_hex(16))
 

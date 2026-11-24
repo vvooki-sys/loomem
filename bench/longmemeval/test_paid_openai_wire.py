@@ -9,10 +9,11 @@ import unittest
 
 from budget import BudgetExceeded
 from paid_call_journal import CallJournal, JournalError, ModelDrift
-from paid_campaign import CampaignError, SublimitExceeded
-from paid_fake_openai import FakeOpenAI
+from paid_campaign import CampaignError, SublimitExceeded, open_campaign
+from paid_fake_openai import OUTPUT_LIMIT_400, FakeOpenAI
 from paid_openai_wire import (BoundBreach, Rejected4xx, RunStopped, Transport, TransportError, WireError,
-                              actual_cost, build_wire, check_wire, paid_completion, parse_completion)
+                              actual_cost, build_wire, check_wire, is_output_limit_400, paid_completion,
+                              parse_completion)
 from paid_price_sheet import PriceUnknown, StageBound
 from paid_test_support import (SOURCES_BYTES_MAX, FakeTransport, binding, load_fixture_sheet, make_campaign,
                                messages, ok_body)
@@ -22,6 +23,14 @@ PROFILE = {"model": "gpt-6-luna", "reasoning_effort": "low", "max_completion_tok
 
 def ok(body=None):
     return (200, {"x-request-id": "prov-1"}, body if body is not None else ok_body())
+
+
+# Byte-for-byte the body OpenAI sent for holdout r2's selection request (HTTP 400, 2026-11-24).
+OUTPUT_LIMIT_BODY = json.dumps(OUTPUT_LIMIT_400, indent=2).encode("utf-8")
+
+
+def output_limit(body=OUTPUT_LIMIT_BODY, status=400):
+    return (status, {"x-request-id": "prov-400"}, body)
 
 
 def without_usage():
@@ -121,6 +130,24 @@ class ParseAndCostTests(unittest.TestCase):
         self.assertEqual(actual_cost(sheet, "gpt-6.1-sol", big, "7.5"), Decimal("7.5"))
 
 
+class OutputLimitRuleTests(unittest.TestCase):
+    def test_only_the_output_limit_400_matches(self):
+        error = OUTPUT_LIMIT_400["error"]
+        self.assertTrue(is_output_limit_400(400, error))
+        self.assertTrue(is_output_limit_400(400, json.loads(OUTPUT_LIMIT_BODY)["error"]))  # the r2 evidence body
+        cases = {"429": (429, error), "401": (401, error), "500": (500, error), "no error object": (400, None),
+                 "other type": (400, {**error, "type": "rate_limit_error"}),
+                 "other message": (400, {**error, "message": "Invalid schema for response_format"}),
+                 "only max_tokens": (400, {**error, "message": "max_tokens is too large"}),
+                 "param set": (400, {**error, "param": "max_tokens"}),
+                 "code set": (400, {**error, "code": "invalid_value"}),
+                 "parts without the prefix": (400, {**error, "message": "Invalid max_tokens; model output limit is 4096"}),
+                 "message not a string": (400, {**error, "message": None})}
+        for label, (status, err) in cases.items():
+            with self.subTest(case=label):
+                self.assertFalse(is_output_limit_400(status, err))
+
+
 class PaidCompletionTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -218,6 +245,68 @@ class PaidCompletionTests(unittest.TestCase):
         self.assertEqual((record["outcome"], record["actual_usd"]), ("rejected_4xx", "0"))
         totals = self.campaign.ledger.totals()
         self.assertEqual((totals["spent_usd"], totals["pending_count"]), (Decimal(0), 0))
+
+    def test_output_limit_400_settles_as_length_at_zero(self):
+        transport = FakeTransport([output_limit(), ok()])
+        done = self.call(transport)
+        self.assertEqual((done.outcome, done.usage, done.model, done.finish_reason, done.text, done.actual_usd,
+                          done.provider_request_id, done.replayed), ("length", None, None, None, "", "0", "prov-400", False))
+        record = self.settled(done.request_id)
+        self.assertEqual({k: record[k] for k in ("http_status", "outcome", "model_observed", "usage", "finish_reason",
+                                                 "actual_usd")},
+                         {"http_status": 400, "outcome": "length", "model_observed": None, "usage": None,
+                          "finish_reason": None, "actual_usd": "0"})
+        totals = self.campaign.ledger.totals()
+        self.assertEqual((totals["spent_usd"], totals["pending_count"], totals["request_count"]), (Decimal(0), 0, 1))
+        self.assertEqual(list((Path(self.campaign.directory) / "pins").iterdir()), [])  # no model observed, none pinned
+        self.assertEqual(self.call(transport, binding=binding(qid="q2")).outcome, "ok", "no stop, no block")
+
+    def test_other_4xx_and_non_json_400_are_unchanged(self):
+        error = OUTPUT_LIMIT_400["error"]
+        rejected = {"other message": (400, {**error, "message": "rejected"}),
+                    "other type": (400, {**error, "type": "invalid_json_schema"}),
+                    "429": (429, error), "401": (401, {"message": "bad key", "type": "invalid_request_error"})}
+        for index, (label, (status, err)) in enumerate(rejected.items()):
+            with self.subTest(case=label):
+                self.open(make_campaign(Path(self.directory.name) / f"r{index}", self.sheet))
+                with self.assertRaises(Rejected4xx):
+                    self.call(FakeTransport([output_limit(json.dumps({"error": err}).encode("utf-8"), status)]))
+                [record] = self.journal.state.settled.values()
+                self.assertEqual((record["outcome"], record["actual_usd"]), ("rejected_4xx", "0"))
+        self.open(make_campaign(Path(self.directory.name) / "nonjson", self.sheet))
+        with self.assertRaises(RunStopped):
+            self.call(FakeTransport([output_limit(b"max_tokens or model output limit")]))
+        self.assertEqual((len(self.journal.state.uncertain), len(self.journal.state.settled)), (1, 0))
+
+    def test_output_limit_400_replays_as_length_after_restart(self):
+        transport = FakeTransport([output_limit()])
+        first = self.call(transport)
+        self.open(open_campaign(self.campaign.directory, self.sheet))  # process restart: re-read from disk
+        again = self.call(transport)
+        self.assertEqual((again.request_id, again.replayed, again.outcome, again.usage, again.model, again.text),
+                         (first.request_id, True, "length", None, None, ""))
+        self.assertEqual((len(transport.calls), self.campaign.ledger.totals()["request_count"]), (1, 1))
+
+    def test_tampered_stored_output_limit_body_is_not_replayed(self):
+        transport = FakeTransport([output_limit()])
+        first = self.call(transport)
+        path = self.calls / f"{first.request_id}.response.json"
+        stored = json.loads(path.read_text())
+        stored["body_text"] = json.dumps({"error": {**OUTPUT_LIMIT_400["error"], "message": "rejected"}})
+        path.write_text(json.dumps(stored))
+        self.open(open_campaign(self.campaign.directory, self.sheet))
+        with self.assertRaisesRegex(RunStopped, "no longer matches"):
+            self.call(transport)
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_replayed_rejected_4xx_still_stops(self):
+        transport = FakeTransport([(400, {}, b'{"error": {"message": "rejected", "type": "invalid_request_error"}}')])
+        with self.assertRaises(Rejected4xx):
+            self.call(transport)
+        self.open(open_campaign(self.campaign.directory, self.sheet))
+        with self.assertRaisesRegex(RunStopped, "rejected_4xx"):
+            self.call(transport)
+        self.assertEqual(len(transport.calls), 1)
 
     def test_bound_breaches(self):
         with self.assertRaises(BoundBreach):

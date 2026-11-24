@@ -6,7 +6,7 @@ from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
 from paid_call_journal import CallJournal, sha256_hex
-from paid_fake_openai import FakeOpenAI
+from paid_fake_openai import OUTPUT_LIMIT_400, FakeOpenAI
 from paid_openai_wire import InputTokensBreach, Transport, parse_completion
 from paid_provider_proxy import KEY_ENV, ProviderProxy, system_fingerprint, validate_extraction_body
 from paid_test_support import PROFILES, FakeTransport, load_fixture_sheet, make_campaign, ok_body
@@ -259,6 +259,17 @@ class ProviderProxyTests(unittest.TestCase):
         settled = self.journal.state.settled
         self.assertEqual(sorted(s["outcome"] for s in settled.values()), ["length", "ok"])
         self.assertEqual(self.campaign.ledger.totals()["request_count"], 2)
+
+    def test_output_limit_400_on_extraction_halts_without_a_fabricated_completion(self):
+        transport = self.transport((400, {}, json.dumps(OUTPUT_LIMIT_400).encode("utf-8")))
+        with self.proxy(transport) as proxy:
+            proxy.bind("h1", "h1-s1", 5)
+            status, answer = post(proxy, body())
+            self.assertEqual((status, proxy.halted), (502, True))
+            self.assertIn("output-limit HTTP 400", answer["error"]["message"])
+            self.assertEqual([r["outcome"] for r in proxy.unbind()], ["halted"])
+        [settled] = self.journal.state.settled.values()
+        self.assertEqual((settled["outcome"], settled["actual_usd"]), ("length", "0"))
 
     def test_precount_is_consulted_and_an_over_bound_count_stops_without_reservation(self):
         counts = []

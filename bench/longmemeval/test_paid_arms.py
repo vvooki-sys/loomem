@@ -175,6 +175,16 @@ class ArmTests(unittest.TestCase):
         outcome = run_arm("selective_originals", truncated.context("h1-q01"), truncated.deps)
         self.assertEqual((outcome.status, truncated.roles()), ("length", ["diagnostic"]))
 
+    def test_output_limit_400_in_selection_means_status_length(self):
+        h = ArmHarness(self, scenarios={"selection": "length_http400"})
+        outcome = run_arm("selective_originals", h.context("h1-q01"), h.deps)
+        self.assertEqual((outcome.status, outcome.answer), ("length", None))
+        self.assertEqual({k: outcome.stages["selection"][k] for k in ("outcome", "usage", "model")},
+                         {"outcome": "length", "usage": None, "model": None})
+        self.assertEqual(h.roles(), ["diagnostic", "audit", "selection"])
+        write_arm_outcome(h.campaign.directory, outcome)  # the record stays serialisable with usage None
+        self.assertEqual(read_arm_outcome(h.campaign.directory, "h1-q01", "selective_originals").status, "length")
+
     def test_unparsable_diagnostic_is_technical_error(self):
         h = ArmHarness(self, unrouted=("diagnostic",))  # the fake answers plain text for an unknown role
         outcome = run_arm("selective_originals", h.context("h1-q01"), h.deps)

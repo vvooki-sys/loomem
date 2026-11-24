@@ -87,6 +87,27 @@ class ReportTests(unittest.TestCase):
         self.assertEqual((row["rejected_4xx"], row["uncertain"], row["model_drift"], row["bound_breach"], row["length"]),
                          (0, 0, 0, 0, 0))
 
+    def test_output_limit_400_counts_as_length_and_length_http400(self):
+        h = ArmHarness(self, scenarios={"selection": "length_http400", "answer": "length"})
+        directory = Path(h.campaign.directory)
+        ctx = h.context("h1-q01")
+        write_create_only(directory / "contexts" / "h1-q01.json", ctx)
+        for arm in ("facts_retry", "selective_originals"):  # F: answer 200+length; S: selection HTTP 400
+            outcome = run_arm(arm, ctx, h.deps)
+            write_arm_outcome(directory, outcome)
+            write_verdict(directory, judge_arm(h.deps, h.holdout, ctx, arm, outcome))
+        report = build_report(h.campaign, h.journal.state, directory, h.holdout)
+        money = report["money"]
+        pick = lambda row: (row["length"], row["length_http400"], row["rejected_4xx"], row["actual_usd"] == "0")
+        self.assertEqual(pick(money["by_letter"]["F"])[:3], (1, 0, 0))
+        self.assertEqual(pick(money["by_letter"]["S"])[:3], (1, 1, 0))
+        self.assertEqual(pick(money["by_stage"]["selection"]), (1, 1, 0, True))
+        self.assertEqual(pick(money["by_letter_stage"]["F:answer"])[:2], (1, 0))
+        self.assertEqual((report["per_arm"]["facts_retry"]["length"], report["per_arm"]["selective_originals"]["length"]),
+                         (1, 1))
+        self.assertEqual(report["states"]["h1-q01"]["selective_originals"], "length")
+        self.assertEqual(money["blocking_request_ids"], [])
+
     def test_extraction_counts_probes_and_events(self):
         h = ArmHarness(self)
         directory = self.populate(h)
