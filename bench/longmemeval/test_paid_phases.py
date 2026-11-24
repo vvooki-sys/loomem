@@ -1,6 +1,7 @@
 """Phase robustness on the dry-run path: an interrupted history with zero_facts resumes without a
 JournalError, and a failed engine start never leaves the engine un-closed."""
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -42,10 +43,10 @@ class RefusingEngine(FakeEngine):
         RefusingEngine.closed += 1
 
 
-def factory_for(cls):
+def factory_for(cls, limit=None):
     def outer(campaign):
         profile = campaign.profile("extraction")
-        return lambda url, token: cls(url, token, profile=profile, top_k=60)
+        return lambda url, token: cls(url, token, profile=profile, top_k=60, max_facts_per_chunk=limit)
     return outer
 
 
@@ -74,10 +75,10 @@ class PhaseResumeTests(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def dry_run(self, cls, *extra):
+    def dry_run(self, cls, *extra, limit=None):
         with mock.patch("sys.stderr", io.StringIO()):
             return _main(["dry-run", *self.fixture.flags(self.campaign_dir), *extra],
-                         factories={"engine": factory_for(cls)}, stdout=io.StringIO(), env=runner_env())
+                         factories={"engine": factory_for(cls, limit)}, stdout=io.StringIO(), env=runner_env())
 
     def test_interrupted_zero_facts_history_resumes_without_journal_error(self):
         FlakyEngine.failures_left, FlakyEngine.closed = 1, 0
@@ -93,6 +94,23 @@ class PhaseResumeTests(unittest.TestCase):
         events = sorted(p.name for p in (self.campaign_dir / "events").glob("*.zero_facts.json"))
         self.assertEqual(events, ["h1.h1-s1.zero_facts.json", "h1.h1-s2.zero_facts.json"])
         self.assertTrue(any(p.name.startswith("h1.partial-") for p in (self.campaign_dir / "engine").iterdir()))
+
+    def test_interrupted_capped_history_resumes_with_one_event_per_session(self):
+        FlakyEngine.failures_left, FlakyEngine.closed = 1, 0
+        code = self.dry_run(FlakyEngine, "--scenario", "extraction=capped", limit=20)
+        self.assertEqual(code, 3, "the first run stops on the engine crash, not on the cap")
+        events = sorted(p.name for p in (self.campaign_dir / "events").glob("*.json"))
+        self.assertEqual(events, ["h1.h1-s1.extraction_capped.json"])
+        first = (self.campaign_dir / "events" / events[0]).read_bytes()
+        code = self.dry_run(FlakyEngine, "--resume", "--scenario", "extraction=capped", limit=20)
+        self.assertEqual(code, 0, "the redone history keeps the existing event and adds the second")
+        events = sorted(p.name for p in (self.campaign_dir / "events").glob("*.json"))
+        self.assertEqual(events, ["h1.h1-s1.extraction_capped.json", "h1.h1-s2.extraction_capped.json"])
+        self.assertEqual((self.campaign_dir / "events" / events[0]).read_bytes(), first)
+        sessions = json.loads((self.campaign_dir / "extraction" / "h1.json").read_text())["sessions"]
+        self.assertEqual([(s["capped"], s["discarded_facts"], s["zero_facts"]) for s in sessions],
+                         [(True, 2, False), (True, 2, False)])
+        self.assertEqual(len(list((self.campaign_dir / "contexts").glob("*.json"))), 2, "no question was dropped")
 
     def test_failed_engine_start_is_closed_and_stops(self):
         RefusingEngine.closed = 0

@@ -130,6 +130,9 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(s_arm["status"], "ok")
         self.assertIsNotNone(summary["observed"]["system_fingerprints"]["extraction"])
         self.assertEqual(summary["observed"]["pins"], {"gpt-6-luna": "gpt-6-luna", "gpt-6.2-astra": "gpt-6.2-astra"})
+        self.assertEqual(summary["observed"]["extraction_capped_events"], [])
+        self.assertEqual((summary["report"]["extraction"]["capped_sessions"],
+                          summary["report"]["extraction"]["discarded_facts_total"]), (0, 0))
         maximum = summary["predicted_maximum"]
         self.assertEqual(maximum["policy_chosen"], "p1")
         self.assertEqual({r["letter"] for r in maximum["rows"]}, {"F", "S", "A", "K"})
@@ -174,6 +177,39 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(summary["report"]["per_arm"]["facts_retry"]["zero_facts"], 2)
         self.assertEqual(summary["report"]["per_arm"]["facts_retry"]["expected"], 2)
         self.assertEqual(len(list((self.campaign_dir / "verdicts").glob("*.json"))), 5)
+
+    def test_fact_limit_capped_extraction_is_a_counted_state_not_a_stop(self):
+        code, out = self.dry_run("--scenario", "extraction=capped")
+        self.assertEqual(code, 0, out)
+        summary = self.summary()
+        self.assertIsNone(summary["stop"])
+        self.assertEqual(summary["observed"]["extraction_capped_events"],
+                         ["h1.h1-s1.extraction_capped.json", "h1.h1-s2.extraction_capped.json"])
+        self.assertEqual(summary["observed"]["zero_facts_events"], [])
+        extraction = summary["report"]["extraction"]
+        self.assertEqual((extraction["capped_sessions"], extraction["discarded_facts_total"],
+                          extraction["zero_facts_sessions"]), (2, 4, 0))
+        stored = json.loads((self.campaign_dir / "extraction" / "h1.json").read_text())
+        self.assertEqual([(s["capped"], s["discarded_facts"], len(s["fact_ids"])) for s in stored["sessions"]],
+                         [(True, 2, 20), (True, 2, 20)])
+        event = json.loads((self.campaign_dir / "events" / "h1.h1-s1.extraction_capped.json").read_text())
+        self.assertEqual((event["type"], event["discarded_facts"], event["requests"]),
+                         ("extraction_capped", 2, stored["sessions"][0]["requests"]))
+        report = json.loads((self.campaign_dir / "reports" / "report-1.json").read_text())
+        self.assertEqual((report["capped_questions"], report["zero_facts_events"]), (["h1-q01", "h1-q02"], 0))
+        per_arm = summary["report"]["per_arm"]
+        self.assertEqual((per_arm["facts_retry"]["expected"], per_arm["always_originals"]["expected"]), (2, 1))
+        self.assertEqual(per_arm["facts_retry"]["zero_facts"], 0)
+        self.assertEqual(len(list((self.campaign_dir / "verdicts").glob("*.json"))), 5)
+
+    def test_capped_extraction_with_a_failed_attempt_stops(self):
+        code, out = self.dry_run("--scenario", "extraction=capped_failed_attempt")
+        self.assertEqual(code, 3, out)
+        summary = self.summary()
+        self.assertIn("EngineError", summary["stop"])
+        self.assertEqual(summary["observed"]["extraction_capped_events"], [])
+        self.assertFalse((self.campaign_dir / "extraction" / "h1.json").exists())
+        self.assertFalse((self.campaign_dir / "arms").exists())
 
     def test_control_rejection_stops_before_any_other_call(self):
         code, out = self.dry_run("--scenario", "control=bad_request_400")

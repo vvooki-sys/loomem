@@ -1,5 +1,9 @@
 """The four phases shared by ``run`` and ``dry-run``: extraction, retrieval, arms, judge (plan §3/§4).
 
+A session whose extraction hit the per-chunk fact cap (engine ``partial``, facts discarded) is the
+explicit state ``extraction_capped``, not a stop: its stored facts are used and its questions stay in
+the denominator; ``events/<hid>.<sid>.extraction_capped.json`` and the report count it.
+
 Every phase is resumable by construction: work whose artifact file exists is
 skipped (``extraction/<hid>.json``, ``contexts/<qid>.json``,
 ``arms/<qid>.<arm>.json``, ``verdicts/<qid>.<arm>.json``) and identical paid
@@ -118,10 +122,20 @@ def _ingest(ctx, engine, hid, session):
         if not event.exists():
             write_create_only(event, {"history_id": hid, "session_id": sid, "source_id": receipt.source_id,
                                       "at": ctx.clock()})
+    requests = [r["request_id"] for r in records if r.get("request_id")]
+    if receipt.capped:
+        # The product dropped facts above max_facts_per_chunk (engine status `partial`): not a stop and not
+        # zero_facts. The session keeps its stored facts and its questions stay in every arm's denominator.
+        event = ctx.directory / "events" / f"{hid}.{sid}.extraction_capped.json"
+        if not event.exists():
+            write_create_only(event, {"type": "extraction_capped", "history_id": hid, "session_id": sid,
+                                      "source_id": receipt.source_id, "discarded_facts": receipt.discarded_facts,
+                                      "requests": requests, "at": ctx.clock()})
     return {"session_id": sid, "source_id": receipt.source_id, "conversation_date": session["conversation_date"],
             "fragment_ids": list(receipt.fragment_ids), "fact_ids": list(receipt.fact_ids),
-            "zero_facts": bool(receipt.zero_facts), "requests": [r["request_id"] for r in records if r.get("request_id")],
-            "records": records, "proof_sha256": _sha(proof), "predicted_max_requests": cap}
+            "zero_facts": bool(receipt.zero_facts), "requests": requests,
+            "records": records, "proof_sha256": _sha(proof), "predicted_max_requests": cap,
+            "capped": bool(receipt.capped), "discarded_facts": receipt.discarded_facts}
 
 
 def _sha(obj):

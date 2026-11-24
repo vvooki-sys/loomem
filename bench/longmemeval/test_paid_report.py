@@ -100,6 +100,36 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report["zero_facts_events"], 1)
         self.assertEqual(report["input_tokens"], {"probes": 1, "input_tokens_total": 120, "by_stage": {"diagnostic": 1}})
 
+    def test_runs_without_capped_sessions_report_zero_caps(self):
+        h = ArmHarness(self)
+        report = build_report(h.campaign, h.journal.state, self.populate(h), h.holdout)
+        extraction = report["extraction"]
+        self.assertEqual((extraction["capped_sessions"], extraction["discarded_facts_total"]), (0, 0))
+        self.assertEqual(report["capped_questions"], [])
+
+    def test_capped_sessions_are_counted_and_not_zero_facts_events(self):
+        h = ArmHarness(self)
+        directory = Path(h.campaign.directory)
+        q1 = h.context("h1-q01")
+        write_create_only(directory / "contexts" / "h1-q01.json", q1)
+        write_create_only(directory / "extraction" / "h1.json",
+                          {"history_id": "h1", "sessions": [
+                              {"session_id": "h1-s1", "source_id": "x", "fact_ids": ["a"] * 20, "zero_facts": False,
+                               "requests": ["r1"], "capped": True, "discarded_facts": 2},
+                              {"session_id": "h1-s2", "source_id": "y", "fact_ids": [], "zero_facts": True,
+                               "requests": ["r2"], "capped": False, "discarded_facts": 0}]})
+        write_create_only(directory / "events" / "h1.h1-s1.extraction_capped.json",
+                          {"type": "extraction_capped", "history_id": "h1", "session_id": "h1-s1", "discarded_facts": 2})
+        write_create_only(directory / "events" / "h1.h1-s2.zero_facts.json", {"history_id": "h1", "session_id": "h1-s2"})
+        report = build_report(h.campaign, h.journal.state, directory, h.holdout)
+        self.assertEqual((report["extraction"]["capped_sessions"], report["extraction"]["discarded_facts_total"],
+                          report["extraction"]["zero_facts_sessions"]), (1, 2, 1))
+        self.assertEqual(report["capped_questions"], ["h1-q01", "h1-q02"])  # every question of the capped history
+        self.assertEqual(report["zero_facts_events"], 1)  # the extraction_capped event is not counted here
+        self.assertEqual(report["per_arm"]["facts_retry"]["expected"], 2)  # capped stays in the denominator
+        blind = build_report(h.campaign, h.journal.state, directory)  # no holdout: questions from the contexts
+        self.assertEqual(blind["capped_questions"], ["h1-q01"])
+
     def test_missing_directories_and_no_holdout_are_tolerated(self):
         h = ArmHarness(self)
         report = build_report(h.campaign, h.journal.state, h.campaign.directory)

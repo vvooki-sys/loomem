@@ -27,7 +27,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import ProxyHandler, Request, build_opener
 
-from extraction_receipt import confirmed_facts
+from extraction_receipt import confirmed_facts_with_cap
 from fragment_projection import EVIDENCE_V2, v2_projection_proven
 from ingest_receipt import ReceiptError, expected_ids_from_mcp_result
 from paid_engine_config import (DISABLED_SECTIONS, EngineError, check_artifacts, check_extraction, check_port,  # noqa: F401
@@ -57,6 +57,8 @@ class SessionReceipt:
     fact_ids: list
     zero_facts: bool
     raw: dict
+    capped: bool = False            # the per-chunk fact cap discarded facts (engine status `partial`)
+    discarded_facts: int = 0
 
 
 def _iso_date(value, label):
@@ -296,7 +298,7 @@ class EvaluationEngine:
             if "extraction_receipt" not in structured:
                 raise EngineError("memory_ingest result lacks extraction_receipt")
             source_id = structured["ingest_receipt"]["source_id"]
-            facts = confirmed_facts(structured["extraction_receipt"], source_id)
+            facts, cap = confirmed_facts_with_cap(structured["extraction_receipt"], source_id)
         except ReceiptError as exc:
             raise EngineError(f"memory_ingest receipt rejected: {exc} ({_result_text(result)})") from exc
         if source_id in self.sources:
@@ -304,7 +306,7 @@ class EvaluationEngine:
         self.sources[source_id] = content
         return SessionReceipt(session_id, source_id, content, arguments.get("conversation_date"),
                               sorted(expected - {source_id}), facts, [fact["id"] for fact in facts],
-                              len(facts) == 0, result)
+                              len(facts) == 0, result, cap.capped, cap.discarded_facts)
 
     def prove_readiness_v2(self, scope, receipt, session, deadline_s):
         if not isinstance(scope, str) or not scope or len(scope) > 128:

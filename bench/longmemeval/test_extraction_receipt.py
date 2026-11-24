@@ -3,7 +3,7 @@ from pathlib import Path
 import unittest
 from copy import deepcopy
 
-from extraction_receipt import confirmed_facts, confirmed_facts_from_mcp_result
+from extraction_receipt import ExtractionCap, confirmed_facts, confirmed_facts_from_mcp_result, confirmed_facts_with_cap
 from ingest_receipt import ReceiptError
 
 SOURCE = '00000000-0000-4000-8000-000000000001'
@@ -146,6 +146,44 @@ class ExtractionReceiptTests(unittest.TestCase):
         result['isError'] = True
         with self.assertRaises(ReceiptError):
             confirmed_facts_from_mcp_result(result)
+
+    def capped(self, **outcome):
+        """The engine's fact-cap receipt (status partial, no error code), with outcome overrides."""
+        receipt = fixture()
+        receipt['status'] = 'partial'
+        receipt['outcome'].update({'fact_limit_reached': True, 'discarded_facts': 2, **outcome})
+        return receipt
+
+    def test_fact_limit_partial_is_accepted_only_with_cap(self):
+        rows, cap = confirmed_facts_with_cap(self.capped(), SOURCE)
+        self.assertEqual((len(rows), cap), (1, ExtractionCap(True, 2)))
+        self.assertEqual(rows[0]['id'], FACT)
+        self.rejects(self.capped())  # confirmed_facts itself still refuses every partial
+        rows, cap = confirmed_facts_with_cap(fixture(), SOURCE)
+        self.assertEqual((len(rows), cap), (1, ExtractionCap(False, 0)))
+        exact = fixture()
+        exact['outcome']['fact_limit_reached'] = True  # complete, limit reached, nothing discarded
+        self.assertEqual(confirmed_facts_with_cap(exact, SOURCE)[1], ExtractionCap(False, 0))
+
+    def test_fact_limit_partial_refusals(self):
+        unflagged = self.capped(fact_limit_reached=False)
+        nothing_discarded = self.capped(discarded_facts=0)
+        complete_discarded = fixture()
+        complete_discarded['outcome'].update(fact_limit_reached=True, discarded_facts=2)
+        with_error = self.capped()
+        with_error['error_code'] = 'all_chunks_failed'
+        failed_status = self.capped()
+        failed_status['status'] = 'failed'
+        unwritten = self.capped()
+        unwritten['persistence']['failed'] = 1
+        cases = {'partial without limit flag': unflagged, 'partial without discards': nothing_discarded,
+                 'failed attempt': self.capped(failed_attempts=1), 'error code': with_error,
+                 'unprocessed chunk': self.capped(input_chunks_total=2), 'complete with discards': complete_discarded,
+                 'failed status': failed_status, 'unconfirmed write': unwritten}
+        for label, receipt in cases.items():
+            with self.subTest(case=label):
+                with self.assertRaises(ReceiptError):
+                    confirmed_facts_with_cap(receipt, SOURCE)
 
     def test_source_scope_schema_and_error_bindings(self):
         for field, value in [('version', True), ('source_id', FACT), ('scope', 'source_and_fragments'),
