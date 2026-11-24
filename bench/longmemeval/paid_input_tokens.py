@@ -29,6 +29,8 @@ OBJECT = "response.input_tokens"
 CONTEXT_KEYS = ("stage", "arm", "question_id", "history_id", "session_id", "r_tokens")
 
 
+# The record id excludes the binding's attempt: a --retry-rejected attempt reuses the earlier probe record,
+# so report.input_tokens.probes does not count retries.
 def count_record_id(context, wire_sha256):
     return sha256_hex(canonical_bytes({"context": context, "wire_sha256": wire_sha256}))
 

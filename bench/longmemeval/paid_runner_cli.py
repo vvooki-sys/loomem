@@ -90,7 +90,10 @@ def build_parser():
                      help="control = only the control call K (then check the usage dashboard)")
     run.add_argument("--acknowledge-uncertain", action="append", default=[], metavar="RID")
     run.add_argument("--retry-rejected", action="append", default=[], metavar="RID",
-                     help="send this settled rejected_4xx request again as the next attempt (new reservation)")
+                     help="send this settled rejected_4xx request again as the next attempt (new reservation); "
+                          "never together with --acknowledge-uncertain for the same RID. A crash after the next "
+                          "attempt's intent but before it was sent leaves that binding stopped for manual "
+                          "investigation")
     rep = sub.add_parser("report", help="write reports/report-<n>.json")
     rep.add_argument("--campaign-dir", required=True)
     return parser

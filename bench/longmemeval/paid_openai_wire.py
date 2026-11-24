@@ -3,7 +3,7 @@
 ``paid_completion`` is the only function that may send money-costing traffic.
 Its order is fixed (plan §2): check wire -> sublimit -> ``ledger.reserve`` ->
 ``journal.intent`` -> ``journal.sent`` -> HTTP -> parse -> pin model ->
-``journal.settled`` + ``ledger.settle`` -> bound check. Nothing is retried. A
+``journal.settled`` + ``ledger.settle`` -> bound check. Nothing is retried automatically. A
 request whose outcome is unknown (timeout, connection error, 5xx, unreadable
 body, missing usage) is recorded ``uncertain``, keeps its full reservation and
 stops the run; the next call refuses until the ID is explicitly acknowledged.
@@ -334,7 +334,8 @@ def paid_completion(campaign, journal, sheet, *, letter, stage, binding, message
     if replay is not None:
         return _replayed(campaign, journal, rid, replay, max_usd)
     if rid in state.intents:
-        raise RunStopped(f"request {rid} was attempted before without settlement; use a new attempt")
+        raise RunStopped(f"request {rid} was attempted before and never settled (unsent, voided or uncertain); "
+                         "nothing re-sends or steps past it: investigate the journal and ledger manually")
     if precount is not None:
         counted = precount(wire)
         if type(counted) is not int or counted < 0:
@@ -368,7 +369,12 @@ def current_attempt(campaign_id, state, binding, wire_sha, retry_rejected=frozen
     ``rejected_4xx`` and either the owner named it in ``retry_rejected`` or the same binding with
     ``attempt + 1`` and the same wire is already in the journal, move on to that next attempt:
     a new request on the first run, a plain replay on every later one. Anything else is unchanged
-    (the rejected record replays as a stop)."""
+    (the rejected record replays as a stop).
+
+    Crash window: when the process dies after the intent of attempt N+1 was written but before it
+    was sent, that intent is never settled and this binding stays stopped ("never settled") on every
+    later run, with or without the flag. That is deliberate: nothing steps past an unsettled intent;
+    it needs manual investigation of the journal and ledger."""
     rid = request_id(campaign_id, binding, wire_sha)
     while state.settled.get(rid, {}).get("outcome") == "rejected_4xx" and type(binding.get("attempt")) is int:
         following = {**binding, "attempt": binding["attempt"] + 1}
@@ -441,7 +447,8 @@ def _replayed(campaign, journal, rid, replay, max_usd):
     token = journal.state.intents[rid]["ledger_token"]
     campaign.ledger.verify_reservation(token, rid, str(max_usd))
     if settled["outcome"] not in ("ok", "length"):
-        raise RunStopped(f"request {rid} settled with outcome {settled['outcome']!r}; cannot replay")
+        hint = f"; pass --retry-rejected {rid} to send it again" if settled["outcome"] == "rejected_4xx" else ""
+        raise RunStopped(f"request {rid} settled with outcome {settled['outcome']!r}; cannot replay{hint}")
     if settled["outcome"] == "length" and settled.get("http_status") == 400:
         if not is_output_limit_400(400, _error_object(response["body_text"].encode("utf-8"))):
             raise RunStopped(f"request {rid} settled as an output-limit HTTP 400 but its stored response "

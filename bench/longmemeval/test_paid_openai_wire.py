@@ -6,6 +6,7 @@ from pathlib import Path
 import socket
 import tempfile
 import unittest
+from unittest import mock
 
 from budget import BudgetExceeded
 from paid_call_journal import CallJournal, JournalError, ModelDrift
@@ -355,6 +356,33 @@ class PaidCompletionTests(unittest.TestCase):
         self.restart()
         self.assertEqual(self.call(transport).request_id, done.request_id)
         self.assertEqual(len(transport.calls), 3)
+
+    def test_replayed_rejection_names_the_retry_flag(self):
+        transport = FakeTransport([quota_429()])
+        with self.assertRaises(Rejected4xx):
+            self.call(transport)
+        [rejected] = self.journal.state.settled
+        with self.assertRaisesRegex(RunStopped, f"pass --retry-rejected {rejected} to send it again"):
+            self.call(transport)
+
+    def test_unsent_next_attempt_stays_stopped_for_manual_investigation(self):
+        """Crash window: attempt 2's intent is durable but the process died before ``sent``. Nothing steps
+        past it, with or without the flag; the stop says it needs manual investigation."""
+        transport = FakeTransport([quota_429(), ok()])
+        with self.assertRaises(Rejected4xx):
+            self.call(transport)
+        [rejected] = self.journal.state.settled
+        with mock.patch.object(CallJournal, "sent", side_effect=OSError("crash before sent")):
+            with self.assertRaises(OSError):
+                self.call(transport, retry_rejected=frozenset({rejected}))
+        self.restart()
+        [unsent] = set(self.journal.state.intents) - {rejected}
+        self.assertEqual(self.journal.state.intents[unsent]["binding"]["attempt"], 2)
+        self.assertEqual(self.journal.state.pending_intents, [unsent])
+        for retry in (frozenset(), frozenset({rejected})):
+            with self.subTest(retry=sorted(retry)), self.assertRaisesRegex(RunStopped, "manual"):
+                self.call(transport, retry_rejected=retry)
+        self.assertEqual(len(transport.calls), 1, "the unsent attempt is never sent and never stepped past")
 
     def test_retry_rejected_leaves_other_requests_alone(self):
         transport = FakeTransport([quota_429(), ok(), ok()])

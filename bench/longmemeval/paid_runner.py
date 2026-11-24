@@ -140,10 +140,14 @@ def _acknowledged(args, journal):
     return acknowledged
 
 
-def retry_rejected_ids(requested, journal):
-    """``--retry-rejected``: every id must be in the journal and settled ``rejected_4xx``; refused before
-    any preflight probe or reservation otherwise."""
+def retry_rejected_ids(requested, journal, acknowledged=frozenset()):
+    """``--retry-rejected``: every id must be in the journal, settled ``rejected_4xx`` and not also
+    acknowledged (an acknowledged binding becomes a permanent technical_error, so the retry could never
+    happen); refused before any preflight probe or reservation otherwise."""
     retry = frozenset(requested or ())
+    both = sorted(retry & frozenset(acknowledged))
+    if both:
+        raise CampaignError(f"--retry-rejected and --acknowledge-uncertain name the same request ids {both}")
     unknown = sorted(r for r in retry if r not in journal.state.intents)
     if unknown:
         raise CampaignError(f"--retry-rejected names unknown request ids {unknown}")
@@ -154,12 +158,25 @@ def retry_rejected_ids(requested, journal):
     return retry
 
 
+def retry_summary(campaign_id, state, retry):
+    """One line: which --retry-rejected ids now have a next attempt in the journal and which were not
+    reached by this invocation (e.g. their stage is outside --phase, or the run stopped earlier)."""
+    from paid_call_journal import request_id
+    used, unused = [], []
+    for rid in sorted(retry):
+        intent = state.intents[rid]
+        following = {**intent["binding"], "attempt": intent["binding"].get("attempt", 1) + 1}
+        sent_again = request_id(campaign_id, following, intent["wire_sha256"]) in state.intents
+        (used if sent_again else unused).append(rid[:12])
+    return f"retry-rejected: sent again {used}; not reached {unused}"
+
+
 def cmd_run(args, factories, clock, env, out):
     loaded = load_campaign(args.campaign_dir)
     campaign, journal = loaded.campaign, loaded.journal
     campaign.require_paid_mode()
     acknowledged = _acknowledged(args, journal)
-    retry = retry_rejected_ids(args.retry_rejected, journal)
+    retry = retry_rejected_ids(args.retry_rejected, journal, acknowledged)
     checks = run_preflight(args.campaign_dir, mode_command="run", env=env, holdout=loaded.holdout,
                            sheet=loaded.sheet, prompts=loaded.prompts, acknowledged=acknowledged)
     print(format_checks(checks), file=out)
@@ -200,6 +217,8 @@ def cmd_run(args, factories, clock, env, out):
                 stop = exc
     report = build_report(campaign, journal.state, campaign.directory, loaded.holdout, clock)
     print(str(write_report(campaign, report)), file=out)
+    if retry:
+        print(retry_summary(campaign.campaign_id, journal.state, retry), file=out)
     if stop is not None:
         print(f"STOP: {type(stop).__name__}: {stop}", file=sys.stderr)
         return 3

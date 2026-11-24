@@ -6,7 +6,8 @@ A fixed short probe is sent to the ``control`` profile (judge model,
 reservation is ``sheet.control_bound()`` under the campaign's policy and must
 not exceed 0.24 USD, otherwise the call is refused before anything is
 reserved. A provider rejection (HTTP 400, ``Rejected4xx``) propagates: that is
-the pilot stop the protocol asks for. Nothing here is retried.
+the pilot stop the protocol asks for. Nothing here is retried automatically
+(only the owner's ``run --retry-rejected`` sends a rejected control request again).
 """
 from decimal import Decimal
 import time
