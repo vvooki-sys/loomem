@@ -202,6 +202,27 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(per_arm["facts_retry"]["zero_facts"], 0)
         self.assertEqual(len(list((self.campaign_dir / "verdicts").glob("*.json"))), 5)
 
+    def test_output_limit_400_on_one_selection_is_an_arm_length_not_a_stop(self):
+        code, out = self.dry_run("--scenario", "selection=length_http400,ok")
+        self.assertEqual(code, 0, out)
+        summary = self.summary()
+        self.assertIsNone(summary["stop"])
+        self.assertEqual(summary["observed"]["requests_by_role_this_invocation"]["selection"], 2)
+        statuses = {p.name: json.loads(p.read_text())["status"] for p in (self.campaign_dir / "arms").glob("*.json")}
+        self.assertEqual(sorted(statuses.values()).count("length"), 1)
+        self.assertEqual([n for n, s in statuses.items() if s == "length"][0].split(".")[1], "selective_originals")
+        self.assertEqual(len(list((self.campaign_dir / "verdicts").glob("*.json"))), 5)
+        report = summary["report"]
+        self.assertEqual(report["per_arm"]["selective_originals"]["length"], 1)
+        self.assertEqual(report["per_arm"]["selective_originals"]["expected"], 2)
+        selection = report["money"]["by_stage"]["selection"]
+        self.assertEqual((selection["calls"], selection["length"], selection["length_http400"], selection["rejected_4xx"]),
+                         (2, 1, 1, 0))
+        self.assertEqual(report["money"]["by_letter"]["S"]["length_http400"], 1)
+        code, out = self.dry_run("--resume", "--scenario", "selection=length_http400,ok")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.summary()["observed"]["requests_by_role_this_invocation"], {})
+
     def test_capped_extraction_with_a_failed_attempt_stops(self):
         code, out = self.dry_run("--scenario", "extraction=capped_failed_attempt")
         self.assertEqual(code, 3, out)

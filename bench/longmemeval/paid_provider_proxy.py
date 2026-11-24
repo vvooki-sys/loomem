@@ -273,6 +273,9 @@ class ProviderProxy:
             return self._stop(handler, ordinal, exc, wire_bytes)
         except Exception as exc:  # fail closed on anything unexpected, never answer a fabricated completion
             return self._stop(handler, ordinal, exc, wire_bytes)
+        if completion.usage is None:  # output-limit HTTP 400 settled as length: no completion to forward
+            return self._stop(handler, ordinal, ProxyHalted(
+                f"request {completion.request_id} ended as an output-limit HTTP 400 (length, no usage)"), wire_bytes)
         self._record(ordinal, completion.outcome, request_id=completion.request_id, usage=completion.usage,
                      wire_bytes=wire_bytes)
         return _send(handler, 200, self._chat_completion(completion))

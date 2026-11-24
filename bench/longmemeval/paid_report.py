@@ -8,7 +8,8 @@ counted under ``extraction`` and ``capped_questions`` and stay in every arm) aga
 denominator: every holdout question for F and S, the always-originals list
 for A. Missing directories are tolerated (an interrupted campaign still
 reports). Money is reported as exact Decimal strings: the reserved maximum
-(``max_usd``) next to what was actually billed (``actual_usd``).
+(``max_usd``) next to what was actually billed (``actual_usd``); ``length_http400``
+counts the ``length`` calls that came as OpenAI's output-limit HTTP 400.
 """
 from decimal import Decimal
 import json
@@ -85,7 +86,8 @@ def _arm_table(expected, contexts, arms, verdicts):
 
 def _empty_row():
     return {"calls": 0, "settled": 0, "reserved_max_usd": Decimal(0), "actual_usd": Decimal(0),
-            "rejected_4xx": 0, "uncertain": 0, "model_drift": 0, "bound_breach": 0, "length": 0, "void": 0}
+            "rejected_4xx": 0, "uncertain": 0, "model_drift": 0, "bound_breach": 0, "length": 0, "length_http400": 0,
+            "void": 0}
 
 
 def _add(row, intent, settled, uncertain, void):
@@ -102,6 +104,7 @@ def _add(row, intent, settled, uncertain, void):
     row["rejected_4xx"] += outcome == "rejected_4xx"
     row["model_drift"] += outcome == "model_drift"
     row["length"] += outcome == "length"
+    row["length_http400"] += outcome == "length" and settled.get("http_status") == 400  # output-limit 400
     usage = settled.get("usage") or {}
     if usage and (usage.get("prompt_tokens", 0) > intent.get("r_tokens", float("inf"))
                   or usage.get("completion_tokens", 0) > intent.get("o_tokens", float("inf"))):

@@ -158,6 +158,11 @@ class JudgeArmTests(unittest.TestCase):
         self.assertEqual(record["score"], "invalid_judge")
         self.assertIn("length", record["verdict"]["error"])
         self.assertIsNotNone(record["request_id"])
+        h = ArmHarness(self, scenarios={"judge": "length_http400"})  # strict json_schema output-limit HTTP 400
+        ctx = h.context("h1-q01")
+        record = judge_arm(h.deps, h.holdout, ctx, "facts_retry", run_arm("facts_retry", ctx, h.deps))
+        self.assertEqual((record["score"], record["usage"]), ("invalid_judge", None))
+        self.assertEqual(json.loads(json.dumps(record))["usage"], None)
 
     def test_verdict_records_are_written_create_only(self):
         h = ArmHarness(self)

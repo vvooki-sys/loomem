@@ -7,6 +7,8 @@ Its order is fixed (plan §2): check wire -> sublimit -> ``ledger.reserve`` ->
 request whose outcome is unknown (timeout, connection error, 5xx, unreadable
 body, missing usage) is recorded ``uncertain``, keeps its full reservation and
 stops the run; the next call refuses until the ID is explicitly acknowledged.
+One HTTP 400 is not a rejection: OpenAI's output-limit error (``is_output_limit_400``)
+settles as outcome ``length`` at 0 USD, exactly like ``finish_reason=length``.
 """
 from dataclasses import dataclass
 from decimal import Decimal
@@ -28,6 +30,10 @@ FORBIDDEN_WIRE_KEYS = frozenset({"max_tokens", "temperature", "seed", "top_p", "
                                  "functions", "stream_options", "logprobs"})
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 BODY_CAP = 4 * 1024 * 1024
+# OpenAI answers HTTP 400 invalid_request_error "Could not finish the message because max_tokens or
+# model output limit was reached. ..." instead of 200 + finish_reason=length when a strict json_schema
+# response_format cannot be completed within max_completion_tokens (holdout r2, 2026-11-24).
+OUTPUT_LIMIT_MESSAGE_PARTS = ("max_tokens", "output limit")
 
 
 class WireError(ValueError):
@@ -58,7 +64,7 @@ class Completion:
     finish_reason: str
     model: str
     provider_request_id: str | None
-    outcome: str            # ok | length
+    outcome: str            # ok | length (an output-limit HTTP 400 is length with usage/model/finish_reason None)
     actual_usd: str
     replayed: bool = False
 
@@ -245,6 +251,21 @@ def _error_object(body):
     return None
 
 
+def is_output_limit_400(status, error):
+    """True only for OpenAI's strict-json_schema output-limit error: HTTP 400, an error object of
+    type ``invalid_request_error`` whose message contains every OUTPUT_LIMIT_MESSAGE_PARTS. It is
+    ``finish_reason=length`` in disguise (truncated JSON cannot be returned); every other 4xx is a rejection."""
+    if status != 400 or not isinstance(error, dict) or error.get("type") != "invalid_request_error":
+        return False
+    message = error.get("message")
+    return isinstance(message, str) and all(part in message for part in OUTPUT_LIMIT_MESSAGE_PARTS)
+
+
+def _output_limit_completion(rid, provider_rid, replayed=False):
+    """The ``length`` result of an output-limit HTTP 400: no text, usage, finish_reason or model."""
+    return Completion(rid, "", None, None, None, provider_rid, "length", "0", replayed=replayed)
+
+
 def actual_cost(sheet, model, usage, max_usd):
     """Billed cost at the tier of the observed prompt size; unpriced tier = full reservation."""
     pin, pout, threshold, long_in, long_out = sheet.require_priced(model)
@@ -335,7 +356,14 @@ def _settle_exchange(campaign, journal, sheet, ex, clock):
     rid, raw, status = ex["rid"], ex["raw"], ex["status"]
     record = {"status": status, "x_request_id": ex["provider_rid"], "body_text": raw.decode("utf-8", errors="replace")}
     base = {"http_status": status, "provider_request_id": ex["provider_rid"], "response_sha256": sha256_hex(raw)}
-    if 400 <= status < 500 and _error_object(raw) is not None:
+    error = _error_object(raw) if 400 <= status < 500 else None
+    if is_output_limit_400(status, error):  # length, not a rejection: settled at 0, nothing pinned
+        journal.settled(rid, {**base, "settled_at": clock(), "model_observed": None, "usage": None,
+                              "finish_reason": None, "outcome": "length", "actual_usd": "0",
+                              "elapsed_ms": _ms(ex["started"], clock())}, record)
+        campaign.ledger.settle(ex["token"], "0")
+        return _output_limit_completion(rid, ex["provider_rid"])
+    if error is not None:
         journal.settled(rid, {**base, "settled_at": clock(), "model_observed": None, "usage": None,
                               "finish_reason": None, "outcome": "rejected_4xx", "actual_usd": "0",
                               "elapsed_ms": _ms(ex["started"], clock())}, record)
@@ -386,6 +414,8 @@ def _replayed(campaign, journal, rid, replay, max_usd):
     campaign.ledger.verify_reservation(token, rid, str(max_usd))
     if settled["outcome"] not in ("ok", "length"):
         raise RunStopped(f"request {rid} settled with outcome {settled['outcome']!r}; cannot replay")
+    if settled["outcome"] == "length" and settled.get("http_status") == 400:
+        return _output_limit_completion(rid, settled.get("provider_request_id"), replayed=True)
     parsed = parse_completion(response["body_text"].encode("utf-8"))
     return Completion(rid, parsed["text"], settled["usage"], settled["finish_reason"],
                       settled["model_observed"], settled.get("provider_request_id"),
