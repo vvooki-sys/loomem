@@ -140,6 +140,8 @@ def cmd_dry_run(args, factories, clock, env, out):
     if env.get("OPENAI_API_KEY"):
         print("refused: OPENAI_API_KEY is present in the environment; a dry-run must not be able to pay", file=sys.stderr)
         return 2
+    if args.retry_rejected and not args.resume:
+        raise CampaignError("--retry-rejected needs --resume (a new campaign has no rejected request)")
     sheet = load_sheet(args.cost_sheet, args.cost_sheet_sha256)
     prompts = load_prompts(args.plan_json, args.plan_json_sha256, judge_prompt_pair(args))
     scenarios = parse_pairs(args.scenario, "--scenario")
@@ -163,8 +165,10 @@ def cmd_dry_run(args, factories, clock, env, out):
 
 def _dry_run(args, factories, clock, env, out, sheet, prompts, holdout, fake, engine_probe,
              stops, remember, resolve, stage_map):
+    from paid_runner import retry_rejected_ids
     campaign = _campaign(args, prompts, sheet, fake, clock)
     journal = CallJournal(campaign.directory)
+    retry = retry_rejected_ids(args.retry_rejected, journal)
     directory = Path(campaign.directory)
     env_view = {**env, KEY_ENV: fake.token}
     checks = run_preflight(directory, mode_command="dry-run", env=env_view, holdout=holdout, sheet=sheet,
@@ -183,15 +187,18 @@ def _dry_run(args, factories, clock, env, out, sheet, prompts, holdout, fake, en
         proxy = proxy_factory(campaign=campaign, journal=journal, sheet=sheet, transport=transport,
                               extraction_profile=campaign.profile("extraction"),
                               manifest_sha256=campaign.spec["holdout"]["manifest_sha256"],
-                              system_sha256=_frozen(directory), precount=precount, clock=clock)
+                              system_sha256=_frozen(directory), precount=precount, clock=clock,
+                              retry_rejected=retry)
         register = _register_extraction_role(fake)
         with proxy:
             try:
                 if campaign.has_control_profile() and not has_settled_control(journal.state):
-                    control_call(campaign, journal, sheet, transport, precount=precount, clock=clock)
+                    control_call(campaign, journal, sheet, transport, precount=precount, clock=clock,
+                                 retry_rejected=retry)
                 ctx = RunContext(campaign, journal, sheet, prompts, holdout, transport, engine_factory, proxy,
                                  precount=precount, limit_histories=args.limit_histories, clock=clock,
-                                 after_session=lambda p: (register(p), remember(directory, p, clock)))
+                                 after_session=lambda p: (register(p), remember(directory, p, clock)),
+                                 retry_rejected=retry)
                 run_phases(ctx, "all")
             except stops as exc:
                 stop = exc
@@ -200,7 +207,8 @@ def _dry_run(args, factories, clock, env, out, sheet, prompts, holdout, fake, en
     maximum = predicted_maximum(sheet, campaign.spec, holdout, limit_histories=args.limit_histories,
                                 token_counter=tokenizer_or_none(env))
     summary = {"campaign_id": campaign.campaign_id, "campaign_dir": str(directory), "mode": campaign.mode,
-               "resumed": bool(args.resume), "scenarios": {"default": "ok", **parse_pairs(args.scenario, "--scenario")},
+               "resumed": bool(args.resume), "retry_rejected": sorted(retry),
+               "scenarios": {"default": "ok", **parse_pairs(args.scenario, "--scenario")},
                "preflight": [{"name": c.name, "passed": c.passed, "detail": c.detail} for c in checks],
                "predicted_maximum": maximum, "observed": _observed(campaign, journal, holdout, fake, tokenizer_or_none(env), prompts, sheet),
                "hashes": _hashes(campaign, prompts, sheet), "report_path": str(report_path),

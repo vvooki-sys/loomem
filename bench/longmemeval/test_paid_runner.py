@@ -13,6 +13,7 @@ from paid_call_journal import CallJournal, request_id, sha256_hex
 from paid_campaign import open_campaign
 from paid_context import context_sha256
 from paid_dry_run import KEY_ENV, fake_provider
+from paid_fake_openai import INSUFFICIENT_QUOTA_429
 from paid_openai_wire import build_wire, wire_bytes
 from paid_runner import main as _main
 from paid_test_support import PROFILES, binding, messages
@@ -243,6 +244,82 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual((money["K"]["calls"], money["K"]["rejected_4xx"], money["K"]["actual_usd"]), (1, 1, "0"))
         self.assertEqual(sum(row["calls"] for letter, row in money.items() if letter != "K"), 0)
 
+    def rejected_ids(self):
+        state = CallJournal(self.campaign_dir).state
+        return sorted(r for r, s in state.settled.items() if s["outcome"] == "rejected_4xx")
+
+    def test_rejected_judge_is_sent_again_only_with_retry_rejected(self):
+        code, out = self.dry_run("--scenario", "judge=rejected_4xx,ok")
+        self.assertEqual(code, 3, out)
+        self.assertIn("Rejected4xx", self.summary()["stop"])
+        [rid] = self.rejected_ids()
+        ok_rid = next(r for r, s in CallJournal(self.campaign_dir).state.settled.items() if s["outcome"] == "ok")
+        refusals = {("--retry-rejected", "not-a-known-rid"): "unknown request ids",
+                    ("--retry-rejected", ok_rid): "not settled as rejected_4xx"}
+        for flags, message in refusals.items():
+            with self.subTest(flags=flags):
+                code, out = self.dry_run("--resume", *flags)
+                self.assertEqual(code, 2, out)
+                self.assertIn(message, out)
+        code, out = self.dry_run("--retry-rejected", rid)  # never on a new campaign
+        self.assertEqual(code, 2, out)
+        self.assertIn("needs --resume", out)
+        code, out = self.dry_run("--resume")  # without the flag the replayed rejection still stops
+        self.assertEqual(code, 3, out)
+        self.assertEqual(self.summary()["observed"]["requests_by_role_this_invocation"], {})
+        code, out = self.dry_run("--resume", "--retry-rejected", rid)
+        self.assertEqual(code, 0, out)
+        summary = self.summary()
+        self.assertEqual((summary["stop"], summary["retry_rejected"]), (None, [rid]))
+        self.assertEqual(summary["observed"]["requests_by_role_this_invocation"], {"judge": 5})
+        judge = summary["report"]["money"]["by_stage"]["judge"]
+        self.assertEqual((judge["calls"], judge["rejected_4xx"], judge["retried"], judge["max_attempt"], judge["settled"]),
+                         (6, 1, 1, 2, 6))
+        self.assertEqual(sum(row["judged"] for row in summary["report"]["per_arm"].values()), 5)
+        self.assertEqual(sum(row["pending"] + row["ok_unjudged"] for row in summary["report"]["per_arm"].values()), 0)
+        self.assertEqual(summary["report"]["money"]["by_stage"]["diagnostic"]["max_attempt"], 1)
+        code, out = self.dry_run("--resume")  # later resume without the flag: attempt 2 replays, nothing is sent
+        self.assertEqual(code, 0, out)
+        resumed = self.summary()
+        self.assertEqual(resumed["observed"]["requests_by_role_this_invocation"], {})
+        self.assertEqual(resumed["observed"]["input_token_probes_this_invocation"], 0)
+        self.assertEqual(resumed["report"]["money"]["by_stage"]["judge"]["retried"], 1)
+
+    def test_budget_stop_on_a_retried_first_stage_is_not_started_budget(self):
+        from paid_campaign import Campaign, SublimitExceeded
+        code, out = self.dry_run("--scenario", "diagnostic=rejected_4xx,ok")  # h1-q01 facts_retry diagnostic
+        self.assertEqual(code, 3, out)
+        [rid] = self.rejected_ids()
+        original = Campaign.check_sublimit
+
+        def no_room_for_f(campaign, letter, committed, add):
+            if letter == "F":
+                raise SublimitExceeded("synthetic: sublimit F exhausted")
+            return original(campaign, letter, committed, add)
+
+        with mock.patch.object(Campaign, "check_sublimit", no_room_for_f):
+            code, out = self.dry_run("--resume", "--retry-rejected", rid)
+        self.assertEqual(code, 3, out)
+        arm = json.loads((self.campaign_dir / "arms" / "h1-q01.facts_retry.json").read_text())
+        self.assertEqual(arm["status"], "not_started_budget", "a 0 USD rejected_4xx is not a reservation")
+
+    def test_retry_rejected_covers_control_extraction_and_arm_stages(self):
+        for role, stage in (("control", "control"), ("extraction", "extraction"), ("diagnostic", "diagnostic")):
+            with self.subTest(role=role):
+                self.campaign_dir = self.root / f"dry-{role}"
+                code, out = self.dry_run("--scenario", f"{role}=rejected_4xx,ok")
+                self.assertEqual(code, 3, out)
+                [rid] = self.rejected_ids()
+                code, out = self.dry_run("--resume", "--retry-rejected", rid)
+                self.assertEqual(code, 0, out)
+                summary = self.summary()
+                row = summary["report"]["money"]["by_stage"][stage]
+                self.assertEqual((row["rejected_4xx"], row["retried"], row["max_attempt"]), (1, 1, 2))
+                self.assertEqual(len(list((self.campaign_dir / "verdicts").glob("*.json"))), 5)
+                code, out = self.dry_run("--resume")
+                self.assertEqual(code, 0, out)
+                self.assertEqual(self.summary()["observed"]["requests_by_role_this_invocation"], {})
+
 
 @unittest.skipUnless(SANDBOX_PRESENT, "sandbox-exec absent: paid-mode preflight cannot pass here")
 class PinnedFingerprintTests(unittest.TestCase):
@@ -370,6 +447,14 @@ class AcknowledgeUncertainTests(unittest.TestCase):
                           "--acknowledge-uncertain", "not-a-known-rid"], env=self.env)
         self.assertEqual(code, 2)
         self.assertIn("unknown request ids", out)
+        for rid, message in (("not-a-known-rid", "unknown request ids"),
+                             (self.rid, "not settled as rejected_4xx")):  # an unsettled request is not a rejection
+            code, out = main(["run", "--campaign-dir", str(self.campaign_dir), "--phase", "arms",
+                              "--retry-rejected", rid], env=self.env)
+            self.assertEqual(code, 2, out)
+            self.assertIn(message, out)
+            self.assertNotIn("PASS", out, "refused before preflight")
+        self.assertEqual(self.fake.log, [])
         code, out = main(["run", "--campaign-dir", str(self.campaign_dir), "--phase", "arms",
                           "--acknowledge-uncertain", self.rid], env=self.env)
         self.assertEqual(code, 0, out)
@@ -393,6 +478,86 @@ class AcknowledgeUncertainTests(unittest.TestCase):
         self.assertEqual(roles.count("judge"), 0)
         self.assertFalse((self.campaign_dir / "run.lock").exists())
         self.assertTrue((self.campaign_dir / "reports" / "report-1.json").is_file())
+
+    def forge_rejected_control(self):
+        """The control call K reserved, sent and settled rejected_4xx (HTTP 429), ledger settled at 0."""
+        from paid_control import control_binding, control_messages, control_reservation
+        wire = build_wire(self.campaign.profile("control"), control_messages())
+        body, bind = wire_bytes(wire), control_binding(self.campaign)
+        rid = request_id(self.campaign.campaign_id, bind, sha256_hex(body))
+        bound, max_usd = control_reservation(self.campaign, self.sheet)
+        token = self.campaign.ledger.reserve(rid, str(max_usd))
+        clock = itertools.count(1_600_000_100).__next__
+        self.journal.intent({"schema": 1, "request_id": rid, "campaign_id": self.campaign.campaign_id,
+                             "created_at": clock(), "letter": "K", "stage": "control", "binding": bind,
+                             "profile": {**self.campaign.profile("control"), "service_tier": "default"},
+                             "bound_policy": "p1", "r_tokens": bound.r_tokens, "o_tokens": bound.o_tokens,
+                             "max_usd": str(max_usd), "wire_sha256": sha256_hex(body), "wire_bytes": len(body),
+                             "ledger_token": token}, wire)
+        self.journal.sent(rid, clock(), 5, "127.0.0.1")
+        error = json.dumps(INSUFFICIENT_QUOTA_429)
+        self.journal.settled(rid, {"http_status": 429, "provider_request_id": None,
+                                   "response_sha256": sha256_hex(error.encode("utf-8")), "settled_at": clock(),
+                                   "model_observed": None, "usage": None, "finish_reason": None,
+                                   "outcome": "rejected_4xx", "actual_usd": "0", "elapsed_ms": 1},
+                             {"status": 429, "x_request_id": None, "body_text": error})
+        self.campaign.ledger.settle(token, "0")
+        return rid
+
+    def test_paid_run_retries_a_rejected_request_once_and_then_replays_it(self):
+        rid = self.forge_rejected_control()
+        control = ["run", "--campaign-dir", str(self.campaign_dir), "--phase", "control",
+                   "--acknowledge-uncertain", self.rid]  # the unrelated forged diagnostic stays acknowledged
+        code, out = main([*control, "--retry-rejected", rid, "--acknowledge-uncertain", rid], env=self.env)
+        self.assertEqual(code, 2, out)
+        self.assertIn("name the same request ids", out)
+        self.assertNotIn("PASS", out, "refused before preflight")
+        code, out = main(control, env=self.env)  # without the flag the rejected K replays as a stop
+        self.assertEqual(code, 3, out)
+        self.assertIn(f"pass --retry-rejected {rid}", out)
+        self.assertEqual(self.fake.log, [])
+        code, out = main([*control, "--retry-rejected", rid], env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual([e["role"] for e in self.fake.log], ["control"])
+        self.assertIn(f"retry-rejected: sent again ['{rid[:12]}']; journaled unsent []; not reached []", out)
+        journal = CallJournal(self.campaign_dir)
+        [retried] = [r for r, i in journal.state.intents.items() if i["stage"] == "control" and r != rid]
+        self.assertEqual(journal.state.intents[retried]["binding"], {**journal.state.intents[rid]["binding"], "attempt": 2})
+        self.assertEqual((journal.state.settled[rid]["outcome"], journal.state.settled[retried]["outcome"]),
+                         ("rejected_4xx", "ok"))
+        code, out = main(control, env=self.env)  # resume without the flag: nothing new leaves
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.fake.log), 1)
+        from paid_control import control_call
+        from paid_openai_wire import Transport
+        campaign = open_campaign(self.campaign_dir, self.sheet)
+        again = control_call(campaign, CallJournal(self.campaign_dir), self.sheet, Transport.from_campaign(campaign),
+                             acknowledged=frozenset({self.rid}))
+        self.assertEqual((again.request_id, again.replayed), (retried, True))  # attempt 1 -> 2 is followed
+        self.assertEqual(len(self.fake.log), 1)
+
+    def test_retry_names_ids_the_phase_did_not_reach(self):
+        rid = self.forge_rejected_control()
+        with mock.patch("paid_runner.has_settled_control", return_value=True):  # K not attempted this invocation
+            code, out = main(["run", "--campaign-dir", str(self.campaign_dir), "--phase", "control",
+                              "--acknowledge-uncertain", self.rid, "--retry-rejected", rid], env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"retry-rejected: sent again []; journaled unsent []; not reached ['{rid[:12]}']", out)
+        self.assertEqual(self.fake.log, [])
+
+    def test_retry_whose_next_attempt_was_never_sent_is_journaled_unsent(self):
+        """Crash window: the attempt-2 intent is written, then ``journal.sent`` fails; the run stops and
+        the summary must not claim the request was sent again."""
+        rid = self.forge_rejected_control()
+        with mock.patch.object(CallJournal, "sent", side_effect=OSError("crash before sent")):
+            code, out = main(["run", "--campaign-dir", str(self.campaign_dir), "--phase", "control",
+                              "--acknowledge-uncertain", self.rid, "--retry-rejected", rid], env=self.env)
+        self.assertEqual(code, 3, out)
+        self.assertIn(f"retry-rejected: sent again []; journaled unsent ['{rid[:12]}']; not reached []", out)
+        self.assertEqual(self.fake.log, [], "the provider was never called")
+        state = CallJournal(self.campaign_dir).state
+        [unsent] = [r for r, i in state.intents.items() if i["stage"] == "control" and r != rid]
+        self.assertEqual((state.intents[unsent]["binding"]["attempt"], unsent in state.sent), (2, False))
 
 
 class ControlPhaseTests(unittest.TestCase):

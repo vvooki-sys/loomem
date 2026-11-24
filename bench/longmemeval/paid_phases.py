@@ -48,6 +48,7 @@ class RunContext:
     clock: object = time.time
     readiness_deadline_s: float = 60.0
     after_session: object = None    # optional callable(proxy) after each session (dry-run role registration)
+    retry_rejected: frozenset = frozenset()  # rejected_4xx request ids the owner allows to send again
 
     @property
     def directory(self):
@@ -240,12 +241,17 @@ def _deps(ctx):
     from paid_arms import ArmDeps
     return ArmDeps(ctx.campaign, ctx.journal, ctx.sheet, ctx.prompts, ctx.transport,
                    ctx.holdout.sources_bytes_max(), ctx.campaign.spec["holdout"]["manifest_sha256"],
-                   frozenset(ctx.acknowledged), ctx.precount, ctx.clock)
+                   frozenset(ctx.acknowledged), ctx.precount, ctx.clock, frozenset(ctx.retry_rejected))
 
 
 def _arm_reserved_before(ctx, qid, arm):
+    """True when a non-judge request of this arm holds or held money; a 0 USD ``rejected_4xx`` does not
+    count, so a budget stop on its retry is ``not_started_budget``, not ``technical_error``."""
+    state = ctx.journal.state
     return any(i["binding"].get("question_id") == qid and i["binding"].get("arm") == arm
-               and i["binding"].get("stage") != "judge" for i in ctx.journal.state.intents.values())
+               and i["binding"].get("stage") != "judge"
+               and state.settled.get(rid, {}).get("outcome") != "rejected_4xx"
+               for rid, i in state.intents.items())
 
 
 def _run_one_arm(ctx, deps, qid, arm, acked):

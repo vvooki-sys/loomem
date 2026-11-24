@@ -6,7 +6,8 @@ A fixed short probe is sent to the ``control`` profile (judge model,
 reservation is ``sheet.control_bound()`` under the campaign's policy and must
 not exceed 0.24 USD, otherwise the call is refused before anything is
 reserved. A provider rejection (HTTP 400, ``Rejected4xx``) propagates: that is
-the pilot stop the protocol asks for. Nothing here is retried.
+the pilot stop the protocol asks for. Nothing here is retried automatically
+(only the owner's ``run --retry-rejected`` sends a rejected control request again).
 """
 from decimal import Decimal
 import time
@@ -61,7 +62,7 @@ def has_settled_control(journal_state):
 
 
 def control_call(campaign, journal, sheet, transport, *, precount=None, acknowledged=frozenset(),
-                 clock=time.time):
+                 clock=time.time, retry_rejected=frozenset()):
     if not campaign.has_control_profile():
         raise CampaignError(f"campaign has no {CONTROL_STAGE!r} profile: the pilot control call is refused")
     bound, _ = control_reservation(campaign, sheet)
@@ -71,4 +72,5 @@ def control_call(campaign, journal, sheet, transport, *, precount=None, acknowle
     return paid_completion(campaign, journal, sheet, letter=LETTER, stage=CONTROL_STAGE,
                            binding=control_binding(campaign), messages=control_messages(),
                            response_format=None, transport=transport, bound=bound,
-                           acknowledged=acknowledged, clock=clock, precount=precount)
+                           acknowledged=acknowledged, clock=clock, precount=precount,
+                           retry_rejected=retry_rejected)

@@ -12,7 +12,10 @@ request goes through ``paid_completion`` with the exact pre-send input count as
 fake. Exit codes: 0 ok, 2 refused/FAIL, 3 stopped mid-run (journal and report
 say where). An extraction the product capped (facts above ``max_facts_per_chunk``
 dropped, engine status ``partial``) is the state ``extraction_capped``, not a
-stop: the session stays in the denominator and the report counts it.
+stop: the session stays in the denominator and the report counts it. A provider rejection
+(``rejected_4xx``, e.g. HTTP 429 ``insufficient_quota``) stops the run and replays as a stop;
+``--retry-rejected RID`` (each RID settled ``rejected_4xx``) sends that same frozen request again
+as ``attempt + 1``, which every later resume then replays.
 """
 from dataclasses import dataclass
 import os
@@ -137,11 +140,50 @@ def _acknowledged(args, journal):
     return acknowledged
 
 
+def retry_rejected_ids(requested, journal, acknowledged=frozenset()):
+    """``--retry-rejected``: every id must be in the journal, settled ``rejected_4xx`` and not also
+    acknowledged (an acknowledged binding becomes a permanent technical_error, so the retry could never
+    happen); refused before any preflight probe or reservation otherwise."""
+    retry = frozenset(requested or ())
+    both = sorted(retry & frozenset(acknowledged))
+    if both:
+        raise CampaignError(f"--retry-rejected and --acknowledge-uncertain name the same request ids {both}")
+    unknown = sorted(r for r in retry if r not in journal.state.intents)
+    if unknown:
+        raise CampaignError(f"--retry-rejected names unknown request ids {unknown}")
+    other = sorted(f"{r} ({journal.state.settled.get(r, {}).get('outcome', 'unsettled')})" for r in retry
+                   if r not in unknown and journal.state.settled.get(r, {}).get("outcome") != "rejected_4xx")
+    if other:
+        raise CampaignError(f"--retry-rejected names request ids not settled as rejected_4xx: {other}")
+    return retry
+
+
+def retry_summary(campaign_id, state, retry):
+    """One line: which --retry-rejected ids had their next attempt sent, which have only a journaled
+    intent for it that was never sent (crash window: investigate manually), and which were not reached
+    by this invocation (e.g. their stage is outside --phase, or the run stopped earlier)."""
+    from paid_call_journal import request_id
+    buckets = {"sent again": [], "journaled unsent": [], "not reached": []}
+    for rid in sorted(retry):
+        intent = state.intents[rid]
+        following = {**intent["binding"], "attempt": intent["binding"].get("attempt", 1) + 1}
+        next_rid = request_id(campaign_id, following, intent["wire_sha256"])
+        if next_rid in state.sent:
+            bucket = "sent again"
+        elif next_rid in state.intents:
+            bucket = "journaled unsent"
+        else:
+            bucket = "not reached"
+        buckets[bucket].append(rid[:12])
+    return "retry-rejected: " + "; ".join(f"{name} {ids}" for name, ids in buckets.items())
+
+
 def cmd_run(args, factories, clock, env, out):
     loaded = load_campaign(args.campaign_dir)
     campaign, journal = loaded.campaign, loaded.journal
     campaign.require_paid_mode()
     acknowledged = _acknowledged(args, journal)
+    retry = retry_rejected_ids(args.retry_rejected, journal, acknowledged)
     checks = run_preflight(args.campaign_dir, mode_command="run", env=env, holdout=loaded.holdout,
                            sheet=loaded.sheet, prompts=loaded.prompts, acknowledged=acknowledged)
     print(format_checks(checks), file=out)
@@ -166,21 +208,24 @@ def cmd_run(args, factories, clock, env, out):
                               # sending any other extraction prompt halts before anything is reserved.
                               system_sha256=(frozen_extraction_system(campaign.directory)
                                              or campaign.spec.get("extraction_system_sha256")),
-                              precount=precount, acknowledged=acknowledged, clock=clock)
+                              precount=precount, acknowledged=acknowledged, clock=clock, retry_rejected=retry)
         with proxy:
             try:
                 if not has_settled_control(journal.state):
                     done = control_call(campaign, journal, loaded.sheet, transport, precount=precount,
-                                        acknowledged=acknowledged, clock=clock)
+                                        acknowledged=acknowledged, clock=clock, retry_rejected=retry)
                     print(f"control call {done.request_id[:12]}: {done.outcome}, model {done.model}", file=out)
                 ctx = RunContext(campaign, journal, loaded.sheet, loaded.prompts, loaded.holdout, transport,
                                  engine_factory, proxy, precount=precount, acknowledged=acknowledged, clock=clock,
-                                 after_session=lambda p: remember_extraction_system(campaign.directory, p, clock))
+                                 after_session=lambda p: remember_extraction_system(campaign.directory, p, clock),
+                                 retry_rejected=retry)
                 run_phases(ctx, args.phase)
             except STOPS as exc:
                 stop = exc
     report = build_report(campaign, journal.state, campaign.directory, loaded.holdout, clock)
     print(str(write_report(campaign, report)), file=out)
+    if retry:
+        print(retry_summary(campaign.campaign_id, journal.state, retry), file=out)
     if stop is not None:
         print(f"STOP: {type(stop).__name__}: {stop}", file=sys.stderr)
         return 3

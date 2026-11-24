@@ -111,7 +111,8 @@ def _send(handler, status, obj):
 
 class ProviderProxy:
     def __init__(self, campaign, journal, sheet, transport, *, extraction_profile, manifest_sha256,
-                 system_sha256=None, precount=None, acknowledged=frozenset(), clock=time.time):
+                 system_sha256=None, precount=None, acknowledged=frozenset(), clock=time.time,
+                 retry_rejected=frozenset()):
         if not isinstance(extraction_profile, dict) or set(extraction_profile) != PROFILE_KEYS:
             raise ValueError("extraction_profile must have exactly model, reasoning_effort, max_completion_tokens")
         if not isinstance(manifest_sha256, str) or len(manifest_sha256) != 64:
@@ -121,6 +122,7 @@ class ProviderProxy:
         self.manifest_sha256 = manifest_sha256
         self.system_sha256 = system_sha256
         self.precount, self.acknowledged, self.clock = precount, frozenset(acknowledged), clock
+        self.retry_rejected = frozenset(retry_rejected)
         self.token = secrets.token_hex(32)
         self.key_env = KEY_ENV
         self.halted, self.halt_reason = False, None
@@ -271,7 +273,8 @@ class ProviderProxy:
             completion = paid_completion(
                 self.campaign, self.journal, self.sheet, letter="E", stage="extraction", binding=binding,
                 messages=messages, response_format=None, transport=self.transport, bound=bound,
-                acknowledged=self.acknowledged, clock=self.clock, precount=self.precount)
+                acknowledged=self.acknowledged, clock=self.clock, precount=self.precount,
+                retry_rejected=self.retry_rejected)
         except MONEY_PATH_ERRORS as exc:
             return self._stop(handler, ordinal, exc, wire_bytes)
         except Exception as exc:  # fail closed on anything unexpected, never answer a fabricated completion

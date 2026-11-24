@@ -9,7 +9,10 @@ denominator: every holdout question for F and S, the always-originals list
 for A. Missing directories are tolerated (an interrupted campaign still
 reports). Money is reported as exact Decimal strings: the reserved maximum
 (``max_usd``) next to what was actually billed (``actual_usd``); ``length_http400``
-counts the ``length`` calls that came as OpenAI's output-limit HTTP 400.
+counts the ``length`` calls that came as OpenAI's output-limit HTTP 400. ``retried`` counts the
+calls sent as a later attempt of a ``rejected_4xx`` request (``run --retry-rejected``) and
+``max_attempt`` is the highest attempt in the row; the rejected attempt itself stays counted in
+``calls`` and ``rejected_4xx``. Like ``calls``, ``retried`` counts intents (attempt > 1), sent or not.
 """
 from decimal import Decimal
 import json
@@ -87,11 +90,15 @@ def _arm_table(expected, contexts, arms, verdicts):
 def _empty_row():
     return {"calls": 0, "settled": 0, "reserved_max_usd": Decimal(0), "actual_usd": Decimal(0),
             "rejected_4xx": 0, "uncertain": 0, "model_drift": 0, "bound_breach": 0, "length": 0, "length_http400": 0,
-            "void": 0}
+            "void": 0, "retried": 0, "max_attempt": 0}
 
 
 def _add(row, intent, settled, uncertain, void):
     row["calls"] += 1
+    attempt = (intent.get("binding") or {}).get("attempt")
+    attempt = attempt if type(attempt) is int else 1
+    row["retried"] += attempt > 1       # a later attempt of a rejected_4xx request (run --retry-rejected)
+    row["max_attempt"] = max(row["max_attempt"], attempt)
     row["reserved_max_usd"] += Decimal(intent["max_usd"])
     row["uncertain"] += bool(uncertain)
     row["void"] += bool(void)
