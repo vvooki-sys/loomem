@@ -396,7 +396,7 @@ rerank_sync_timeout_ms = 2000
 event_date_proximity_boost = 0.0
 content_dedup = &quot;prefix&quot;
 </code></pre>
-<p>These <code>[search]</code> keys, the <code>memory_search</code> keys in <a href="#mcp"><code>[mcp]</code></a> and <code>temporal_grounding</code> in <a href="#knowledge_extraction"><code>[knowledge_extraction]</code></a> are quality levers. All of them are off or neutral by default: with the shipped values, output is byte-identical to the output before the key existed. A default changes only after a measured A/B run. A value the validation rejects stops the config from loading.</p>
+<p>These <code>[search]</code> keys, the <code>memory_search</code> keys in <a href="#mcp"><code>[mcp]</code></a>, and the <code>temporal_grounding</code> and <code>prompt_variant</code> keys in <a href="#knowledge_extraction"><code>[knowledge_extraction]</code></a> are quality levers. All of them are off or neutral by default: with the shipped values, output is byte-identical to the output before the key existed. A default changes only after a measured A/B run. A value the validation rejects stops the config from loading.</p>
 <table>
 <thead>
 <tr>
@@ -1061,6 +1061,7 @@ input_chunk_tokens = 4000
 split_on_truncation = true
 tolerate_trailing_json = false
 temporal_grounding = &quot;off&quot;
+prompt_variant = &quot;default&quot;
 </code></pre>
 <p>Controls the <code>memory_ingest</code> LLM pipeline.</p>
 <table>
@@ -1106,7 +1107,7 @@ temporal_grounding = &quot;off&quot;
 </tbody>
 </table>
 <p>These are the shipped defaults since 2026-11-22 (an owner decision, deliberately without an A/B — the validation pilot is the measurement). Before, extraction was one call per transcript up to 20K tokens, with a 2000-token completion cap and 20 facts per transcript. The code defaults for a config that omits these keys stay at the legacy values (<code>20</code> / <code>2000</code> / <code>0</code> / <code>false</code>), so an older config behaves as before; with <code>input_chunk_tokens = 0</code> and <code>max_facts_per_transcript = 20</code> the whole transcript is one chunk and the per-chunk cap is the former cap, fact for fact. The one visible change for such a config: a transcript over <code>max_transcript_tokens</code>, which the legacy path processes as overlapping windows, now gets the cap per window. A truncated reply is never admitted in either mode; a completion that ends with <code>finish_reason = "length"</code> is an explicit error on every chat path, not only in extraction.</p>
-<p><code>temporal_grounding</code> is a quality lever (see <a href="#quality-levers">Quality levers</a>):</p>
+<p><code>temporal_grounding</code> and <code>prompt_variant</code> are quality levers (see <a href="#quality-levers">Quality levers</a>):</p>
 <table>
 <thead>
 <tr>
@@ -1123,9 +1124,15 @@ temporal_grounding = &quot;off&quot;
 <td><code>"off"</code></td>
 <td>Rejects extracted facts whose relative time (such as "three weeks ago" or "yesterday") or <code>event_date_context</code> does not appear in the source chunk. <code>"off"</code>: no check; the prompt and the admitted facts are byte-identical to before. <code>"filter"</code>: drop such facts; the extraction prompt does not change. <code>"prompt_and_filter"</code>: <code>"filter"</code>, plus a TEMPORAL GROUNDING notice prepended to the extraction system prompt, which changes the prompt sent to the LLM. Any other value fails config loading</td>
 </tr>
+<tr>
+<td><code>prompt_variant</code></td>
+<td>string</td>
+<td><code>"default"</code></td>
+<td>Extraction system prompt. <code>"default"</code>: the prompt is byte-identical to before. <code>"relations"</code>: a RELATIONS AND VALUES notice is prepended to the extraction system prompt, asking the model to keep a stated cause in the fact it explains, the direction of a change (from what to what, increased or decreased, started or stopped; never inverted), and numbers, amounts, currencies and dates with the entity they belong to. This changes the prompt sent to the LLM; the output format and the reply parser do not change. With <code>temporal_grounding = "prompt_and_filter"</code>, the TEMPORAL GROUNDING notice comes before the RELATIONS AND VALUES notice, and both follow the security notice (untrusted data) at the top of the prompt. Any other value fails config loading</td>
+</tr>
 </tbody>
 </table>
-<p>The check compares whitespace-normalized, lowercased text, and it covers only some relative expressions: a fact that uses any other form passes the content check unexamined. Known forms it does not cover:</p>
+<p>The <code>temporal_grounding</code> check compares whitespace-normalized, lowercased text, and it covers only some relative expressions: a fact that uses any other form passes the content check unexamined. Known forms it does not cover:</p>
 <ul>
 <li>English: "last night", "this morning", "next week", "in two weeks", "last Friday/weekend/summer", "a couple of weeks ago", "a few/several days ago", and number words above ten ("eleven days ago").</li>
 <li>Polish: "dziś", "przedwczoraj", "w zeszłym tygodniu", "tydzień/miesiąc/rok temu", and number words above five ("sześć dni temu" and up).</li>

@@ -130,7 +130,7 @@ event_date_proximity_boost = 0.0
 content_dedup = "prefix"
 ```
 
-Te klucze `[search]`, klucze `memory_search` w [`[mcp]`](#mcp) oraz `temporal_grounding` w [`[knowledge_extraction]`](#knowledge_extraction) to dźwignie jakości. Wszystkie są domyślnie wyłączone lub neutralne: przy wartościach z dostarczanej konfiguracji wynik jest identyczny bajt po bajcie z wynikiem sprzed wprowadzenia klucza. Wartość domyślna zmienia się dopiero po zmierzonym teście A/B. Wartość odrzucona przez walidację zatrzymuje wczytanie konfiguracji.
+Te klucze `[search]`, klucze `memory_search` w [`[mcp]`](#mcp) oraz klucze `temporal_grounding` i `prompt_variant` w [`[knowledge_extraction]`](#knowledge_extraction) to dźwignie jakości. Wszystkie są domyślnie wyłączone lub neutralne: przy wartościach z dostarczanej konfiguracji wynik jest identyczny bajt po bajcie z wynikiem sprzed wprowadzenia klucza. Wartość domyślna zmienia się dopiero po zmierzonym teście A/B. Wartość odrzucona przez walidację zatrzymuje wczytanie konfiguracji.
 
 | Klucz | Typ | Domyślnie | Opis |
 |----|----|----|----|
@@ -566,6 +566,7 @@ input_chunk_tokens = 4000
 split_on_truncation = true
 tolerate_trailing_json = false
 temporal_grounding = "off"
+prompt_variant = "default"
 ```
 
 Steruje procesem LLM `memory_ingest`.
@@ -580,13 +581,14 @@ Steruje procesem LLM `memory_ingest`.
 
 Te wartości są domyślne w dostarczanej konfiguracji od 2026-11-22 (decyzja właściciela, celowo bez testu A/B — pomiarem jest pilotaż walidacyjny). Wcześniej ekstrakcja wykonywała jedno wywołanie na transkrypcję do 20 tys. tokenów, z limitem odpowiedzi 2000 tokenów i 20 faktami na transkrypcję. Wartości domyślne w kodzie dla konfiguracji pomijającej te klucze pozostają przy poprzednich (`20` / `2000` / `0` / `false`), więc starsza konfiguracja zachowuje się jak dotąd; przy `input_chunk_tokens = 0` i `max_facts_per_transcript = 20` cała transkrypcja jest jednym fragmentem, a limit na fragment jest dawnym limitem, fakt po fakcie. Jedyna widoczna zmiana dla takiej konfiguracji: transkrypcja dłuższa niż `max_transcript_tokens`, którą poprzedni proces przetwarza jako nakładające się okna, dostaje teraz limit na każde okno. Obcięta odpowiedź nie jest przyjmowana w żadnym trybie; odpowiedź zakończona `finish_reason = "length"` jest jawnym błędem na każdej ścieżce czatu, nie tylko w ekstrakcji.
 
-`temporal_grounding` to dźwignia jakości (zobacz [Dźwignie jakości](#quality-levers)):
+`temporal_grounding` i `prompt_variant` to dźwignie jakości (zobacz [Dźwignie jakości](#quality-levers)):
 
 | Klucz | Typ | Domyślnie | Opis |
 |----|----|----|----|
 | `temporal_grounding` | string | `"off"` | Odrzuca wyodrębnione fakty, których czas względny (np. „three weeks ago” lub „yesterday”) albo `event_date_context` nie występuje we fragmencie źródłowym. `"off"`: bez kontroli; prompt i przyjęte fakty są identyczne bajt po bajcie z wcześniejszymi. `"filter"`: odrzuca takie fakty; prompt ekstrakcji się nie zmienia. `"prompt_and_filter"`: jak `"filter"`, a do promptu systemowego ekstrakcji dodawane jest na początku powiadomienie TEMPORAL GROUNDING, co zmienia prompt wysyłany do LLM. Każda inna wartość powoduje błąd wczytania konfiguracji |
+| `prompt_variant` | string | `"default"` | Prompt systemowy ekstrakcji. `"default"`: prompt jest identyczny bajt po bajcie z wcześniejszym. `"relations"`: do promptu systemowego ekstrakcji dodawane jest na początku powiadomienie RELATIONS AND VALUES, które prosi model, by zachował podaną przyczynę w fakcie, który ona wyjaśnia, kierunek zmiany (z czego na co, wzrost lub spadek, rozpoczęcie lub zakończenie; nigdy odwrócony) oraz liczby, kwoty, waluty i daty razem z encją, do której należą. Zmienia to prompt wysyłany do LLM; format odpowiedzi i parser się nie zmieniają. Przy `temporal_grounding = "prompt_and_filter"` powiadomienie TEMPORAL GROUNDING poprzedza powiadomienie RELATIONS AND VALUES, a oba następują po powiadomieniu bezpieczeństwa (dane niezaufane) na początku promptu. Każda inna wartość powoduje błąd wczytania konfiguracji |
 
-Kontrola porównuje tekst po normalizacji białych znaków i zamianie na małe litery i obejmuje tylko część wyrażeń względnych: fakt, który używa innej formy, przechodzi kontrolę treści bez sprawdzenia. Znane formy, których nie obejmuje:
+Kontrola `temporal_grounding` porównuje tekst po normalizacji białych znaków i zamianie na małe litery i obejmuje tylko część wyrażeń względnych: fakt, który używa innej formy, przechodzi kontrolę treści bez sprawdzenia. Znane formy, których nie obejmuje:
 
 - angielskie: „last night”, „this morning”, „next week”, „in two weeks”, „last Friday/weekend/summer”, „a couple of weeks ago”, „a few/several days ago” oraz liczebniki słowne powyżej dziesięciu („eleven days ago”);
 - polskie: „dziś”, „przedwczoraj”, „w zeszłym tygodniu”, „tydzień/miesiąc/rok temu” oraz liczebniki słowne powyżej pięciu („sześć dni temu” i wyższe).

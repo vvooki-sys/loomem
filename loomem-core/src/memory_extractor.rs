@@ -14,12 +14,14 @@ mod chunking;
 mod completion;
 mod config_validation;
 mod http;
+mod prompt_variant;
 mod reply;
 mod temporal_grounding;
 use chunking::extract_chunk_with_split;
 pub use completion::ExtractionOutcome;
 use config_validation::transcript_chunks;
 pub use http::HttpExtractionChat;
+pub use prompt_variant::ExtractionPromptVariant;
 pub use temporal_grounding::TemporalGrounding;
 
 /// /153: an operator-defined extraction category. `fact_type` is the wire key
@@ -101,6 +103,10 @@ pub struct KnowledgeExtractionConfig {
     /// also prepends a TEMPORAL GROUNDING notice to the system prompt.
     #[serde(default)]
     pub temporal_grounding: TemporalGrounding,
+    /// Extraction prompt variant (module `prompt_variant`). `Default` keeps
+    /// the prompt bytes identical; output schema and parser never change.
+    #[serde(default)]
+    pub prompt_variant: ExtractionPromptVariant,
 }
 
 fn default_extraction_max_tokens() -> u32 {
@@ -130,6 +136,7 @@ impl Default for KnowledgeExtractionConfig {
             tolerate_trailing_json: false,
             topics: None,
             temporal_grounding: TemporalGrounding::Off,
+            prompt_variant: ExtractionPromptVariant::Default,
         }
     }
 }
@@ -181,12 +188,12 @@ pub fn build_extraction_prompt(
     let topics = match config.topics.as_ref() {
         Some(t) if !t.is_empty() => t,
         _ => {
-            return prefix_untrusted_notice(&temporal_grounding::with_notice(
-                config.temporal_grounding,
+            return wrap_prompt(
+                config,
                 EXTRACTION_PROMPT
                     .replace("{conversation_date}", conversation_date)
                     .replace("{max_facts}", &max_facts.to_string()),
-            ))
+            )
         }
     };
 
@@ -208,8 +215,8 @@ pub fn build_extraction_prompt(
         .collect::<Vec<_>>()
         .join("|");
 
-    prefix_untrusted_notice(&temporal_grounding::with_notice(
-        config.temporal_grounding,
+    wrap_prompt(
+        config,
         format!(
             r#"Extract factual knowledge from this conversation. Each fact is a self-contained sentence.
 
@@ -238,6 +245,14 @@ The conversation_date is: {conversation_date}
 Return ONLY valid JSON (no markdown, no code blocks):
 {{"facts": [{{"content": "...", "fact_type": {enum_values}, "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "attributed_to": "user"|"assistant"|null, "confidence": 0.9}}]}}"#,
         ),
+    )
+}
+
+/// Wrap a prompt body in its notices: untrusted data, temporal grounding, relations.
+fn wrap_prompt(config: &KnowledgeExtractionConfig, body: String) -> String {
+    prefix_untrusted_notice(&temporal_grounding::with_notice(
+        config.temporal_grounding,
+        prompt_variant::with_notice(config.prompt_variant, body),
     ))
 }
 

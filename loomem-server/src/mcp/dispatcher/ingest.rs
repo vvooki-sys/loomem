@@ -434,6 +434,8 @@ mod fragment_tests;
 #[cfg(test)]
 mod grounding_tests;
 #[cfg(test)]
+mod prompt_variant_tests;
+#[cfg(test)]
 mod stage1_acceptance_tests;
 #[cfg(test)]
 mod tests;

@@ -153,7 +153,7 @@ fn prompt_sha256(prompt: &str) -> String {
         })
 }
 
-fn golden_topics_config() -> KnowledgeExtractionConfig {
+pub(super) fn golden_topics_config() -> KnowledgeExtractionConfig {
     KnowledgeExtractionConfig {
         topics: Some(vec![ExtractionTopic {
             name: "milestone".to_string(),
@@ -164,7 +164,7 @@ fn golden_topics_config() -> KnowledgeExtractionConfig {
     }
 }
 
-fn shipped_extraction_config() -> KnowledgeExtractionConfig {
+pub(super) fn shipped_extraction_config() -> KnowledgeExtractionConfig {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
     let content = std::fs::read_to_string(path).unwrap();
     let table: toml::Table = toml::from_str(&content).unwrap();
@@ -174,7 +174,8 @@ fn shipped_extraction_config() -> KnowledgeExtractionConfig {
 /// Golden pin of the extraction system-prompt bytes, captured on origin/main
 /// af9468bd. Any change to the prompt text, including a default-off option
 /// leaking into it, changes these digests. Downstream prompt pins (a frozen
-/// system-prompt sha in an evaluation proxy) rely on them.
+/// system-prompt sha in an evaluation proxy) rely on them. The
+/// `prompt_and_filter` digest is the same prompt's bytes on origin/main 9c88f5bb.
 #[test]
 fn extraction_system_prompt_bytes_are_pinned() {
     let date = "2024-03-20";
@@ -194,9 +195,21 @@ fn extraction_system_prompt_bytes_are_pinned() {
             build_extraction_prompt(&shipped_extraction_config(), date),
             "573876af7f38228ba4a8ed5a23ee3712818287ac78ea7bdb2254ceb93fb68a3f",
         ),
+        (
+            "prompt_and_filter",
+            build_extraction_prompt(
+                &with_grounding(
+                    KnowledgeExtractionConfig::default(),
+                    TemporalGrounding::PromptAndFilter,
+                ),
+                date,
+            ),
+            "3c2a6ef6bfb472e588b466044cfe04620f73c68805568e87fadbbdf90402d278",
+        ),
     ];
     for (name, prompt, expected) in cases {
         assert_eq!(prompt_sha256(&prompt), expected, "{name} prompt drifted");
+        assert!(!prompt.contains(prompt_variant::NOTICE), "{name}");
     }
 }
 

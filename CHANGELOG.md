@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the 2026-11-25 holdout run: a `finish_reason: stop` reply with a stray
   `]}` after a valid object lost every fact of its chunk (default off,
   byte-identical).
+- `[knowledge_extraction] prompt_variant = "relations"` prepends a RELATIONS
+  AND VALUES notice to the extraction prompt: keep a stated cause in the fact
+  it explains, the direction of a change (never inverted), and numbers,
+  amounts, currencies and dates with their entity. Output format and parser
+  are unchanged. Found in the 2026-11 holdout r5 diagnosis: a valuation
+  never reached a fact, a reason was dropped, and a state change came out
+  inverted (default `"default"`, byte-identical).
 
 ## [0.5.5] - 2026-11-22
 
