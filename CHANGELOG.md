@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not in the source chunk: `"filter"` keeps the prompt unchanged,
   `"prompt_and_filter"` also adds a grounding notice to the extraction prompt
   (default `"off"`, byte-identical).
+- `[knowledge_extraction] tolerate_trailing_json` admits the first complete
+  `{"facts": […]}` object of an extraction reply when the rest, whitespace
+  trimmed, is at most 8 characters of `}` and `]`; the discarded tail is
+  logged by length only. Any other parse error still rejects the chunk. Found
+  in the 2026-11-25 holdout run: a `finish_reason: stop` reply with a stray
+  `]}` after a valid object lost every fact of its chunk (default off,
+  byte-identical).
 
 ## [0.5.5] - 2026-11-22
 

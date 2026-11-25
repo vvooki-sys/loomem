@@ -80,6 +80,15 @@ pub struct KnowledgeExtractionConfig {
     /// reports the chunk without any retry.
     #[serde(default)]
     pub split_on_truncation: bool,
+    /// Admit the first complete `{"facts": […]}` object of a reply whose
+    /// remaining text, after trimming whitespace, is at most
+    /// [`reply::MAX_TOLERATED_TAIL_CHARS`] characters drawn from `}` and `]`
+    /// (holdout r4, 2026-11-25: `finish_reason: stop`, a valid object plus a
+    /// stray `]}`; the whole chunk's facts were lost). Any other parse error
+    /// still rejects the chunk. `false` (default) keeps the strict parse
+    /// byte-identical.
+    #[serde(default)]
+    pub tolerate_trailing_json: bool,
     /// /153: operator-defined extraction categories. `None`/empty preserves
     /// the built-in [`EXTRACTION_PROMPT`] byte-for-byte (serde default keeps
     /// a config without this field deserializing unchanged).
@@ -118,6 +127,7 @@ impl Default for KnowledgeExtractionConfig {
             max_tokens: default_extraction_max_tokens(),
             input_chunk_tokens: 0,
             split_on_truncation: false,
+            tolerate_trailing_json: false,
             topics: None,
             temporal_grounding: TemporalGrounding::Off,
         }

@@ -564,6 +564,7 @@ max_facts_per_chunk = 20
 max_tokens = 16384
 input_chunk_tokens = 4000
 split_on_truncation = true
+tolerate_trailing_json = false
 temporal_grounding = "off"
 ```
 
@@ -575,6 +576,7 @@ Steruje procesem LLM `memory_ingest`.
 | `max_tokens` | int | 16384 | Limit odpowiedzi na wywołanie ekstrakcji, wysyłany przez wpis `openai` jako `max_completion_tokens` (tokeny rozumowania mieszczą się w nim). Odpowiedź, która go osiągnie (`finish_reason: "length"`), jest odrzucana; nigdy nie jest przyjmowana częściowo |
 | `input_chunk_tokens` | int | 4000 | Limit wejścia dla jednego wywołania ekstrakcji (4 znaki ≈ 1 token): transkrypcja jest dzielona na granicach wierszy na fragmenty o maksymalnie `min(input_chunk_tokens, max_transcript_tokens)` tokenach, po jednym wywołaniu na każdy. `0` = jedno wywołanie na transkrypcję do `max_transcript_tokens` (poprzedni proces), a powyżej tej wielkości nakładające się okna |
 | `split_on_truncation` | bool | true | Fragment, którego odpowiedź została obcięta, jest ponownie przetwarzany jako dwie połowy rozdzielone na granicy wiersza (głębokość 2, maksymalnie 4 dodatkowe wywołania na fragment). Przy `false` obcięty fragment jest odrzucany i zgłaszany bez ponawiania |
+| `tolerate_trailing_json` | bool | false | `true` przyjmuje pierwszy kompletny obiekt `{"facts": […]}` odpowiedzi, gdy jej reszta po przycięciu białych znaków to najwyżej 8 znaków `}` i `]` (odpowiedź z `finish_reason: "stop"` i zbędnym `]}` po poprawnym obiekcie traci inaczej wszystkie fakty fragmentu); odrzucony ogon jest logowany tylko jako długość, a każdy inny błąd parsowania nadal odrzuca fragment. `false` = ścisłe parsowanie, bajtowo identyczne |
 
 Te wartości są domyślne w dostarczanej konfiguracji od 2026-11-22 (decyzja właściciela, celowo bez testu A/B — pomiarem jest pilotaż walidacyjny). Wcześniej ekstrakcja wykonywała jedno wywołanie na transkrypcję do 20 tys. tokenów, z limitem odpowiedzi 2000 tokenów i 20 faktami na transkrypcję. Wartości domyślne w kodzie dla konfiguracji pomijającej te klucze pozostają przy poprzednich (`20` / `2000` / `0` / `false`), więc starsza konfiguracja zachowuje się jak dotąd; przy `input_chunk_tokens = 0` i `max_facts_per_transcript = 20` cała transkrypcja jest jednym fragmentem, a limit na fragment jest dawnym limitem, fakt po fakcie. Jedyna widoczna zmiana dla takiej konfiguracji: transkrypcja dłuższa niż `max_transcript_tokens`, którą poprzedni proces przetwarza jako nakładające się okna, dostaje teraz limit na każde okno. Obcięta odpowiedź nie jest przyjmowana w żadnym trybie; odpowiedź zakończona `finish_reason = "length"` jest jawnym błędem na każdej ścieżce czatu, nie tylko w ekstrakcji.
 

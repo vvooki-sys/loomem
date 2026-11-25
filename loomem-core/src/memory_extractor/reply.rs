@@ -3,6 +3,7 @@
 use super::{truncate_reason, ChatHttpReply, ChunkFailure, ExtractedFact, ExtractionResult};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+use tracing::warn;
 
 #[derive(Deserialize)]
 struct LlmResponse {
@@ -79,11 +80,63 @@ fn validate_completion(choice: &LlmChoice) -> Result<(), CompletionFailure> {
     Ok(())
 }
 
+/// Longest tail (whitespace trimmed) that `tolerate_trailing_json` discards
+/// after the first complete facts object. Sized for stray closers the model
+/// appends after a finished object (the observed case was 2 characters, `]}`);
+/// anything longer, or any character outside `}` / `]` / whitespace, keeps
+/// the strict parse error so real syntax damage is never masked.
+pub(super) const MAX_TOLERATED_TAIL_CHARS: usize = 8;
+
+/// `true` when `tail` is only stray closers the salvage path may drop.
+fn is_tolerable_tail(tail: &str) -> bool {
+    let trimmed = tail.trim();
+    !trimmed.is_empty()
+        && trimmed.chars().count() <= MAX_TOLERATED_TAIL_CHARS
+        && trimmed
+            .chars()
+            .all(|c| c == '}' || c == ']' || c.is_whitespace())
+}
+
+/// Salvage path for a reply the strict parse rejected: take the first
+/// complete JSON value from the start of `json_str` and accept it only when
+/// what follows is a tolerable tail. `None` for every other failure, so the
+/// caller reports the original strict error unchanged.
+fn salvage_leading_object(json_str: &str, chunk_index: usize) -> Option<ExtractionResult> {
+    let mut stream = serde_json::Deserializer::from_str(json_str).into_iter::<ExtractionResult>();
+    let result = stream.next()?.ok()?;
+    let tail = json_str.get(stream.byte_offset()..)?;
+    if !is_tolerable_tail(tail) {
+        return None;
+    }
+    // Length only: the tail is model output, never logged verbatim (rule 1).
+    warn!(
+        "Extraction chunk {chunk_index}: discarded {} trailing character(s) after the facts object (tolerate_trailing_json)",
+        tail.trim().chars().count()
+    );
+    Some(result)
+}
+
+/// Strict parse first (byte-identical to the pre-flag path); with
+/// `tolerate_trailing_json` a rejected reply gets one salvage attempt that
+/// only drops a short tail of stray closers.
+fn parse_facts(
+    json_str: &str,
+    chunk_index: usize,
+    tolerate_trailing_json: bool,
+) -> Result<ExtractionResult, serde_json::Error> {
+    match serde_json::from_str::<ExtractionResult>(json_str) {
+        Ok(result) => Ok(result),
+        Err(e) if tolerate_trailing_json => salvage_leading_object(json_str, chunk_index).ok_or(e),
+        Err(e) => Err(e),
+    }
+}
+
 /// Parse a 2xx envelope only after the provider's explicit completion metadata
 /// allows it. A syntactically valid JSON prefix must not bypass truncation.
 pub(super) fn parse_extraction_reply(
     reply: &ChatHttpReply,
     chunk_index: usize,
+    tolerate_trailing_json: bool,
 ) -> Result<Vec<ExtractedFact>, ChunkFailure> {
     let failure = |reason| ChunkFailure {
         chunk_index,
@@ -108,7 +161,7 @@ pub(super) fn parse_extraction_reply(
         .trim_start_matches("```")
         .trim_end_matches("```")
         .trim();
-    serde_json::from_str::<ExtractionResult>(json_str)
+    parse_facts(json_str, chunk_index, tolerate_trailing_json)
         .map(|result| result.facts)
         .map_err(|e| failure(truncate_reason(&format!("facts parse failed: {e}"))))
 }

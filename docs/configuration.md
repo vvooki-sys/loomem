@@ -544,6 +544,7 @@ max_facts_per_chunk = 20
 max_tokens = 16384
 input_chunk_tokens = 4000
 split_on_truncation = true
+tolerate_trailing_json = false
 temporal_grounding = "off"
 ```
 
@@ -555,6 +556,7 @@ Controls the `memory_ingest` LLM pipeline.
 | `max_tokens` | int | 16384 | Completion cap per extraction call, sent as `max_completion_tokens` through the `openai` entry (reasoning tokens share it). A reply that hits it (`finish_reason: "length"`) is rejected, never partially admitted |
 | `input_chunk_tokens` | int | 4000 | Input budget per extraction call (4 chars ≈ 1 token): the transcript is split at line boundaries into chunks of at most `min(input_chunk_tokens, max_transcript_tokens)` tokens, one call each. `0` = one call per transcript up to `max_transcript_tokens` (the legacy pipeline), overlapping windows above it |
 | `split_on_truncation` | bool | true | A chunk whose completion was truncated is re-extracted as two line-aligned halves (depth 2, at most 4 extra calls per chunk). `false` rejects and reports the truncated chunk, with no retry |
+| `tolerate_trailing_json` | bool | false | `true` admits the first complete `{"facts": […]}` object of a reply when the rest, whitespace trimmed, is at most 8 characters of `}` and `]` (a `finish_reason: "stop"` reply with a stray `]}` after a valid object otherwise loses the whole chunk's facts); the discarded tail is logged by length only, and any other parse error still rejects the chunk. `false` = strict parse, byte-identical |
 
 These are the shipped defaults since 2026-11-22 (an owner decision, deliberately without an A/B — the validation pilot is the measurement). Before, extraction was one call per transcript up to 20K tokens, with a 2000-token completion cap and 20 facts per transcript. The code defaults for a config that omits these keys stay at the legacy values (`20` / `2000` / `0` / `false`), so an older config behaves as before; with `input_chunk_tokens = 0` and `max_facts_per_transcript = 20` the whole transcript is one chunk and the per-chunk cap is the former cap, fact for fact. The one visible change for such a config: a transcript over `max_transcript_tokens`, which the legacy path processes as overlapping windows, now gets the cap per window. A truncated reply is never admitted in either mode; a completion that ends with `finish_reason = "length"` is an explicit error on every chat path, not only in extraction.
 
