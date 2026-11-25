@@ -2,7 +2,10 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use loomem_core::memory_extractor::{ChatHttpReply, ExtractionChat, TemporalGrounding};
+use loomem_core::memory_extractor::{
+    ChatHttpReply, ExtractionChat, ExtractionPromptVariant, KnowledgeExtractionConfig,
+    TemporalGrounding,
+};
 use loomem_core::storage::Chunk;
 use serde_json::{json, Value};
 use tokio::sync::Notify;
@@ -84,12 +87,26 @@ pub(super) fn fixture(chunk_tokens: usize) -> (axum::Router, Arc<AppState>) {
 /// keyless: no provider can resolve a real key, so only the injected chat
 /// transport is ever called.
 pub(super) fn fixture_with_grounding(mode: TemporalGrounding) -> (axum::Router, Arc<AppState>) {
+    keyless_fixture(|extraction| extraction.temporal_grounding = mode)
+}
+
+/// [`fixture_with_grounding`]'s keyless app with `[knowledge_extraction]
+/// prompt_variant` set instead.
+pub(super) fn fixture_with_prompt_variant(
+    variant: ExtractionPromptVariant,
+) -> (axum::Router, Arc<AppState>) {
+    keyless_fixture(|extraction| extraction.prompt_variant = variant)
+}
+
+fn keyless_fixture(
+    edit: impl FnOnce(&mut KnowledgeExtractionConfig),
+) -> (axum::Router, Arc<AppState>) {
     let (_, original) = crate::tests::make_test_app();
     let mut config = original.config.clone();
     config.knowledge_extraction.enabled = true;
     config.knowledge_extraction.max_transcript_tokens = 20000;
     config.knowledge_extraction.contradiction_check = false;
-    config.knowledge_extraction.temporal_grounding = mode;
+    edit(&mut config.knowledge_extraction);
     config.llm.api_key = None;
     config.llm.api_key_env = "LOOMEM_TEST_KEY_THAT_IS_NEVER_SET".into();
     config.llm.providers.clear();

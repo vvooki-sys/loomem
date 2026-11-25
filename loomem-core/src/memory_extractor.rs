@@ -14,12 +14,14 @@ mod chunking;
 mod completion;
 mod config_validation;
 mod http;
+mod prompt_variant;
 mod reply;
 mod temporal_grounding;
 use chunking::extract_chunk_with_split;
 pub use completion::ExtractionOutcome;
 use config_validation::transcript_chunks;
 pub use http::HttpExtractionChat;
+pub use prompt_variant::ExtractionPromptVariant;
 pub use temporal_grounding::TemporalGrounding;
 
 /// /153: an operator-defined extraction category. `fact_type` is the wire key
@@ -101,6 +103,12 @@ pub struct KnowledgeExtractionConfig {
     /// also prepends a TEMPORAL GROUNDING notice to the system prompt.
     #[serde(default)]
     pub temporal_grounding: TemporalGrounding,
+    /// Extraction system prompt variant. `Default` keeps the prompt bytes
+    /// identical; `Relations` prepends a RELATIONS AND VALUES notice (keep
+    /// causes, the direction of a change, and values with their entity).
+    /// Output schema and parser are the same for every variant.
+    #[serde(default)]
+    pub prompt_variant: ExtractionPromptVariant,
 }
 
 fn default_extraction_max_tokens() -> u32 {
@@ -130,6 +138,7 @@ impl Default for KnowledgeExtractionConfig {
             tolerate_trailing_json: false,
             topics: None,
             temporal_grounding: TemporalGrounding::Off,
+            prompt_variant: ExtractionPromptVariant::Default,
         }
     }
 }
@@ -183,9 +192,12 @@ pub fn build_extraction_prompt(
         _ => {
             return prefix_untrusted_notice(&temporal_grounding::with_notice(
                 config.temporal_grounding,
-                EXTRACTION_PROMPT
-                    .replace("{conversation_date}", conversation_date)
-                    .replace("{max_facts}", &max_facts.to_string()),
+                prompt_variant::with_notice(
+                    config.prompt_variant,
+                    EXTRACTION_PROMPT
+                        .replace("{conversation_date}", conversation_date)
+                        .replace("{max_facts}", &max_facts.to_string()),
+                ),
             ))
         }
     };
@@ -210,8 +222,10 @@ pub fn build_extraction_prompt(
 
     prefix_untrusted_notice(&temporal_grounding::with_notice(
         config.temporal_grounding,
-        format!(
-            r#"Extract factual knowledge from this conversation. Each fact is a self-contained sentence.
+        prompt_variant::with_notice(
+            config.prompt_variant,
+            format!(
+                r#"Extract factual knowledge from this conversation. Each fact is a self-contained sentence.
 
 Facts may be authored by any party in the conversation. Extract them from the user's statements AND from the assistant's (or agent's) recommendations, plans, schedules, and researched answers — assistant-authored content carries first-class facts that the user is likely to reference later.
 
@@ -237,6 +251,7 @@ The conversation_date is: {conversation_date}
 
 Return ONLY valid JSON (no markdown, no code blocks):
 {{"facts": [{{"content": "...", "fact_type": {enum_values}, "subject": "...", "event_date": "2026-03-15"|null, "event_date_context": "yesterday"|null, "attributed_to": "user"|"assistant"|null, "confidence": 0.9}}]}}"#,
+            ),
         ),
     ))
 }

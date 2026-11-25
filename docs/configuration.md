@@ -116,7 +116,7 @@ event_date_proximity_boost = 0.0
 content_dedup = "prefix"
 ```
 
-These `[search]` keys, the `memory_search` keys in [`[mcp]`](#mcp) and `temporal_grounding` in [`[knowledge_extraction]`](#knowledge_extraction) are quality levers. All of them are off or neutral by default: with the shipped values, output is byte-identical to the output before the key existed. A default changes only after a measured A/B run. A value the validation rejects stops the config from loading.
+These `[search]` keys, the `memory_search` keys in [`[mcp]`](#mcp), and the `temporal_grounding` and `prompt_variant` keys in [`[knowledge_extraction]`](#knowledge_extraction) are quality levers. All of them are off or neutral by default: with the shipped values, output is byte-identical to the output before the key existed. A default changes only after a measured A/B run. A value the validation rejects stops the config from loading.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -546,6 +546,7 @@ input_chunk_tokens = 4000
 split_on_truncation = true
 tolerate_trailing_json = false
 temporal_grounding = "off"
+prompt_variant = "default"
 ```
 
 Controls the `memory_ingest` LLM pipeline.
@@ -560,11 +561,12 @@ Controls the `memory_ingest` LLM pipeline.
 
 These are the shipped defaults since 2026-11-22 (an owner decision, deliberately without an A/B — the validation pilot is the measurement). Before, extraction was one call per transcript up to 20K tokens, with a 2000-token completion cap and 20 facts per transcript. The code defaults for a config that omits these keys stay at the legacy values (`20` / `2000` / `0` / `false`), so an older config behaves as before; with `input_chunk_tokens = 0` and `max_facts_per_transcript = 20` the whole transcript is one chunk and the per-chunk cap is the former cap, fact for fact. The one visible change for such a config: a transcript over `max_transcript_tokens`, which the legacy path processes as overlapping windows, now gets the cap per window. A truncated reply is never admitted in either mode; a completion that ends with `finish_reason = "length"` is an explicit error on every chat path, not only in extraction.
 
-`temporal_grounding` is a quality lever (see [Quality levers](#quality-levers)):
+`temporal_grounding` and `prompt_variant` are quality levers (see [Quality levers](#quality-levers)):
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `temporal_grounding` | string | `"off"` | Rejects extracted facts whose relative time (such as "three weeks ago" or "yesterday") or `event_date_context` does not appear in the source chunk. `"off"`: no check; the prompt and the admitted facts are byte-identical to before. `"filter"`: drop such facts; the extraction prompt does not change. `"prompt_and_filter"`: `"filter"`, plus a TEMPORAL GROUNDING notice prepended to the extraction system prompt, which changes the prompt sent to the LLM. Any other value fails config loading |
+| `prompt_variant` | string | `"default"` | Extraction system prompt. `"default"`: the prompt is byte-identical to before. `"relations"`: a RELATIONS AND VALUES notice is prepended to the extraction system prompt, asking the model to keep a stated cause in the fact it explains, the direction of a change (from what to what, increased or decreased, started or stopped; never inverted), and numbers, amounts, currencies and dates with the entity they belong to. This changes the prompt sent to the LLM; the output format and the reply parser do not change. With `temporal_grounding = "prompt_and_filter"` the grounding notice comes first. Any other value fails config loading |
 
 The check compares whitespace-normalized, lowercased text, and it covers only some relative expressions: a fact that uses any other form passes the content check unexamined. Known forms it does not cover:
 
