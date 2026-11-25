@@ -1,7 +1,8 @@
 use super::{ExtractionPromptVariant, NOTICE};
+use crate::memory_extractor::config_tests::{golden_topics_config, shipped_extraction_config};
 use crate::memory_extractor::{
     build_extraction_prompt, extract_knowledge_with, ChatHttpReply, ExtractionChat,
-    ExtractionTopic, KnowledgeExtractionConfig, TemporalGrounding,
+    KnowledgeExtractionConfig, TemporalGrounding,
 };
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -11,17 +12,6 @@ const DATE: &str = "2024-03-20";
 
 /// The minimal `[knowledge_extraction]` keys every config carries.
 const BASE: &str = "enabled = true\nmax_transcript_tokens = 20000\ndedup_cosine_threshold = 0.92\ncontradiction_check = true\ncontradiction_cosine_min = 0.5\n";
-
-fn sha256_hex(text: &str) -> String {
-    use sha2::{Digest, Sha256};
-    use std::fmt::Write as _;
-    Sha256::digest(text.as_bytes())
-        .iter()
-        .fold(String::with_capacity(64), |mut s, b| {
-            let _ = write!(s, "{b:02x}");
-            s
-        })
-}
 
 fn with_variant(
     config: KnowledgeExtractionConfig,
@@ -33,62 +23,8 @@ fn with_variant(
     }
 }
 
-fn topics_config() -> KnowledgeExtractionConfig {
-    KnowledgeExtractionConfig {
-        topics: Some(vec![ExtractionTopic {
-            name: "milestone".to_string(),
-            description: "Project milestone".to_string(),
-            fact_type: None,
-        }]),
-        ..KnowledgeExtractionConfig::default()
-    }
-}
-
-fn shipped_config() -> KnowledgeExtractionConfig {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.toml");
-    let content = std::fs::read_to_string(path).unwrap();
-    let table: toml::Table = toml::from_str(&content).unwrap();
-    table["knowledge_extraction"].clone().try_into().unwrap()
-}
-
 fn untrusted_head() -> String {
     format!("{}\n\n", crate::sanitizer::UNTRUSTED_DATA_NOTICE)
-}
-
-/// The default variant sends the exact system-prompt bytes of origin/main
-/// 9c88f5bb (same digests as `extraction_system_prompt_bytes_are_pinned`).
-/// The paid evaluation harness pins this prompt's sha256; a default variant
-/// that leaked into the prompt would change these digests.
-#[test]
-fn default_variant_prompt_bytes_are_pinned() {
-    let default = with_variant(
-        KnowledgeExtractionConfig::default(),
-        ExtractionPromptVariant::Default,
-    );
-    let topics = with_variant(topics_config(), ExtractionPromptVariant::Default);
-    let shipped = shipped_config();
-    assert_eq!(shipped.prompt_variant, ExtractionPromptVariant::Default);
-    for (name, config, expected) in [
-        (
-            "default",
-            default,
-            "573876af7f38228ba4a8ed5a23ee3712818287ac78ea7bdb2254ceb93fb68a3f",
-        ),
-        (
-            "topics",
-            topics,
-            "80d5a6e5f56cb4fbd75a4573b7d07626ac297ec17681932e60d3f4e1f56af12e",
-        ),
-        (
-            "shipped",
-            shipped,
-            "573876af7f38228ba4a8ed5a23ee3712818287ac78ea7bdb2254ceb93fb68a3f",
-        ),
-    ] {
-        let prompt = build_extraction_prompt(&config, DATE);
-        assert_eq!(sha256_hex(&prompt), expected, "{name} prompt drifted");
-        assert!(!prompt.contains("RELATIONS AND VALUES"), "{name}");
-    }
 }
 
 #[test]
@@ -124,6 +60,10 @@ fn shipped_config_spells_out_the_default_variant() {
         table["knowledge_extraction"]["prompt_variant"].as_str(),
         Some("default")
     );
+    assert_eq!(
+        shipped_extraction_config().prompt_variant,
+        ExtractionPromptVariant::Default
+    );
 }
 
 /// The notice names the three relations the variant exists for.
@@ -156,7 +96,7 @@ fn relations_notice_covers_cause_direction_and_values() {
 /// default prompt byte for byte. Holds for the built-in and the topic prompt.
 #[test]
 fn relations_prepends_notice_and_keeps_the_rest_identical() {
-    for config in [KnowledgeExtractionConfig::default(), topics_config()] {
+    for config in [KnowledgeExtractionConfig::default(), golden_topics_config()] {
         let default = build_extraction_prompt(&config, DATE);
         let relations = build_extraction_prompt(
             &with_variant(config.clone(), ExtractionPromptVariant::Relations),
