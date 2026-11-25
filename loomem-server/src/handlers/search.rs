@@ -3943,6 +3943,7 @@ mod tests {
                 implicit_access_boost_weight: 0.0,
                 user_state_boost: 1.0,
                 agent_fact_damp: 1.0,
+                latest_state_boost: 1.0,
                 rare_term_lane: loomem_core::search::rare_term::RareTermLaneConfig::default(),
                 vector_similarity_floor: 0.0,
                 decay_match_relief: 0.0,

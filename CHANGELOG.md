@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behind `[mcp] search_include_predecessor` (default off, byte-identical).
 - `[search] event_date_proximity_boost` boosts chunks whose event date is
   inside or near the query date range (default 0.0 = off, byte-identical).
+- `[search] latest_state_boost` promotes later statements for questions
+  about the current state ("now", "currently", "still", "so far", …): each
+  candidate is multiplied by a recency factor from 1.0 (oldest statement in
+  the pool) to the boost (newest), so an update can outrank the earlier
+  state it changes (default 1.0 = off, byte-identical).
 - Reranker document text levers, off by default and byte-identical when left
   so: `[search] rerank_date_prefix` dates each reranker document like
   `memory_search`, `rerank_llm_max_chars` sets the LLM reranker's

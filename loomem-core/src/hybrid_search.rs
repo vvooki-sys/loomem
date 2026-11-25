@@ -11,6 +11,7 @@ use crate::graph::GraphSearchConfig;
 use crate::tantivy_index::SearchResult;
 mod candidate_budget;
 mod clock;
+pub mod latest_state;
 pub use candidate_budget::{SearchCandidateBudget, VectorSearchOptions};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -75,6 +76,13 @@ pub struct SearchConfig {
     /// assistant/preference categories.
     #[serde(default = "default_attribution_neutral")]
     pub agent_fact_damp: f64,
+    /// Latest-state promotion for current-state queries ("now", "currently",
+    /// "so far", …): candidates are multiplied by a recency factor from x1.0
+    /// (oldest statement in the pool) to x`latest_state_boost` (newest), so a
+    /// later update outranks the earlier state it changes. 1.0 == disabled,
+    /// byte-identical (no store read, no re-sort). See `latest_state`.
+    #[serde(default = "default_attribution_neutral")]
+    pub latest_state_boost: f64,
     /// Cycle/012: rare-term guarantee lane. Chunks containing a rare query
     /// token are force-kept in the candidate pool that feeds the reranker.
     /// Default fully disabled — execution path identical to pre-cycle.
@@ -736,6 +744,7 @@ mod tests {
                 implicit_access_boost_weight: 0.0,
                 user_state_boost: 1.0,
                 agent_fact_damp: 1.0,
+                latest_state_boost: 1.0,
                 rare_term_lane: crate::search::rare_term::RareTermLaneConfig::default(),
                 vector_similarity_floor: 0.0,
                 decay_match_relief: 0.0,

@@ -72,6 +72,10 @@ fn validate_levers(search: &SearchConfig) -> Result<()> {
         search.event_date_proximity_boost >= 0.0 && search.event_date_proximity_boost.is_finite(),
         "search.event_date_proximity_boost must be a finite non-negative number"
     );
+    anyhow::ensure!(
+        search.latest_state_boost >= 1.0 && search.latest_state_boost.is_finite(),
+        "search.latest_state_boost must be a finite number >= 1.0 (1.0 = disabled)"
+    );
     Ok(())
 }
 
@@ -108,7 +112,7 @@ mod tests {
         assert_eq!(decoded.top_k, original.search.top_k);
     }
 
-    const LEVER_KEYS: [&str; 7] = [
+    const LEVER_KEYS: [&str; 8] = [
         "rerank_date_prefix",
         "rerank_llm_max_chars",
         "rerank_onnx_max_tokens",
@@ -116,6 +120,7 @@ mod tests {
         "rerank_sync_timeout_ms",
         "event_date_proximity_boost",
         "content_dedup",
+        "latest_state_boost",
     ];
 
     fn assert_levers_off(search: &SearchConfig) {
@@ -126,6 +131,7 @@ mod tests {
         assert_eq!(search.rerank_sync_timeout_ms, 2000);
         assert_eq!(search.event_date_proximity_boost, 0.0);
         assert_eq!(search.content_dedup, crate::search::ContentDedup::Prefix);
+        assert_eq!(search.latest_state_boost, 1.0);
     }
 
     /// A pre-lever config file (none of the new keys) loads with every lever
@@ -196,5 +202,15 @@ mod tests {
         assert!(boost.validate().is_err());
         boost.search.event_date_proximity_boost = 1.5;
         boost.validate().unwrap();
+
+        let mut latest = config();
+        for bad in [0.9, 0.0, -1.0, f64::NAN, f64::INFINITY] {
+            latest.search.latest_state_boost = bad;
+            assert!(latest.validate().is_err(), "{bad}");
+        }
+        for ok in [1.0, 1.5, 2.0] {
+            latest.search.latest_state_boost = ok;
+            latest.validate().unwrap();
+        }
     }
 }

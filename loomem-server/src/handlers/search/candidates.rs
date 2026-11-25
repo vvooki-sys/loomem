@@ -98,17 +98,18 @@ pub(super) async fn retrieve_primary(
     };
     let Some(inputs) = vectors else {
         state.retrieval_counters.record_lexical_only_search();
-        return Ok(state.hybrid_search.bm25_only_with_budget(
-            bm25_results,
-            request.guaranteed,
-            budget,
-        )?);
+        let mut results =
+            state
+                .hybrid_search
+                .bm25_only_with_budget(bm25_results, request.guaranteed, budget)?;
+        promote_latest_state(state, request.payload, &mut results);
+        return Ok(results);
     };
     state.retrieval_counters.record_vector_search();
     if let Some(diag) = request.channel_diag {
         diag.vector_top = vector_channel_hits(&inputs.embeddings, &inputs.query_embedding);
     }
-    Ok(state.hybrid_search.search_with_vector_budget(
+    let mut results = state.hybrid_search.search_with_vector_budget(
         bm25_results,
         &inputs.embeddings,
         &inputs.query_embedding,
@@ -118,7 +119,22 @@ pub(super) async fn retrieve_primary(
             guaranteed: request.guaranteed,
             budget,
         },
-    )?)
+    )?;
+    promote_latest_state(state, request.payload, &mut results);
+    Ok(results)
+}
+
+/// `[search] latest_state_boost` on the fused pool, before any later stage
+/// cuts it to the response size. A no-op (no store read, no re-sort) with
+/// the default 1.0 or when the query does not ask for the current state.
+fn promote_latest_state(
+    state: &AppState,
+    payload: &SearchRequest,
+    results: &mut [HybridSearchResult],
+) {
+    state
+        .hybrid_search
+        .promote_latest_state(&payload.query, results, &state.store);
 }
 
 async fn vector_inputs(
