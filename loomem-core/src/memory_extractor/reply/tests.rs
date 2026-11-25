@@ -174,7 +174,15 @@ fn flag_keeps_the_strict_error_for_text_or_long_tails() {
     // Short prose after the object, a tail over the cap, and a tail that
     // mixes closers with another character: none is "stray closers".
     let too_long = "}".repeat(MAX_TOLERATED_TAIL_CHARS + 1);
-    for tail in [" ok", "\nDone.", too_long.as_str(), "}]}]}]}]}", "},"] {
+    let two_objects = FACTS.to_string();
+    for tail in [
+        " ok",
+        "\nDone.",
+        too_long.as_str(),
+        "}]}]}]}]}",
+        "},",
+        two_objects.as_str(),
+    ] {
         let strict = parse_extraction_reply(&stray_tail_reply(tail), 0, false).unwrap_err();
         let tolerant = parse_extraction_reply(&stray_tail_reply(tail), 0, true)
             .expect_err("only a short tail of closers may be dropped");
@@ -202,28 +210,44 @@ fn flag_does_not_repair_other_syntax_errors() {
 }
 
 #[test]
+fn flag_admits_an_empty_facts_list_before_a_stray_tail() {
+    let empty = completion(json!("{\"facts\":[]}]}"), json!("stop"));
+    assert!(parse_extraction_reply(&empty, 0, false).is_err());
+    assert!(parse_extraction_reply(&empty, 0, true).unwrap().is_empty());
+}
+
+#[test]
 fn truncation_still_wins_over_the_flag() {
-    let failure = parse_extraction_reply(&stray_tail_reply("]}"), 0, true)
-        .map(|_| ())
-        .err();
-    assert!(failure.is_none(), "stop + tail is admitted");
+    assert!(parse_extraction_reply(&stray_tail_reply("]}"), 0, true).is_ok());
     let truncated = completion(json!(format!("{FACTS}]}}")), json!("length"));
     let failure = parse_extraction_reply(&truncated, 0, true).unwrap_err();
     assert_eq!(failure.reason, TRUNCATED_REASON);
 }
 
 #[test]
-fn tolerable_tail_rule_is_bounded_and_closers_only() {
+fn tolerable_tail_rule_counts_closers_only_and_is_bounded() {
     assert!(is_tolerable_tail("]}"));
     assert!(is_tolerable_tail("\n } ] \n"));
     assert!(is_tolerable_tail(&"}".repeat(MAX_TOLERATED_TAIL_CHARS)));
+    // Whitespace between closers does not count toward the bound; Unicode
+    // whitespace (which serde_json does not skip) is whitespace here too.
+    assert!(is_tolerable_tail(&format!("}}{}}}", "\n".repeat(7))));
+    assert!(is_tolerable_tail("]}\u{a0}"));
     assert!(!is_tolerable_tail(""));
     assert!(!is_tolerable_tail("   "));
+    assert!(!is_tolerable_tail("\u{a0}"));
     assert!(!is_tolerable_tail(
         &"}".repeat(MAX_TOLERATED_TAIL_CHARS + 1)
     ));
+    assert!(!is_tolerable_tail(&format!(
+        "{} }}",
+        "}".repeat(MAX_TOLERATED_TAIL_CHARS)
+    )));
     assert!(!is_tolerable_tail("})"));
     assert!(!is_tolerable_tail("}x"));
+    assert!(!is_tolerable_tail("{"));
+    assert_eq!(stray_closer_count(" ] } "), Some(2));
+    assert_eq!(stray_closer_count("},"), None);
 }
 
 struct StrayTailReply;

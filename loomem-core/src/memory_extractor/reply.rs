@@ -80,21 +80,31 @@ fn validate_completion(choice: &LlmChoice) -> Result<(), CompletionFailure> {
     Ok(())
 }
 
-/// Longest tail (whitespace trimmed) that `tolerate_trailing_json` discards
-/// after the first complete facts object. Sized for stray closers the model
-/// appends after a finished object (the observed case was 2 characters, `]}`);
-/// anything longer, or any character outside `}` / `]` / whitespace, keeps
-/// the strict parse error so real syntax damage is never masked.
+/// Most stray closers (`}` / `]`, whitespace between them not counted) that
+/// `tolerate_trailing_json` discards after the first complete facts object.
+/// Sized for closers the model appends after a finished object (the observed
+/// case was 2, `]}`); more of them, or any character outside `}` / `]` /
+/// whitespace, keeps the strict parse error so real syntax damage is never
+/// masked.
 pub(super) const MAX_TOLERATED_TAIL_CHARS: usize = 8;
+
+/// Number of stray closers in `tail` when it holds nothing but closers and
+/// whitespace; `None` for any other content.
+fn stray_closer_count(tail: &str) -> Option<usize> {
+    let mut closers = 0usize;
+    for c in tail.chars() {
+        match c {
+            '}' | ']' => closers += 1,
+            c if c.is_whitespace() => {}
+            _ => return None,
+        }
+    }
+    Some(closers)
+}
 
 /// `true` when `tail` is only stray closers the salvage path may drop.
 fn is_tolerable_tail(tail: &str) -> bool {
-    let trimmed = tail.trim();
-    !trimmed.is_empty()
-        && trimmed.chars().count() <= MAX_TOLERATED_TAIL_CHARS
-        && trimmed
-            .chars()
-            .all(|c| c == '}' || c == ']' || c.is_whitespace())
+    matches!(stray_closer_count(tail), Some(n) if n > 0 && n <= MAX_TOLERATED_TAIL_CHARS)
 }
 
 /// Salvage path for a reply the strict parse rejected: take the first
@@ -111,7 +121,7 @@ fn salvage_leading_object(json_str: &str, chunk_index: usize) -> Option<Extracti
     // Length only: the tail is model output, never logged verbatim (rule 1).
     warn!(
         "Extraction chunk {chunk_index}: discarded {} trailing character(s) after the facts object (tolerate_trailing_json)",
-        tail.trim().chars().count()
+        tail.chars().count()
     );
     Some(result)
 }
