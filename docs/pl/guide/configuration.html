@@ -971,6 +971,7 @@ max_facts_per_chunk = 20
 max_tokens = 16384
 input_chunk_tokens = 4000
 split_on_truncation = true
+tolerate_trailing_json = false
 temporal_grounding = "off"
 </code></pre>
 <p>Steruje procesem LLM <code>memory_ingest</code>.</p>
@@ -1007,6 +1008,12 @@ temporal_grounding = "off"
 <td>bool</td>
 <td>true</td>
 <td>Fragment, którego odpowiedź została obcięta, jest ponownie przetwarzany jako dwie połowy rozdzielone na granicy wiersza (głębokość 2, maksymalnie 4 dodatkowe wywołania na fragment). Przy <code>false</code> obcięty fragment jest odrzucany i zgłaszany bez ponawiania</td>
+</tr>
+<tr>
+<td><code>tolerate_trailing_json</code></td>
+<td>bool</td>
+<td>false</td>
+<td><code>true</code> przyjmuje pierwszy kompletny obiekt <code>{"facts": […]}</code> odpowiedzi, gdy jej reszta po przycięciu białych znaków to najwyżej 8 znaków <code>}</code> i <code>]</code> (odpowiedź z <code>finish_reason: "stop"</code> i zbędnym <code>]}</code> po poprawnym obiekcie traci inaczej wszystkie fakty fragmentu); odrzucony ogon jest logowany tylko jako długość, a każdy inny błąd parsowania nadal odrzuca fragment. <code>false</code> = ścisłe parsowanie, bajtowo identyczne</td>
 </tr>
 </tbody>
 </table>

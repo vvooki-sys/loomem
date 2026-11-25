@@ -1059,6 +1059,7 @@ max_facts_per_chunk = 20
 max_tokens = 16384
 input_chunk_tokens = 4000
 split_on_truncation = true
+tolerate_trailing_json = false
 temporal_grounding = &quot;off&quot;
 </code></pre>
 <p>Controls the <code>memory_ingest</code> LLM pipeline.</p>
@@ -1095,6 +1096,12 @@ temporal_grounding = &quot;off&quot;
 <td>bool</td>
 <td>true</td>
 <td>A chunk whose completion was truncated is re-extracted as two line-aligned halves (depth 2, at most 4 extra calls per chunk). <code>false</code> rejects and reports the truncated chunk, with no retry</td>
+</tr>
+<tr>
+<td><code>tolerate_trailing_json</code></td>
+<td>bool</td>
+<td>false</td>
+<td><code>true</code> admits the first complete <code>{"facts": […]}</code> object of a reply when the rest, whitespace trimmed, is at most 8 characters of <code>}</code> and <code>]</code> (a <code>finish_reason: "stop"</code> reply with a stray <code>]}</code> after a valid object otherwise loses the whole chunk's facts); the discarded tail is logged by length only, and any other parse error still rejects the chunk. <code>false</code> = strict parse, byte-identical</td>
 </tr>
 </tbody>
 </table>

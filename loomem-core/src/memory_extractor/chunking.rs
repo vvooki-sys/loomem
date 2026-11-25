@@ -66,7 +66,14 @@ pub(super) async fn extract_chunk_with_split(
             config.max_tokens,
         );
         run.calls_attempted += 1;
-        match extract_chunk(chat, &request_body, chunk_index).await {
+        match extract_chunk(
+            chat,
+            &request_body,
+            chunk_index,
+            config.tolerate_trailing_json,
+        )
+        .await
+        {
             Ok(facts) => {
                 run.calls_completed += 1;
                 run.facts.extend(facts);
@@ -114,6 +121,7 @@ async fn extract_chunk(
     chat: &impl ExtractionChat,
     request_body: &serde_json::Value,
     chunk_index: usize,
+    tolerate_trailing_json: bool,
 ) -> Result<Vec<ExtractedFact>, ChunkFailure> {
     let reply = match chat.chat(request_body).await {
         Ok(r) => r,
@@ -134,7 +142,7 @@ async fn extract_chunk(
         });
     }
 
-    let facts = parse_extraction_reply(&reply, chunk_index)?;
+    let facts = parse_extraction_reply(&reply, chunk_index, tolerate_trailing_json)?;
     // Diagnostic for the silent-degradation signature (server-degradation brief
     // §4.1): a 2xx that parses to zero facts. `body_len` separates a healthy
     // "model legitimately found nothing" (full body) from a degraded transport
