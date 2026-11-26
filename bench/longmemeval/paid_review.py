@@ -217,12 +217,18 @@ def reviewed_pairs(state):
             for i in state.intents.values() if i.get("stage") == REVIEW_STAGE}
 
 
-def check_cap(state, plan, qid, arm):
-    """Before a new review request: the journal may only hold listed pairs, and at most len(list)."""
+def check_listed(state, plan):
+    """The journal may only hold review requests for listed pairs; returns the reviewed pairs."""
     pairs = reviewed_pairs(state)
     outside = sorted(pairs - set(plan.pairs))
     if outside:
         raise ReviewCapExceeded(f"journal holds review requests for pairs outside the frozen list: {outside[:3]}")
+    return pairs
+
+
+def check_cap(state, plan, qid, arm):
+    """Before a new review request: the journal may only hold listed pairs, and at most len(list)."""
+    pairs = check_listed(state, plan)
     if (qid, arm) not in pairs and len(pairs) + 1 > len(plan):
         raise ReviewCapExceeded(f"review of ({qid}, {arm}) would make {len(pairs) + 1} reviews, above the "
                                 f"frozen list's {len(plan)}: stop, a new approval is needed")
@@ -449,6 +455,7 @@ def phase_review(ctx):
     verdicts = reviewable_verdicts(ctx.directory, plan)
     freeze(ctx.directory, plan, ctx.clock)
     deps, acked, done = _deps(ctx), ctx.acknowledged_bindings(), 0
+    check_listed(ctx.journal.state, plan)  # also on a resume with every listed pair already written
     for qid, arm in plan.pairs:
         if review_path(ctx.directory, qid, arm).exists():
             continue

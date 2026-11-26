@@ -9,9 +9,13 @@ evidence copy) and the pinned holdout (for categories). Output: a create-only JS
 Draw (plan §8C): ``--sample-size`` questions (100) stratified by category x judge agreement between
 the arms (``agree`` when every judged arm of the question has the same score). Categories get a
 largest-remainder proportional share (ties: a category with a ``disagree`` stratum first, then more
-disagreements, then the name); inside a category the two strata split the same way, with at least 1
+disagreements, then the name); a category with a ``disagree`` stratum whose share would be 0 gets 1
+reserved place and the rest is shared again among the others (refused when ``--sample-size`` is below
+the number of such categories). Inside a category the two strata split the same way, with at least 1
 ``disagree`` question whenever that stratum exists. ``random.Random(seed)`` draws from each stratum
-in holdout order. Each drawn question contributes its ``--sample-arms`` pairs. Always added, beyond
+in holdout order. Each drawn question contributes its ``--sample-arms`` pairs; a requested arm that
+runs on a drawn question (``always_originals`` only on the always list) but has no verdict (e.g. an
+interrupted judge run) refuses the draw, so a frozen list never silently loses an arm. Always added, beyond
 the draw: every regression pair (F correct and S not: both F and S; F correct and A not: F and A)
 and every non-correct answer in the critical categories (temporal_update, conflict_entity_assignment,
 unanswerable), and every ``--include-pair QID:ARM`` the validation names (e.g. suspected judge or
@@ -92,13 +96,36 @@ def _largest_remainder(total, weights, tie_key):
     return shares
 
 
+def _category_shares(sample_size, sizes, disagree):
+    """Largest-remainder shares; a category with a disagree stratum left at 0 gets 1 reserved place and
+    the rest is shared again among the other categories, until none is left at 0. Identical to the plain
+    proportional share whenever that already gives every such category a place."""
+    def tie_key(category):
+        return -(disagree[category] > 0), -disagree[category], category
+
+    reserved = {}
+    while True:
+        rest = {c: n for c, n in sizes.items() if c not in reserved}
+        shares = _largest_remainder(sample_size - len(reserved), rest, tie_key) if rest else {}
+        starved = [c for c, k in shares.items() if not k and disagree[c]]
+        if not starved:
+            return {**shares, **reserved}
+        reserved.update(dict.fromkeys(starved, 1))
+
+
 def allocate(strata, sample_size):
-    """{category: {"agree": k, "disagree": k}}: proportional, >= 1 disagree where that stratum exists."""
+    """{category: {"agree": k, "disagree": k}}: proportional, >= 1 disagree in every category where that
+    stratum exists (a reserved place when the proportional share would be 0); refused when the sample is
+    smaller than the number of such categories."""
     sizes = {c: len(s["agree"]) + len(s["disagree"]) for c, s in strata.items()}
     if sample_size <= 0 or sample_size > sum(sizes.values()):
         raise SampleError(f"sample size {sample_size} outside 1..{sum(sizes.values())} judged questions")
     disagree = {c: len(s["disagree"]) for c, s in strata.items()}
-    per_category = _largest_remainder(sample_size, sizes, lambda c: (-(disagree[c] > 0), -disagree[c], c))
+    needed = sum(1 for n in disagree.values() if n)
+    if sample_size < needed:
+        raise SampleError(f"sample size {sample_size} is below the {needed} categories with a disagree stratum, "
+                          "each of which needs at least 1 place")
+    per_category = _category_shares(sample_size, sizes, disagree)
     out = {}
     for category, k in per_category.items():
         counts = {s: len(strata[category][s]) for s in STRATA}
@@ -140,6 +167,13 @@ def check_included(pairs, verdicts, order):
     return sorted(set(pairs))
 
 
+def missing_sampled(verdicts, holdout, sampled, sample_arms):
+    """Sampled (question, arm) pairs of a requested arm that runs on the question but has no verdict.
+    ``always_originals`` runs only on the always list (as ``paid_phases.RunContext.arms_for``)."""
+    return [(q, arm) for q in sampled for arm in sample_arms
+            if (q, arm) not in verdicts and (arm != A or q in holdout.always_ids)]
+
+
 def build_list(verdicts, holdout, seed, sample_size, sample_arms, include_pairs=()):
     order = list(holdout.question_order)
     categories = {q: holdout.questions[q]["category"] for q in order}
@@ -148,6 +182,10 @@ def build_list(verdicts, holdout, seed, sample_size, sample_arms, include_pairs=
     sampled = draw(strata, allocation, seed, order)
     f_s, f_a, critical = mandatory(verdicts, categories)
     included = check_included(include_pairs, verdicts, order)
+    missing = missing_sampled(verdicts, holdout, sampled, sample_arms)
+    if missing:
+        raise SampleError(f"{len(missing)} sampled pair(s) of a requested arm have no verdict (an interrupted "
+                          f"judge run?): {missing[:5]}")
     wanted = {(q, arm) for q in sampled for arm in sample_arms if (q, arm) in verdicts} | set(included)
     wanted |= {(q, arm) for q in f_s for arm in (F, S)} | {(q, arm) for q in f_a for arm in (F, A)}
     wanted |= set(critical)

@@ -56,6 +56,17 @@ class AllocationTests(unittest.TestCase):
         with self.assertRaises(SampleError):
             allocate(strata, 201)
 
+    def test_a_disagreement_category_with_a_zero_share_gets_a_reserved_place(self):
+        strata = {"x": {"agree": [f"a{i}" for i in range(99)], "disagree": []},
+                  "y": {"agree": [], "disagree": ["d0"]}}  # proportional share of y: 10 x 1/100 -> 0
+        self.assertEqual(allocate(strata, 10), {"x": {"agree": 9, "disagree": 0}, "y": {"agree": 0, "disagree": 1}})
+        chain = {"x": {"agree": [f"a{i}" for i in range(97)], "disagree": []},
+                 **{c: {"agree": [], "disagree": [f"{c}0"]} for c in ("p", "q", "r")}}
+        self.assertEqual(allocate(chain, 3), {"p": {"agree": 0, "disagree": 1}, "q": {"agree": 0, "disagree": 1},
+                                              "r": {"agree": 0, "disagree": 1}, "x": {"agree": 0, "disagree": 0}})
+        with self.assertRaises(SampleError):  # 3 categories need a disagreement place, 2 places
+            allocate(chain, 2)
+
 
 class ListTests(unittest.TestCase):
     def test_deterministic_and_seeded(self):
@@ -80,7 +91,7 @@ class ListTests(unittest.TestCase):
         verdicts[("list-007", S)] = verdict("list-007", S, "technical_error", candidate=None)  # unreviewable
         verdicts[("list-009", S)] = verdict("list-009", S, "technical_error", candidate=None)  # F/S, S unreviewable
         verdicts[("temp-003", F)] = verdict("temp-003", F, "incorrect")        # critical category, not correct
-        doc = build_list(verdicts, holdout, "s", 1, [F])
+        doc = build_list(verdicts, holdout, "s", 2, [F])  # 2 categories with a disagreement: 1 place each
         listed = {(p["question_id"], p["arm"]) for p in doc["pairs"]}
         for pair in [("list-005", F), ("list-005", S), ("list-007", F), ("list-007", A), ("list-009", F),
                      ("temp-003", F)]:
@@ -102,6 +113,27 @@ class ListTests(unittest.TestCase):
         for bad in ([("list-020", A)], [("nope-001", F)]):  # no verdict for the pair / not a holdout question
             with self.subTest(bad=bad), self.assertRaises(SampleError):
                 build_list(verdicts, holdout, "s", 1, [F], include_pairs=bad)
+
+
+    def test_a_sampled_pair_without_a_verdict_is_refused(self):
+        holdout, verdicts = synthetic()
+        complete = build_list(verdicts, holdout, "seed", 100, [F, S])
+        qid = complete["sampled_question_ids"][7]
+        del verdicts[(qid, S)]  # e.g. an interrupted judge run
+        with self.assertRaises(SampleError) as caught:
+            build_list(verdicts, holdout, "seed", 100, [F, S])
+        self.assertIn(repr((qid, S)), str(caught.exception))
+
+    def test_always_originals_is_expected_only_on_the_always_list(self):
+        holdout, verdicts = synthetic({"list_count": (4, 0)})
+        holdout.always_ids = frozenset({"list-000"})
+        verdicts[("list-000", A)] = verdict("list-000", A)
+        doc = build_list(verdicts, holdout, "s", 4, [F, A])  # A never runs on list-001..003: not missing
+        self.assertEqual([(p["question_id"], p["arm"]) for p in doc["pairs"]],
+                         [("list-000", F), ("list-000", A), ("list-001", F), ("list-002", F), ("list-003", F)])
+        del verdicts[("list-000", A)]
+        with self.assertRaises(SampleError):
+            build_list(verdicts, holdout, "s", 4, [F, A])
 
 
 class CliTests(unittest.TestCase):

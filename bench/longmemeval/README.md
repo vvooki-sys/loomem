@@ -566,7 +566,8 @@ python3 bench/longmemeval/paid_runner.py run --campaign-dir /abs/campaign --phas
   pinned per alias, shared with the judge; a change stops the run. Resume skips
   existing review artifacts and replays settled requests without HTTP. A review
   request for a pair outside the frozen list, or more reviewed pairs than the list
-  holds, stops the run.
+  holds, stops the run; the outside-list check runs before any pair, so it also
+  stops a resume that has nothing left to review.
 - **Output limit today.** The active holdout sheet (`cost_sheet.py`, 3b13e609)
   sets `JUDGE_OUT["review"] = 16000`, so a campaign created from it must use
   `O = 16000`: `R_i` = 85 665 tokens and the per-call P1 maximum is
@@ -609,9 +610,14 @@ python3 bench/longmemeval/paid_runner.py run --campaign-dir /abs/campaign --phas
 
 `review_sample.py` is offline and deterministic: `--sample-size` questions
 stratified by category x judge agreement between the arms (largest-remainder
-shares, at least one question from a disagreement stratum when it exists),
-drawn with `random.Random(seed)`, plus every regression pair (F correct and S
-not; F correct and A not) and every non-correct answer in `temporal_update`,
+shares, at least one question from the disagreement stratum of every category
+that has one: such a category whose share would be 0 gets a reserved place, and
+a `--sample-size` below the number of such categories is refused), drawn with
+`random.Random(seed)`. A drawn question whose requested `--sample-arms` arm runs
+on it (`always_originals` only on the always list) but has no verdict, e.g.
+after an interrupted judge run, refuses the draw. Added to the draw: every
+regression pair (F correct and S not; F correct and A not) and every
+non-correct answer in `temporal_update`,
 `conflict_entity_assignment` and `unanswerable`, plus every `--include-pair
 QID:ARM` (repeatable; recorded under `mandatory.included_pairs`). Pairs without a
 judged candidate are listed under `excluded_unreviewable`. The list records

@@ -401,6 +401,18 @@ class ReviewDryRunTests(unittest.TestCase):
         self.assertEqual(self.capture.fakes[1].raw_log, [])
         self.assertEqual(len(self.review_intents()), 1)
 
+    def test_a_review_outside_the_frozen_list_stops_a_resume_with_nothing_left_to_review(self):
+        self.assertEqual(self.dry_run()[0], 0)
+        path, sha = self.write_list([("h1-q01", "facts_retry")])
+        self.assertEqual(self.dry_run(*self.review_flags(path, sha))[0], 0)  # every listed pair has its artifact
+        self.forge_review_intent("h1-q02", "facts_retry")
+        before = len(self.capture.fakes)
+        code, out = self.dry_run(*self.review_flags(path, sha))
+        self.assertEqual(code, 3, out)
+        self.assertIn("ReviewCapExceeded", out)
+        self.assertIn("outside the frozen list", out)
+        self.assertTrue(all(f.raw_log == [] for f in self.capture.fakes[before:]))
+
     def test_unjudged_pairs_are_refused_by_preflight(self):
         self.assertEqual(self.dry_run()[0], 0)
         (self.campaign_dir / "verdicts" / "h1-q02.facts_retry.json").unlink()
