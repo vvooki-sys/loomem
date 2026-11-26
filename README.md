@@ -280,3 +280,4 @@ Loomem is created and maintained by **Łukasz Gumowski** — [lukasz.gumowski@gm
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+<!-- trial -->
