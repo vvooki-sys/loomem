@@ -6,7 +6,9 @@
 //! of soft-deleted chunks). Cases are data-driven from
 //! `tests/fixtures/forgetting_eval.json`; the measured baseline is written
 //! back to `tests/fixtures/forgetting_baseline.json` (same write-back
-//! convention as `se_regression.rs`).
+//! convention as `se_regression.rs`) only when `LOOMEM_TEST_WRITE_BASELINE`
+//! is set: the file is tracked and `generated_at_unix` changes every run, so
+//! an unconditional write dirtied the tree after each `cargo test --workspace`.
 //!
 //! The purge cases mirror the cascade order used by the server handlers
 //! (`delete.rs::delete_memory_fully`, `purge.rs::hard_delete_memory_fully`:
@@ -606,18 +608,25 @@ fn forgetting_correctness_baseline() -> Result<()> {
         purge_orphans: orphans,
     };
 
+    // Opt-in write-back: the tracked fixture must not change on an ordinary
+    // test run (a timestamp-only diff slipped into PR #195 that way).
     let out = fixture_dir().join("forgetting_baseline.json");
-    std::fs::write(&out, serde_json::to_string_pretty(&report)?)
-        .with_context(|| format!("write {}", out.display()))?;
+    let written = if std::env::var_os("LOOMEM_TEST_WRITE_BASELINE").is_some() {
+        std::fs::write(&out, serde_json::to_string_pretty(&report)?)
+            .with_context(|| format!("write {}", out.display()))?;
+        format!("→ {}", out.display())
+    } else {
+        "(not written; set LOOMEM_TEST_WRITE_BASELINE=1 to refresh the fixture)".to_string()
+    };
     println!(
-        "forgetting baseline: supersede {}/{}, purge {}/{}, release {}/{} → {}",
+        "forgetting baseline: supersede {}/{}, purge {}/{}, release {}/{} {}",
         report.supersede.passed,
         report.supersede.total,
         report.purge.passed,
         report.purge.total,
         report.release.passed,
         report.release.total,
-        out.display()
+        written
     );
 
     // AC-1: baseline measured for all three paths.
@@ -629,7 +638,7 @@ fn forgetting_correctness_baseline() -> Result<()> {
     assert_eq!(
         report.purge_orphans.total(),
         0,
-        "AC-2: purge left residue: {:?} — details in {}",
+        "AC-2: purge left residue: {:?} — rerun with LOOMEM_TEST_WRITE_BASELINE=1 for the full report in {}",
         report.purge_orphans,
         out.display()
     );
@@ -645,7 +654,7 @@ fn forgetting_correctness_baseline() -> Result<()> {
         .collect();
     assert!(
         failing.is_empty(),
-        "forgetting baseline violations in {failing:?} — details in {}",
+        "forgetting baseline violations in {failing:?} — rerun with LOOMEM_TEST_WRITE_BASELINE=1 for the full report in {}",
         out.display()
     );
     Ok(())
