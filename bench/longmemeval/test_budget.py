@@ -198,3 +198,8 @@ class BudgetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrialFailure(unittest.TestCase):
+    def test_fails(self):
+        self.fail("trial: CI gate must go red")
