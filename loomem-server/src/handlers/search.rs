@@ -682,7 +682,7 @@ pub async fn search_handler(
     )
     .await?;
 
-    // Cycle/012 diagnostics: fused pool snapshot (post-fusion, pre-boost).
+    // Cycle/012 diagnostics: fused pool snapshot (post-fusion + latest-state promotion, pre-boost).
     if let Some(diag) = channel_diag.as_mut() {
         diag.fused_pool = fused_pool_hits(&hybrid_results);
         diag.graph_top = graph_channel_hits(&payload, &auth, &state);
@@ -3943,6 +3943,7 @@ mod tests {
                 implicit_access_boost_weight: 0.0,
                 user_state_boost: 1.0,
                 agent_fact_damp: 1.0,
+                latest_state_boost: 1.0,
                 rare_term_lane: loomem_core::search::rare_term::RareTermLaneConfig::default(),
                 vector_similarity_floor: 0.0,
                 decay_match_relief: 0.0,

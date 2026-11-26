@@ -11,6 +11,7 @@ use crate::graph::GraphSearchConfig;
 use crate::tantivy_index::SearchResult;
 mod candidate_budget;
 mod clock;
+pub mod latest_state;
 pub use candidate_budget::{SearchCandidateBudget, VectorSearchOptions};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -75,6 +76,23 @@ pub struct SearchConfig {
     /// assistant/preference categories.
     #[serde(default = "default_attribution_neutral")]
     pub agent_fact_damp: f64,
+    /// Latest-state promotion for current-state queries ("now", "currently",
+    /// "so far", …): positive candidate scores are multiplied by a factor
+    /// from x1.0 (oldest distinct statement time in the pool, by rank) to
+    /// x`latest_state_boost` (newest), so a later update can outrank the
+    /// earlier state it changes. It lifts every later statement whatever its
+    /// topic (A/B before enabling); undated chunks (`memory_store`, dream /
+    /// consolidation output) fall back to their write timestamp and usually
+    /// rank as newest. It acts only inside the fused pool (3 x top_k), is
+    /// skipped under an explicit date filter, is largely inert for
+    /// Temporal-class queries (final order by timestamp; `classify_query`'s
+    /// substrings such as "do ", "od ", "po ", "rok", "ago" make that class
+    /// broader than it looks), lets the cross-encoder reranker reorder only
+    /// the head slice the promotion filled, and does not reach graph-only or
+    /// multi-query candidates added afterwards. 1.0 == disabled,
+    /// byte-identical (no store read, no re-sort). See `latest_state`.
+    #[serde(default = "default_latest_state_neutral")]
+    pub latest_state_boost: f64,
     /// Cycle/012: rare-term guarantee lane. Chunks containing a rare query
     /// token are force-kept in the candidate pool that feeds the reranker.
     /// Default fully disabled — execution path identical to pre-cycle.
@@ -163,6 +181,10 @@ fn default_implicit_access_boost_weight() -> f64 {
 }
 
 fn default_attribution_neutral() -> f64 {
+    1.0
+}
+
+fn default_latest_state_neutral() -> f64 {
     1.0
 }
 
@@ -736,6 +758,7 @@ mod tests {
                 implicit_access_boost_weight: 0.0,
                 user_state_boost: 1.0,
                 agent_fact_damp: 1.0,
+                latest_state_boost: 1.0,
                 rare_term_lane: crate::search::rare_term::RareTermLaneConfig::default(),
                 vector_similarity_floor: 0.0,
                 decay_match_relief: 0.0,
