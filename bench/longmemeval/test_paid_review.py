@@ -24,6 +24,8 @@ from paid_runner import main as _main
 from paid_test_support import PROFILES, write_holdout
 from test_paid_preflight import SUBLIMITS, build_fixture, runner_env, tokenizer_available
 
+SANDBOX_PRESENT = Path("/usr/bin/sandbox-exec").is_file()
+
 ARM_NAMES = ("facts_retry", "selective_originals", "always_originals")
 REFERENCE = {"reference_answer": "The workshop moved to Lisbon in March.",
              "required_answer_atoms": ["Lisbon"], "equivalence_rule": "city name", "unanswerable_explanation": None}
@@ -503,6 +505,7 @@ class ReviewDryRunTests(unittest.TestCase):
         campaign.ledger.settle(token, "0")
 
 
+@unittest.skipUnless(SANDBOX_PRESENT, "sandbox-exec absent: paid-mode preflight cannot pass here")
 class PaidRunReviewTests(unittest.TestCase):
     """``run --phase review`` on a paid campaign whose provider is the loopback fake."""
 
