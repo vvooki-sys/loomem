@@ -22,10 +22,19 @@
 //! chunks and chunks without a time stay neutral.
 //!
 //! Limits (A/B before enabling): it lifts *every* later statement in the pool,
-//! whatever its topic; it reorders only the fused pool (3 x top_k), so an
-//! update ranked below that pool cannot be rescued; Temporal-class queries
-//! (re-sorted by timestamp later) and the cross-encoder reranker override
-//! its order; graph-only and multi-query candidates added after it are not
+//! whatever its topic; chunks without a conversation date (`memory_store`
+//! writes, dream/consolidation output) fall back to their write timestamp,
+//! so they usually rank as newest and get close to the full boost. It
+//! reorders only the fused pool (3 x top_k), so an update ranked below that
+//! pool cannot be rescued. The server skips it when the request carries an
+//! explicit date filter (an "as of March 2024" question must not be pushed
+//! toward newer facts). It is largely inert for Temporal-class queries: their
+//! final order is by timestamp (a stable sort, so ties keep the promoted
+//! order), and `classify_query`'s Temporal substrings ("do ", "od ", "po ",
+//! "rok", "ago", …) make that class broader than it looks. With the
+//! cross-encoder reranker on, the reranker reorders its head slice
+//! (`rerank_candidates`), but the promotion decides which candidates enter
+//! it. Graph-only and multi-query candidates added after it are not
 //! promoted, so they lose ground relative to the pool.
 //!
 //! Default `latest_state_boost = 1.0` returns before any work (no store read,

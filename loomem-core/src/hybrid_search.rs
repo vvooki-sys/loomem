@@ -81,9 +81,14 @@ pub struct SearchConfig {
     /// from x1.0 (oldest distinct statement time in the pool, by rank) to
     /// x`latest_state_boost` (newest), so a later update can outrank the
     /// earlier state it changes. It lifts every later statement whatever its
-    /// topic (A/B before enabling), acts only inside the fused pool
-    /// (3 x top_k), has no effect on Temporal-class queries or with the
-    /// cross-encoder reranker on, and does not reach graph-only or
+    /// topic (A/B before enabling); undated chunks (`memory_store`, dream /
+    /// consolidation output) fall back to their write timestamp and usually
+    /// rank as newest. It acts only inside the fused pool (3 x top_k), is
+    /// skipped under an explicit date filter, is largely inert for
+    /// Temporal-class queries (final order by timestamp; `classify_query`'s
+    /// substrings such as "do ", "od ", "po ", "rok", "ago" make that class
+    /// broader than it looks), lets the cross-encoder reranker reorder only
+    /// the head slice the promotion filled, and does not reach graph-only or
     /// multi-query candidates added afterwards. 1.0 == disabled,
     /// byte-identical (no store read, no re-sort). See `latest_state`.
     #[serde(default = "default_latest_state_neutral")]

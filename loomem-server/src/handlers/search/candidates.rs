@@ -102,7 +102,7 @@ pub(super) async fn retrieve_primary(
             state
                 .hybrid_search
                 .bm25_only_with_budget(bm25_results, request.guaranteed, budget)?;
-        promote_latest_state(state, request.payload, &mut results);
+        promote_latest_state(state, request.ctx, request.payload, &mut results);
         return Ok(results);
     };
     state.retrieval_counters.record_vector_search();
@@ -120,18 +120,25 @@ pub(super) async fn retrieve_primary(
             budget,
         },
     )?;
-    promote_latest_state(state, request.payload, &mut results);
+    promote_latest_state(state, request.ctx, request.payload, &mut results);
     Ok(results)
 }
 
 /// `[search] latest_state_boost` on the fused pool, before any later stage
 /// cuts it to the response size. A no-op (no store read, no re-sort) with
-/// the default 1.0 or when the query does not ask for the current state.
+/// the default 1.0, when the query does not ask for the current state, or
+/// when the request carries an explicit date filter (`date_from`/`date_to`
+/// or a date in the query): an "as of March 2024" question must not be
+/// pushed toward newer facts.
 fn promote_latest_state(
     state: &AppState,
+    ctx: &QueryContext,
     payload: &SearchRequest,
     results: &mut [HybridSearchResult],
 ) {
+    if ctx.date_filter.is_some() {
+        return;
+    }
     state
         .hybrid_search
         .promote_latest_state(&payload.query, results, &state.store);

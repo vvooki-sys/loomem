@@ -20,10 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distinct statement time in the fused pool, by rank) to the boost (newest),
   so an update can outrank the earlier state it changes (default 1.0 = off,
   byte-identical). It lifts every later statement whatever its topic, so
-  A/B it before enabling; it only reorders the fused pool (3 × `top_k`);
-  it has no effect on Temporal-class queries or with the cross-encoder
-  reranker on; graph-only and multi-query candidates added after it are
-  not boosted.
+  A/B it before enabling; chunks without a conversation date
+  (`memory_store` writes, dream/consolidation output) fall back to their
+  write timestamp and usually rank as newest. It only reorders the fused
+  pool (3 × `top_k`); it is skipped when the request carries a date filter;
+  it is largely inert for Temporal-class queries (their final order is by
+  timestamp); with the cross-encoder reranker on, the reranker reorders its
+  head slice, but the promotion decides which candidates enter it;
+  graph-only and multi-query candidates added after it are not boosted.
 - Reranker document text levers, off by default and byte-identical when left
   so: `[search] rerank_date_prefix` dates each reranker document like
   `memory_search`, `rerank_llm_max_chars` sets the LLM reranker's

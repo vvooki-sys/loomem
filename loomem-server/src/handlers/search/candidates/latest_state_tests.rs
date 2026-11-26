@@ -58,7 +58,10 @@ async fn app(boost: f64) -> axum::Router {
 }
 
 async fn ranked(app: &axum::Router, query: &str) -> Vec<(String, f64)> {
-    let payload = json!({"query":query,"streams":["streamA"],"top_k":10});
+    ranked_payload(app, json!({"query":query,"streams":["streamA"],"top_k":10})).await
+}
+
+async fn ranked_payload(app: &axum::Router, payload: Value) -> Vec<(String, f64)> {
     let request = Request::builder()
         .method("POST")
         .uri("/v1/search")
@@ -110,5 +113,17 @@ async fn http_boost_on_ranks_the_newer_chunk_first_for_a_current_state_query() {
 async fn http_boost_on_without_a_marker_is_identical() {
     let off = ranked(&app(1.0).await, "orchard pears").await;
     let on = ranked(&app(2.0).await, "orchard pears").await;
+    assert_eq!(on, off);
+}
+
+/// An explicit date range (here covering both chunks) turns the promotion
+/// off: an "as of <date>" question must not be pushed toward newer facts.
+#[tokio::test]
+async fn http_boost_on_with_a_date_filter_is_identical() {
+    let payload = json!({"query":"orchard now","streams":["streamA"],"top_k":10,
+        "date_from":"2023-06-01","date_to":"2025-06-01"});
+    let off = ranked_payload(&app(1.0).await, payload.clone()).await;
+    let on = ranked_payload(&app(2.0).await, payload).await;
+    assert_eq!(ids(&off), ["stale", "update"]);
     assert_eq!(on, off);
 }
