@@ -10,8 +10,10 @@ use crate::decay::DecayConfig;
 use crate::graph::GraphSearchConfig;
 use crate::tantivy_index::SearchResult;
 mod candidate_budget;
+mod channels;
 mod clock;
 pub mod latest_state;
+mod vector_fill;
 pub use candidate_budget::{SearchCandidateBudget, VectorSearchOptions};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -108,6 +110,16 @@ pub struct SearchConfig {
     /// (0.75–0.80 starting range).
     #[serde(default)]
     pub vector_similarity_floor: f64,
+    /// Score fused candidates that came in through a non-vector lane (BM25,
+    /// rare-term lane) but sit outside the vector lane's top hits with their
+    /// real cosine to the query, instead of 0.0. The cosine is taken against
+    /// the same query embedding and embedding list the vector lane ranked,
+    /// passes `vector_similarity_floor`, and is normalized by the lane's own
+    /// max (clamped to [0, 1]). It cannot add candidates: a fact in no lane
+    /// stays out. false == disabled, byte-identical (no extra work). See
+    /// `vector_fill`.
+    #[serde(default)]
+    pub vector_fill_missing: bool,
     /// WS-1(b) (Spectron gap brief 2026-07-09): match-quality decay relief.
     /// A strong lexical/vector match weakens the age penalty so an old needle
     /// that is the best match cannot be killed by time decay alone (45-day-old
@@ -295,52 +307,25 @@ impl HybridSearchEngine {
         guaranteed: Option<&std::collections::HashSet<String>>,
         budget: SearchCandidateBudget,
     ) -> Result<Vec<HybridSearchResult>> {
-        // WS-1(a) (Spectron gap brief 2026-07-09): absolute-similarity floor.
-        // Drop vector candidates whose *raw* cosine sits below the floor
-        // before max-normalization — otherwise the top hit of a noise-only
-        // vector channel is normalized to 1.0 and still collects the full
-        // `weights.vector`. Dropped candidates can still enter via BM25.
-        // floor == 0.0 (default) → byte-identical to the pre-cycle path.
-        let floor = self.config.search.vector_similarity_floor;
-        let vector_scores: Vec<(String, f32)> = if floor > 0.0 {
-            vector_scores
-                .into_iter()
-                .filter(|(_, score)| f64::from(*score) >= floor)
-                .collect()
-        } else {
-            vector_scores
+        let lanes = channels::Lanes {
+            bm25: bm25_results,
+            vector: vector_scores,
+            fill: None,
         };
+        self.fuse_lanes(lanes, store, guaranteed, budget)
+    }
 
-        // Normalize BM25 scores
-        let max_bm25 = bm25_results
-            .iter()
-            .map(|r| r.score)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap_or(1.0);
-
-        // Normalize vector scores (cosine similarity is typically -1 to 1, shift to 0-1)
-        let max_vector = vector_scores
-            .iter()
-            .map(|r| r.1)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap_or(1.0);
-
-        // Build maps for efficient lookup
-        let mut bm25_map: HashMap<String, (f32, SearchResult)> = HashMap::new();
-        for result in bm25_results {
-            let normalized = result.score / max_bm25;
-            bm25_map.insert(result.id.clone(), (normalized, result));
-        }
-
-        let mut vector_map: HashMap<String, f32> = HashMap::new();
-        for (id, score) in vector_scores {
-            let normalized = if max_vector > 0.0 {
-                score / max_vector
-            } else {
-                0.0
-            };
-            vector_map.insert(id, normalized);
-        }
+    /// Body of [`Self::fuse_with_vector_budget`]; `lanes.fill` carries the
+    /// optional `vector_fill_missing` cosines (`None` == the unfilled path).
+    fn fuse_lanes(
+        &self,
+        lanes: channels::Lanes,
+        store: Option<&crate::storage::RocksDbStore>,
+        guaranteed: Option<&std::collections::HashSet<String>>,
+        budget: SearchCandidateBudget,
+    ) -> Result<Vec<HybridSearchResult>> {
+        let (bm25_map, vector_map) =
+            channels::normalized_maps(lanes, self.config.search.vector_similarity_floor);
 
         // Collect all unique IDs
         let mut all_ids: Vec<String> = bm25_map.keys().chain(vector_map.keys()).cloned().collect();
@@ -761,6 +746,7 @@ mod tests {
                 latest_state_boost: 1.0,
                 rare_term_lane: crate::search::rare_term::RareTermLaneConfig::default(),
                 vector_similarity_floor: 0.0,
+                vector_fill_missing: false,
                 decay_match_relief: 0.0,
                 tier1: crate::search::tier1::Tier1Config::default(),
                 operation: OperationSearchConfig::default(),

@@ -395,6 +395,7 @@ rerank_sync = false
 rerank_sync_timeout_ms = 2000
 event_date_proximity_boost = 0.0
 content_dedup = &quot;prefix&quot;
+vector_fill_missing = false
 </code></pre>
 <p>These <code>[search]</code> keys, the <code>memory_search</code> keys in <a href="#mcp"><code>[mcp]</code></a>, and the <code>temporal_grounding</code> and <code>prompt_variant</code> keys in <a href="#knowledge_extraction"><code>[knowledge_extraction]</code></a> are quality levers. All of them are off or neutral by default: with the shipped values, output is byte-identical to the output before the key existed. A default changes only after a measured A/B run. A value the validation rejects stops the config from loading.</p>
 <table>
@@ -448,6 +449,12 @@ content_dedup = &quot;prefix&quot;
 <td>string</td>
 <td><code>"prefix"</code></td>
 <td>How near-duplicate results are collapsed. <code>"prefix"</code> (the previous behaviour): compare the first 150 characters of each result, lowercased, and drop the lower-ranked one when the two share a leading run longer than 80% of the shorter prefix, with both prefixes at least 30 bytes long. The run is counted in characters but the 80% is taken of the length in bytes, so text with many multi-byte characters (such as Polish letters) collapses less often, and two identical prefixes can both be kept. Fragments of different sources, and a fragment against its own source, never collapse. <code>"exact"</code>: collapse only byte-identical plain chunks of at least 30 bytes, and never fragments, so a negation or update after a shared prefix survives. Any other value fails config loading. In a trace, results dropped in either mode keep the rejection reason <code>content_prefix_dedup</code></td>
+</tr>
+<tr>
+<td><code>vector_fill_missing</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>Give a fused candidate that came in through a non-vector lane (BM25, or the rare-term lane) but is not among the vector lane's hits its real cosine to the query instead of a vector score of 0. The vector lane keeps only its top cosines (<code>2 × max(top_k, request top_k)</code> on the main search path), so a lexical match just below that cut used to score on BM25 alone and sink to the bottom of the candidate pool. The fill uses the same query embedding and embedding list as the vector lane, applies <code>vector_similarity_floor</code> as for lane hits, divides by the lane's highest cosine and clamps the result to [0, 1]. A candidate without an embedding, or a request whose vector lane is empty, keeps 0; Simple-class queries skip the vector lane, so nothing is filled. Limits: it only rescores candidates already in the pool, so a fact in no lane stays out; it lifts stale candidates as well as updates, so A/B it before enabling; with <code>decay_match_relief</code> above 0 (<code>0.70</code> shipped), a filled vector score also feeds the match-quality decay relief, so filled older candidates lose part of their age penalty too; it costs one pass over the in-memory embedding list plus one cosine per filled candidate, with no storage read. Vector-only hits get no BM25 fill. BM25 sub-query hits (<code>multi_query_enabled</code>) join the BM25 lane before fusion and are filled; graph, vector multi-query and operation-lane candidates added after fusion are not. It applies to <code>/v1/search</code> (and MCP <code>memory_search</code>) and the hosted compat search; the ambient path is not filled. <code>false</code>: nothing is computed</td>
 </tr>
 </tbody>
 </table>
