@@ -34,17 +34,19 @@ Per function: CC ≤ 10, COG ≤ 15, SLOC ≤ 100 (excl. doc comments), args ≤
 
 ## Enforcement reality (aspirational vs actual)
 
-**Actually enforced (CI + pre-commit hook), with `RUSTFLAGS: "-D warnings"`:**
+**Actually enforced (CI + pre-commit hook), with `RUSTFLAGS: "-D warnings"`,** for the jobs the diff selects (§ Test levels):
 
 ```bash
-cargo check  --workspace
+cargo check  --workspace              # "rust" jobs
 cargo test   --workspace --lib        # lib only, no integration tests
 cargo clippy --workspace -- -D warnings
+cargo clippy -p loomem-server --features evaluation -- -D warnings
 cargo fmt --all -- --check
-cargo audit                           # "audit" job
+cargo audit --deny warnings           # "audit" job
+python -m unittest discover -s bench/longmemeval -p 'test_*.py'   # "bench" job
 ```
 
-That clippy run uses **default lints minus `too_many_arguments`** (the one entry in `[workspace.lints.clippy]`). It does **not** include pedantic/nursery/cargo, nor deny rules for `unwrap_used` / `expect_used` / `panic` / `todo` / `unimplemented` / `as_conversions`. The pre-commit hook (`scripts/hooks/pre-commit`) is byte-identical to the CI fmt + clippy commands.
+That clippy run uses **default lints minus `too_many_arguments`** (the one entry in `[workspace.lints.clippy]`). It does **not** include pedantic/nursery/cargo, nor deny rules for `unwrap_used` / `expect_used` / `panic` / `todo` / `unimplemented` / `as_conversions`. For commits that can affect Rust, the pre-commit hook (`scripts/hooks/pre-commit`) is byte-identical to the CI fmt + clippy (workspace) commands; it skips the rest.
 
 **Not checked by CI — enforced by review only:**
 
@@ -62,6 +64,33 @@ cargo clippy --workspace --all-targets -- \
 
 ---
 
+## Test levels
+
+Each change is checked by what it can actually break. Escaped bugs must still surface before merge; the levels only decide how much runs and who runs it. `scripts/ci-scope.cjs` is the single source of the path rules: CI selects jobs with it, `CI gate` verifies with it, and the pre-commit hook asks it whether the staged paths can affect Rust.
+
+| Level | Paths | CI jobs | Local, once per push |
+| --- | --- | --- | --- |
+| presentation | top-level `*.md`, `docs/**` | website (for `docs/**` only) | nothing to build |
+| dashboard | `loomem-dashboard/**` | dashboard | `npm run lint && npm test && npm run build` |
+| bench | `bench/**` | bench (Python `unittest`) | see below |
+| rust | `loomem-{core,server,cli,migrate}/**`, `.cargo/**`, `config.toml`, toolchain/fmt/clippy config | check + `test --lib`, clippy ×2, fmt, bench | `cargo check -p <crate>`, `cargo test -p <crate> --lib`, the changed module's integration tests |
+| dependencies | `Cargo.toml` (any crate), `Cargo.lock`, `deny.toml`, `.cargo/audit.toml` | rust + audit | as rust, plus a full `cargo test --workspace` |
+| ci/infra | `.github/**`, `scripts/**`, `Dockerfile`, `.dockerignore`, `install.sh` | all | the checks of every level the change affects; `node scripts/test-ci-scope.cjs` for scope or gate changes |
+
+**Fail closed.** A diff spanning several levels runs the union of their jobs. A path no rule claims, an empty diff, an unknown event or any classification error runs everything. Rust paths also run the bench job, because the bench tests read `config.toml` and `loomem-server` fixtures.
+
+**`CI gate`** is the required check. It fails unless every selected job succeeded and every other job was skipped, so a selected job that was skipped or cancelled, or an unselected job that ran, both fail it.
+
+**Audit** runs when the dependency files change, on every push to `main`, and weekly on a schedule, so new RUSTSEC advisories surface without a change. `release.yml` stays full and is not scoped.
+
+**High-risk Rust.** A full `cargo test --workspace` once before opening the PR, not per push, when the change touches the public `loomem-core` API, storage or structs persisted in RocksDB, search or fusion, `crypto/` or `encrypt_backfill/`, a god file, dependencies, or the `evaluation` feature. Hot-path refactors add the live smoke test below.
+
+**Bench.** Run the tests of the changed modules and of the modules that import them directly. Run the full harness once before the last push only when the change touches the shared money or runner path (`paid_completion`, the call journal, reservations, precount). Make a new dry-run only when the `harness_sha256()` aggregate changes and the campaign needs that evidence, and check byte identity of existing phases only when the change can reach them. The CI job needs the o200k `tiktoken` cache and skips the macOS `sandbox-exec` tests on Linux; those remain local checks.
+
+**Roles.** The implementer runs its level once per push. The critic does not repeat the full suite: it reads the diff, runs the new and changed tests, and checks that they fail on the old code. CI is the verifier; a local full run is needed only where the level's CI jobs do not cover the change (integration tests, `sandbox-exec` tests). Batch fixes into one push: each push starts a CI run and a Greptile re-review.
+
+---
+
 ## Error handling — detail
 
 No `.unwrap()` in production code; allowed only in `#[cfg(test)]`, `tests/`, `benches/`, `examples/`, and at the very end of `main()` after a full error. Same for `.expect("…")` — if something truly can't be `None`/`Err`, document why in a comment. No `panic!` / `todo!` / `unimplemented!` in production; TODOs go to the issue tracker, not the code. Propagate with `?` **plus context** (`.context("failed to parse user query")?`), not a bare `?`. New error types: `thiserror` in the domain layer (`loomem-core`), `anyhow` in handlers — follow whatever the crate already uses.
@@ -74,7 +103,7 @@ No `.unwrap()` in production code; allowed only in `#[cfg(test)]`, `tests/`, `be
 
 A refactor touching a hot path (HTTP handler, `mcp/`, search, storage, consolidation, crypto) needs, before merge:
 
-- **Tier A (static):** all CI gates green locally + full `cargo test --workspace`.
+- **Tier A (static):** the high-risk Rust level (§ Test levels): CI green and a full `cargo test --workspace` once before opening the PR.
 - **Tier B (sanity):** release build, server started against a live DB, ≥ 3 fixture queries across different branches (simple, temporal/time-aware, complex/multi-query). Expect HTTP 200, valid JSON, zero panics in the log, sensible non-empty results.
 - **Tier C (identity):** build `main` on a separate port, run the same queries, `diff` the top-k IDs after normalizing out `latency_ms` / `cache_hit` / `trace_id`. **Top-k IDs identical in count and order.** Only float-ULP / `time_decay` differences (time elapsed between runs) are acceptable.
 
