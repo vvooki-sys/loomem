@@ -18,7 +18,7 @@ from paid_preflight import harness_sha256
 from paid_preflight_probes import sha256_text
 from smoke_local_e1 import PROFILE
 
-PHASES = ("control", "extraction", "retrieval", "arms", "judge", "all")
+PHASES = ("control", "extraction", "retrieval", "arms", "judge", "all", "review")
 EXTRACTION_DEFAULTS = {"max_completion_tokens": 16384, "input_chunk_tokens": 4000, "split_on_truncation": True,
                        "max_facts_per_chunk": 20, "completion_tokens_floor": 0}
 DEFAULT_MAX_TRANSCRIPT_TOKENS = 20000
@@ -64,6 +64,15 @@ def add_campaign_flags(parser, dry_run=False):
         type=int, default=DEFAULT_MAX_TRANSCRIPT_TOKENS)
 
 
+def add_review_flags(parser):
+    """The plan §8C review list and prompt pins; used only with --phase review."""
+    add = parser.add_argument
+    add("--review-list", metavar="PATH", help="frozen JSON list of (question_id, arm) pairs to review")
+    add("--review-list-sha256", metavar="HEX", help="required with --review-list; a different file is refused")
+    add("--review-prompt-sha256", metavar="HEX",
+        help="the review prompt fingerprint pinned by the validation (paid_prompts.REVIEW_PROMPT_SHA256)")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="paid_runner.py",
                                      description="Paid LongMemEval holdout runner (plan B2): create-campaign, "
@@ -84,10 +93,15 @@ def build_parser():
                      help="paid_fake_engine instead of the sandboxed binary (no process; exercises proxy/journal only)")
     dry.add_argument("--retry-rejected", action="append", default=[], metavar="RID",
                      help="with --resume: send this rejected_4xx request again as the next attempt")
+    dry.add_argument("--phase", choices=("all", "review"), default="all",
+                     help="review = only the plan 8C review of an existing dry_run campaign (with --resume)")
+    add_review_flags(dry)
     run = sub.add_parser("run", help="paid phases (mode=paid only)")
     run.add_argument("--campaign-dir", required=True)
     run.add_argument("--phase", choices=PHASES, default="all",
-                     help="control = only the control call K (then check the usage dashboard)")
+                     help="control = only the control call K (then check the usage dashboard); review = only "
+                          "the plan 8C review of a frozen list (never part of all)")
+    add_review_flags(run)
     run.add_argument("--acknowledge-uncertain", action="append", default=[], metavar="RID")
     run.add_argument("--retry-rejected", action="append", default=[], metavar="RID",
                      help="send this settled rejected_4xx request again as the next attempt (new reservation); "

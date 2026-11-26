@@ -34,6 +34,8 @@ PROBE_SCRIPT = (
     "try:\n    l.connect(('127.0.0.1', port)); print('LOOPBACK_OK')\n"
     "except OSError as e:\n    print('LOOPBACK_FAIL', e.errno)\n"
     "finally:\n    l.close()\n")
+# The stages whose requests carry gold by design (judge; the plan §8C review): not leak-scanned.
+GOLD_STAGES = ("judge", "review")
 ARTIFACT_KEYS = ("binary", "binary_sha256", "template", "template_sha256", "model_dir",
                  "model_onnx_sha256", "tokenizer_sha256")
 # harness_sha256 covers every paid_*.py plus these runtime dependencies of the paid path.
@@ -250,7 +252,7 @@ def gold_scan(directory, journal_state, holdout):
             excluded[field] += counts["excluded_as_source"]
     leaks, scanned = [], 0
     for rid, intent in journal_state.intents.items():
-        if intent.get("stage") == "judge":
+        if intent.get("stage") in GOLD_STAGES:
             continue
         path = Path(directory) / "calls" / f"{rid}.request.json"
         if not path.is_file():

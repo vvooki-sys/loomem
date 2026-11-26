@@ -9,6 +9,8 @@ sublimits, the journal and resume exactly as a paid run would. It ends with
 the PREDICTED MAXIMUM table for both bound policies plus what was observed:
 requests per role and per session, system fingerprints, zero_facts, pins and
 every pinned hash. JSON goes to stdout and to ``dry_run_summary.json``.
+``--resume --phase review`` runs only the plan §8C review of the campaign's verdicts (the fake answers
+the review role with a valid review); ``--phase all`` never runs it and its summary is unchanged.
 """
 import hashlib
 import json
@@ -28,7 +30,7 @@ from paid_openai_wire import Transport
 from paid_phases import RunContext, run_phases
 from paid_preflight import all_passed, format_checks, run_preflight, tokenizer_or_none
 from paid_price_sheet import load_sheet
-from paid_prompts import load_prompts
+from paid_prompts import REVIEW_SYSTEM, load_prompts
 from paid_report import build_report, write_report
 from paid_runner_cli import compose_spec, iso_utc, judge_prompt_pair, parse_pairs, parse_profiles
 
@@ -45,6 +47,7 @@ def fake_provider(prompts, profiles, scenarios):
     the only one whose model alias is registered, so an unknown system with that alias resolves to it."""
     roles = {_sha(prompts.stage(stage).system): stage for stage in STAGES}
     roles[_sha(CONTROL_SYSTEM)] = "control"
+    roles[_sha(REVIEW_SYSTEM)] = "review"
     models = {"extraction": profiles["extraction"]["model"], "judge": profiles["judge"]["model"]}
     # "a,b": a FIFO per role (the last entry repeats), e.g. selection=length_http400,ok hits one request
     scenarios = {role: value.split(",") if "," in value else value for role, value in scenarios.items()}
@@ -127,6 +130,13 @@ def _hashes(campaign, prompts, sheet):
             "stage_sha256": spec["plan_json"]["stage_sha256"], "harness": spec.get("harness_sha256")}
 
 
+def _review_summary(directory, plan, report):
+    folder = Path(directory) / "reviews"
+    written = sorted(p.name for p in folder.glob("*.json")) if folder.is_dir() else []
+    return {"phase": "review", "review_list_sha256": plan.sha256, "review_prompt_sha256": plan.prompt_sha256,
+            "pairs": len(plan), "artifacts": len(written), "summary": report.get("review")}
+
+
 def _write_summary(directory, summary):
     path = Path(directory) / "dry_run_summary.json"
     temporary = path.with_name(path.name + ".tmp")
@@ -146,6 +156,10 @@ def cmd_dry_run(args, factories, clock, env, out):
     prompts = load_prompts(args.plan_json, args.plan_json_sha256, judge_prompt_pair(args))
     scenarios = parse_pairs(args.scenario, "--scenario")
     holdout = verify_holdout(args.holdout_dir, args.holdout_manifest_sha256, args.always50_sha256)
+    from paid_review import plan_from_args
+    if args.phase == "review" and not args.resume:
+        raise CampaignError("--phase review needs --resume (a new campaign has no verdicts to review)")
+    args.review_plan = plan_from_args(args, holdout)
     if args.fake_engine:
         from paid_fake_engine import fake_engine_factory
         factories = {**(factories or {}), "engine": fake_engine_factory}
@@ -172,7 +186,8 @@ def _dry_run(args, factories, clock, env, out, sheet, prompts, holdout, fake, en
     directory = Path(campaign.directory)
     env_view = {**env, KEY_ENV: fake.token}
     checks = run_preflight(directory, mode_command="dry-run", env=env_view, holdout=holdout, sheet=sheet,
-                           prompts=prompts, engine_probe=engine_probe, limit_histories=args.limit_histories)
+                           prompts=prompts, engine_probe=engine_probe, limit_histories=args.limit_histories,
+                           review=args.review_plan)
     print(format_checks(checks), file=out)
     if not all_passed(checks):
         return 2
@@ -198,8 +213,8 @@ def _dry_run(args, factories, clock, env, out, sheet, prompts, holdout, fake, en
                 ctx = RunContext(campaign, journal, sheet, prompts, holdout, transport, engine_factory, proxy,
                                  precount=precount, limit_histories=args.limit_histories, clock=clock,
                                  after_session=lambda p: (register(p), remember(directory, p, clock)),
-                                 retry_rejected=retry)
-                run_phases(ctx, "all")
+                                 retry_rejected=retry, review=args.review_plan)
+                run_phases(ctx, args.phase)
             except stops as exc:
                 stop = exc
     report = build_report(campaign, journal.state, directory, holdout, clock)
@@ -214,6 +229,8 @@ def _dry_run(args, factories, clock, env, out, sheet, prompts, holdout, fake, en
                "hashes": _hashes(campaign, prompts, sheet), "report_path": str(report_path),
                "report": {k: report[k] for k in ("per_arm", "money", "extraction", "input_tokens", "pins", "ledger")},
                "stop": None if stop is None else f"{type(stop).__name__}: {stop}"}
+    if args.review_plan is not None:  # only for --phase review: the --phase all summary keeps its keys
+        summary["review"] = _review_summary(directory, args.review_plan, report)
     print(format_table(maximum), file=out)
     print(json.dumps(summary, sort_keys=True, indent=1), file=out)
     _write_summary(directory, summary)
