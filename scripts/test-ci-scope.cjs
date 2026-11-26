@@ -17,7 +17,8 @@ for (const [paths, expected] of [
   [['loomem-dashboard/.gitignore'], 'rust+dashboard+bench'],
   // bench
   [['bench/longmemeval/paid_runner.py'], 'bench'],
-  [['bench/longmemeval/README.md', 'bench/new/x.py'], 'bench'],
+  [['bench/longmemeval/README.md', 'bench/longmemeval/test_qa.py'], 'bench'],
+  [['bench/new/x.py'], ALL],
   // rust (bench tests read config.toml and server fixtures)
   [['loomem-core/src/intent_log/recovery.rs'], RUST],
   [['loomem-server/src/auth.rs', 'loomem-cli/src/main.rs', 'loomem-migrate/src/main.rs'], RUST],
@@ -54,10 +55,10 @@ for (const [paths, expected] of [
 
 // Labels, events.
 assert.equal(classify(['README.md']).scope, 'presentation');
-assert.equal(classify(['bench/x.py']).scope, 'bench');
+assert.equal(classify(['bench/longmemeval/x.py']).scope, 'bench');
 assert.equal(classify([]).scope, 'full');
 assert.equal(selected(classify(['README.md'], 'push')), 'audit');
-assert.equal(selected(classify(['bench/x.py'], 'push')), 'audit+bench');
+assert.equal(selected(classify(['bench/longmemeval/x.py'], 'push')), 'audit+bench');
 assert.equal(selected(classify([], 'schedule')), 'audit');
 
 // Gate: selected jobs must succeed, the rest must be skipped.
@@ -102,9 +103,9 @@ try {
   } finally { process.chdir(old); }
   // Hook mode reads staged paths and fails closed.
   assert.equal(hook(), 'rust', 'nothing staged');
-  fs.mkdirSync(path.join(dir, 'bench'));
-  fs.writeFileSync(path.join(dir, 'bench', 'x.py'), 'x');
-  git('add', 'bench/x.py');
+  fs.mkdirSync(path.join(dir, 'bench', 'longmemeval'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'bench', 'longmemeval', 'x.py'), 'x');
+  git('add', 'bench/longmemeval/x.py');
   assert.equal(hook(), 'skip', 'bench only');
   fs.writeFileSync(path.join(dir, 'config.toml'), 'changed');
   assert.equal(hook(), 'skip', 'unstaged Rust change');

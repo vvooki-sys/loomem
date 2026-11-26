@@ -40,7 +40,7 @@ cargo audit
 
 Tips:
 
-- Install the pre-commit hook: `scripts/install-hooks.sh` (runs fmt + clippy before every commit).
+- Install the pre-commit hook: `scripts/install-hooks.sh` (runs fmt + clippy before every commit whose staged paths can affect Rust).
 - No `.unwrap()` / `.expect()` / `panic!` in production code paths — propagate errors with `?` and `.context(...)`.
 - New public functions need unit tests; new HTTP handlers need an integration test.
 - Keep changes surgical: one PR = one logical change. Avoid drive-by refactors.

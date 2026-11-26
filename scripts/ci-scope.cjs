@@ -15,7 +15,9 @@ const RULES = [
   // loomem-server embeds loomem-dashboard/dist/ and fails to compile without it.
   [/^loomem-dashboard\/(dist\/|\.gitignore$)/, ['rust', 'dashboard', 'bench']],
   [/^loomem-dashboard\//, ['dashboard']],
-  [/^bench\//, ['bench']],
+  // The bench job discovers tests in bench/longmemeval only; other bench
+  // trees stay unclassified until the job covers them.
+  [/^bench\/longmemeval\//, ['bench']],
   [/^docs\//, ['website']],
   [/^[A-Z_]+\.md$/, []],
 ];

@@ -62,8 +62,9 @@ jobs:
       - name: cargo check
         run: cargo check --workspace
 
-      - name: cargo test (lib only, no integration)
-        run: cargo test --workspace --lib
+      # --bins: loomem-server keeps its unit tests in the binary ([lib] test = false).
+      - name: cargo test (lib + bin unit tests, no integration)
+        run: cargo test --workspace --lib --bins
 
   clippy:
     needs: scope
@@ -176,6 +177,13 @@ jobs:
         env:
           TIKTOKEN_CACHE_DIR: ${{ runner.temp }}/tiktoken
         run: python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
+      # Fails if the tokenizer-gated tests would silently skip.
+      - name: Check o200k is available to the tests
+        working-directory: bench/longmemeval
+        env:
+          TIKTOKEN_CACHE_DIR: ${{ runner.temp }}/tiktoken
+        run: |
+          python -c "from test_paid_preflight import tokenizer_available as ok; raise SystemExit(0 if ok() else 'o200k unavailable, tokenizer-gated tests would skip')"
       - name: unittest bench/longmemeval
         env:
           TIKTOKEN_CACHE_DIR: ${{ runner.temp }}/tiktoken
