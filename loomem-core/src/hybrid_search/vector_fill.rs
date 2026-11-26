@@ -21,13 +21,22 @@
 //! 0.0.
 //!
 //! Limits (A/B before enabling): it only rescores candidates that are
-//! already in the pool through a non-vector lane; a fact in no lane (7 of
-//! the 10 diagnosed cases) stays out. It lifts every such candidate, stale
-//! ones included, and so can push other candidates down (widening the
-//! vector lane in the diagnosis moved a stale fact from rank 11 to 42). It
+//! already in the pool through a non-vector lane; a fact in no lane (6 of
+//! the 10 diagnosed cases, all of which stayed out of the top 60 in the
+//! offline check) stays out. It lifts every such candidate, stale ones
+//! included, and so can push other candidates down (widening the vector
+//! lane in the diagnosis moved a stale fact from rank 11 to 42). With
+//! `decay_match_relief` > 0 (0.70 shipped) a filled vector score also feeds
+//! `relieve_decay(max(bm25, vector))`, so a filled older candidate loses part
+//! of its age penalty too: a second way the flag can lift stale facts. It
 //! costs one pass over the in-memory embedding list plus one cosine per
-//! filled candidate. Vector-only hits get no BM25 fill. Candidates added
-//! after fusion (graph, multi-query, operation lane) are not filled.
+//! filled candidate. Vector-only hits get no BM25 fill. BM25 sub-query hits
+//! of `multi_query_enabled` join the BM25 lane before fusion and are filled;
+//! candidates added after fusion (graph, vector multi-query, operation lane)
+//! are not. It applies wherever `search_with_vector*` fuses: `/v1/search`
+//! (and MCP `memory_search`, which calls the same handler) and the hosted
+//! compat search; the ambient path fuses through `fuse_with_vector` and is
+//! not filled.
 //!
 //! Default `vector_fill_missing = false` computes nothing: the fusion input
 //! is unchanged and output is byte-identical.
