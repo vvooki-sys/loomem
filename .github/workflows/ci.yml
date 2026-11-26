@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, ci/test-tiers]  # TEMPORARY: trial PRs for the scope proof; revert before merge
   # Weekly audit of main, so new RUSTSEC advisories surface without a change.
   schedule:
     - cron: '23 5 * * 1'
