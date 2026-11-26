@@ -50,3 +50,4 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # tantivy 0.25.0 + lru 0.18.2 (see the tantivy entry in the root Cargo.toml).
 allow-git = ["https://github.com/vvooki-sys/tantivy"]
+# trial
