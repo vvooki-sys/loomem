@@ -73,19 +73,19 @@ Each change is checked by what it can actually break. Escaped bugs must still su
 | presentation | top-level `*.md`, `docs/**` | website (for `docs/**` only) | nothing to build |
 | dashboard | `loomem-dashboard/**` | dashboard | `npm run lint && npm test && npm run build` |
 | bench | `bench/**` | bench (Python `unittest`) | see below |
-| rust | `loomem-{core,server,cli,migrate}/**`, `.cargo/**`, `config.toml`, toolchain/fmt/clippy config | check + `test --lib`, clippy ×2, fmt, bench | `cargo check -p <crate>`, `cargo test -p <crate> --lib`, the changed module's integration tests |
-| dependencies | `Cargo.toml` (any crate), `Cargo.lock`, `deny.toml`, `.cargo/audit.toml` | rust + audit | as rust, plus a full `cargo test --workspace` |
+| rust | `loomem-{core,server,cli,migrate}/**`, `.cargo/**`, `config.toml`, toolchain/fmt/clippy config, `loomem-dashboard/dist/` and `loomem-dashboard/.gitignore` (the server embeds `dist/`) | check + `test --lib`, clippy ×2, fmt, bench (+ dashboard for the dashboard paths) | `cargo check -p <crate>`, `cargo test -p <crate> --lib`, integration tests of the changed crate and its dependent crates |
+| dependencies | `Cargo.toml` (any crate), `Cargo.lock`, `deny.toml`, `.cargo/audit.toml`, `.cargo/config.toml` | rust + audit | as rust, plus a full `cargo test --workspace` |
 | ci/infra | `.github/**`, `scripts/**`, `Dockerfile`, `.dockerignore`, `install.sh` | all | the checks of every level the change affects; `node scripts/test-ci-scope.cjs` for scope or gate changes |
 
 **Fail closed.** A diff spanning several levels runs the union of their jobs. A path no rule claims, an empty diff, an unknown event or any classification error runs everything. Rust paths also run the bench job, because the bench tests read `config.toml` and `loomem-server` fixtures.
 
 **`CI gate`** is the required check. It fails unless every selected job succeeded and every other job was skipped, so a selected job that was skipped or cancelled, or an unselected job that ran, both fail it.
 
-**Audit** runs when the dependency files change, on every push to `main`, and weekly on a schedule, so new RUSTSEC advisories surface without a change. `release.yml` stays full and is not scoped.
+**Audit** runs when the dependency files change, on every push to `main`, and weekly on a schedule, so new RUSTSEC advisories surface without a change. Those runs block no PR, so a red audit on `main` or on the schedule must be triaged at once: fix it, or accept the advisory in `.cargo/audit.toml` with a reason. `release.yml` stays full and is not scoped.
 
 **High-risk Rust.** A full `cargo test --workspace` once before opening the PR, not per push, when the change touches the public `loomem-core` API, storage or structs persisted in RocksDB, search or fusion, `crypto/` or `encrypt_backfill/`, a god file, dependencies, or the `evaluation` feature. Hot-path refactors add the live smoke test below.
 
-**Bench.** Run the tests of the changed modules and of the modules that import them directly. Run the full harness once before the last push only when the change touches the shared money or runner path (`paid_completion`, the call journal, reservations, precount). Make a new dry-run only when the `harness_sha256()` aggregate changes and the campaign needs that evidence, and check byte identity of existing phases only when the change can reach them. The CI job needs the o200k `tiktoken` cache and skips the macOS `sandbox-exec` tests on Linux; those remain local checks.
+**Bench.** Run the tests of the changed modules and of the modules that import them directly. Run the full harness once before the last push only when the change touches the shared money or runner path (`paid_completion`, the call journal, reservations, precount). Make a new dry-run only when the `harness_sha256()` aggregate changes and the campaign needs that evidence, and check byte identity of existing phases only when the change can reach them. The CI job needs the o200k `tiktoken` cache. Tests that need macOS `sandbox-exec` skip on Linux (`skipUnless(SANDBOX_PRESENT)`), so after changing the paid runner or preflight run them locally on a Mac.
 
 **Roles.** The implementer runs its level once per push. The critic does not repeat the full suite: it reads the diff, runs the new and changed tests, and checks that they fail on the old code. CI is the verifier; a local full run is needed only where the level's CI jobs do not cover the change (integration tests, `sandbox-exec` tests). Batch fixes into one push: each push starts a CI run and a Greptile re-review.
 

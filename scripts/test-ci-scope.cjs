@@ -13,6 +13,8 @@ for (const [paths, expected] of [
   [['loomem-dashboard/src/index.css'], 'dashboard'],
   [['loomem-dashboard/src/components/AuthGate.jsx', 'loomem-dashboard/package-lock.json'], 'dashboard'],
   [['loomem-dashboard/src/lib/api.js', 'loomem-server/src/spa.rs'], 'rust+dashboard+bench'],
+  [['loomem-dashboard/dist/.gitkeep'], 'rust+dashboard+bench'],
+  [['loomem-dashboard/.gitignore'], 'rust+dashboard+bench'],
   // bench
   [['bench/longmemeval/paid_runner.py'], 'bench'],
   [['bench/longmemeval/README.md', 'bench/new/x.py'], 'bench'],
@@ -20,7 +22,7 @@ for (const [paths, expected] of [
   [['loomem-core/src/intent_log/recovery.rs'], RUST],
   [['loomem-server/src/auth.rs', 'loomem-cli/src/main.rs', 'loomem-migrate/src/main.rs'], RUST],
   [['config.toml'], RUST],
-  [['.cargo/config.toml'], RUST],
+  [['.cargo/config.toml'], DEPS],
   [['rust-toolchain.toml'], RUST],
   [['loomem-server/src/mcp/dispatcher/ingest/extraction_receipt/fixtures/complete.json'], RUST],
   // dependencies and advisories

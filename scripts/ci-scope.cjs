@@ -10,8 +10,10 @@ const CRATES = 'loomem-(core|server|cli|migrate)';
 // paths select the bench job too.
 const RULES = [
   [/^(\.github|scripts)\/|^(Dockerfile|\.dockerignore|install\.sh)$/, JOBS],
-  [new RegExp(`^(${CRATES}/)?Cargo\\.(toml|lock)$|^deny\\.toml$|^\\.cargo/audit\\.toml$`), ['rust', 'audit', 'bench']],
+  [new RegExp(`^(${CRATES}/)?Cargo\\.(toml|lock)$|^deny\\.toml$|^\\.cargo/(audit|config)\\.toml$`), ['rust', 'audit', 'bench']],
   [new RegExp(`^${CRATES}/|^\\.cargo/|^config\\.toml$|^(rust-toolchain|\\.?rustfmt|\\.?clippy)(\\.toml)?$`), ['rust', 'bench']],
+  // loomem-server embeds loomem-dashboard/dist/ and fails to compile without it.
+  [/^loomem-dashboard\/(dist\/|\.gitignore$)/, ['rust', 'dashboard', 'bench']],
   [/^loomem-dashboard\//, ['dashboard']],
   [/^bench\//, ['bench']],
   [/^docs\//, ['website']],

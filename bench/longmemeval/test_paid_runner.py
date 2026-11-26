@@ -373,6 +373,7 @@ class PinnedFingerprintTests(unittest.TestCase):
         self.assertFalse((self.campaign_dir / "extraction" / "h1.json").exists())
 
 
+@unittest.skipUnless(SANDBOX_PRESENT, "sandbox-exec absent: paid-mode preflight cannot pass here")
 class AcknowledgeUncertainTests(unittest.TestCase):
     """A paid campaign whose provider is the loopback fake: `run` is refused while a sent request is
     unsettled, and proceeds with the id acknowledged, marking that arm technical_error without a retry."""
@@ -560,6 +561,7 @@ class AcknowledgeUncertainTests(unittest.TestCase):
         self.assertEqual((state.intents[unsent]["binding"]["attempt"], unsent in state.sent), (2, False))
 
 
+@unittest.skipUnless(SANDBOX_PRESENT, "sandbox-exec absent: paid-mode preflight cannot pass here")
 class ControlPhaseTests(unittest.TestCase):
     """`run --phase control` on a paid campaign whose provider is the loopback fake: only the control
     call K leaves, the report is written and the engine is never started; a rerun sends nothing."""
