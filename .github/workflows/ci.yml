@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Weekly audit of main, so new RUSTSEC advisories surface without a change.
+  schedule:
+    - cron: '23 5 * * 1'
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,6 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       scope: ${{ steps.scope.outputs.scope }}
+      rust: ${{ steps.scope.outputs.rust }}
+      audit: ${{ steps.scope.outputs.audit }}
+      dashboard: ${{ steps.scope.outputs.dashboard }}
+      website: ${{ steps.scope.outputs.website }}
+      bench: ${{ steps.scope.outputs.bench }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -27,11 +35,12 @@ jobs:
         env:
           CI_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           CI_HEAD_SHA: ${{ github.sha }}
+          CI_EVENT: ${{ github.event_name }}
         run: node scripts/ci-scope.cjs
 
   check:
     needs: scope
-    if: needs.scope.outputs.scope == 'full'
+    if: needs.scope.outputs.rust == 'true'
     name: Check + Test
     runs-on: ubuntu-latest
     steps:
@@ -58,7 +67,7 @@ jobs:
 
   clippy:
     needs: scope
-    if: needs.scope.outputs.scope == 'full'
+    if: needs.scope.outputs.rust == 'true'
     name: Clippy
     runs-on: ubuntu-latest
     steps:
@@ -88,7 +97,7 @@ jobs:
 
   fmt:
     needs: scope
-    if: needs.scope.outputs.scope == 'full'
+    if: needs.scope.outputs.rust == 'true'
     name: Format
     runs-on: ubuntu-latest
     steps:
@@ -104,6 +113,8 @@ jobs:
         run: cargo fmt --all -- --check
 
   dashboard:
+    needs: scope
+    if: needs.scope.outputs.dashboard == 'true'
     name: Dashboard (lint + test + build)
     runs-on: ubuntu-latest
     defaults:
@@ -128,6 +139,8 @@ jobs:
         run: npm run build
 
   website:
+    needs: scope
+    if: needs.scope.outputs.website == 'true'
     name: Website language selection
     runs-on: ubuntu-latest
     steps:
@@ -140,9 +153,37 @@ jobs:
       - name: Browser language switching and persistence
         run: bash scripts/test-site-browser.sh
 
+  bench:
+    needs: scope
+    if: needs.scope.outputs.bench == 'true'
+    name: Bench harness (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Install tiktoken
+        run: python -m pip install tiktoken==0.12.0
+      # The o200k encoding is the only download; tests use synthetic data,
+      # no API keys and no other network.
+      - name: Cache o200k encoding
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tiktoken
+          key: tiktoken-0.12.0-o200k_base
+      - name: Load o200k encoding
+        env:
+          TIKTOKEN_CACHE_DIR: ${{ runner.temp }}/tiktoken
+        run: python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
+      - name: unittest bench/longmemeval
+        env:
+          TIKTOKEN_CACHE_DIR: ${{ runner.temp }}/tiktoken
+        run: python -m unittest discover -s bench/longmemeval -p 'test_*.py'
+
   audit:
     needs: scope
-    if: needs.scope.outputs.scope == 'full'
+    if: needs.scope.outputs.audit == 'true'
     name: Audit
     runs-on: ubuntu-latest
     steps:
@@ -153,8 +194,11 @@ jobs:
         with:
           toolchain: stable
 
+      # Prebuilt, checksum-verified binary instead of compiling it each run.
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-audit@0.22.2
 
       - name: cargo audit
         run: cargo audit --deny warnings
@@ -162,29 +206,24 @@ jobs:
   gate:
     name: CI gate
     if: always()
-    needs: [scope, check, clippy, fmt, dashboard, website, audit]
+    needs: [scope, check, clippy, fmt, dashboard, website, bench, audit]
     runs-on: ubuntu-latest
-    env:
-      SCOPE_RESULT: ${{ needs.scope.result }}
-      SCOPE: ${{ needs.scope.outputs.scope }}
-      CHECK: ${{ needs.check.result }}
-      CLIPPY: ${{ needs.clippy.result }}
-      FMT: ${{ needs.fmt.result }}
-      DASHBOARD: ${{ needs.dashboard.result }}
-      WEBSITE: ${{ needs.website.result }}
-      AUDIT: ${{ needs.audit.result }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fails unless every selected job succeeded and every other job was
+      # skipped. Check, Clippy and Format all report under "rust".
       - name: Verify expected jobs and report scope
-        shell: bash
-        run: |
-          echo "CI scope: $SCOPE" >> "$GITHUB_STEP_SUMMARY"
-          printf '| Job | Result |\n| --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
-          for job in CHECK CLIPPY FMT DASHBOARD WEBSITE AUDIT; do
-            printf '| %s | %s |\n' "$job" "${!job}" >> "$GITHUB_STEP_SUMMARY"
-          done
-          [[ "$SCOPE_RESULT" == success && "$DASHBOARD" == success && "$WEBSITE" == success ]] || exit 1
-          case "$SCOPE" in
-            full) [[ "$CHECK" == success && "$CLIPPY" == success && "$FMT" == success && "$AUDIT" == success ]] ;;
-            presentation) [[ "$CHECK" == skipped && "$CLIPPY" == skipped && "$FMT" == skipped && "$AUDIT" == skipped ]] ;;
-            *) exit 1 ;;
-          esac
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          SCOPE: ${{ needs.scope.outputs.scope }}
+          SELECT_RUST: ${{ needs.scope.outputs.rust }}
+          SELECT_AUDIT: ${{ needs.scope.outputs.audit }}
+          SELECT_DASHBOARD: ${{ needs.scope.outputs.dashboard }}
+          SELECT_WEBSITE: ${{ needs.scope.outputs.website }}
+          SELECT_BENCH: ${{ needs.scope.outputs.bench }}
+          RESULT_RUST: ${{ needs.check.result == needs.clippy.result && needs.check.result == needs.fmt.result && needs.check.result || 'mixed' }}
+          RESULT_AUDIT: ${{ needs.audit.result }}
+          RESULT_DASHBOARD: ${{ needs.dashboard.result }}
+          RESULT_WEBSITE: ${{ needs.website.result }}
+          RESULT_BENCH: ${{ needs.bench.result }}
+        run: node scripts/ci-scope.cjs --gate
