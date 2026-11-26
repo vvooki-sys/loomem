@@ -217,7 +217,8 @@ def _review_summary(reviews):
             "by_arm": count(r.get("arm") for r in reviews),
             "agrees_with_judge": count(v["agrees_with_judge"] for v in valid),
             "proposed_correction": count(v["proposed_correction"] for v in valid),
-            "critical_error": count(v["critical_error"] for v in valid),
+            "critical": count(bool(v.get("critical")) for v in valid),
+            "critical_error_types": count(t for v in valid for t in v.get("critical_error_types") or []),
             "review_list_sha256": sorted({r.get("review_list_sha256") for r in reviews if r.get("review_list_sha256")})}
 
 

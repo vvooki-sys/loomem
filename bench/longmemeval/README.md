@@ -567,26 +567,53 @@ python3 bench/longmemeval/paid_runner.py run --campaign-dir /abs/campaign --phas
   existing review artifacts and replays settled requests without HTTP. A review
   request for a pair outside the frozen list, or more reviewed pairs than the list
   holds, stops the run.
+- **Output limit today.** The active holdout sheet (`cost_sheet.py`, 3b13e609)
+  sets `JUDGE_OUT["review"] = 16000`, so a campaign created from it must use
+  `O = 16000`: `R_i` = 85 665 tokens and the per-call P1 maximum is
+  85 665 x 8 + 16 000 x 40 USD per 1M = 1.32532 USD. Variant W2 (226 reviews)
+  then needs sublimit `R` >= 226 x 1.32532 = 299.52232 USD (299.53 at cent
+  granularity), or preflight 18 fails. The proposed `O = 4096` (0.84916 USD per
+  call, 191.91016 USD for W2) needs a new sheet version with
+  `JUDGE_OUT["review"] = 4096`; validation prepares it when it creates the audit
+  campaign.
 - **Blindness.** The model sees only the source conversations, the question, the
   reference, the candidate and the judge's verdict (score, status, correct,
-  answer span, reason). No arm name or letter, `arm` key, question or history id,
-  file name or path is in the request. The request binding, the journal, the
+  answer span, reason). No arm-identifying field (arm name or letter, `arm`
+  key), file name or path is in the request. As for the judge, each `source_id`
+  is a session id and so embeds the history id; it identifies the question's
+  history, never the arm. The request binding, the journal, the
   token-count records and the artifact names do carry the arm, for bookkeeping;
   none of it is sent. Two arms with the same answer send byte-identical requests.
   **Limitation:** the candidate's own content can still hint at the arm (for
   example, an answer that quotes original conversation text reads like one from
   an originals arm); the review cannot hide that.
 - **Output.** A strict JSON schema: `agrees_with_judge`, `proposed_correction`
-  (`keep`, or the auditor's own `correct`/`incorrect`), `critical_error` (plan
-  §8A: `stale_value`, `wrong_entity`, `out_of_scope_disclosure`,
-  `fabrication_after_abstention`, or `none`), `evidence` (an exact quote from a
-  reference field or from one named source conversation) and `rationale`. A
-  reply that breaks these rules is recorded as `invalid_review`, not retried.
+  (`keep`, or the auditor's own `correct`/`incorrect`), `critical_error_types`
+  (every matching plan §8A type, possibly none, no priority: `stale_value`,
+  `wrong_entity`, `out_of_scope_disclosure` = private or out-of-scope data the
+  question does not license, `fabrication_after_abstention`), `evidence` (an
+  exact quote of at least 3 non-space characters from a reference field or from
+  one named source conversation, or `none`) and `rationale` (at most 1200
+  characters). Type uniqueness and the rationale length are enforced by the
+  parser, not by the schema (`uniqueItems`/`maxLength` are not in OpenAI's
+  documented strict-mode keywords). The artifact adds `critical` (true when any
+  type is listed); the report counts reviews per status, arm, agreement,
+  correction, `critical` and type.
+- **No re-review.** A reply that breaks these rules is recorded as
+  `invalid_review`, a truncated one as `length`; both artifacts keep the
+  model's raw `completion_text`. Such a pair has no re-review path: the artifact
+  exists, and the identical request would only replay from the journal. Only a
+  provider rejection (`rejected_4xx`) can be sent again, with
+  `--retry-rejected RID`; an acknowledged uncertain request
+  (`--acknowledge-uncertain RID`) becomes a `technical_error` artifact.
 
 `review_sample.py` is offline and deterministic: `--sample-size` questions
 stratified by category x judge agreement between the arms (largest-remainder
 shares, at least one question from a disagreement stratum when it exists),
 drawn with `random.Random(seed)`, plus every regression pair (F correct and S
 not; F correct and A not) and every non-correct answer in `temporal_update`,
-`conflict_entity_assignment` and `unanswerable`. Pairs without a judged
-candidate are listed under `excluded_unreviewable`.
+`conflict_entity_assignment` and `unanswerable`, plus every `--include-pair
+QID:ARM` (repeatable; recorded under `mandatory.included_pairs`). Pairs without a
+judged candidate are listed under `excluded_unreviewable`. The list records
+`sys.version` and a note on the random generator, because the draw is
+reproducible only with the same generator.

@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -91,6 +92,17 @@ class ListTests(unittest.TestCase):
                          {("list-007", S), ("list-009", S)})
         self.assertNotIn(("list-009", S), listed)
 
+    def test_included_pairs_and_generator_metadata(self):
+        holdout, verdicts = synthetic({"list_count": (30, 0)})
+        doc = build_list(verdicts, holdout, "s", 1, [F], include_pairs=[("list-020", S), ("list-020", S)])
+        self.assertIn({"question_id": "list-020", "arm": S}, doc["pairs"])
+        self.assertEqual(doc["mandatory"]["included_pairs"], [["list-020", S]])
+        self.assertEqual(doc["python"], sys.version)
+        self.assertIn("random.Random", doc["random"])
+        for bad in ([("list-020", A)], [("nope-001", F)]):  # no verdict for the pair / not a holdout question
+            with self.subTest(bad=bad), self.assertRaises(SampleError):
+                build_list(verdicts, holdout, "s", 1, [F], include_pairs=bad)
+
 
 class CliTests(unittest.TestCase):
     def test_writes_create_only_and_prints_the_pinned_sha(self):
@@ -116,6 +128,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(argv[:-1] + [str(again)], io.StringIO()), 0)
             self.assertEqual(again.read_bytes(), out_path.read_bytes())
             self.assertEqual(main(argv[:-3] + ["bogus_arm", "--out", str(Path(tmp) / "x.json")], io.StringIO()), 2)
+            included = Path(tmp) / "included.json"
+            self.assertEqual(main(argv[:-1] + [str(included), "--include-pair", f"h1-q02:{S}"], io.StringIO()), 0)
+            self.assertEqual(json.loads(included.read_text())["mandatory"]["included_pairs"], [["h1-q02", S]])
+            self.assertEqual(main(argv[:-1] + [str(Path(tmp) / "y.json"), "--include-pair", "h1-q02"],
+                                  io.StringIO()), 2)
 
 
 if __name__ == "__main__":

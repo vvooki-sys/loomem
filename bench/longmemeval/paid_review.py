@@ -13,8 +13,14 @@ with ``reviews/<qid>.<arm>.json`` is skipped and an identical settled request re
 journal. The number of reviewed pairs can never exceed the frozen list (``ReviewCapExceeded``).
 
 Blindness: the model-visible payload is sources, question, reference, candidate and the judge's
-verdict — no arm name, arm key, question/history id, file name or path. The binding, journal,
-count records and the artifact name carry the arm for bookkeeping; none of them is sent.
+verdict — no arm-identifying field (no arm name, letter or ``arm`` key), file name or path. As for the
+judge, each ``source_id`` is a session id and so embeds the history id; that identifies the question's
+history, never the arm. The binding, journal, count records and the artifact name carry the arm for
+bookkeeping; none of them is sent.
+
+A ``length`` or ``invalid_review`` reply is final for its pair: the artifact keeps the model's raw
+completion text, and there is no re-review path (the artifact exists, and the identical request would
+only replay from the journal).
 
 The phase never changes a verdict or a score: it writes review artifacts. Corrections are applied
 by a separate, frozen policy document on the validation side.
@@ -39,6 +45,7 @@ REVIEW_KEYS = frozenset(REVIEW_RESPONSE_SCHEMA["required"])
 EVIDENCE_KEYS = frozenset({"kind", "source_id", "quote"})
 RATIONALE_MAX_CHARS = 1200
 QUOTE_MAX_CHARS = 2000
+QUOTE_MIN_NONSPACE = 3  # an evidence quote must carry at least this many non-space characters
 VERDICT_FIELDS = ("score", "status", "correct", "answer_span", "reason")
 
 
@@ -55,7 +62,7 @@ def _sha256(data):
 
 
 CORRECTIONS = tuple(REVIEW_RESPONSE_SCHEMA["properties"]["proposed_correction"]["enum"])
-CRITICAL = tuple(REVIEW_RESPONSE_SCHEMA["properties"]["critical_error"]["enum"])
+CRITICAL_TYPES = tuple(REVIEW_RESPONSE_SCHEMA["properties"]["critical_error_types"]["items"]["enum"])
 EVIDENCE_KINDS = tuple(REVIEW_RESPONSE_SCHEMA["properties"]["evidence"]["properties"]["kind"]["enum"])
 
 
@@ -153,10 +160,18 @@ def read_frozen(directory):
     return frozen
 
 
+def _list_copy(directory):
+    return Path(directory) / "review" / "list.json"
+
+
 def check_frozen(directory, plan):
-    """None when nothing is frozen yet; otherwise the frozen record, which must match ``plan``."""
+    """None when nothing is frozen yet; otherwise the frozen record, which must match ``plan``. A
+    ``review/list.json`` without ``frozen.json`` (crash between the two writes) must equal ``plan.raw``."""
     frozen = read_frozen(directory)
     if frozen is None:
+        copy = _list_copy(directory)
+        if copy.is_file() and copy.read_bytes() != plan.raw:
+            raise ReviewListError(f"review/list.json from an interrupted freeze differs from list {plan.sha256[:12]}")
         return None
     if frozen["review_list_sha256"] != plan.sha256:
         raise ReviewListError(f"this campaign froze review list {frozen['review_list_sha256'][:12]}; "
@@ -188,7 +203,8 @@ def freeze(directory, plan, clock):
     """First review run: the list's exact bytes and the pins become create-only campaign records."""
     if check_frozen(directory, plan) is not None:
         return
-    _write_bytes_create_only(Path(directory) / "review" / "list.json", plan.raw)
+    if not _list_copy(directory).is_file():  # present = an interrupted freeze of these very bytes
+        _write_bytes_create_only(_list_copy(directory), plan.raw)
     write_create_only(frozen_path(directory), {"schema": 1, "review_list_sha256": plan.sha256,
                                                "review_prompt_sha256": plan.prompt_sha256,
                                                "pairs": len(plan), "frozen_at": clock()})
@@ -239,7 +255,8 @@ class Review:
     valid: bool
     agrees_with_judge: bool | None
     proposed_correction: str | None
-    critical_error: str | None
+    critical_error_types: list | None   # every matching plan §8A type, deduplicated, in plan order
+    critical: bool | None               # helper: critical_error_types is non-empty
     evidence: dict | None
     rationale: str | None
     error: str | None
@@ -249,7 +266,7 @@ class Review:
 
 
 def _invalid(error):
-    return Review(False, None, None, None, None, None, error)
+    return Review(False, None, None, None, None, None, None, error)
 
 
 def _strings(value):
@@ -271,8 +288,8 @@ def _evidence_problem(evidence, reference, sources):
         return "evidence kind outside the enum or quote not a string within the limit"
     if kind == "none":
         return None if quote == "" and source_id is None else "evidence none needs an empty quote and null source_id"
-    if not quote.strip():
-        return "evidence quote must be nonblank"
+    if len("".join(quote.split())) < QUOTE_MIN_NONSPACE:
+        return f"evidence quote must carry at least {QUOTE_MIN_NONSPACE} non-space characters"
     if kind == "reference_atom":
         if source_id is not None:
             return "reference_atom evidence needs a null source_id"
@@ -285,8 +302,8 @@ def _evidence_problem(evidence, reference, sources):
 
 def _rule_problem(data, judge_score):
     agrees, correction = data["agrees_with_judge"], data["proposed_correction"]
-    if type(agrees) is not bool or correction not in CORRECTIONS or data["critical_error"] not in CRITICAL:
-        return "agrees_with_judge, proposed_correction or critical_error outside the schema"
+    if type(agrees) is not bool or correction not in CORRECTIONS or _critical_types(data) is None:
+        return "agrees_with_judge, proposed_correction or critical_error_types outside the schema"
     if agrees and (correction != "keep" or judge_score == "invalid_judge"):
         return "agreement needs proposed_correction keep and a scored judge verdict"
     if not agrees and (correction == "keep" or correction == judge_score):
@@ -295,6 +312,14 @@ def _rule_problem(data, judge_score):
     if not isinstance(rationale, str) or not rationale.strip() or len(rationale) > RATIONALE_MAX_CHARS:
         return f"rationale must be nonblank and at most {RATIONALE_MAX_CHARS} characters"
     return None
+
+
+def _critical_types(data):
+    """The listed types deduplicated in plan order, or None when the value breaks the schema."""
+    types = data["critical_error_types"]
+    if not isinstance(types, list) or any(not isinstance(t, str) or t not in CRITICAL_TYPES for t in types):
+        return None
+    return [t for t in CRITICAL_TYPES if t in types]
 
 
 def parse_review(text, judge_score, reference, sources):
@@ -308,7 +333,8 @@ def parse_review(text, judge_score, reference, sources):
     problem = _rule_problem(data, judge_score) or _evidence_problem(data["evidence"], reference, sources)
     if problem:
         return _invalid(problem)
-    return Review(True, data["agrees_with_judge"], data["proposed_correction"], data["critical_error"],
+    types = _critical_types(data)
+    return Review(True, data["agrees_with_judge"], data["proposed_correction"], types, bool(types),
                   dict(data["evidence"]), data["rationale"], None)
 
 
@@ -367,10 +393,13 @@ def review_pair(deps, holdout, ctx, arm, verdict_record, plan):
                   outcome=completion.outcome)
     if completion.outcome == "length":
         record["status"], record["review"] = "length", _invalid("review output truncated").to_dict()
+        record["completion_text"] = completion.text
         return record
     review = parse_review(completion.text, verdict_record["score"], parts["reference"], parts["source_conversations"])
     record["status"] = "reviewed" if review.valid else "invalid_review"
     record["review"] = review.to_dict()
+    if not review.valid:  # kept verbatim: the pair has no re-review path
+        record["completion_text"] = completion.text
     return record
 
 
@@ -379,7 +408,7 @@ def base_record(ctx, arm, verdict_record, plan):
             "review_list_sha256": plan.sha256, "review_prompt_sha256": plan.prompt_sha256,
             "judge": {"request_id": verdict_record.get("request_id"), "score": verdict_record["score"]},
             "request_id": None, "usage": None, "model_observed": None, "outcome": None,
-            "status": None, "review": None}
+            "status": None, "review": None, "completion_text": None}
 
 
 # -- durable records -------------------------------------------------------------------

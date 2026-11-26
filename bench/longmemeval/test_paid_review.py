@@ -39,7 +39,7 @@ def main(argv, env=None, factories=None):
 
 
 def review(**overrides):
-    body = {"agrees_with_judge": True, "proposed_correction": "keep", "critical_error": "none",
+    body = {"agrees_with_judge": True, "proposed_correction": "keep", "critical_error_types": [],
             "evidence": {"kind": "reference_atom", "source_id": None, "quote": "Lisbon"},
             "rationale": "The candidate names Lisbon, the reference city."}
     body.update(overrides)
@@ -94,10 +94,16 @@ class ParseReviewTests(unittest.TestCase):
     def test_valid_agreement_and_disagreement(self):
         ok = self.parse(review())
         self.assertTrue(ok.valid, ok.error)
-        self.assertEqual((ok.agrees_with_judge, ok.proposed_correction, ok.critical_error), (True, "keep", "none"))
-        flip = self.parse(review(agrees_with_judge=False, proposed_correction="incorrect", critical_error="stale_value",
+        self.assertEqual((ok.agrees_with_judge, ok.proposed_correction, ok.critical_error_types, ok.critical),
+                         (True, "keep", [], False))
+        flip = self.parse(review(agrees_with_judge=False, proposed_correction="incorrect",
+                                 critical_error_types=["fabrication_after_abstention", "stale_value", "stale_value"],
                                  evidence={"kind": "source", "source_id": "h1-s1", "quote": "moved the workshop"}))
         self.assertTrue(flip.valid, flip.error)
+        # every type, deduplicated, in plan §8A order; no priority
+        self.assertEqual((flip.critical_error_types, flip.critical), (["stale_value", "fabrication_after_abstention"], True))
+        short = self.parse(review(evidence={"kind": "reference_atom", "source_id": None, "quote": " Lis"}))
+        self.assertTrue(short.valid, short.error)  # exactly 3 non-space characters
         invalid_judge = self.parse(review(agrees_with_judge=False, proposed_correction="correct"), "invalid_judge")
         self.assertTrue(invalid_judge.valid, invalid_judge.error)
         none = self.parse(review(evidence={"kind": "none", "source_id": None, "quote": ""}))
@@ -112,7 +118,11 @@ class ParseReviewTests(unittest.TestCase):
             "disagree with keep": review(agrees_with_judge=False),
             "proposal equals judge": review(agrees_with_judge=False, proposed_correction="correct"),
             "agree with a correction": review(proposed_correction="incorrect"),
-            "enum": review(critical_error="minor"),
+            "enum": review(critical_error_types=["minor"]),
+            "not a list": review(critical_error_types="stale_value"),
+            "old single field": review(critical_error_types=None),
+            "quote too short": review(evidence={"kind": "reference_atom", "source_id": None, "quote": " L i"}),
+            "source quote too short": review(evidence={"kind": "source", "source_id": "h1-s1", "quote": "We"}),
             "quote not in reference": review(evidence={"kind": "reference_atom", "source_id": None, "quote": "Porto"}),
             "reference with source id": review(evidence={"kind": "reference_atom", "source_id": "h1-s1", "quote": "Lisbon"}),
             "unknown source": review(evidence={"kind": "source", "source_id": "h9-s1", "quote": "Lisbon"}),
@@ -187,6 +197,16 @@ class CapTests(unittest.TestCase):
         short = ReviewPlan("0" * 64, (("q1", "facts_retry"),), b"", REVIEW_PROMPT_SHA256)
         with self.assertRaises(ReviewCapExceeded):  # one more than the list would allow
             check_cap(self.state(("q1", "facts_retry")), short, "q2", "facts_retry")
+
+
+    def test_review_and_judge_requests_are_not_arm_spend(self):
+        from paid_phases import _arm_reserved_before
+        bind = lambda stage: {"binding": {"question_id": "q1", "arm": "facts_retry", "stage": stage}}
+        state = SimpleNamespace(intents={"r1": bind("review"), "r2": bind("judge")}, settled={})
+        ctx = SimpleNamespace(journal=SimpleNamespace(state=state))
+        self.assertFalse(_arm_reserved_before(ctx, "q1", "facts_retry"))
+        state.intents["r3"] = bind("diagnostic")
+        self.assertTrue(_arm_reserved_before(ctx, "q1", "facts_retry"))
 
 
 class _FakeCapture:
@@ -390,6 +410,62 @@ class ReviewDryRunTests(unittest.TestCase):
         self.assertIn("FAIL  18 review prompt + list pins", out)
         self.assertIn("no verdict", out)
 
+    def test_an_interrupted_freeze_is_recovered_only_for_the_same_bytes(self):
+        self.assertEqual(self.dry_run()[0], 0)
+        path, sha = self.write_list([("h1-q01", "facts_retry")])
+        copy = self.campaign_dir / "review" / "list.json"
+        copy.parent.mkdir()
+        copy.write_bytes(path.read_bytes() + b" ")  # crash after list.json, different bytes: refused
+        code, out = self.dry_run(*self.review_flags(path, sha))
+        self.assertEqual(code, 2, out)
+        self.assertIn("interrupted freeze differs", out)
+        copy.write_bytes(path.read_bytes())  # crash between list.json and frozen.json: recovered
+        code, out = self.dry_run(*self.review_flags(path, sha))
+        self.assertEqual(code, 0, out)
+        frozen = json.loads((self.campaign_dir / "review" / "frozen.json").read_text())
+        self.assertEqual(frozen["review_list_sha256"], sha)
+        self.assertTrue((self.campaign_dir / "reviews" / "h1-q01.facts_retry.json").is_file())
+
+    def test_length_and_invalid_replies_are_final_artifacts_with_the_raw_text(self):
+        self.assertEqual(self.dry_run()[0], 0)
+        path, sha = self.write_list([("h1-q01", "facts_retry"), ("h1-q02", "facts_retry")])
+        bad = json.dumps({"agrees_with_judge": True, "proposed_correction": "incorrect", "critical_error_types": [],
+                          "evidence": {"kind": "none", "source_id": None, "quote": ""}, "rationale": "r"})
+        with mock.patch("paid_fake_openai._review_for", side_effect=lambda user: json.loads(bad)):
+            code, out = self.dry_run(*self.review_flags(path, sha), "--scenario", "review=length,ok")
+        self.assertEqual(code, 0, out)
+        length = json.loads((self.campaign_dir / "reviews" / "h1-q01.facts_retry.json").read_text())
+        self.assertEqual((length["status"], length["outcome"], length["completion_text"]), ("length", "length", ""))
+        self.assertFalse(length["review"]["valid"])
+        invalid = json.loads((self.campaign_dir / "reviews" / "h1-q02.facts_retry.json").read_text())
+        self.assertEqual(invalid["status"], "invalid_review")
+        self.assertEqual(json.loads(invalid["completion_text"]), json.loads(bad))
+        self.assertIn("agreement needs", invalid["review"]["error"])
+        code, out = self.dry_run(*self.review_flags(path, sha))  # final: no re-review on resume
+        self.assertEqual((code, self.capture.fakes[-1].raw_log), (0, []))
+        report = sorted((self.campaign_dir / "reports").glob("report-*.json"))[-1]
+        self.assertEqual(json.loads(report.read_text())["review"]["by_status"], {"invalid_review": 1, "length": 1})
+
+    def test_rejected_review_is_sent_again_only_with_retry_rejected(self):
+        self.assertEqual(self.dry_run()[0], 0)
+        path, sha = self.write_list([("h1-q01", "facts_retry")])
+        code, out = self.dry_run(*self.review_flags(path, sha), "--scenario", "review=rejected_4xx")
+        self.assertEqual(code, 3, out)
+        self.assertIn("Rejected4xx", out)
+        [(rid, intent)] = self.review_intents().items()
+        code, out = self.dry_run(*self.review_flags(path, sha))  # without the flag: replays as a stop
+        self.assertEqual(code, 3, out)
+        self.assertIn(f"pass --retry-rejected {rid}", out)
+        self.assertEqual(self.roles(self.capture.fakes[-1]), [])
+        code, out = self.dry_run(*self.review_flags(path, sha), "--retry-rejected", rid)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.roles(self.capture.fakes[-1]), ["review"])
+        intents = self.review_intents()
+        [retried] = [r for r in intents if r != rid]
+        self.assertEqual(intents[retried]["binding"], {**intent["binding"], "attempt": 2})
+        record = json.loads((self.campaign_dir / "reviews" / "h1-q01.facts_retry.json").read_text())
+        self.assertEqual((record["status"], record["request_id"]), ("reviewed", retried))
+
     def forge_review_intent(self, qid, arm):
         """A review request for a pair, settled 0 USD (rejected), as an earlier rogue call would leave it."""
         sheet = self.fixture.sheet()
@@ -477,6 +553,34 @@ class PaidRunReviewTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(len(self.fake.log), before + 1)
         self.assertIn("PASS  11 gold leak scan", out)  # review requests carry gold by design and are not scanned
+
+    def test_acknowledged_uncertain_review_is_a_technical_error_artifact(self):
+        self.assertEqual(self.run_phase("--phase", "all")[0], 0)
+        path = self.root / "list.json"
+        path.write_bytes(json.dumps({"schema": 1, "pairs": [{"question_id": "h1-q01", "arm": "facts_retry"},
+                                                            {"question_id": "h1-q02", "arm": "facts_retry"}]}).encode())
+        sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        flags = ["--phase", "review", "--review-list", str(path), "--review-list-sha256", sha,
+                 "--review-prompt-sha256", REVIEW_PROMPT_SHA256]
+        self.fake.scenarios["review"] = "timeout"  # connection closed: outcome unknown
+        code, out = self.run_phase(*flags)
+        self.assertEqual(code, 3, out)
+        state = CallJournal(self.campaign_dir).state
+        [rid] = list(state.uncertain)
+        self.assertEqual(state.intents[rid]["stage"], "review")
+        self.fake.scenarios["review"] = "ok"
+        code, out = self.run_phase(*flags)
+        self.assertEqual(code, 2, out)  # blocked until acknowledged
+        self.assertIn("not acknowledged", out)
+        sent = [e["role"] for e in self.fake.log].count("review")
+        code, out = self.run_phase(*flags, "--acknowledge-uncertain", rid)
+        self.assertEqual(code, 0, out)
+        acked = json.loads((self.campaign_dir / "reviews" / "h1-q01.facts_retry.json").read_text())
+        self.assertEqual((acked["status"], acked["request_id"], acked["outcome"]),
+                         ("technical_error", rid, f"acknowledged_uncertain:{rid}"))
+        other = json.loads((self.campaign_dir / "reviews" / "h1-q02.facts_retry.json").read_text())
+        self.assertEqual(other["status"], "reviewed")
+        self.assertEqual([e["role"] for e in self.fake.log].count("review"), sent + 1)  # the acknowledged one never again
 
 
 if __name__ == "__main__":

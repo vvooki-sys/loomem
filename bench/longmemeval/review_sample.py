@@ -14,8 +14,11 @@ disagreements, then the name); inside a category the two strata split the same w
 in holdout order. Each drawn question contributes its ``--sample-arms`` pairs. Always added, beyond
 the draw: every regression pair (F correct and S not: both F and S; F correct and A not: F and A)
 and every non-correct answer in the critical categories (temporal_update, conflict_entity_assignment,
-unanswerable). Only pairs with a judged candidate are reviewable; any other (e.g. ``technical_error``)
-is listed under ``excluded_unreviewable``.
+unanswerable), and every ``--include-pair QID:ARM`` the validation names (e.g. suspected judge or
+reference errors), recorded under ``mandatory.included_pairs``. Only pairs with a judged candidate are
+reviewable; any other (e.g. ``technical_error``) is listed under ``excluded_unreviewable``. The list
+records ``sys.version`` and the random-generator note, since the draw is reproducible only with the
+same generator.
 """
 import argparse
 from fractions import Fraction
@@ -32,6 +35,9 @@ from paid_holdout import verify_holdout
 from paid_review import REVIEWABLE_SCORES
 
 CRITICAL_CATEGORIES = ("temporal_update", "conflict_entity_assignment", "unanswerable")
+RANDOM_NOTE = ("random.Random(seed) with the str seed (seeding version 2: SHA-512 of the seed), Mersenne Twister "
+               "MT19937; Random.sample per stratum (category order, then agree, disagree) over members in "
+               "holdout order")
 STRATA = ("agree", "disagree")
 F, S, A = "facts_retry", "selective_originals", "always_originals"
 
@@ -127,14 +133,22 @@ def mandatory(verdicts, categories):
     return f_s, f_a, critical
 
 
-def build_list(verdicts, holdout, seed, sample_size, sample_arms):
+def check_included(pairs, verdicts, order):
+    for qid, arm in pairs:
+        if qid not in order or arm not in ARMS or (qid, arm) not in verdicts:
+            raise SampleError(f"--include-pair {qid}:{arm}: not a judged (question, arm) of this holdout")
+    return sorted(set(pairs))
+
+
+def build_list(verdicts, holdout, seed, sample_size, sample_arms, include_pairs=()):
     order = list(holdout.question_order)
     categories = {q: holdout.questions[q]["category"] for q in order}
     strata = strata_of(verdicts, order, categories)
     allocation = allocate(strata, sample_size)
     sampled = draw(strata, allocation, seed, order)
     f_s, f_a, critical = mandatory(verdicts, categories)
-    wanted = {(q, arm) for q in sampled for arm in sample_arms if (q, arm) in verdicts}
+    included = check_included(include_pairs, verdicts, order)
+    wanted = {(q, arm) for q in sampled for arm in sample_arms if (q, arm) in verdicts} | set(included)
     wanted |= {(q, arm) for q in f_s for arm in (F, S)} | {(q, arm) for q in f_a for arm in (F, A)}
     wanted |= set(critical)
     position = {qid: i for i, qid in enumerate(order)}
@@ -144,12 +158,14 @@ def build_list(verdicts, holdout, seed, sample_size, sample_arms):
     excluded = [{"question_id": q, "arm": arm, "score": verdicts[(q, arm)].get("score")}
                 for q, arm in ordered if not reviewable(verdicts[(q, arm)])]
     return {"schema": 1, "kind": "plan-8C-review-list", "seed": seed, "sample_size": sample_size,
+            "python": sys.version, "random": RANDOM_NOTE,
             "sample_arms": list(sample_arms), "critical_categories": list(CRITICAL_CATEGORIES),
             "holdout_manifest_sha256": holdout.manifest_sha256,
             "strata": {c: {s: len(v[s]) for s in STRATA} for c, v in sorted(strata.items())},
             "allocation": allocation, "sampled_question_ids": sampled,
             "mandatory": {"regressions_f_s": f_s, "regressions_f_a": f_a,
-                          "critical_not_correct": [list(p) for p in critical]},
+                          "critical_not_correct": [list(p) for p in critical],
+                          "included_pairs": [list(p) for p in included]},
             "excluded_unreviewable": excluded, "pairs": pairs}
 
 
@@ -162,6 +178,13 @@ def write_list(path, document):
         handle.flush()
         os.fsync(handle.fileno())
     return hashlib.sha256(data).hexdigest()
+
+
+def parse_pair(value):
+    qid, sep, arm = value.rpartition(":")
+    if not sep or not qid or arm not in ARMS:
+        raise SampleError(f"--include-pair must be QID:ARM with ARM in {list(ARMS)}, got {value!r}")
+    return qid, arm
 
 
 def parse_arms(value):
@@ -181,12 +204,14 @@ def main(argv=None, out=None):
     parser.add_argument("--seed", required=True, help="frozen before the draw (e.g. the campaign_id)")
     parser.add_argument("--sample-size", type=int, default=100)
     parser.add_argument("--sample-arms", required=True, help="comma-separated arm names, e.g. facts_retry")
+    parser.add_argument("--include-pair", action="append", default=[], metavar="QID:ARM",
+                        help="always review this pair too (repeatable), recorded under mandatory.included_pairs")
     parser.add_argument("--out", required=True, help="new file (create-only)")
     args = parser.parse_args(argv)
     try:
         holdout = verify_holdout(args.holdout_dir, args.holdout_manifest_sha256, args.always50_sha256)
         document = build_list(load_verdicts(args.verdicts_dir), holdout, args.seed, args.sample_size,
-                              parse_arms(args.sample_arms))
+                              parse_arms(args.sample_arms), [parse_pair(p) for p in args.include_pair])
         digest = write_list(args.out, document)
     except (SampleError, ValueError, OSError) as exc:
         print(f"refused: {type(exc).__name__}: {exc}", file=sys.stderr)

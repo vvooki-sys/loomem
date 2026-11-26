@@ -100,7 +100,7 @@ def _review_for(user):
     evidence = {"kind": "reference_atom" if quote else "none", "source_id": None, "quote": quote}
     agrees = score in ("correct", "incorrect")
     return {"agrees_with_judge": agrees, "proposed_correction": "keep" if agrees else "correct",
-            "critical_error": "none", "evidence": evidence, "rationale": "synthetic review"}
+            "critical_error_types": [], "evidence": evidence, "rationale": "synthetic review"}
 
 
 class FakeOpenAI:

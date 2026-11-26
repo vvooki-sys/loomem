@@ -249,11 +249,12 @@ def _deps(ctx):
 
 
 def _arm_reserved_before(ctx, qid, arm):
-    """True when a non-judge request of this arm holds or held money; a 0 USD ``rejected_4xx`` does not
-    count, so a budget stop on its retry is ``not_started_budget``, not ``technical_error``."""
+    """True when an arm-stage request (not judge, not review) of this arm holds or held money; a 0 USD
+    ``rejected_4xx`` does not count, so a budget stop on its retry is ``not_started_budget``, not
+    ``technical_error``."""
     state = ctx.journal.state
     return any(i["binding"].get("question_id") == qid and i["binding"].get("arm") == arm
-               and i["binding"].get("stage") != "judge"
+               and i["binding"].get("stage") not in ("judge", "review")
                and state.settled.get(rid, {}).get("outcome") != "rejected_4xx"
                for rid, i in state.intents.items())
 

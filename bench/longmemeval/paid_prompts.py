@@ -45,16 +45,17 @@ REVIEW_SYSTEM = (
     "the same. When the judge's score is invalid_judge, agrees_with_judge is false.\n"
     "4. proposed_correction is \"keep\" when you agree with the judge; otherwise it is your own score, "
     "\"correct\" or \"incorrect\".\n"
-    "5. critical_error describes the candidate, not the judge. It is \"none\" unless the candidate gives an "
-    "earlier value although the sources show a later update (stale_value), attributes a fact, preference or "
-    "event to the wrong person or entity (wrong_entity), discloses information the question did not ask for "
-    "or that is not in the sources (out_of_scope_disclosure), or gives a concrete answer where the reference "
-    "requires abstention (fabrication_after_abstention). If several apply, choose the first that applies in "
-    "this order: fabrication_after_abstention, wrong_entity, stale_value, out_of_scope_disclosure.\n"
+    "5. critical_error_types lists every critical error of the candidate (not of the judge); it is empty when "
+    "there is none. stale_value: the candidate gives an earlier value although the sources show a later "
+    "update. wrong_entity: it attributes a fact, preference or event to the wrong person or entity. "
+    "out_of_scope_disclosure: it discloses private or out-of-scope information that the question does not "
+    "license. fabrication_after_abstention: it gives a concrete answer where the reference requires "
+    "abstention. An unsupported or invented claim that is none of these makes the candidate incorrect but is "
+    "not a critical error.\n"
     "6. evidence is the single most decisive support for your decision: kind \"reference_atom\" with a quote "
     "copied exactly from one reference field and source_id null; or kind \"source\" with the source_id of one "
     "source conversation and a quote copied exactly from one of its turns; or kind \"none\" with an empty "
-    "quote and source_id null when no quote applies.\n"
+    "quote and source_id null when no quote applies. A quote has at least 3 non-space characters.\n"
     "7. rationale is at most 1200 characters, factual and specific.\n"
     "Return only the JSON object the response schema requires.")
 REVIEW_RESPONSE_SCHEMA = {
@@ -62,8 +63,12 @@ REVIEW_RESPONSE_SCHEMA = {
     "properties": {
         "agrees_with_judge": {"type": "boolean"},
         "proposed_correction": {"type": "string", "enum": ["keep", "correct", "incorrect"]},
-        "critical_error": {"type": "string", "enum": ["none", "stale_value", "wrong_entity",
-                                                      "out_of_scope_disclosure", "fabrication_after_abstention"]},
+        # Plan §8A order. No uniqueItems/maxLength: not in OpenAI's documented strict-mode keyword list, so
+        # uniqueness (and the rationale length) are enforced by paid_review.parse_review instead.
+        "critical_error_types": {"type": "array",
+                                 "items": {"type": "string", "enum": ["stale_value", "wrong_entity",
+                                                                      "out_of_scope_disclosure",
+                                                                      "fabrication_after_abstention"]}},
         "evidence": {"type": "object",
                      "properties": {"kind": {"type": "string", "enum": ["reference_atom", "source", "none"]},
                                     "source_id": {"type": ["string", "null"]},
@@ -71,7 +76,7 @@ REVIEW_RESPONSE_SCHEMA = {
                      "required": ["kind", "source_id", "quote"], "additionalProperties": False},
         "rationale": {"type": "string"},
     },
-    "required": ["agrees_with_judge", "proposed_correction", "critical_error", "evidence", "rationale"],
+    "required": ["agrees_with_judge", "proposed_correction", "critical_error_types", "evidence", "rationale"],
     "additionalProperties": False,
 }
 # Sources first (prefix caching, as the pinned judge order); no key names the arm.
