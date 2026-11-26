@@ -24,7 +24,7 @@ def verdict(qid, arm, score="correct", candidate="An answer."):
 
 
 def synthetic(spec=R5):
-    """A holdout stub and F/S verdicts whose agreement strata match ``spec``."""
+    """A holdout stub (empty always list) and F/S verdicts whose agreement strata match ``spec``."""
     order, questions, verdicts = [], {}, {}
     for category, (agree, disagree) in spec.items():
         for i in range(agree + disagree):
@@ -33,7 +33,14 @@ def synthetic(spec=R5):
             questions[qid] = {"category": category}
             verdicts[(qid, F)] = verdict(qid, F)
             verdicts[(qid, S)] = verdict(qid, S, "correct" if i < agree else "incorrect")
-    return SimpleNamespace(question_order=tuple(order), questions=questions, manifest_sha256="0" * 64), verdicts
+    return SimpleNamespace(question_order=tuple(order), questions=questions, manifest_sha256="0" * 64,
+                           always_ids=frozenset()), verdicts
+
+
+def digest_without_python(doc):
+    """SHA-256 of the list without ``sys.version``, so the golden value holds across interpreters."""
+    rest = {k: v for k, v in doc.items() if k != "python"}
+    return hashlib.sha256(json.dumps(rest, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 class AllocationTests(unittest.TestCase):
@@ -136,6 +143,58 @@ class ListTests(unittest.TestCase):
             build_list(verdicts, holdout, "s", 4, [F, A])
 
 
+class IncompleteVerdictTests(unittest.TestCase):
+    """Every holdout question needs a verdict for every arm that runs on it, drawn or not."""
+
+    def assert_refused(self, verdicts, holdout, pair, sample_arms=(F,)):
+        with self.assertRaises(SampleError) as caught:
+            build_list(verdicts, holdout, "s", 1, list(sample_arms))
+        self.assertIn(repr(pair), str(caught.exception))
+
+    def test_missing_s_on_an_f_correct_question_is_refused(self):
+        holdout, verdicts = synthetic({"list_count": (30, 0)})
+        del verdicts[("list-012", S)]  # would have been an F/S regression candidate
+        self.assert_refused(verdicts, holdout, ("list-012", S))
+
+    def test_missing_a_on_an_always_question_is_refused(self):
+        holdout, verdicts = synthetic({"list_count": (30, 0)})
+        holdout.always_ids = frozenset({"list-003", "list-004"})
+        verdicts[("list-004", A)] = verdict("list-004", A)
+        self.assert_refused(verdicts, holdout, ("list-003", A))
+
+    def test_missing_a_on_a_question_off_the_always_list_is_not_refused(self):
+        holdout, verdicts = synthetic({"list_count": (30, 0)})
+        holdout.always_ids = frozenset({"list-003"})
+        verdicts[("list-003", A)] = verdict("list-003", A, "incorrect")
+        doc = build_list(verdicts, holdout, "s", 1, [F, A])
+        self.assertEqual(doc["mandatory"]["regressions_f_a"], ["list-003"])
+
+    def test_missing_f_is_refused(self):
+        holdout, verdicts = synthetic({"list_count": (30, 0)})
+        del verdicts[("list-020", F)]
+        self.assert_refused(verdicts, holdout, ("list-020", F), sample_arms=(S,))
+
+    def test_a_one_armed_question_is_refused_not_counted_as_agree(self):
+        holdout, verdicts = synthetic({"list_count": (29, 1)})  # list-029 disagrees (F correct, S not)
+        verdicts[("list-029", F)] = verdict("list-029", F, "incorrect")  # no regression, only F left below
+        del verdicts[("list-029", S)]
+        self.assert_refused(verdicts, holdout, ("list-029", S))
+
+    def test_complete_verdicts_give_the_same_list_as_before(self):
+        """Golden digests from origin/main's review_sample.py (31391dc5) on the same fixtures."""
+        holdout, verdicts = synthetic()
+        self.assertEqual(digest_without_python(build_list(verdicts, holdout, "seed", 100, [F, S])),
+                         "034dd3e2bea94d0dbbe7420f299d54ff0ca715b06d0caaddcccf157c8e0332a6")
+        holdout, verdicts = synthetic({"list_count": (30, 0), "temporal_update": (10, 0)})
+        holdout.always_ids = frozenset({"list-007"})
+        verdicts[("list-005", S)] = verdict("list-005", S, "incorrect")
+        verdicts[("list-007", A)] = verdict("list-007", A, "invalid_judge")
+        verdicts[("list-009", S)] = verdict("list-009", S, "technical_error", candidate=None)  # present, not missing
+        verdicts[("temp-003", F)] = verdict("temp-003", F, "incorrect")
+        self.assertEqual(digest_without_python(build_list(verdicts, holdout, "s", 2, [F, A])),
+                         "5da42242360408b70f2ef09a9fd3227cb146cf2110324b590ce6f1f9d54db709")
+
+
 class CliTests(unittest.TestCase):
     def test_writes_create_only_and_prints_the_pinned_sha(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch("sys.stderr", io.StringIO()):
@@ -149,6 +208,9 @@ class CliTests(unittest.TestCase):
             argv = ["--verdicts-dir", str(folder), "--holdout-dir", str(root), "--holdout-manifest-sha256", manifest,
                     "--always50-sha256", always, "--seed", "s", "--sample-size", "1", "--sample-arms", F,
                     "--out", str(out_path)]
+            self.assertEqual(main(argv, io.StringIO()), 2)  # h1-q01 is on the always list: its A verdict is missing
+            self.assertFalse(out_path.exists())
+            (folder / f"h1-q01.{A}.json").write_text(json.dumps(verdict("h1-q01", A)))
             out = io.StringIO()
             self.assertEqual(main(argv, out), 0)
             digest = hashlib.sha256(out_path.read_bytes()).hexdigest()

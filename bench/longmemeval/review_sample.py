@@ -13,11 +13,12 @@ disagreements, then the name); a category with a ``disagree`` stratum whose shar
 reserved place and the rest is shared again among the others (refused when ``--sample-size`` is below
 the number of such categories). Inside a category the two strata split the same way, with at least 1
 ``disagree`` question whenever that stratum exists. ``random.Random(seed)`` draws from each stratum
-in holdout order. Each drawn question contributes its ``--sample-arms`` pairs; a requested arm that
-runs on a drawn question (``always_originals`` only on the always list) but has no verdict (e.g. an
-interrupted judge run) refuses the draw, so a frozen list never silently loses an arm. Always added, beyond
-the draw: every regression pair (F correct and S not: both F and S; F correct and A not: F and A)
-and every non-correct answer in the critical categories (temporal_update, conflict_entity_assignment,
+in holdout order. Each drawn question contributes its ``--sample-arms`` pairs. Every holdout question
+needs a verdict for every arm that runs on it (``always_originals`` only on the always list); a missing
+one (e.g. an interrupted judge run) refuses the list before the draw, so neither the strata, the draw
+nor the regressions below silently lose a question or an arm. Always added, beyond the draw: every
+regression pair (F correct and S not: both F and S; F correct and A not: F and A) and every
+non-correct answer in the critical categories (temporal_update, conflict_entity_assignment,
 unanswerable), and every ``--include-pair QID:ARM`` the validation names (e.g. suspected judge or
 reference errors), recorded under ``mandatory.included_pairs``. Only pairs with a judged candidate are
 reviewable; any other (e.g. ``technical_error``) is listed under ``excluded_unreviewable``. The list
@@ -70,7 +71,7 @@ def reviewable(record):
 
 
 def strata_of(verdicts, order, categories):
-    """{category: {"agree": [qid...], "disagree": [qid...]}} in holdout order (judged questions only)."""
+    """{category: {"agree": [qid...], "disagree": [qid...]}} in holdout order (verdicts complete)."""
     scores = {}
     for (qid, arm), record in verdicts.items():
         scores.setdefault(qid, {})[arm] = record.get("score")
@@ -79,9 +80,8 @@ def strata_of(verdicts, order, categories):
         raise SampleError(f"verdicts for questions outside the holdout: {unknown[:3]}")
     out = {}
     for qid in order:
-        if qid in scores:
-            stratum = "agree" if len(set(scores[qid].values())) == 1 else "disagree"
-            out.setdefault(categories[qid], {s: [] for s in STRATA})[stratum].append(qid)
+        stratum = "agree" if len(set(scores[qid].values())) == 1 else "disagree"
+        out.setdefault(categories[qid], {s: [] for s in STRATA})[stratum].append(qid)
     return out
 
 
@@ -153,8 +153,8 @@ def mandatory(verdicts, categories):
     """(regressions F/S, regressions F/A, critical non-correct pairs) from the verdict scores."""
     score = {key: record.get("score") for key, record in verdicts.items()}
     qids = sorted({qid for qid, _ in verdicts})
-    f_s = [q for q in qids if score.get((q, F)) == "correct" and (q, S) in score and score[(q, S)] != "correct"]
-    f_a = [q for q in qids if score.get((q, F)) == "correct" and (q, A) in score and score[(q, A)] != "correct"]
+    f_s = [q for q in qids if score[(q, F)] == "correct" and score[(q, S)] != "correct"]
+    f_a = [q for q in qids if score[(q, F)] == "correct" and (q, A) in score and score[(q, A)] != "correct"]
     critical = sorted((q, arm) for (q, arm), s in score.items()
                       if categories[q] in CRITICAL_CATEGORIES and s != "correct")
     return f_s, f_a, critical
@@ -167,25 +167,25 @@ def check_included(pairs, verdicts, order):
     return sorted(set(pairs))
 
 
-def missing_sampled(verdicts, holdout, sampled, sample_arms):
-    """Sampled (question, arm) pairs of a requested arm that runs on the question but has no verdict.
+def missing_verdicts(verdicts, holdout):
+    """(question, arm) pairs, in holdout order, of an arm that runs on the question but has no verdict.
     ``always_originals`` runs only on the always list (as ``paid_phases.RunContext.arms_for``)."""
-    return [(q, arm) for q in sampled for arm in sample_arms
+    return [(q, arm) for q in holdout.question_order for arm in ARMS
             if (q, arm) not in verdicts and (arm != A or q in holdout.always_ids)]
 
 
 def build_list(verdicts, holdout, seed, sample_size, sample_arms, include_pairs=()):
     order = list(holdout.question_order)
     categories = {q: holdout.questions[q]["category"] for q in order}
+    missing = missing_verdicts(verdicts, holdout)
+    if missing:
+        raise SampleError(f"{len(missing)} (question, arm) pair(s) that run have no verdict (an interrupted "
+                          f"judge run?): {missing[:5]}")
     strata = strata_of(verdicts, order, categories)
     allocation = allocate(strata, sample_size)
     sampled = draw(strata, allocation, seed, order)
     f_s, f_a, critical = mandatory(verdicts, categories)
     included = check_included(include_pairs, verdicts, order)
-    missing = missing_sampled(verdicts, holdout, sampled, sample_arms)
-    if missing:
-        raise SampleError(f"{len(missing)} sampled pair(s) of a requested arm have no verdict (an interrupted "
-                          f"judge run?): {missing[:5]}")
     wanted = {(q, arm) for q in sampled for arm in sample_arms if (q, arm) in verdicts} | set(included)
     wanted |= {(q, arm) for q in f_s for arm in (F, S)} | {(q, arm) for q in f_a for arm in (F, A)}
     wanted |= set(critical)
