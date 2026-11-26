@@ -112,7 +112,7 @@ mod tests {
         assert_eq!(decoded.top_k, original.search.top_k);
     }
 
-    const LEVER_KEYS: [&str; 8] = [
+    const LEVER_KEYS: [&str; 9] = [
         "rerank_date_prefix",
         "rerank_llm_max_chars",
         "rerank_onnx_max_tokens",
@@ -121,6 +121,7 @@ mod tests {
         "event_date_proximity_boost",
         "content_dedup",
         "latest_state_boost",
+        "vector_fill_missing",
     ];
 
     fn assert_levers_off(search: &SearchConfig) {
@@ -132,6 +133,7 @@ mod tests {
         assert_eq!(search.event_date_proximity_boost, 0.0);
         assert_eq!(search.content_dedup, crate::search::ContentDedup::Prefix);
         assert_eq!(search.latest_state_boost, 1.0);
+        assert!(!search.vector_fill_missing);
     }
 
     /// A pre-lever config file (none of the new keys) loads with every lever

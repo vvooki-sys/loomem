@@ -28,6 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamp); with the cross-encoder reranker on, the reranker reorders its
   head slice, but the promotion decides which candidates enter it;
   graph-only and multi-query candidates added after it are not boosted.
+- `[search] vector_fill_missing` gives fused candidates that came in through
+  a non-vector lane (BM25, rare-term lane) but sit below the vector lane's
+  cut their real query cosine instead of a vector score of 0.0: the same
+  query embedding and embedding list as the vector lane, the same
+  `vector_similarity_floor`, divided by the lane's max and clamped to
+  [0, 1] (default `false` = off, byte-identical, no extra work). It only
+  rescores candidates already in the pool: a fact in no lane stays out
+  (7 of the 10 diagnosed r5 retrieval losses). It lifts stale candidates
+  as well as updates, so A/B it before enabling. It costs one pass over the
+  in-memory embedding list and one cosine per filled candidate, with no
+  storage read. Vector-only hits get no BM25 fill, and graph, multi-query
+  and operation-lane candidates added after fusion are not filled.
 - Reranker document text levers, off by default and byte-identical when left
   so: `[search] rerank_date_prefix` dates each reranker document like
   `memory_search`, `rerank_llm_max_chars` sets the LLM reranker's

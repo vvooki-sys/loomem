@@ -334,6 +334,7 @@ rerank_sync = false
 rerank_sync_timeout_ms = 2000
 event_date_proximity_boost = 0.0
 content_dedup = "prefix"
+vector_fill_missing = false
 </code></pre>
 <p>Te klucze <code>[search]</code>, klucze <code>memory_search</code> w <a href="#mcp"><code>[mcp]</code></a> oraz klucze <code>temporal_grounding</code> i <code>prompt_variant</code> w <a href="#knowledge_extraction"><code>[knowledge_extraction]</code></a> to dźwignie jakości. Wszystkie są domyślnie wyłączone lub neutralne: przy wartościach z dostarczanej konfiguracji wynik jest identyczny bajt po bajcie z wynikiem sprzed wprowadzenia klucza. Wartość domyślna zmienia się dopiero po zmierzonym teście A/B. Wartość odrzucona przez walidację zatrzymuje wczytanie konfiguracji.</p>
 <table>
@@ -393,6 +394,12 @@ content_dedup = "prefix"
 <td>string</td>
 <td><code>"prefix"</code></td>
 <td>Sposób łączenia niemal identycznych wyników. <code>"prefix"</code> (dotychczasowe działanie): porównuje pierwsze 150 znaków każdego wyniku po zamianie na małe litery i usuwa wynik niżej w rankingu, gdy oba mają wspólny początek dłuższy niż 80% krótszego prefiksu, a oba prefiksy mają co najmniej 30 bajtów. Wspólny początek jest liczony w znakach, ale 80% liczy się od długości w bajtach, więc tekst z wieloma znakami wielobajtowymi (np. polskimi literami) jest łączony rzadziej, a dwa identyczne prefiksy mogą oba zostać zachowane. Fragmenty różnych źródeł oraz fragment i jego własne źródło nigdy nie są łączone. <code>"exact"</code>: łączy tylko identyczne bajt po bajcie zwykłe chunki o długości co najmniej 30 bajtów i nigdy fragmenty, więc zaprzeczenie lub aktualizacja po wspólnym początku przetrwa. Każda inna wartość powoduje błąd wczytania konfiguracji. W śledzeniu wyniki usunięte w obu trybach zachowują powód odrzucenia <code>content_prefix_dedup</code></td>
+</tr>
+<tr>
+<td><code>vector_fill_missing</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>Kandydat po fuzji, który trafił do puli przez tor inny niż wektorowy (BM25 albo tor rzadkich terminów), ale nie należy do trafień toru wektorowego, dostaje swój rzeczywisty cosinus z zapytaniem zamiast wyniku wektorowego 0. Tor wektorowy zachowuje tylko najwyższe cosinusy (<code>2 × max(top_k, top_k żądania)</code> na głównej ścieżce wyszukiwania), więc dopasowanie leksykalne tuż pod tym progiem było dotąd oceniane tylko przez BM25 i spadało na koniec puli kandydatów. Uzupełnienie używa tego samego embeddingu zapytania i tej samej listy embeddingów co tor wektorowy, stosuje <code>vector_similarity_floor</code> tak jak dla trafień toru, dzieli przez najwyższy cosinus toru i przycina wynik do [0, 1]. Kandydat bez embeddingu oraz żądanie z pustym torem wektorowym zachowują 0; zapytania klasy Simple pomijają tor wektorowy, więc nic nie jest uzupełniane. Ograniczenia: zmienia ocenę tylko kandydatów, którzy już są w puli, więc fakt spoza wszystkich torów nadal do niej nie trafi; podnosi zarówno aktualizacje, jak i nieaktualne fakty, więc przed włączeniem wymaga testu A/B; kosztuje jedno przejście po liście embeddingów w pamięci i jeden cosinus na uzupełnionego kandydata, bez odczytu z magazynu. Trafienia wyłącznie wektorowe nie dostają uzupełnienia BM25, a kandydaci z grafu, z wielu zapytań i z toru operacji, dodawani po fuzji, nie są uzupełniani. <code>false</code>: nic nie jest obliczane</td>
 </tr>
 </tbody>
 </table>

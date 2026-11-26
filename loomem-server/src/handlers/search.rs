@@ -3946,6 +3946,7 @@ mod tests {
                 latest_state_boost: 1.0,
                 rare_term_lane: loomem_core::search::rare_term::RareTermLaneConfig::default(),
                 vector_similarity_floor: 0.0,
+                vector_fill_missing: false,
                 decay_match_relief: 0.0,
                 tier1: loomem_core::search::tier1::Tier1Config::default(),
                 operation: loomem_core::hybrid_search::OperationSearchConfig::default(),

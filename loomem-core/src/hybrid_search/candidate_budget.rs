@@ -1,4 +1,6 @@
 //! Per-request retrieval pool limits; legacy entry points retain configured limits.
+use super::channels::Lanes;
+use super::vector_fill;
 use super::{relieve_decay, retain_pool_with_guaranteed, HybridSearchEngine, HybridSearchResult};
 use crate::{storage::RocksDbStore, tantivy_index::SearchResult, vector_search};
 use anyhow::{Context, Result};
@@ -162,8 +164,24 @@ impl HybridSearchEngine {
             bm25_results.len()
         );
 
+        // `[search] vector_fill_missing`: real cosines for BM25 hits the
+        // vector lane cut off. Off (default) computes nothing.
+        let fill = self.config.search.vector_fill_missing.then(|| {
+            vector_fill::missing_cosines(
+                &bm25_results,
+                &vector_results,
+                all_embeddings,
+                query_embedding,
+            )
+        });
+
         // Fuse with BM25 results
-        self.fuse_with_vector_budget(bm25_results, vector_results, store, guaranteed, budget)
+        let lanes = Lanes {
+            bm25: bm25_results,
+            vector: vector_results,
+            fill,
+        };
+        self.fuse_lanes(lanes, store, guaranteed, budget)
     }
 
     pub fn bm25_only_with_budget(
