@@ -214,3 +214,4 @@ class BudgetLedger:
         """Read exact Decimal totals under the same cross-process lock."""
         with self._locked():
             return _totals(self._read())
+# trial
