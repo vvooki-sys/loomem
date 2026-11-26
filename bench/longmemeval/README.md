@@ -594,8 +594,8 @@ python3 bench/longmemeval/paid_runner.py run --campaign-dir /abs/campaign --phas
   question does not license, `fabrication_after_abstention`), `evidence` (an
   exact quote of at least 3 non-space characters from a reference field or from
   one named source conversation, or `none`) and `rationale` (at most 1200
-  characters). Type uniqueness and the rationale length are enforced by the
-  parser, not by the schema (`uniqueItems`/`maxLength` are not in OpenAI's
+  characters). The parser deduplicates the types into plan order (it does not
+  reject repeats) and enforces the rationale length; the schema does not (`uniqueItems`/`maxLength` are not in OpenAI's
   documented strict-mode keywords). The artifact adds `critical` (true when any
   type is listed); the report counts reviews per status, arm, agreement,
   correction, `critical` and type.
