@@ -82,7 +82,25 @@ def content_for(role, user, scenario):
             candidate = ""
         return json.dumps({"status": "scored", "correct": True, "answer_span": candidate[:20],
                            "reason": "synthetic verdict"})
+    if role == "review":
+        return json.dumps(_review_for(user))
     return "Synthetic answer."
+
+
+def _review_for(user):
+    """A valid plan §8C review: agree with a scored judge, else propose correct; quote the reference."""
+    try:
+        payload = json.loads(user)
+    except ValueError:
+        payload = {}
+    score = (payload.get("judge_verdict") or {}).get("score")
+    reference = (payload.get("reference") or {}).get("reference_answer")
+    quote = reference[:20] if isinstance(reference, str) else ""
+    quote = quote if quote.strip() else ""
+    evidence = {"kind": "reference_atom" if quote else "none", "source_id": None, "quote": quote}
+    agrees = score in ("correct", "incorrect")
+    return {"agrees_with_judge": agrees, "proposed_correction": "keep" if agrees else "correct",
+            "critical_error_types": [], "evidence": evidence, "rationale": "synthetic review"}
 
 
 class FakeOpenAI:
@@ -101,6 +119,7 @@ class FakeOpenAI:
         self.token = token
         self.log = []
         self.count_log = []
+        self.raw_log = []  # exact request bytes per path and role (blindness tests, evidence)
         self._lock = threading.Lock()
         self._server = None
         self._thread = None
@@ -174,16 +193,17 @@ class FakeOpenAI:
         except ValueError:
             return _send(handler, 400, {"error": {"message": "invalid json", "type": "invalid_request_error"}})
         if handler.path == INPUT_TOKENS_PATH:
-            return self._count(handler, wire)
+            return self._count(handler, wire, raw)
         if "max_tokens" in wire or "max_completion_tokens" not in wire or "reasoning_effort" not in wire:
             return _send(handler, 400, {"error": {"message": "legacy or incomplete wire", "type": "invalid_request_error"}})
         role = self.role_of(wire)
         with self._lock:
             scenario = self.scenario_of(role)
             self.log.append({"role": role, "scenario": scenario, "wire": wire, "bytes": len(raw)})
+            self.raw_log.append({"path": PATH, "role": role, "raw": raw})
         self._respond(handler, role, scenario, wire)
 
-    def _count(self, handler, body):
+    def _count(self, handler, body, raw=b""):
         """Responses token counter: `input` is a string or a list of {role, content} items."""
         items = body.get("input")
         if isinstance(items, str):
@@ -197,6 +217,7 @@ class FakeOpenAI:
             count = 10 ** 7
         with self._lock:
             self.count_log.append({"role": role, "model": body["model"], "input_tokens": count})
+            self.raw_log.append({"path": INPUT_TOKENS_PATH, "role": role, "raw": raw})
         return _send(handler, 200, {"object": "response.input_tokens", "input_tokens": count})
 
     def _respond(self, handler, role, scenario, wire):

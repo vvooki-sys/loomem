@@ -6,7 +6,10 @@ table and exits 2 on any FAIL. Checks follow plan §5 (1-13) plus the brief's
 additions: #14 compares ``max_transcript_tokens`` with the real o200k count of
 every session, #15 requires the control profile in paid mode, and the key check
 proves ``OPENAI_API_KEY`` is in the runner env (paid) or absent (dry-run) and
-never equals any engine env value.
+never equals any engine env value. Only for ``--phase review`` (a ``review`` plan is passed), #18
+checks the review prompt fingerprint and list hash, the campaign's frozen review state, that every
+listed pair has a judged candidate, and that the review maximum fits sublimit R; without a plan the
+table is exactly #1-#17.
 """
 from dataclasses import dataclass
 import os
@@ -63,6 +66,7 @@ class _Preflight:
         self.engine_env = engine_env
         self.checks = []
         self.acknowledged = frozenset()
+        self.review = None
         self.campaign = self.journal = self.holdout = self.sheet = self.prompts = None
 
     def add(self, name, passed, detail):
@@ -263,6 +267,24 @@ class _Preflight:
         from paid_preflight_engine import chunking_matches_sheet
         return chunking_matches_sheet(self.sheet, self.campaign.spec["extraction"])
 
+    # 18 (only with a review plan) -----------------------------------------
+    def check_review(self):
+        from paid_prompts import REVIEW_PROMPT_SHA256
+        from paid_review import check_frozen, review_maximum, reviewable_verdicts
+        plan = self.review
+        if plan.prompt_sha256 != REVIEW_PROMPT_SHA256:
+            return False, "review plan pins a different review prompt fingerprint"
+        frozen = check_frozen(self.directory, plan)
+        reviewable_verdicts(self.directory, plan)
+        per_call, total = review_maximum(self.sheet, self.campaign, self.holdout, len(plan))
+        sublimit = self.campaign.sublimits["R"]
+        if total > sublimit:
+            return False, (f"review maximum {len(plan)} x {per_call} = {total} USD exceeds sublimit R {sublimit} "
+                           "(the review needs an explicit R > 0 that covers the whole frozen list)")
+        return True, (f"prompt {REVIEW_PROMPT_SHA256[:12]}; list {plan.sha256[:12]} ({len(plan)} pair(s), "
+                      f"{'frozen' if frozen else 'freezes on this run'}); every pair judged; maximum "
+                      f"{len(plan)} x {per_call} = {total} USD <= sublimit R {sublimit}")
+
     def run(self):
         if not self.guarded("1 campaign registry/ledger/journal", self.check_campaign):
             return self.checks
@@ -283,15 +305,19 @@ class _Preflight:
         self.guarded("15 control profile", lambda: self.check_control() if self.sheet else (False, "no sheet"))
         self.guarded("16 live engine probe", lambda: self.check_live_engine() if self.sheet else (False, "no sheet"))
         self.guarded("17 sheet chunking vs engine", lambda: self.check_chunking() if self.sheet else (False, "no sheet"))
+        if self.review is not None:
+            self.guarded("18 review prompt + list pins", lambda: self.check_review() if self.sheet and self.holdout
+                         else (False, "no sheet or holdout"))
         return self.checks
 
 
 def run_preflight(campaign_dir, *, mode_command, env=None, holdout=None, sheet=None, prompts=None,
-                  engine_probe=True, limit_histories=None, engine_env=None, acknowledged=frozenset()):
+                  engine_probe=True, limit_histories=None, engine_env=None, acknowledged=frozenset(), review=None):
     flight = _Preflight(campaign_dir, mode_command, os.environ if env is None else env, engine_probe,
                         limit_histories, engine_env)
     flight.holdout, flight.sheet, flight.prompts = holdout, sheet, prompts
     flight.acknowledged = frozenset(acknowledged)
+    flight.review = review
     return flight.run()
 
 
