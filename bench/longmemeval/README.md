@@ -613,9 +613,12 @@ stratified by category x judge agreement between the arms (largest-remainder
 shares, at least one question from the disagreement stratum of every category
 that has one: such a category whose share would be 0 gets a reserved place, and
 a `--sample-size` below the number of such categories is refused), drawn with
-`random.Random(seed)`. A drawn question whose requested `--sample-arms` arm runs
-on it (`always_originals` only on the always list) but has no verdict, e.g.
-after an interrupted judge run, refuses the draw. Added to the draw: every
+`random.Random(seed)`. Every holdout question needs a verdict for every arm
+that runs on it (`always_originals` only on the always list), drawn or not: a
+missing one, e.g. after an interrupted judge run, refuses the list before the
+draw and writes nothing, so no question silently drops out of the strata or the
+regressions. A verdict with a non-reviewable score (e.g. `technical_error`)
+counts as present. Added to the draw: every
 regression pair (F correct and S not; F correct and A not) and every
 non-correct answer in `temporal_update`,
 `conflict_entity_assignment` and `unanswerable`, plus every `--include-pair
