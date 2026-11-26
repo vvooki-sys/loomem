@@ -60,6 +60,9 @@ fn current_state_markers_match_the_r5_questions() {
         "Jakie mam teraz zlecenia w kolejce?",
         "Co wciąż czeka na odbiór?",
         "Ile psów przyjąłem do tej pory?",
+        "Jaki jest aktualny stan projektu?",
+        "Obecna lista zleceń",
+        "Co wciaz czeka na odbior?",
     ] {
         assert!(asks_current_state(query), "{query}");
     }
@@ -83,13 +86,14 @@ fn newer_update_outranks_the_earlier_state() {
     let mut pool = stale_and_update_pool();
     assert_eq!(ids(&pool), ["stale_state", "old_plan", "update"]);
     assert!(promote_by_recency(&mut pool, 2.0, times));
-    // update (newest): 0.45 * 2.0 = 0.90; stale (position 150/200):
-    // 0.50 * (1 + 1.0 * 0.75) = 0.875; oldest: 0.48 * 1.0.
+    // Three distinct times -> ranks 0, 1, 2 -> positions 0, 0.5, 1.
+    // update (newest): 0.45 * 2.0 = 0.90; stale (middle):
+    // 0.50 * (1 + 1.0 * 0.5) = 0.75; oldest: 0.48 * 1.0.
     assert_eq!(ids(&pool), ["update", "stale_state", "old_plan"]);
     let update = pool.iter().find(|r| r.id == "update").unwrap();
     assert!((update.score - 0.90).abs() < 1e-12);
     let stale = pool.iter().find(|r| r.id == "stale_state").unwrap();
-    assert!((stale.score - 0.875).abs() < 1e-12);
+    assert!((stale.score - 0.75).abs() < 1e-12);
     // The oldest statement keeps its score exactly.
     let old = pool.iter().find(|r| r.id == "old_plan").unwrap();
     assert_eq!(old.score.to_bits(), 0.48_f64.to_bits());
@@ -110,6 +114,58 @@ fn newer_update_wins_when_raw_scores_are_close() {
     };
     assert!(promote_by_recency(&mut pool, 1.5, lookup));
     assert_eq!(ids(&pool), ["update", "stale_state", "old_plan"]);
+}
+
+/// Rank, not linear time: a far-old wall-clock fallback and a `9999-12-31`
+/// date would squeeze the real dates (150 vs 200 days into a ~8000-year
+/// span) to nearly the same linear position. By rank the four distinct
+/// times sit at 0, 1/3, 2/3, 1, so the update keeps its full lead.
+#[test]
+fn outlier_dates_do_not_compress_the_real_ones() {
+    let far_future = day_start_unix("9999-12-31").unwrap();
+    let mut pool = vec![
+        hit("stale_state", 0.50, T0 + 150 * DAY),
+        hit("update", 0.45, T0 + 200 * DAY),
+        hit("far_old", 0.30, 1),
+        hit("far_future", 0.20, far_future),
+    ];
+    let lookup = |id: &str| match id {
+        "stale_state" => Some(T0 + 150 * DAY),
+        "update" => Some(T0 + 200 * DAY),
+        "far_old" => Some(1),
+        "far_future" => Some(far_future),
+        _ => None,
+    };
+    assert!(promote_by_recency(&mut pool, 2.5, lookup));
+    let score = |id: &str| pool.iter().find(|r| r.id == id).unwrap().score;
+    // stale: x(1 + 1.5 / 3) = x1.5; update: x(1 + 1.5 * 2 / 3) = x2.0.
+    assert!((score("stale_state") - 0.50 * 1.5).abs() < 1e-12);
+    assert!((score("update") - 0.45 * 2.0).abs() < 1e-12);
+    assert!((score("update") / score("stale_state") - 0.45 * 2.0 / 0.75).abs() < 1e-12);
+    assert_eq!(score("far_old").to_bits(), 0.30_f64.to_bits());
+    assert!((score("far_future") - 0.20 * 2.5).abs() < 1e-12);
+    assert_eq!(
+        ids(&pool),
+        ["update", "stale_state", "far_future", "far_old"]
+    );
+}
+
+#[test]
+fn non_positive_scores_keep_their_value() {
+    let mut pool = stale_and_update_pool();
+    pool.push(hit("negative", -0.10, T0 + 300 * DAY));
+    pool.push(hit("zero", 0.0, T0 + 300 * DAY));
+    let lookup = |id: &str| match id {
+        "negative" | "zero" => Some(T0 + 300 * DAY),
+        other => times(other),
+    };
+    assert!(promote_by_recency(&mut pool, 2.0, lookup));
+    let score = |id: &str| pool.iter().find(|r| r.id == id).unwrap().score;
+    assert_eq!(score("negative").to_bits(), (-0.10_f64).to_bits());
+    assert_eq!(score("zero").to_bits(), 0.0_f64.to_bits());
+    // Positive scores still promoted (4 distinct times: update is rank 2/3).
+    assert!(score("update") > 0.45);
+    assert_eq!(&ids(&pool)[3..], ["zero", "negative"]);
 }
 
 #[test]
@@ -197,8 +253,11 @@ fn statement_time_prefers_the_ingest_conversation_date() {
     // No date recorded: the chunk timestamp.
     assert_eq!(statement_time(&ingest_fact(None)), Some(T0));
     assert_eq!(statement_time(&ingest_fragment(None)), Some(T0));
-    // A present but malformed date is unknown, not a timestamp fallback.
+    // A present but malformed or non-canonical date is unknown, not a
+    // timestamp fallback.
     assert_eq!(statement_time(&ingest_fact(Some("20.11.2025"))), None);
+    assert_eq!(statement_time(&ingest_fact(Some("2025-11-2"))), None);
+    assert_eq!(statement_time(&ingest_fact(Some(" 2025-11-20"))), None);
 }
 
 #[test]
@@ -269,8 +328,8 @@ fn default_boost_is_byte_identical() {
     let before = bits(&pool);
     engine(1.0).promote_latest_state(query, &mut pool, &store);
     assert_eq!(bits(&pool), before);
-    // The shipped default comes from the same neutral value.
-    assert_eq!(test_config().search.latest_state_boost, 1.0);
+    // The shipped config.toml default (1.0) is asserted by
+    // `config::search_validation::tests::shipped_config_keeps_every_lever_off`.
 }
 
 #[test]

@@ -682,7 +682,7 @@ pub async fn search_handler(
     )
     .await?;
 
-    // Cycle/012 diagnostics: fused pool snapshot (post-fusion, pre-boost).
+    // Cycle/012 diagnostics: fused pool snapshot (post-fusion + latest-state promotion, pre-boost).
     if let Some(diag) = channel_diag.as_mut() {
         diag.fused_pool = fused_pool_hits(&hybrid_results);
         diag.graph_top = graph_channel_hits(&payload, &auth, &state);

@@ -77,11 +77,16 @@ pub struct SearchConfig {
     #[serde(default = "default_attribution_neutral")]
     pub agent_fact_damp: f64,
     /// Latest-state promotion for current-state queries ("now", "currently",
-    /// "so far", …): candidates are multiplied by a recency factor from x1.0
-    /// (oldest statement in the pool) to x`latest_state_boost` (newest), so a
-    /// later update outranks the earlier state it changes. 1.0 == disabled,
+    /// "so far", …): positive candidate scores are multiplied by a factor
+    /// from x1.0 (oldest distinct statement time in the pool, by rank) to
+    /// x`latest_state_boost` (newest), so a later update can outrank the
+    /// earlier state it changes. It lifts every later statement whatever its
+    /// topic (A/B before enabling), acts only inside the fused pool
+    /// (3 x top_k), has no effect on Temporal-class queries or with the
+    /// cross-encoder reranker on, and does not reach graph-only or
+    /// multi-query candidates added afterwards. 1.0 == disabled,
     /// byte-identical (no store read, no re-sort). See `latest_state`.
-    #[serde(default = "default_attribution_neutral")]
+    #[serde(default = "default_latest_state_neutral")]
     pub latest_state_boost: f64,
     /// Cycle/012: rare-term guarantee lane. Chunks containing a rare query
     /// token are force-kept in the candidate pool that feeds the reranker.
@@ -171,6 +176,10 @@ fn default_implicit_access_boost_weight() -> f64 {
 }
 
 fn default_attribution_neutral() -> f64 {
+    1.0
+}
+
+fn default_latest_state_neutral() -> f64 {
     1.0
 }
 

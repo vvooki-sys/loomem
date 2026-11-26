@@ -219,3 +219,6 @@ async fn embed_query(state: &AppState, query: &str) -> anyhow::Result<Vec<f32>> 
     )
     .await
 }
+
+#[cfg(test)]
+mod latest_state_tests;
