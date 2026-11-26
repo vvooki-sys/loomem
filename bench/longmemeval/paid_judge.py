@@ -52,6 +52,12 @@ def reference_payload(gold, cap_bytes=None):
     return reference
 
 
+def gold_reference(holdout, question_id, cap_bytes=None):
+    """The reference of one question for the judge and the plan §8C review (``paid_review``): this module
+    stays the only reader of ``Holdout.judge_view``."""
+    return reference_payload(holdout.judge_view(question_id), cap_bytes)
+
+
 def source_conversations(history):
     """All sessions of the history, plan.json shape: conversation_date, source_id (= session_id), turns."""
     sessions = history.get("sessions") if isinstance(history, dict) else None

@@ -15,7 +15,9 @@ dropped, engine status ``partial``) is the state ``extraction_capped``, not a
 stop: the session stays in the denominator and the report counts it. A provider rejection
 (``rejected_4xx``, e.g. HTTP 429 ``insufficient_quota``) stops the run and replays as a stop;
 ``--retry-rejected RID`` (each RID settled ``rejected_4xx``) sends that same frozen request again
-as ``attempt + 1``, which every later resume then replays.
+as ``attempt + 1``, which every later resume then replays. ``--phase review`` (plan §8C, ``paid_review``)
+runs only on its own, with a hash-pinned review list and review prompt fingerprint; preflight then adds
+check 18 (pins, frozen state, reviewable pairs, review maximum vs sublimit R).
 """
 from dataclasses import dataclass
 import os
@@ -34,9 +36,11 @@ from paid_preflight import all_passed, format_checks, run_preflight
 from paid_price_sheet import SheetError, load_sheet
 from paid_prompts import PromptsError, load_prompts
 from paid_report import build_report, write_report
+from paid_review import ReviewListError, plan_from_args
 from paid_runner_cli import build_parser, compose_spec, iso_utc, judge_prompt_pair
 
-REFUSALS = (CampaignError, SheetError, PromptsError, HoldoutError, JournalError, WireError, OSError, ValueError)
+REFUSALS = (CampaignError, SheetError, PromptsError, HoldoutError, JournalError, WireError, ReviewListError,
+            OSError, ValueError)
 # Every fail-closed stop (RunStopped family, BudgetError, CampaignError, JournalError, EngineError,
 # ProxyHalted are RuntimeErrors; WireError, SheetError, ContextError are ValueErrors) ends the run
 # with a report and exit 3; genuine programming errors (TypeError, KeyError) still surface as tracebacks.
@@ -68,8 +72,10 @@ def load_campaign(directory):
 def stage_map(prompts):
     import hashlib
     from paid_control import SYSTEM
+    from paid_prompts import REVIEW_STAGE, REVIEW_SYSTEM
     out = {hashlib.sha256(prompts.stage(n).system.encode("utf-8")).hexdigest(): n
            for n in ("diagnostic", "audit", "selection", "answer", "judge")}
+    out[hashlib.sha256(REVIEW_SYSTEM.encode("utf-8")).hexdigest()] = REVIEW_STAGE
     out[hashlib.sha256(SYSTEM.encode("utf-8")).hexdigest()] = "control"
     return out
 
@@ -184,8 +190,9 @@ def cmd_run(args, factories, clock, env, out):
     campaign.require_paid_mode()
     acknowledged = _acknowledged(args, journal)
     retry = retry_rejected_ids(args.retry_rejected, journal, acknowledged)
+    review = plan_from_args(args, loaded.holdout)
     checks = run_preflight(args.campaign_dir, mode_command="run", env=env, holdout=loaded.holdout,
-                           sheet=loaded.sheet, prompts=loaded.prompts, acknowledged=acknowledged)
+                           sheet=loaded.sheet, prompts=loaded.prompts, acknowledged=acknowledged, review=review)
     print(format_checks(checks), file=out)
     if not all_passed(checks):
         return 2
@@ -218,7 +225,7 @@ def cmd_run(args, factories, clock, env, out):
                 ctx = RunContext(campaign, journal, loaded.sheet, loaded.prompts, loaded.holdout, transport,
                                  engine_factory, proxy, precount=precount, acknowledged=acknowledged, clock=clock,
                                  after_session=lambda p: remember_extraction_system(campaign.directory, p, clock),
-                                 retry_rejected=retry)
+                                 retry_rejected=retry, review=review)
                 run_phases(ctx, args.phase)
             except STOPS as exc:
                 stop = exc

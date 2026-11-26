@@ -197,9 +197,28 @@ def build_report(campaign, journal_state, directory, holdout=None, clock=None):
               "money": _money_rows(journal_state), "extraction": _extraction(extraction),
               "zero_facts_events": len(_read_dir(directory, "events", skip=(".extraction_capped.json",))),
               "input_tokens": _input_tokens(_read_dir(directory, "counts")), "pins": pins}
+    reviews = _read_dir(directory, "reviews")
+    if reviews:  # only after --phase review: a campaign without reviews keeps the exact earlier report
+        report["review"] = _review_summary(reviews)
     if clock is not None:
         report["generated_at"] = clock()
     return report
+
+
+def _review_summary(reviews):
+    """Counts over ``reviews/*.json`` (plan §8C); verdicts and scores above are never changed by a review."""
+    def count(values):
+        out = {}
+        for value in values:
+            out[str(value)] = out.get(str(value), 0) + 1
+        return dict(sorted(out.items()))
+    valid = [r["review"] for r in reviews if isinstance(r.get("review"), dict) and r["review"].get("valid")]
+    return {"artifacts": len(reviews), "by_status": count(r.get("status") for r in reviews),
+            "by_arm": count(r.get("arm") for r in reviews),
+            "agrees_with_judge": count(v["agrees_with_judge"] for v in valid),
+            "proposed_correction": count(v["proposed_correction"] for v in valid),
+            "critical_error": count(v["critical_error"] for v in valid),
+            "review_list_sha256": sorted({r.get("review_list_sha256") for r in reviews if r.get("review_list_sha256")})}
 
 
 def write_report(campaign, report):

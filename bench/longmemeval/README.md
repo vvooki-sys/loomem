@@ -528,3 +528,65 @@ python3 bench/longmemeval/stage_diagnostics.py \
   --packed /absolute/path/packed.json --output /absolute/path/report.json \
   --markdown /absolute/path/report.md --format markdown
 ```
+
+## Paid runner: semantic review phase (plan §8C)
+
+`paid_runner.py run --phase review` sends one blind audit call per pair of a
+frozen review list: the judged candidate of one `(question_id, arm)`. It runs
+only on its own; `--phase all` never includes it, and a campaign that never
+runs it keeps its exact wire bodies, request ids, journal, preflight table and
+report. The phase writes `reviews/<question_id>.<arm>.json` and never changes a
+verdict or a score: corrections are applied by a separate, frozen policy on the
+validation side.
+
+```sh
+python3 bench/longmemeval/review_sample.py --verdicts-dir /abs/campaign/verdicts \
+  --holdout-dir /abs/holdout --holdout-manifest-sha256 HEX --always50-sha256 HEX \
+  --seed FROZEN_SEED --sample-size 100 --sample-arms facts_retry,selective_originals \
+  --out /abs/review_list.json        # prints the list's sha256
+python3 bench/longmemeval/paid_runner.py run --campaign-dir /abs/campaign --phase review \
+  --review-list /abs/review_list.json --review-list-sha256 HEX \
+  --review-prompt-sha256 HEX          # paid_prompts.REVIEW_PROMPT_SHA256, pinned in protocol/
+```
+
+- **Pins.** The list is refused unless its bytes match `--review-list-sha256`;
+  `--review-prompt-sha256` must equal the frozen review prompt in
+  `paid_prompts.py` (`REVIEW_PROMPT_SHA256`, same digest rule as the plan
+  stages; not part of `stage_sha256`). The first review run freezes the list
+  bytes into `review/list.json` + `review/frozen.json`; any other list or prompt
+  is then refused (one list per campaign). Preflight adds check 18 (pins, frozen
+  state, a judged candidate for every pair, list length x per-call maximum <=
+  sublimit `R`) only for `--phase review`.
+- **Money.** Letter `R`, stage `review`: the sheet's `review` bound `R_i` (P1:
+  review system + 2 x question cap + 6 x answer cap + FRAMING + largest history)
+  and the campaign's `review` profile `O` (model and `max_completion_tokens` come
+  from the sheet and the campaign, not from the code). Every call is counted
+  exactly before sending (stop above `R_i`, and above the model's standard tier
+  as a hard limit), reserved before HTTP and settled after. The observed model is
+  pinned per alias, shared with the judge; a change stops the run. Resume skips
+  existing review artifacts and replays settled requests without HTTP. A review
+  request for a pair outside the frozen list, or more reviewed pairs than the list
+  holds, stops the run.
+- **Blindness.** The model sees only the source conversations, the question, the
+  reference, the candidate and the judge's verdict (score, status, correct,
+  answer span, reason). No arm name or letter, `arm` key, question or history id,
+  file name or path is in the request. The request binding, the journal, the
+  token-count records and the artifact names do carry the arm, for bookkeeping;
+  none of it is sent. Two arms with the same answer send byte-identical requests.
+  **Limitation:** the candidate's own content can still hint at the arm (for
+  example, an answer that quotes original conversation text reads like one from
+  an originals arm); the review cannot hide that.
+- **Output.** A strict JSON schema: `agrees_with_judge`, `proposed_correction`
+  (`keep`, or the auditor's own `correct`/`incorrect`), `critical_error` (plan
+  §8A: `stale_value`, `wrong_entity`, `out_of_scope_disclosure`,
+  `fabrication_after_abstention`, or `none`), `evidence` (an exact quote from a
+  reference field or from one named source conversation) and `rationale`. A
+  reply that breaks these rules is recorded as `invalid_review`, not retried.
+
+`review_sample.py` is offline and deterministic: `--sample-size` questions
+stratified by category x judge agreement between the arms (largest-remainder
+shares, at least one question from a disagreement stratum when it exists),
+drawn with `random.Random(seed)`, plus every regression pair (F correct and S
+not; F correct and A not) and every non-correct answer in `temporal_update`,
+`conflict_entity_assignment` and `unanswerable`. Pairs without a judged
+candidate are listed under `excluded_unreviewable`.

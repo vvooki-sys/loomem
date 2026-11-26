@@ -1,5 +1,8 @@
 """The four phases shared by ``run`` and ``dry-run``: extraction, retrieval, arms, judge (plan §3/§4).
 
+``--phase review`` (``paid_review``, the plan §8C audit) is separate: it is not in ``PHASES``, so
+``--phase all`` never runs it.
+
 A session whose extraction hit the per-chunk fact cap (engine ``partial``, facts discarded) is the
 explicit state ``extraction_capped``, not a stop: its stored facts are used and its questions stay in
 the denominator; ``events/<hid>.<sid>.extraction_capped.json`` and the report count it.
@@ -49,6 +52,7 @@ class RunContext:
     readiness_deadline_s: float = 60.0
     after_session: object = None    # optional callable(proxy) after each session (dry-run role registration)
     retry_rejected: frozenset = frozenset()  # rejected_4xx request ids the owner allows to send again
+    review: object = None           # paid_review.ReviewPlan, only for --phase review
 
     @property
     def directory(self):
@@ -325,6 +329,10 @@ PHASES = {"extraction": phase_extraction, "retrieval": phase_retrieval, "arms": 
 def run_phases(ctx, phase="all"):
     if phase == "control":
         return []  # the control call K, sent by the caller before this, is the whole invocation
+    if phase == "review":  # the plan §8C audit runs only on its own, never as part of "all"
+        from paid_review import phase_review
+        phase_review(ctx)
+        return ["review"]
     names = list(PHASES) if phase == "all" else [phase]
     for name in names:
         PHASES[name](ctx)

@@ -9,6 +9,12 @@ frozen; the key ORDER is the plan's raw order unless a separately frozen
 judge-prompt file (``judge_prompt_v1.json``: ``user_payload_field_order`` with
 sources before the candidate, for prefix caching) is pinned alongside — it must
 agree with the plan on system text, schema, key set and ``derived_from.sha256``.
+
+The sixth stage, ``review`` (the plan §8C semantic audit, ``run --phase review``), is NOT in
+plan.json: its system text, strict schema and user keys are frozen below in this file and carry
+their own fingerprint ``REVIEW_PROMPT_SHA256`` (same digest rule as every stage), which the
+validation pins in ``protocol/`` and the runner checks. ``fingerprint()`` and therefore
+``campaign.json`` ``stage_sha256`` stay the five plan stages.
 """
 from dataclasses import dataclass
 import hashlib
@@ -16,6 +22,60 @@ import json
 from pathlib import Path
 
 STAGES = ("diagnostic", "audit", "selection", "answer", "judge")
+REVIEW_STAGE = "review"
+
+# -- the frozen review prompt (plan §8C); any edit changes REVIEW_PROMPT_SHA256 -------------
+REVIEW_SYSTEM = (
+    "You are an independent semantic auditor of an automatic evaluation. You receive one question about a "
+    "user's past conversations, the complete source conversations, the reference (reference answer, required "
+    "answer atoms, equivalence rule, and an explanation when the question cannot be answered from the "
+    "sources), one candidate answer, and the automatic judge's verdict on that candidate with its reason. "
+    "You are not told which system produced the candidate; do not guess it and do not mention it.\n"
+    "Decide on your own whether the candidate answers the question correctly, then compare your decision "
+    "with the judge's verdict.\n"
+    "Rules:\n"
+    "1. The reference and its equivalence rule define correctness. Use the sources to check facts, dates and "
+    "who said what. If the reference and the sources disagree, say so in the rationale and follow the "
+    "reference.\n"
+    "2. A candidate is correct only if it states every required answer atom (or an equivalent the "
+    "equivalence rule allows) and asserts nothing that contradicts the reference or the sources. When the "
+    "reference says the question cannot be answered, a correct candidate abstains or says the information "
+    "is not available; a concrete answer is incorrect.\n"
+    "3. agrees_with_judge is true only when the judge's score is correct or incorrect and your decision is "
+    "the same. When the judge's score is invalid_judge, agrees_with_judge is false.\n"
+    "4. proposed_correction is \"keep\" when you agree with the judge; otherwise it is your own score, "
+    "\"correct\" or \"incorrect\".\n"
+    "5. critical_error describes the candidate, not the judge. It is \"none\" unless the candidate gives an "
+    "earlier value although the sources show a later update (stale_value), attributes a fact, preference or "
+    "event to the wrong person or entity (wrong_entity), discloses information the question did not ask for "
+    "or that is not in the sources (out_of_scope_disclosure), or gives a concrete answer where the reference "
+    "requires abstention (fabrication_after_abstention). If several apply, choose the first that applies in "
+    "this order: fabrication_after_abstention, wrong_entity, stale_value, out_of_scope_disclosure.\n"
+    "6. evidence is the single most decisive support for your decision: kind \"reference_atom\" with a quote "
+    "copied exactly from one reference field and source_id null; or kind \"source\" with the source_id of one "
+    "source conversation and a quote copied exactly from one of its turns; or kind \"none\" with an empty "
+    "quote and source_id null when no quote applies.\n"
+    "7. rationale is at most 1200 characters, factual and specific.\n"
+    "Return only the JSON object the response schema requires.")
+REVIEW_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "agrees_with_judge": {"type": "boolean"},
+        "proposed_correction": {"type": "string", "enum": ["keep", "correct", "incorrect"]},
+        "critical_error": {"type": "string", "enum": ["none", "stale_value", "wrong_entity",
+                                                      "out_of_scope_disclosure", "fabrication_after_abstention"]},
+        "evidence": {"type": "object",
+                     "properties": {"kind": {"type": "string", "enum": ["reference_atom", "source", "none"]},
+                                    "source_id": {"type": ["string", "null"]},
+                                    "quote": {"type": "string"}},
+                     "required": ["kind", "source_id", "quote"], "additionalProperties": False},
+        "rationale": {"type": "string"},
+    },
+    "required": ["agrees_with_judge", "proposed_correction", "critical_error", "evidence", "rationale"],
+    "additionalProperties": False,
+}
+# Sources first (prefix caching, as the pinned judge order); no key names the arm.
+REVIEW_USER_KEYS = ("source_scope", "source_conversations", "question", "reference", "candidate", "judge_verdict")
 
 
 class PromptsError(ValueError):
@@ -145,3 +205,28 @@ def load_prompts(path, expected_sha256, judge_prompt=None):
     stages = _extract_stages(plan)
     judge_sha256 = _apply_judge_prompt(stages, plan_sha256, judge_prompt) if judge_prompt else None
     return Prompts(stages, plan_sha256, judge_sha256)
+
+
+# -- the review stage (frozen here, never from plan.json) ------------------------------
+def review_stage():
+    """The frozen review stage; its ``sha256`` (same digest rule as the plan stages) is REVIEW_PROMPT_SHA256."""
+    digest = _sha256(_canonical({"system": REVIEW_SYSTEM, "response_schema": REVIEW_RESPONSE_SCHEMA,
+                                 "user_keys": list(REVIEW_USER_KEYS)}).encode("utf-8"))
+    return StagePrompt(REVIEW_STAGE, REVIEW_SYSTEM, REVIEW_RESPONSE_SCHEMA, REVIEW_USER_KEYS, digest)
+
+
+REVIEW_PROMPT_SHA256 = review_stage().sha256
+
+
+def review_messages(parts):
+    """System + compact JSON user message whose keys are exactly REVIEW_USER_KEYS, in that order."""
+    if not isinstance(parts, dict) or set(parts) != set(REVIEW_USER_KEYS):
+        raise PromptsError(f"stage {REVIEW_STAGE!r}: user keys must be exactly {sorted(REVIEW_USER_KEYS)}")
+    ordered = {key: parts[key] for key in REVIEW_USER_KEYS}
+    user = json.dumps(ordered, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    return [{"role": "system", "content": REVIEW_SYSTEM}, {"role": "user", "content": user}]
+
+
+def review_response_format():
+    return {"type": "json_schema", "json_schema": {"name": REVIEW_STAGE, "strict": True,
+                                                   "schema": REVIEW_RESPONSE_SCHEMA}}
