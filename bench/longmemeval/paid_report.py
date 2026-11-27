@@ -213,12 +213,16 @@ def _review_summary(reviews):
             out[str(value)] = out.get(str(value), 0) + 1
         return dict(sorted(out.items()))
     valid = [r["review"] for r in reviews if isinstance(r.get("review"), dict) and r["review"].get("valid")]
+    kinds = [(v.get("evidence") or {}).get("kind") for v in valid]
+    # Policy 09 § 38: a disagreement whose evidence kind is "none" is a dispute without correction evidence.
+    disputes = sum(1 for v, kind in zip(valid, kinds) if v["agrees_with_judge"] is False and kind == "none")
     return {"artifacts": len(reviews), "by_status": count(r.get("status") for r in reviews),
             "by_arm": count(r.get("arm") for r in reviews),
             "agrees_with_judge": count(v["agrees_with_judge"] for v in valid),
             "proposed_correction": count(v["proposed_correction"] for v in valid),
             "critical": count(bool(v.get("critical")) for v in valid),
             "critical_error_types": count(t for v in valid for t in v.get("critical_error_types") or []),
+            "evidence_kind": count(kinds), "disputes_without_evidence": disputes,
             "review_list_sha256": sorted({r.get("review_list_sha256") for r in reviews if r.get("review_list_sha256")})}
 
 

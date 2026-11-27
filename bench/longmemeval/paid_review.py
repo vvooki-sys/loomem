@@ -477,4 +477,8 @@ def phase_review(ctx):
             record.update(status="technical_error", outcome=f"ContextError: {exc}")
         write_review(ctx.directory, record)
         done += 1
-    ctx.emit(f"review: {done} review(s) this invocation; frozen list {plan.sha256[:12]} ({len(plan)} pair(s))")
+    from paid_report import _read_dir, _review_summary
+    summary = _review_summary(_read_dir(ctx.directory, "reviews"))
+    ctx.emit(f"review: {done} review(s) this invocation; frozen list {plan.sha256[:12]} ({len(plan)} pair(s)); "
+             f"evidence_kind {json.dumps(summary['evidence_kind'], sort_keys=True)}; "
+             f"disputes_without_evidence {summary['disputes_without_evidence']}")

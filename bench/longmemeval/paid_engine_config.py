@@ -6,6 +6,14 @@ effective_config`` plus the owner-frozen overrides: knowledge extraction ON
 ``LOOMEM_BENCH_PROXY_TOKEN``), fragments ON, ``[search] evidence_fields``
 ON, every other LLM mutator OFF, local 384-d embeddings, loopback host and a
 random port (never the product ports). Pure functions, no process here.
+
+Engine levers (``ENGINE_LEVERS``) are the retrieval/extraction switches a campaign
+may set explicitly: ``levers`` is a dict ``{"section.key": value}`` checked against
+the table (known key, same type as the r5 default, ``prompt_variant`` in its enum).
+Only a lever whose value differs from its default is written into the TOML, so a
+campaign without levers (or with every lever at its default) renders byte-identical
+text and keeps its ``effective_config_sha256``; a non-default lever adds or replaces
+exactly one ``key = value`` line.
 """
 import hashlib
 from pathlib import Path
@@ -35,6 +43,21 @@ W0_FLAGS = (("search", "rerank_date_prefix", False), ("search", "rerank_llm_max_
             ("search", "rerank_sync_timeout_ms", 2000), ("search", "event_date_proximity_boost", 0.0),
             ("mcp", "search_include_predecessor", False), ("mcp", "predecessor_max_chars", 400),
             ("mcp", "search_group_by", "none"))
+# Engine levers with their r5 defaults (holdout-200-2026-11-25-r5, effective config aa7510a0...): a
+# campaign sets them explicitly through --engine-lever and campaign.json records the non-default ones
+# under engine.levers. The state_followup_* keys and prompt_variant values are the engine's names.
+ENGINE_LEVERS = (
+    ("search", "vector_fill_missing", False),
+    ("knowledge_extraction", "prompt_variant", "default"),
+    ("search", "state_followup_enabled", False),
+    ("search", "state_followup_max_seeds", 3),
+    ("search", "state_followup_hits_per_seed", 60),
+    ("search", "state_followup_fact_types", ["project_state", "event"]),
+    ("search", "state_followup_weight", 1.0),
+    ("search", "state_followup_with_date_filter", False),
+)
+LEVER_DEFAULTS = {f"{section}.{key}": default for section, key, default in ENGINE_LEVERS}
+PROMPT_VARIANTS = ("default", "relations", "relations_v2")
 # The effective-config fingerprint renders the same config with the per-process
 # binding values (work dir, engine port, proxy port) at fixed placeholders.
 FINGERPRINT_WORK, FINGERPRINT_PORT, FINGERPRINT_PROXY = Path("/loomem-evaluation-work"), 1024, "http://127.0.0.1:1/v1"
@@ -88,11 +111,55 @@ def check_extraction(extraction):
     return dict(extraction)
 
 
-def evaluation_config(artifacts, work, *, port, proxy_url, extraction):
+def _lever_type_ok(value, default):
+    if isinstance(default, bool):
+        return type(value) is bool
+    if isinstance(default, int):
+        return type(value) is int
+    if isinstance(default, float):
+        return type(value) in (int, float)
+    if isinstance(default, list):
+        return isinstance(value, list) and all(type(item) is str for item in value)
+    return type(value) is str
+
+
+def check_levers(levers):
+    """``{"section.key": value}`` (None or empty = no levers) -> the same dict with every key known,
+    every value of the default's type (an int is accepted for a float lever and stored as float) and
+    ``prompt_variant`` in PROMPT_VARIANTS; keys sorted. Default-valued entries are kept: the caller
+    decides what to emit."""
+    if levers is None:
+        return {}
+    if not isinstance(levers, dict):
+        raise EngineError("levers must be a dict {\"section.key\": value}")
+    out = {}
+    for name in sorted(levers):
+        if name not in LEVER_DEFAULTS:
+            raise EngineError(f"unknown engine lever {name!r}; known: {sorted(LEVER_DEFAULTS)}")
+        default, value = LEVER_DEFAULTS[name], levers[name]
+        if not _lever_type_ok(value, default):
+            raise EngineError(f"engine lever {name} must be a {type(default).__name__}, got {value!r}")
+        if isinstance(default, float):
+            value = float(value)
+        if name == "knowledge_extraction.prompt_variant" and value not in PROMPT_VARIANTS:
+            raise EngineError(f"engine lever {name} must be one of {PROMPT_VARIANTS}, got {value!r}")
+        out[name] = list(value) if isinstance(value, list) else value
+    return out
+
+
+def lever_overrides(levers):
+    """``(section, key, value)`` for every lever that differs from its default, in ENGINE_LEVERS order."""
+    levers = check_levers(levers)
+    return [(section, key, levers[f"{section}.{key}"]) for section, key, default in ENGINE_LEVERS
+            if f"{section}.{key}" in levers and levers[f"{section}.{key}"] != default]
+
+
+def evaluation_config(artifacts, work, *, port, proxy_url, extraction, levers=None):
     """The effective TOML text for one engine process (see module docstring)."""
     check_port(port)
     artifacts = check_artifacts(artifacts)
     extraction = check_extraction(extraction)
+    levers = lever_overrides(levers)
     if not re.fullmatch(r"http://127\.0\.0\.1:\d+/v1", proxy_url or ""):
         raise EngineError(f"proxy_url must be http://127.0.0.1:<port>/v1, got {proxy_url!r}")
     work = Path(work)
@@ -121,7 +188,7 @@ def evaluation_config(artifacts, work, *, port, proxy_url, extraction):
                  # PR #177 keys: the dream schedule and its auto trigger stay off even on a build that
                  # knows them (the config has no deny_unknown_fields, so this is harmless before #177).
                  ("dream", "schedule_enabled", False), ("dream", "auto_trigger_threshold", 0),
-                 *W0_FLAGS]
+                 *W0_FLAGS, *levers]
     for section, key, value in overrides:
         text = replace_setting(text, section, key, value)
     for section in DISABLED_SECTIONS:
@@ -129,10 +196,10 @@ def evaluation_config(artifacts, work, *, port, proxy_url, extraction):
     return text
 
 
-def config_fingerprint(artifacts, extraction):
+def config_fingerprint(artifacts, extraction, levers=None):
     """SHA-256 of the effective config with placeholder work dir, port and proxy port."""
     text = evaluation_config(artifacts, FINGERPRINT_WORK, port=FINGERPRINT_PORT, proxy_url=FINGERPRINT_PROXY,
-                             extraction=extraction)
+                             extraction=extraction, levers=levers)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 

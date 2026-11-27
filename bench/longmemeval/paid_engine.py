@@ -30,8 +30,8 @@ from urllib.request import ProxyHandler, Request, build_opener
 from extraction_receipt import confirmed_facts_with_cap
 from fragment_projection import EVIDENCE_V2, v2_projection_proven
 from ingest_receipt import ReceiptError, expected_ids_from_mcp_result
-from paid_engine_config import (DISABLED_SECTIONS, EngineError, check_artifacts, check_extraction, check_port,  # noqa: F401
-                                config_fingerprint, evaluation_config, free_port, sandbox_wrapper)
+from paid_engine_config import (DISABLED_SECTIONS, EngineError, check_artifacts, check_extraction, check_levers,  # noqa: F401
+                                check_port, config_fingerprint, evaluation_config, free_port, sandbox_wrapper)
 from paid_provider_proxy import KEY_ENV
 from readiness_proof import STATES
 from runner_local_e1 import render_transcript as _render_turns
@@ -117,9 +117,10 @@ def _check_proof(response, scope, expected_ids):
 
 class EvaluationEngine:
     def __init__(self, artifacts, *, proxy_url, proxy_token, extraction, top_k, port=None,
-                 extraction_timeout_s=MAX_EXTRACTION_TIMEOUT_S):
+                 extraction_timeout_s=MAX_EXTRACTION_TIMEOUT_S, levers=None):
         self.artifacts = check_artifacts(artifacts)
         self.extraction = check_extraction(extraction)
+        self.levers = check_levers(levers)  # campaign.json engine.levers; {} = every lever at its r5 default
         if type(top_k) is not int or top_k <= 0:
             raise EngineError("top_k must be a positive int")
         # The evaluation build reads LOOMEM_EVALUATION_EXTRACTION_TIMEOUT_SECS (memory_extractor/http.rs);
@@ -133,7 +134,7 @@ class EvaluationEngine:
         self.port = free_port() if port is None else check_port(port)
         self.token = secrets.token_hex(32)
         self.endpoint = f"http://127.0.0.1:{self.port}"
-        self.effective_config_sha256 = config_fingerprint(self.artifacts, self.extraction)
+        self.effective_config_sha256 = config_fingerprint(self.artifacts, self.extraction, self.levers)
         self.config_sha256 = self.process = self.work = None
         self.sources, self.session_id, self.rpc_id = {}, None, 0
         self.opener = build_opener(ProxyHandler({}))
@@ -161,7 +162,7 @@ class EvaluationEngine:
             (work / "synonyms.toml").write_text("synonyms = []\n")
             (work / "pii_blocklist.txt").write_text("")
         text = evaluation_config(self.artifacts, work, port=self.port, proxy_url=self.proxy_url,
-                                 extraction=self.extraction)
+                                 extraction=self.extraction, levers=self.levers)
         (work / "config.toml").write_text(text)
         (work / "tmp").mkdir(exist_ok=True)
         self.config_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()

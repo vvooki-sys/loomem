@@ -121,7 +121,7 @@ def artifact_check(engine):
     return True, "binary/template/model.onnx/tokenizer.json/sandbox profile match the registry"
 
 
-def _toml_problems(config, extraction):
+def _toml_problems(config, extraction, levers=None):
     def get(*keys):
         node = config
         for key in keys:
@@ -153,37 +153,61 @@ def _toml_problems(config, extraction):
     expected += [(f"{section}.{key}", get(section, key), want) for section, key, want in W0_FLAGS]
     problems = [f"{name}={value!r} (expected {want!r})" for name, value, want in expected
                 if value != want or type(value) is not type(want)]
+    problems += _lever_problems(get, levers)
     port = get("server", "port")
     if port in (3035, 3037, 3038):
         problems.append(f"server.port={port} is a reserved product port")
     return problems
 
 
+def _lever_problems(get, levers):
+    """Every ENGINE_LEVERS entry: a key absent from the TOML counts as its default; a present key must
+    equal the requested value (the default when the campaign did not set it) with the same type."""
+    from paid_engine_config import ENGINE_LEVERS, EngineError, check_levers
+    try:
+        levers = check_levers(levers)
+    except EngineError as exc:
+        return [f"engine.levers rejected: {exc}"]
+    problems = []
+    for section, key, default in ENGINE_LEVERS:
+        want = levers.get(f"{section}.{key}", default)
+        value = get(section, key)
+        if value is None and want == default and type(want) is type(default):
+            continue
+        if value != want or type(value) is not type(want):
+            problems.append(f"{section}.{key}={value!r} (expected {want!r})")
+    return problems
+
+
 def effective_config_check(engine, extraction):
     """Render the evaluation config at the fingerprint placeholders and assert the TOML; the
     rendered text's sha256 is the engine's ``effective_config_sha256`` and must equal the
-    registry's when the registry carries one."""
+    registry's when the registry carries one. ``engine["levers"]`` (campaign.json, only when the
+    campaign set a lever) enters the rendering and the assertions."""
     try:
         from paid_engine_config import FINGERPRINT_PORT, FINGERPRINT_PROXY, FINGERPRINT_WORK, evaluation_config
     except ImportError as exc:
         return False, f"paid_engine unavailable: {exc}"
     artifacts = {key: engine[key] for key in ARTIFACT_KEYS}
+    levers = engine.get("levers")
     try:
         text = evaluation_config(artifacts, FINGERPRINT_WORK, port=FINGERPRINT_PORT, proxy_url=FINGERPRINT_PROXY,
-                                 extraction=extraction)
+                                 extraction=extraction, levers=levers)
         config = tomllib.loads(text)
     except Exception as exc:  # any rendering failure is a FAIL with its reason
         return False, f"effective config not renderable: {type(exc).__name__}: {exc}"
-    problems = _toml_problems(config, extraction)
+    problems = _toml_problems(config, extraction, levers)
     digest = sha256_text(text)
     pinned = engine.get("effective_config_sha256")
     if pinned is not None and pinned != digest:
         problems.append(f"effective_config_sha256 {digest[:12]} differs from the registry {str(pinned)[:12]}")
     if problems:
         return False, "TOML assertions failed: " + "; ".join(problems)
+    set_levers = "" if not levers else "; engine levers " + json.dumps(levers, sort_keys=True)
     return True, (f"TOML: NER off, provider bench, extraction {extraction['max_completion_tokens']}/"
                   f"{extraction['input_chunk_tokens']}/split/{extraction['max_facts_per_chunk']}, floor recorded, "
-                  f"every mutator section off, fragments+evidence on, dream schedule off, W0 levers off/neutral, port free; effective_config_sha256 {digest[:12]}")
+                  f"every mutator section off, fragments+evidence on, dream schedule off, W0 levers off/neutral, port free; effective_config_sha256 {digest[:12]}"
+                  + set_levers)
 
 
 # -- tokenizer -------------------------------------------------------------------

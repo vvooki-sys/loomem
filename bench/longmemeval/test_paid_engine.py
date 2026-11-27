@@ -12,7 +12,8 @@ from unittest.mock import patch
 import paid_engine
 from paid_engine import (EngineError, EvaluationEngine, SessionReceipt, config_fingerprint, evaluation_config,
                          predicted_chunks, render_transcript, sandbox_wrapper)
-from paid_engine_config import DISABLED_SECTIONS, FORBIDDEN_PORTS
+from paid_engine_config import (DISABLED_SECTIONS, ENGINE_LEVERS, FINGERPRINT_PORT, FINGERPRINT_PROXY, FINGERPRINT_WORK,
+                                FORBIDDEN_PORTS, LEVER_DEFAULTS, check_levers)
 from paid_provider_proxy import KEY_ENV
 from paid_test_support import history_doc
 
@@ -22,6 +23,17 @@ EXTRACTION = {"max_completion_tokens": 16384, "input_chunk_tokens": 4000, "split
 SOURCE = "00000000-0000-4000-8000-000000000001"
 FACT = "00000000-0000-4000-8000-000000000002"
 PROXY_TOKEN = "p" * 64
+# The repo config.toml at origin/main 920edd00 and the sha256 of the effective config it renders at the
+# fingerprint placeholders with ``embedding_model_path`` masked to MODEL_PLACEHOLDER (the only line that
+# depends on the test's temporary directory; everything else is binding-independent). Both captured on
+# the unmodified tree before engine levers existed: the lever-less rendering must stay byte-identical.
+PINNED_TEMPLATE_SHA256 = "f8fa6818ebf4b12653f5332ae2206a105313a68dbf40051b1d8c5fa6d40fc49d"
+PINNED_MASKED_CONFIG_SHA256 = "e30c9c2648165862dae6519801dbacbbc998fec1fb6719b877d93b7baa19a238"
+MODEL_PLACEHOLDER = "/loomem-evaluation-model"
+# The r5 holdout campaign (holdout-200-2026-11-25-r5): its frozen template and the pinned effective config.
+R5_CAMPAIGN = Path.home() / "loomem-campaigns/lme-validation-2026-11/evidence/holdout-200-2026-11-25-r5/campaign.json"
+R5_TEMPLATE = Path.home() / "loomem-campaigns/lme-validation-2026-11/bin/config-v0.5.5.template.toml"
+R5_EFFECTIVE_CONFIG_SHA256 = "aa7510a0ac28f2ccd6f0a02cff6693c6b407256f90235b7af8086374844f26ca"
 
 
 def sha(data):
@@ -145,6 +157,109 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(engine.fingerprints()["binary_sha256"], self.artifacts["binary_sha256"])
         self.assertEqual(set(engine.fingerprints()), {"binary_sha256", "template_sha256", "model_onnx_sha256",
                                                       "tokenizer_sha256", "effective_config_sha256", "sandbox_profile_sha256"})
+
+    def render(self, levers=None):
+        return evaluation_config(self.artifacts, FINGERPRINT_WORK, port=FINGERPRINT_PORT, proxy_url=FINGERPRINT_PROXY,
+                                 extraction=EXTRACTION, levers=levers)
+
+    def test_lever_table_is_the_frozen_r5_default_set(self):
+        self.assertEqual([f"{s}.{k}" for s, k, _ in ENGINE_LEVERS],
+                         ["search.vector_fill_missing", "knowledge_extraction.prompt_variant", "search.state_followup_enabled",
+                          "search.state_followup_max_seeds", "search.state_followup_hits_per_seed",
+                          "search.state_followup_fact_types", "search.state_followup_weight",
+                          "search.state_followup_with_date_filter"])
+        self.assertEqual(LEVER_DEFAULTS["search.vector_fill_missing"], False)
+        self.assertEqual(LEVER_DEFAULTS["knowledge_extraction.prompt_variant"], "default")
+        self.assertEqual(LEVER_DEFAULTS["search.state_followup_fact_types"], ["project_state", "event"])
+        self.assertEqual(LEVER_DEFAULTS["search.state_followup_weight"], 1.0)
+
+    def test_no_levers_and_all_default_levers_render_the_pinned_text(self):
+        """levers=None == every lever explicitly at its default == the rendering before levers existed."""
+        base = config_fingerprint(self.artifacts, EXTRACTION)
+        self.assertEqual(base, config_fingerprint(self.artifacts, EXTRACTION, None))
+        self.assertEqual(base, config_fingerprint(self.artifacts, EXTRACTION, {}))
+        self.assertEqual(base, config_fingerprint(self.artifacts, EXTRACTION, dict(LEVER_DEFAULTS)))
+        self.assertEqual(base, config_fingerprint(self.artifacts, EXTRACTION, {"search.state_followup_weight": 1}))  # int for float
+        text = self.render()
+        self.assertEqual(text, self.render(dict(LEVER_DEFAULTS)))
+        self.assertEqual(base, sha(text.encode("utf-8")))
+        self.assertEqual(text.count(self.artifacts["model_dir"]), 1)
+        if sha(TEMPLATE.read_bytes()) != PINNED_TEMPLATE_SHA256:
+            self.skipTest("config.toml changed since 920edd00; the pinned rendering is for that template")
+        masked = text.replace(self.artifacts["model_dir"], MODEL_PLACEHOLDER)
+        self.assertEqual(sha(masked.encode("utf-8")), PINNED_MASKED_CONFIG_SHA256,
+                         "the lever-less effective config must stay byte-identical to origin/main 920edd00")
+
+    def test_a_non_default_lever_changes_exactly_one_line_and_the_hash(self):
+        import difflib
+        base, base_hash = self.render(), config_fingerprint(self.artifacts, EXTRACTION)
+        cases = {"search.vector_fill_missing": True, "knowledge_extraction.prompt_variant": "relations_v2",
+                 "search.state_followup_enabled": True, "search.state_followup_max_seeds": 5,
+                 "search.state_followup_fact_types": ["event"], "search.state_followup_weight": 0.5,
+                 "search.state_followup_with_date_filter": True}
+        for name, value in cases.items():
+            with self.subTest(name):
+                section, key = name.split(".")
+                text = self.render({name: value})
+                added = [l for l in difflib.ndiff(base.splitlines(), text.splitlines()) if l.startswith("+ ")]
+                removed = [l for l in difflib.ndiff(base.splitlines(), text.splitlines()) if l.startswith("- ")]
+                self.assertEqual(added, [f"+ {key} = {json.dumps(value)}"])
+                self.assertLessEqual(len(removed), 1, removed)  # the template's own line, when it has one
+                for line in removed:
+                    self.assertTrue(line.startswith(f"- {key} ="), line)
+                self.assertEqual(tomllib.loads(text)[section][key], value)
+                digest = config_fingerprint(self.artifacts, EXTRACTION, {name: value})
+                self.assertNotEqual(digest, base_hash)
+                self.assertEqual(digest, sha(text.encode("utf-8")))
+        engine = EvaluationEngine(self.artifacts, proxy_url="http://127.0.0.1:1/v1", proxy_token=PROXY_TOKEN,
+                                  extraction=EXTRACTION, top_k=60, port=40123, levers={"search.vector_fill_missing": True})
+        self.assertEqual(engine.effective_config_sha256, config_fingerprint(self.artifacts, EXTRACTION, {"search.vector_fill_missing": True}))
+        self.assertEqual(engine.levers, {"search.vector_fill_missing": True})
+
+    def test_lever_refusals(self):
+        bad = {"unknown key": {"search.rerank_enabled": True},
+               "typo": {"search.vector_fill_misssing": True},
+               "bool as int": {"search.vector_fill_missing": 1},
+               "bool as string": {"search.vector_fill_missing": "true"},
+               "int as bool": {"search.state_followup_max_seeds": True},
+               "int as float": {"search.state_followup_max_seeds": 3.0},
+               "float as string": {"search.state_followup_weight": "1.0"},
+               "float as bool": {"search.state_followup_weight": True},
+               "list as string": {"search.state_followup_fact_types": "event"},
+               "list of non-strings": {"search.state_followup_fact_types": ["event", 1]},
+               "variant outside the enum": {"knowledge_extraction.prompt_variant": "relations_v3"},
+               "variant not a string": {"knowledge_extraction.prompt_variant": None},
+               "not a dict": [("search", "vector_fill_missing", True)]}
+        for name, levers in bad.items():
+            with self.subTest(name), self.assertRaises(EngineError):
+                check_levers(levers)
+            with self.subTest(name + " (fingerprint)"), self.assertRaises(EngineError):
+                config_fingerprint(self.artifacts, EXTRACTION, levers)
+        self.assertEqual(check_levers({"knowledge_extraction.prompt_variant": "relations"}),
+                         {"knowledge_extraction.prompt_variant": "relations"})
+        self.assertEqual(check_levers({"search.state_followup_weight": 2}), {"search.state_followup_weight": 2.0})
+
+    @unittest.skipUnless(R5_CAMPAIGN.is_file() and R5_TEMPLATE.is_file(), "r5 campaign evidence not on this machine")
+    def test_r5_effective_config_is_reproduced_without_levers(self):
+        """Regression against the frozen r5 campaign: the template has no lever key and the pinned hash must
+        still come out of the lever-aware renderer (read-only; nothing under the campaign is written)."""
+        spec = json.loads(R5_CAMPAIGN.read_text(encoding="utf-8"))
+        engine = spec["engine"]
+        self.assertEqual(engine["template"], str(R5_TEMPLATE))
+        self.assertEqual(engine["effective_config_sha256"], R5_EFFECTIVE_CONFIG_SHA256)
+        self.assertNotIn("levers", engine)
+        artifacts = {k: engine[k] for k in ("binary", "binary_sha256", "template", "template_sha256", "model_dir",
+                                            "model_onnx_sha256", "tokenizer_sha256")}
+        for path in (artifacts["binary"], Path(artifacts["model_dir"]) / "model.onnx"):
+            if not Path(path).is_file():
+                self.skipTest(f"r5 artifact missing: {path}")
+        template = R5_TEMPLATE.read_text(encoding="utf-8")
+        for _, key, _ in ENGINE_LEVERS:
+            self.assertNotIn(key, template)
+        self.assertEqual(config_fingerprint(artifacts, spec["extraction"]), R5_EFFECTIVE_CONFIG_SHA256)
+        self.assertEqual(config_fingerprint(artifacts, spec["extraction"], dict(LEVER_DEFAULTS)), R5_EFFECTIVE_CONFIG_SHA256)
+        self.assertNotEqual(config_fingerprint(artifacts, spec["extraction"], {"search.vector_fill_missing": True}),
+                            R5_EFFECTIVE_CONFIG_SHA256)
 
     def test_refusals(self):
         good = dict(port=40123, proxy_url="http://127.0.0.1:1/v1", extraction=EXTRACTION)
