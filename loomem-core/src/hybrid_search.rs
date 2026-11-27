@@ -13,8 +13,10 @@ mod candidate_budget;
 mod channels;
 mod clock;
 pub mod latest_state;
+pub mod state_followup;
 mod vector_fill;
 pub use candidate_budget::{SearchCandidateBudget, VectorSearchOptions};
+pub use state_followup::StateFollowupConfig;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OperationSearchConfig {
@@ -120,6 +122,12 @@ pub struct SearchConfig {
     /// `vector_fill`.
     #[serde(default)]
     pub vector_fill_missing: bool,
+    /// Six flat `state_followup_*` keys: after fusion, embed up to N state
+    /// facts from the requested top-k and add their vector neighbours to
+    /// the fused pool (no LLM). `state_followup_enabled = false` (default)
+    /// runs nothing, byte-identical. See `state_followup`.
+    #[serde(flatten, default)]
+    pub state_followup: StateFollowupConfig,
     /// WS-1(b) (Spectron gap brief 2026-07-09): match-quality decay relief.
     /// A strong lexical/vector match weakens the age penalty so an old needle
     /// that is the best match cannot be killed by time decay alone (45-day-old
@@ -260,6 +268,13 @@ pub struct HybridSearchResult {
     pub time_decay_factor: f64,
 }
 
+/// Output of [`HybridSearchEngine::finish_score`].
+struct Scored {
+    score: f64,
+    /// The relieved decay that lands in `time_decay_factor`.
+    time_decay: f64,
+}
+
 pub struct HybridSearchEngine {
     config: Config,
     clock: clock::SearchClock,
@@ -372,38 +387,13 @@ impl HybridSearchEngine {
             };
 
             if let Some((content, user_id, app_id, level, timestamp)) = doc_data {
-                // WS-1(b) (Spectron gap brief 2026-07-09): a strong match in
-                // either channel relieves the age penalty. Neutral (identity)
-                // with the default `decay_match_relief == 0.0`.
-                let time_decay = relieve_decay(
-                    self.compute_time_decay(timestamp, level, &self.config.search.decay),
-                    f64::from(bm25_score.max(vector_score)),
-                    self.config.search.decay_match_relief,
+                let scored = self.finish_score(
+                    fusion_score,
+                    bm25_score.max(vector_score),
+                    level,
+                    timestamp,
+                    chunk_opt.as_ref(),
                 );
-                // Cycle /001 (MemIR): weight equally-relevant chunks by authority
-                // (trust tier + provenance role) before the final sort. Hits with
-                // no chunk loaded (e.g. store=None) get a neutral 1.0 multiplier.
-                let trust_prov = chunk_opt
-                    .as_ref()
-                    .map(trust_provenance_multiplier)
-                    .unwrap_or(1.0);
-                // Boost user-authored state facts (and optionally damp
-                // agent-authored ones) so the latest user statement is not
-                // pushed out of top_k by agent-authored facts on the same
-                // topic. Neutral (1.0) when no chunk/extraction_meta is loaded
-                // or with the default config.
-                let attrib = chunk_opt
-                    .as_ref()
-                    .and_then(|c| c.extraction_meta.as_ref())
-                    .map(|m| {
-                        attribution_multiplier(
-                            m.attributed_to.as_deref(),
-                            Some(&m.fact_type),
-                            &self.config.search,
-                        )
-                    })
-                    .unwrap_or(1.0);
-                let final_score = fusion_score * time_decay * trust_prov * attrib;
 
                 fused_results.push(HybridSearchResult {
                     id: id.clone(),
@@ -412,10 +402,10 @@ impl HybridSearchEngine {
                     app_id,
                     level,
                     timestamp,
-                    score: final_score,
+                    score: scored.score,
                     bm25_score,
                     vector_score,
-                    time_decay_factor: time_decay,
+                    time_decay_factor: scored.time_decay,
                 });
             }
         }
@@ -439,6 +429,51 @@ impl HybridSearchEngine {
         );
 
         Ok(fused_results)
+    }
+
+    /// Final score of one candidate from its fusion term (moved unchanged
+    /// out of `fuse_lanes`; the state follow-up lane scores through it too):
+    /// `fusion_score x relieved time decay x trust/provenance x attribution`.
+    /// `strength` is the candidate's best normalized channel score.
+    fn finish_score(
+        &self,
+        fusion_score: f64,
+        strength: f32,
+        level: i32,
+        timestamp: i64,
+        chunk: Option<&crate::storage::Chunk>,
+    ) -> Scored {
+        // WS-1(b) (Spectron gap brief 2026-07-09): a strong match in
+        // either channel relieves the age penalty. Neutral (identity)
+        // with the default `decay_match_relief == 0.0`.
+        let time_decay = relieve_decay(
+            self.compute_time_decay(timestamp, level, &self.config.search.decay),
+            f64::from(strength),
+            self.config.search.decay_match_relief,
+        );
+        // Cycle /001 (MemIR): weight equally-relevant chunks by authority
+        // (trust tier + provenance role) before the final sort. Hits with
+        // no chunk loaded (e.g. store=None) get a neutral 1.0 multiplier.
+        let trust_prov = chunk.map(trust_provenance_multiplier).unwrap_or(1.0);
+        // Boost user-authored state facts (and optionally damp
+        // agent-authored ones) so the latest user statement is not
+        // pushed out of top_k by agent-authored facts on the same
+        // topic. Neutral (1.0) when no chunk/extraction_meta is loaded
+        // or with the default config.
+        let attrib = chunk
+            .and_then(|c| c.extraction_meta.as_ref())
+            .map(|m| {
+                attribution_multiplier(
+                    m.attributed_to.as_deref(),
+                    Some(&m.fact_type),
+                    &self.config.search,
+                )
+            })
+            .unwrap_or(1.0);
+        Scored {
+            score: fusion_score * time_decay * trust_prov * attrib,
+            time_decay,
+        }
     }
 
     /// Original fuse_scores for compatibility (converts SearchResult vector results)
@@ -747,6 +782,7 @@ mod tests {
                 rare_term_lane: crate::search::rare_term::RareTermLaneConfig::default(),
                 vector_similarity_floor: 0.0,
                 vector_fill_missing: false,
+                state_followup: StateFollowupConfig::default(),
                 decay_match_relief: 0.0,
                 tier1: crate::search::tier1::Tier1Config::default(),
                 operation: OperationSearchConfig::default(),

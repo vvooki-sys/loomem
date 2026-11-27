@@ -188,6 +188,18 @@ pub struct RareTermLaneDiag {
     pub injected_ids: Vec<String>,
 }
 
+/// `[search] state_followup_*` trail for one query. Present only when the
+/// step ran (enabled, no blocking date filter, an embedder available).
+#[derive(Debug, Serialize, PartialEq)]
+pub struct StateFollowupDiag {
+    /// Seed ids taken from the requested top-k, in rank order.
+    pub seeds: Vec<String>,
+    /// Follow-up candidates in the fused pool after the re-cut.
+    pub injected_ids: Vec<String>,
+    /// Seeds whose content was embedded (a failed embedding is skipped).
+    pub embedded: usize,
+}
+
 /// Cycle/012: pre-fusion per-channel top-N + fused/post-rank pools + lane
 /// trail. Every list is capped at a small N (20) — this is a debugging
 /// surface, not a data export.
@@ -200,6 +212,8 @@ pub struct ChannelDiagnostics {
     pub post_rank_top: Vec<FusedPoolHit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lane: Option<RareTermLaneDiag>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_followup: Option<StateFollowupDiag>,
 }
 
 #[derive(Debug, Serialize)]

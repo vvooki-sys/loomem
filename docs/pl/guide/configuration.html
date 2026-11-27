@@ -335,6 +335,12 @@ rerank_sync_timeout_ms = 2000
 event_date_proximity_boost = 0.0
 content_dedup = "prefix"
 vector_fill_missing = false
+state_followup_enabled = false
+state_followup_max_seeds = 3
+state_followup_hits_per_seed = 60
+state_followup_fact_types = ["project_state", "event"]
+state_followup_weight = 1.0
+state_followup_with_date_filter = false
 </code></pre>
 <p>Te klucze <code>[search]</code>, klucze <code>memory_search</code> w <a href="#mcp"><code>[mcp]</code></a> oraz klucze <code>temporal_grounding</code> i <code>prompt_variant</code> w <a href="#knowledge_extraction"><code>[knowledge_extraction]</code></a> to dźwignie jakości. Wszystkie są domyślnie wyłączone lub neutralne: przy wartościach z dostarczanej konfiguracji wynik jest identyczny bajt po bajcie z wynikiem sprzed wprowadzenia klucza. Wartość domyślna zmienia się dopiero po zmierzonym teście A/B. Wartość odrzucona przez walidację zatrzymuje wczytanie konfiguracji.</p>
 <table>
@@ -400,6 +406,42 @@ vector_fill_missing = false
 <td>bool</td>
 <td><code>false</code></td>
 <td>Kandydat po fuzji, który trafił do puli przez tor inny niż wektorowy (BM25 albo tor rzadkich terminów), ale nie należy do trafień toru wektorowego, dostaje swój rzeczywisty cosinus z zapytaniem zamiast wyniku wektorowego 0. Tor wektorowy zachowuje tylko najwyższe cosinusy (<code>2 × max(top_k, top_k żądania)</code> na głównej ścieżce wyszukiwania), więc dopasowanie leksykalne tuż pod tym progiem było dotąd oceniane tylko przez BM25 i spadało na koniec puli kandydatów. Uzupełnienie używa tego samego embeddingu zapytania i tej samej listy embeddingów co tor wektorowy, stosuje <code>vector_similarity_floor</code> tak jak dla trafień toru, dzieli przez najwyższy cosinus toru i przycina wynik do [0, 1]. Kandydat bez embeddingu oraz żądanie z pustym torem wektorowym zachowują 0; zapytania klasy Simple pomijają tor wektorowy, więc nic nie jest uzupełniane. Ograniczenia: zmienia ocenę tylko kandydatów, którzy już są w puli, więc fakt spoza wszystkich torów nadal do niej nie trafi; podnosi zarówno aktualizacje, jak i nieaktualne fakty, więc przed włączeniem wymaga testu A/B; przy <code>decay_match_relief</code> powyżej 0 (w dostarczanej konfiguracji <code>0.70</code>) uzupełniony wynik wektorowy zasila też łagodzenie zaniku za jakość dopasowania, więc uzupełnieni starsi kandydaci tracą również część kary za wiek; kosztuje jedno przejście po liście embeddingów w pamięci i jeden cosinus na uzupełnionego kandydata, bez odczytu z magazynu. Trafienia wyłącznie wektorowe nie dostają uzupełnienia BM25. Trafienia BM25 zapytań składowych (<code>multi_query_enabled</code>) dołączają do toru BM25 przed fuzją i są uzupełniane; kandydaci z grafu, z wektorowego wielu zapytań i z toru operacji, dodawani po fuzji, nie są uzupełniani. Działa w <code>/v1/search</code> (oraz w MCP <code>memory_search</code>) i w wyszukiwaniu zgodności wersji hostowanej; ścieżka ambient nie jest uzupełniana. <code>false</code>: nic nie jest obliczane</td>
+</tr>
+<tr>
+<td><code>state_followup_enabled</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>Tor dopytania o stan. Po pierwszej fuzji hybrydowej z żądanego top-k puli po fuzji brane są w kolejności rankingu najwyżej <code>state_followup_max_seeds</code> faktów o stanie (fragment, którego <code>extraction_meta.fact_type</code> należy do <code>state_followup_fact_types</code>, jest najnowszą wersją i nie został zastąpiony), treść każdego takiego ziarna jest osadzana tym samym modelem embeddingów co zapytanie (bez wywołania LLM) i porównywana z listą embeddingów, której użył tor wektorowy (już przefiltrowaną według strumienia, daty i agenta), a trafienia dołączają do puli po fuzji: samo ziarno i identyfikatory już obecne w puli są pomijane, więc dotychczasowi kandydaci zachowują dokładnie swoje wyniki; trafienia poniżej <code>vector_similarity_floor</code> są pomijane; pozostałe są dzielone przez najwyższy cosinus ziarna inny niż jego własny, oceniane jako <code>hybrid_weights.vector × znormalizowany cosinus × state_followup_weight</code>, a potem dostają to samo łagodzenie zaniku za jakość dopasowania oraz mnożniki zaufania/pochodzenia i atrybucji co fuzja. Pula jest ponownie sortowana i przycinana do 3 × max(<code>top_k</code>, top_k żądania), więc trafienia dopytania mogą wypchnąć z puli niżej ocenionych kandydatów i zmienić, które identyfikatory trafią do top-k (identyfikatory dopytania nie są gwarantowane; konkurują jak inne). Kosztuje do <code>state_followup_max_seeds</code> dodatkowych embeddingów i przejść po liście embeddingów w pamięci na żądanie. Pomijany, gdy żądanie ma filtr dat (<code>date_from</code>/<code>date_to</code> albo data odczytana z zapytania), chyba że <code>state_followup_with_date_filter = true</code>, gdy nie ma dostępnego modelu embeddingów oraz dla zapytań klasy Simple (brak toru wektorowego). Działa w <code>/v1/search</code> i w MCP <code>memory_search</code>; nie w wyszukiwaniu zgodności wersji hostowanej ani na ścieżce ambient. Przy <code>debug_channels</code> obiekt <code>channel_diagnostics</code> w odpowiedzi zyskuje obiekt <code>state_followup</code> (<code>seeds</code>, <code>injected_ids</code>, <code>embedded</code>) tylko wtedy, gdy krok się wykonał. Przed włączeniem wymaga testu A/B, tak jak <code>vector_fill_missing</code>. <code>false</code>: nic się nie wykonuje (bez odczytu z magazynu, bez embeddingu, bez ponownego sortowania)</td>
+</tr>
+<tr>
+<td><code>state_followup_max_seeds</code></td>
+<td>int</td>
+<td><code>3</code></td>
+<td>Liczba ziaren branych w kolejności rankingu z żądanego top-k puli po fuzji; każde kosztuje jeden embedding i jedno przejście po liście embeddingów w pamięci. Co najmniej 1</td>
+</tr>
+<tr>
+<td><code>state_followup_hits_per_seed</code></td>
+<td>int</td>
+<td><code>60</code></td>
+<td>Liczba trafień wektorowych pobieranych dla każdego ziarna, zanim pominięte zostaną identyfikatory już obecne w puli i trafienia poniżej progu. Co najmniej 1</td>
+</tr>
+<tr>
+<td><code>state_followup_fact_types</code></td>
+<td>lista napisów</td>
+<td><code>["project_state", "event"]</code></td>
+<td>Wartości <code>extraction_meta.fact_type</code>, które kwalifikują fragment jako ziarno, jako nazwy typów faktów w snake_case (<code>preference_or_decision</code>, <code>project_state</code>, <code>fact</code>, <code>event</code>, <code>experience</code>). Nieznana wartość przerywa wczytywanie konfiguracji. Nie może być pusta, gdy <code>state_followup_enabled = true</code></td>
+</tr>
+<tr>
+<td><code>state_followup_weight</code></td>
+<td>f64</td>
+<td><code>1.0</code></td>
+<td>Mnożnik składnika wektorowego dopytania (<code>hybrid_weights.vector × znormalizowany cosinus × waga</code>). Przy <code>1.0</code> trafienie dopytania o najwyższym cosinusie do ziarna jest oceniane jak najwyższe trafienie toru wektorowego. Musi być skończony i większy od 0</td>
+</tr>
+<tr>
+<td><code>state_followup_with_date_filter</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td><code>false</code>: pomija dopytanie, gdy żądanie ma filtr dat, więc pytanie „na dzień marzec 2024” zachowuje przefiltrowaną pulę. <code>true</code>: wykonuje je na liście embeddingów przefiltrowanej według dat</td>
 </tr>
 </tbody>
 </table>
