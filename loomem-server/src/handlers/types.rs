@@ -189,14 +189,18 @@ pub struct RareTermLaneDiag {
 }
 
 /// `[search] state_followup_*` trail for one query. Present only when the
-/// step ran (enabled, no blocking date filter, an embedder available).
+/// step ran (enabled, no blocking date filter).
 #[derive(Debug, Serialize, PartialEq)]
 pub struct StateFollowupDiag {
     /// Seed ids taken from the requested top-k, in rank order.
     pub seeds: Vec<String>,
     /// Follow-up candidates in the fused pool after the re-cut.
     pub injected_ids: Vec<String>,
-    /// Seeds whose content was embedded (a failed embedding is skipped).
+    /// Seeds whose stored vector was reused (from the filtered embedding
+    /// list or the store).
+    pub seeds_from_store: usize,
+    /// Seeds without a stored vector whose content was embedded afresh (a
+    /// seed with neither a vector nor an embedder is skipped).
     pub embedded: usize,
 }
 

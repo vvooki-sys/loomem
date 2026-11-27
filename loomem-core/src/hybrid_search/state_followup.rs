@@ -11,13 +11,17 @@
 //! What: after the first hybrid fusion, the server takes the requested
 //! top-k of the fused pool in rank order and picks up to `max_seeds` "state
 //! facts" ([`HybridSearchEngine::state_followup_seeds`]): chunks whose
-//! `extraction_meta.fact_type` is in `fact_types`, that are `is_latest` and
-//! not superseded. Each seed's content is embedded with the same embedder
-//! as the user query (no LLM) and ranked against the already filtered
-//! in-memory embedding list; the resulting hits are merged into the fused
-//! pool ([`HybridSearchEngine::merge_state_followup`]): a hit that is the
-//! seed itself or already in the pool is skipped (existing candidates keep
-//! their exact scores), a hit below `vector_similarity_floor` is skipped,
+//! `extraction_meta.fact_type` is in `fact_types`, that are `is_latest`,
+//! not superseded and not soft-deleted. Each seed's *stored* vector is
+//! reused as the follow-up query (looked up in the filtered embedding list,
+//! else read from the store; only a seed without a stored vector is embedded
+//! afresh with the query embedder, so chunk content normally never leaves
+//! the process; no LLM) and ranked against the already filtered in-memory
+//! embedding list; the resulting hits are merged into the fused pool
+//! ([`HybridSearchEngine::merge_state_followup`]): a hit that is the seed
+//! itself, already in the pool or soft-deleted is skipped (existing
+//! candidates keep their exact scores), a hit below
+//! `vector_similarity_floor` is skipped,
 //! the rest are normalized by the best non-seed cosine of that seed's hit
 //! list (the seed's self-similarity would otherwise make the normalization
 //! a no-op), scored like a vector-only fusion hit (`hybrid_weights.vector x
@@ -26,13 +30,16 @@
 //! the pool is re-sorted and re-cut to `3 x max(top_k, request top_k)`. A
 //! chunk reached from several seeds is added once, by the first seed in
 //! rank order. Follow-up candidates are not guaranteed: they compete for the
-//! pool like any other candidate.
+//! pool like any other candidate. For a follow-up candidate
+//! `HybridSearchResult::vector_score` holds the raw cosine to its seed
+//! (fusion candidates hold the max-normalized cosine to the query).
 //!
 //! Limits (A/B before enabling): it lifts every neighbour of a state fact,
 //! stale or not, and the re-cut can push lower-ranked old candidates out of
 //! the pool, so the top-k membership can change. It costs up to `max_seeds`
-//! extra embeddings and in-memory scans per request (measured offline on
-//! the r5 copies, see the PR). The server skips it under a date filter
+//! in-memory scans per request, plus one embedder call for each seed whose
+//! stored vector is missing (measured offline on the r5 copies, see the
+//! PR). The server skips it under a date filter
 //! unless `with_date_filter` is set; the embedding list it scans is the
 //! stream/date/agent-filtered list of the main query, so a follow-up under
 //! a date filter inherits that filter. It runs for `/v1/search` and MCP
@@ -165,13 +172,14 @@ pub struct FollowupPool<'a> {
 }
 
 /// Whether `chunk` can seed a follow-up: a configured fact type, latest, not
-/// superseded.
+/// superseded, not soft-deleted (a soft-deleted chunk can still sit in the
+/// pool while its delete chain is incomplete; its text must not be used).
 fn is_seed(chunk: &Chunk, fact_types: &[FactType]) -> bool {
     let typed = chunk
         .extraction_meta
         .as_ref()
         .is_some_and(|meta| fact_types.contains(&meta.fact_type));
-    typed && chunk.is_latest && chunk.superseded_by.is_none()
+    typed && chunk.is_latest && chunk.superseded_by.is_none() && chunk.deleted_at.is_none()
 }
 
 /// Best cosine of a seed's hit list after the floor, the seed itself
@@ -276,7 +284,7 @@ impl HybridSearchEngine {
 
     /// One follow-up candidate, scored like a vector-only fusion hit with the
     /// follow-up weight applied to the fusion term. `None` when the chunk is
-    /// not in the store.
+    /// not in the store or is soft-deleted.
     fn followup_result(
         &self,
         id: &str,
@@ -285,6 +293,11 @@ impl HybridSearchEngine {
         store: &RocksDbStore,
     ) -> Option<HybridSearchResult> {
         let chunk = store.get_chunk(id).ok().flatten()?;
+        if chunk.deleted_at.is_some() {
+            return None;
+        }
+        // `fuse_lanes` wraps this with `as`; a timestamp above `i64::MAX` is
+        // practically unreachable, so the candidate is simply skipped.
         let timestamp = i64::try_from(chunk.timestamp).ok()?;
         let normalized = (cosine / max_cosine).clamp(0.0, 1.0);
         let fusion_score = self.config.search.hybrid_weights.vector

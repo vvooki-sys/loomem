@@ -494,6 +494,53 @@ fn is_seed_requires_type_latest_and_not_superseded() {
     chunk.superseded_by = None;
     chunk.is_latest = false;
     assert!(!is_seed(&chunk, &types), "not latest");
+    chunk.is_latest = true;
+    chunk.deleted_at = Some(1);
+    assert!(!is_seed(&chunk, &types), "soft-deleted");
+}
+
+/// A soft-deleted neighbour (its delete chain may have left the embedding
+/// behind) is never injected; a soft-deleted state fact is never a seed.
+#[test]
+fn merge_skips_soft_deleted_neighbours_and_seeds() {
+    let mut fx = fixture();
+    let mut deleted = base_chunk();
+    deleted.id = "deleted-a".into();
+    deleted.content = "ottoman order cancelled".into();
+    deleted.extraction_meta = Some(meta(FactType::Event));
+    deleted.deleted_at = Some(1_700_000_000);
+    // Cosine 0.70 to the query (outside the vector lane, no BM25 hit) and
+    // 0.98 to seed-a, closer than update-a: it would be the top hit.
+    const DELETED_A: [f32; 3] = [0.7, 0.0, 0.7141];
+    fx.put(deleted, &DELETED_A);
+    let engine = HybridSearchEngine::new(enabled(0.0));
+    let mut pool = fuse(&fx, &engine);
+    let hits = seed_hits(&fx, "seed-a");
+    assert_eq!(
+        hits.hits[1].0, "deleted-a",
+        "second only to the seed itself"
+    );
+    let outcome = engine.merge_state_followup(&mut pool, vec![hits], followup_pool(&fx, None));
+    assert!(!outcome.injected_ids.iter().any(|id| id == "deleted-a"));
+    assert!(pool.iter().all(|r| r.id != "deleted-a"));
+    assert!(outcome.injected_ids.iter().any(|id| id == "update-a"));
+    // The deleted chunk still set the seed's scale (it is a hit), so
+    // update-a is normalized against it, not against itself.
+    let cosine = |v: &[f32]| crate::vector_search::cosine_similarity(&SEED_A, v);
+    let update = find(&pool, "update-a");
+    let normalized = cosine(&UPDATE_A) / cosine(&DELETED_A);
+    assert_eq!(
+        update.score.to_bits(),
+        (0.6_f64 * f64::from(normalized) * 1.0).to_bits()
+    );
+    // A soft-deleted state fact in the top-k is not a seed.
+    let mut stale = fx.store.get_chunk("seed-a").unwrap().unwrap();
+    stale.deleted_at = Some(1_700_000_000);
+    fx.store.store_chunk(&stale).unwrap();
+    assert_eq!(
+        ids(&engine.state_followup_seeds(&pool, 10, &fx.store)),
+        ["c05", "c00", "c01"]
+    );
 }
 
 /// A `[search]` table without any `state_followup_*` key loads the

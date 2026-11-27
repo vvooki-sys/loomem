@@ -51,12 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first hybrid fusion: up to `state_followup_max_seeds` (3) state facts are
   taken in rank order from the requested top-k of the fused pool
   (`extraction_meta.fact_type` in `state_followup_fact_types`, default
-  `["project_state", "event"]`, latest and not superseded), each seed's
-  content is embedded with the same embedder as the query (no LLM) and
-  ranked against the already filtered embedding list
+  `["project_state", "event"]`, latest, not superseded, not soft-deleted),
+  each seed's stored vector is reused (a fresh embedding with the query
+  embedder only when the vector is missing, one embedder call per such
+  seed; no LLM) and ranked against the already filtered embedding list
   (`state_followup_hits_per_seed`, 60), and the hits join the fused pool:
-  the seed itself and ids already in the pool are skipped (existing
-  candidates keep their exact scores), hits below
+  the seed itself, ids already in the pool and soft-deleted chunks are
+  skipped (existing candidates keep their exact scores), hits below
   `vector_similarity_floor` are skipped, the rest are normalized by the
   seed's best non-seed cosine and scored `hybrid_weights.vector x
   normalized cosine x state_followup_weight` (1.0) with the same decay
@@ -64,11 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is then re-sorted and re-cut to 3 x max(`top_k`, request top_k), so
   follow-up hits can push lower-ranked candidates out and change the top-k
   membership (A/B before enabling). Skipped under a date filter unless
-  `state_followup_with_date_filter = true`, without an embedder, and for
-  Simple-class queries. Applies to `/v1/search` and MCP `memory_search`;
-  not to the hosted compat search or the ambient path. `debug_channels`
-  responses gain a `state_followup` object (seeds, injected ids, embedded
-  count) only when the step ran. Motivation: r5 holdout diagnosis § B.15
+  `state_followup_with_date_filter = true` and for Simple-class queries;
+  without an embedder a seed without a stored vector is skipped. Applies
+  to `/v1/search` and MCP `memory_search`; not to the hosted compat search
+  or the ambient path. `debug_channels` responses gain a `state_followup`
+  object (seeds, injected ids, seeds from store, embedded count) only when
+  the step ran. Motivation: r5 holdout diagnosis § B.15
   (the update of a state is far from the question but close to the stale
   fact that is in the top-k; seeding with the stale fact pulled the update
   into the top 60 in 8 of 9 measurable cases); cost measured offline on

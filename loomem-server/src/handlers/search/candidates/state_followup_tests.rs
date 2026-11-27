@@ -1,9 +1,9 @@
 //! `[search] state_followup_*` against real tempdir RocksDB + Tantivy: real
 //! BM25 retrieval, the stored embeddings, hybrid fusion with the request
-//! budget, the follow-up merge, then the handler's filter + truncate. The
-//! test app has no embedder, so the query vector is given directly (as in
-//! `vector_fill_tests`) and a seed's "embedding" is its stored vector; the
-//! server gate (date filter, no embedder) is tested on its own.
+//! budget, the server step (`apply`, which reuses the seeds' stored
+//! vectors), then the handler's filter + truncate. The test app has no
+//! embedder, so the query vector is given directly (as in
+//! `vector_fill_tests`); a seed without a stored vector is skipped.
 //!
 //! Fixture: 20 "dense" chunks without the query word and `stale` (a
 //! project_state fact that mentions it, cosine 0.83) fill the vector lane
@@ -18,10 +18,8 @@ use crate::handlers::search::{
 };
 use crate::handlers::types::{ChannelDiagnostics, SearchRequest, StateFollowupDiag};
 use crate::AppState;
-use loomem_core::hybrid_search::state_followup::{FollowupPool, SeedHits};
 use loomem_core::hybrid_search::{SearchCandidateBudget, VectorSearchOptions};
 use loomem_core::storage::{Chunk, UserRole, DEFAULT_STREAM_ID};
-use loomem_core::vector_search::vector_search;
 use loomem_core::{Config, HybridSearchResult, TextDocument};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -48,7 +46,13 @@ fn request(extra: Value) -> SearchRequest {
     serde_json::from_value(payload).expect("request fixture")
 }
 
-async fn seed(state: &Arc<AppState>, id: &str, content: &str, vector: &[f32], meta: Option<&str>) {
+async fn seed(
+    state: &Arc<AppState>,
+    id: &str,
+    content: &str,
+    vector: Option<&[f32]>,
+    meta: Option<&str>,
+) {
     let mut chunk = json!({
         "id":id, "content":content, "stream":DEFAULT_STREAM_ID, "level":0,
         "score":1.0, "timestamp":1_700_000_000, "consolidated":false,
@@ -59,10 +63,12 @@ async fn seed(state: &Arc<AppState>, id: &str, content: &str, vector: &[f32], me
     }
     let chunk: Chunk = serde_json::from_value(chunk).expect("chunk fixture");
     state.store.store_chunk(&chunk).expect("seed chunk");
-    state
-        .store
-        .store_embedding(id, vector.to_vec())
-        .expect("seed vector");
+    if let Some(vector) = vector {
+        state
+            .store
+            .store_embedding(id, vector.to_vec())
+            .expect("seed vector");
+    }
     let mut index = state.tantivy.lock().await;
     index
         .upsert_document(TextDocument {
@@ -101,13 +107,13 @@ async fn app(config: Config) -> Arc<AppState> {
         let id = format!("dense-{i:02}");
         let content = format!("orchard ledger entry {i}");
         let vector = [1.0, 0.5 + f32::from(i) / 40.0, 0.0];
-        seed(&state, &id, &content, &vector, None).await;
+        seed(&state, &id, &content, Some(&vector), None).await;
     }
     seed(
         &state,
         "stale",
         "ashdown is on the apple ottoman waiting list",
-        &STALE,
+        Some(&STALE),
         Some("project_state"),
     )
     .await;
@@ -115,7 +121,7 @@ async fn app(config: Config) -> Arc<AppState> {
         &state,
         "update",
         "ashdown's ottoman was finished and collected",
-        &UPDATE,
+        Some(&UPDATE),
         Some("event"),
     )
     .await;
@@ -187,16 +193,6 @@ fn bits(pool: &[HybridSearchResult]) -> Vec<(String, u64, u32)> {
         .collect()
 }
 
-/// What the server computes per seed, with the seed's stored vector in
-/// place of a fresh embedding of its content.
-fn seed_hits(state: &AppState, run: &Run, seed_id: &str, vector: &[f32]) -> SeedHits {
-    let hits_per_seed = state.config.search.state_followup.hits_per_seed;
-    SeedHits {
-        seed_id: seed_id.into(),
-        hits: vector_search(&run.inputs.embeddings, vector, hits_per_seed),
-    }
-}
-
 #[tokio::test]
 async fn off_is_bit_identical_to_a_run_with_the_keys_absent() {
     let absent = app(test_config()).await;
@@ -226,7 +222,7 @@ async fn off_is_bit_identical_to_a_run_with_the_keys_absent() {
 }
 
 #[tokio::test]
-async fn on_pulls_the_update_into_the_response_without_touching_old_scores() {
+async fn on_pulls_the_update_into_the_response_from_the_stored_seed_vector() {
     let state = app(enabled()).await;
     let mut run = fuse(&state, request(json!({}))).await;
     let before = bits(&run.pool);
@@ -234,23 +230,27 @@ async fn on_pulls_the_update_into_the_response_without_touching_old_scores() {
         !run.pool.iter().any(|r| r.id == "update"),
         "out of every lane"
     );
-    let seeds = state
-        .hybrid_search
-        .state_followup_seeds(&run.pool, run.ctx.limit, &state.store);
-    assert_eq!(seeds.len(), 1);
-    assert_eq!(seeds[0].id, "stale");
-    let hits = vec![seed_hits(&state, &run, "stale", &STALE)];
-    let outcome = state.hybrid_search.merge_state_followup(
-        &mut run.pool,
-        hits,
-        FollowupPool {
-            store: &state.store,
-            budget: run.budget,
-            guaranteed: None,
-        },
+    assert!(
+        state.local_embedder.is_none(),
+        "no embedder: stored vectors only"
     );
-    assert_eq!(outcome.seeds, ["stale"]);
-    assert!(outcome.injected_ids.iter().any(|id| id == "update"));
+    let diag = apply(
+        &state,
+        &run.ctx,
+        &run.inputs,
+        &mut run.pool,
+        run.budget,
+        None,
+    )
+    .await
+    .expect("the step ran");
+    assert_eq!(diag.seeds, ["stale"]);
+    assert_eq!(diag.seeds_from_store, diag.seeds.len());
+    assert_eq!(diag.embedded, 0);
+    assert!(
+        diag.injected_ids.iter().any(|id| id == "update"),
+        "{diag:?}"
+    );
     // The update is the seed's best neighbour: full vector weight, so it
     // follows only the stale fact (BM25 + vector) and dense-00 (cosine 1).
     let ids = response_ids(&state, &run);
@@ -258,6 +258,8 @@ async fn on_pulls_the_update_into_the_response_without_touching_old_scores() {
     let update = run.pool.iter().find(|r| r.id == "update").expect("merged");
     assert_eq!(update.score.to_bits(), (0.6_f64 * 1.0 * 1.0).to_bits());
     assert_eq!(update.bm25_score, 0.0);
+    let cosine = loomem_core::vector_search::cosine_similarity(&STALE, &UPDATE);
+    assert_eq!(update.vector_score, cosine, "raw cosine to the seed");
     assert_eq!(
         update.content,
         "ashdown's ottoman was finished and collected"
@@ -269,53 +271,97 @@ async fn on_pulls_the_update_into_the_response_without_touching_old_scores() {
     }
 }
 
+/// A seed without a stored vector needs a fresh embedding; with no embedder
+/// it is skipped (warned) and the pool is untouched. Nothing is sent
+/// anywhere: the test config points the key env var at nothing.
 #[tokio::test]
-async fn gate_skips_the_step_under_a_date_filter_or_without_an_embedder() {
-    // No embedder in the test app: the step is skipped even when enabled.
-    let state = app(enabled()).await;
-    let mut run = fuse(&state, request(json!({}))).await;
-    assert!(state.local_embedder.is_none());
-    assert!(!runs(&state, &run.ctx));
-    let before = bits(&run.pool);
+async fn seed_without_a_stored_vector_is_skipped_when_no_embedder_exists() {
+    let mut config = enabled();
+    config.search.state_followup.fact_types = vec![loomem_core::storage::FactType::ProjectState];
+    let state = app(config).await;
+    seed(
+        &state,
+        "orphan",
+        "apple ottoman delivered to the orphanage",
+        None,
+        Some("project_state"),
+    )
+    .await;
+    // top_k 25 so the vector-less orphan (BM25 only) is inside the scanned
+    // top-k; the wider budget also puts every embedded chunk in the pool,
+    // so nothing is left to inject. `fuse` expects one BM25 hit, so build
+    // the run by hand.
+    let payload = request(json!({"top_k":25}));
+    let ctx = prepare_query_context(&state, &auth(), &payload).expect("query context");
+    let bm25 = bm25_retrieve(&ctx, &[], &payload, &state)
+        .await
+        .expect("BM25");
+    assert_eq!(bm25.len(), 2);
+    let embeddings = state.store.get_all_embeddings().expect("vectors");
+    assert!(embeddings.iter().all(|(id, _)| id != "orphan"));
+    let budget = SearchCandidateBudget::new(state.config.search.top_k, ctx.limit).expect("budget");
+    let mut pool = state
+        .hybrid_search
+        .search_with_vector_budget(
+            bm25,
+            &embeddings,
+            &QUERY_VECTOR,
+            VectorSearchOptions {
+                store: Some(&state.store),
+                stream_filter: None,
+                guaranteed: None,
+                budget,
+            },
+        )
+        .expect("fusion");
+    let inputs = VectorInputs {
+        embeddings,
+        query_embedding: QUERY_VECTOR.to_vec(),
+    };
+    let before = bits(&pool);
+    let diag = apply(&state, &ctx, &inputs, &mut pool, budget, None)
+        .await
+        .expect("the step ran");
+    assert_eq!(diag.seeds, ["stale", "orphan"]);
+    assert_eq!(diag.seeds_from_store, 1, "stale: stored vector reused");
+    assert_eq!(diag.embedded, 0, "orphan: no vector, no embedder, skipped");
+    assert!(diag.injected_ids.is_empty());
+    assert_eq!(bits(&pool), before);
+}
+
+#[tokio::test]
+async fn gate_skips_the_step_under_a_date_filter_unless_allowed() {
+    let mut config = enabled();
+    let state = app(config.clone()).await;
+    let plain = fuse(&state, request(json!({}))).await;
+    assert!(
+        runs(&state, &plain.ctx),
+        "no embedder needed: stored vectors"
+    );
+    let dated_payload = json!({"date_from":"2023-01-01","date_to":"2025-01-01"});
+    let mut dated = fuse(&state, request(dated_payload.clone())).await;
+    assert!(dated.ctx.date_filter.is_some());
+    assert!(!runs(&state, &dated.ctx));
+    let before = bits(&dated.pool);
     let diag = apply(
         &state,
-        &run.ctx,
-        &run.inputs,
-        &mut run.pool,
-        run.budget,
+        &dated.ctx,
+        &dated.inputs,
+        &mut dated.pool,
+        dated.budget,
         None,
     )
     .await;
     assert_eq!(diag, None);
-    assert_eq!(bits(&run.pool), before);
+    assert_eq!(bits(&dated.pool), before);
 
-    // With a key the gate opens (the gate alone is checked: nothing is
-    // embedded here), and a date filter closes it again unless
-    // `with_date_filter` is set.
-    let mut keyed = enabled();
-    keyed.llm.api_key = Some("test-key-never-sent".into());
-    let state = app(keyed.clone()).await;
-    let plain = fuse(&state, request(json!({}))).await;
-    assert!(runs(&state, &plain.ctx));
-    let dated = fuse(
-        &state,
-        request(json!({"date_from":"2023-01-01","date_to":"2025-01-01"})),
-    )
-    .await;
-    assert!(dated.ctx.date_filter.is_some());
-    assert!(!runs(&state, &dated.ctx));
-
-    keyed.search.state_followup.with_date_filter = true;
-    let state = app(keyed.clone()).await;
-    let dated = fuse(
-        &state,
-        request(json!({"date_from":"2023-01-01","date_to":"2025-01-01"})),
-    )
-    .await;
+    config.search.state_followup.with_date_filter = true;
+    let state = app(config.clone()).await;
+    let dated = fuse(&state, request(dated_payload)).await;
     assert!(runs(&state, &dated.ctx));
 
-    keyed.search.state_followup.enabled = false;
-    let state = app(keyed).await;
+    config.search.state_followup.enabled = false;
+    let state = app(config).await;
     let plain = fuse(&state, request(json!({}))).await;
     assert!(!runs(&state, &plain.ctx), "disabled wins over everything");
 }
@@ -331,12 +377,13 @@ fn diagnostics_key_is_absent_unless_the_step_ran() {
         state_followup: Some(StateFollowupDiag {
             seeds: vec!["stale".into()],
             injected_ids: vec!["update".into()],
-            embedded: 1,
+            seeds_from_store: 1,
+            embedded: 0,
         }),
         ..Default::default()
     };
     assert_eq!(
         serde_json::to_value(ran).unwrap()["state_followup"],
-        json!({"seeds":["stale"],"injected_ids":["update"],"embedded":1})
+        json!({"seeds":["stale"],"injected_ids":["update"],"seeds_from_store":1,"embedded":0})
     );
 }
