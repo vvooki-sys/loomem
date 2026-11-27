@@ -25,13 +25,14 @@ EXTRACTION = {"max_completion_tokens": 16384, "input_chunk_tokens": 4000, "split
 SOURCE = "00000000-0000-4000-8000-000000000001"
 FACT = "00000000-0000-4000-8000-000000000002"
 PROXY_TOKEN = "p" * 64
-# The repo config.toml at origin/main 723550a3 (PR #211 merged) and the sha256 of the effective config
-# it renders at the fingerprint placeholders with ``embedding_model_path`` masked to MODEL_PLACEHOLDER (the
-# only line that depends on the test's temporary directory; everything else is binding-independent). The
-# hash was produced by the pre-lever renderer (pristine bench/longmemeval at f28acce7, identical to
-# 920edd00): the lever-less rendering of the lever-aware code must stay byte-identical to it.
-PINNED_TEMPLATE_SHA256 = "d5fdc1a78222b8602577c31a175800bcea11c556ec06e80814279b612bdc008d"
-PINNED_MASKED_CONFIG_SHA256 = "40fb9c84862c42a8c5f19a5fae6abb88db37e9749edc4c293ebb9beb73575958"
+# The repo config.toml on feat/search-state-followup at 57cd194b (PR #213: the six state_followup_* keys
+# added after vector_fill_missing) and the sha256 of the effective config it renders at the fingerprint
+# placeholders with ``embedding_model_path`` masked to MODEL_PLACEHOLDER (the only line that depends on the
+# test's temporary directory; everything else is binding-independent). The hash was produced by the
+# pre-lever renderer (pristine bench/longmemeval at f28acce7, identical to 920edd00) on that config.toml:
+# the lever-less rendering of the lever-aware code must stay byte-identical to it.
+PINNED_TEMPLATE_SHA256 = "f5d8a8d4619a84895a959af43b96d867cd8121d192510f43c357a96a7bf09801"
+PINNED_MASKED_CONFIG_SHA256 = "a6d77f5a2d869ae63102df98d4657080e67f2844236c698e9fc039867491cdda"
 MODEL_PLACEHOLDER = "/loomem-evaluation-model"
 # The r5 holdout campaign (holdout-200-2026-11-25-r5): its frozen template and the pinned effective config.
 R5_CAMPAIGN = Path.home() / "loomem-campaigns/lme-validation-2026-11/evidence/holdout-200-2026-11-25-r5/campaign.json"
@@ -206,7 +207,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(base, sha(text.encode("utf-8")))
         self.assertEqual(text.count(self.artifacts["model_dir"]), 1)
         if sha(TEMPLATE.read_bytes()) != PINNED_TEMPLATE_SHA256:
-            self.skipTest("config.toml changed since 723550a3; the pinned rendering is for that template")
+            self.skipTest("config.toml changed since 57cd194b; the pinned rendering is for that template")
         masked = text.replace(self.artifacts["model_dir"], MODEL_PLACEHOLDER)
         self.assertEqual(sha(masked.encode("utf-8")), PINNED_MASKED_CONFIG_SHA256,
                          "the lever-less effective config must stay byte-identical to the pre-lever renderer")
@@ -248,7 +249,7 @@ class ConfigTests(unittest.TestCase):
         self.assertRegex(repo, r"(?m)^vector_fill_missing\s*=")  # the repo config.toml knows these two
         self.assertRegex(repo, r"(?m)^prompt_variant\s*=")
         self.assertRegex(repo, r"(?m)^tolerate_trailing_json\s*=")
-        self.assertNotRegex(repo, r"(?m)^state_followup_enabled\s*=")  # and not these (engine PR pending)
+        self.assertRegex(repo, r"(?m)^state_followup_enabled\s*=")  # and the state follow-up keys (#213)
         on = {"search.vector_fill_missing": True}
         self.assertEqual(check_levers_against_template(repo, on), [("search", "vector_fill_missing", True)])
         self.assertEqual(check_levers_against_template(repo, {"knowledge_extraction.prompt_variant": "relations_v2"}),
@@ -259,11 +260,19 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(check_levers_against_template(repo, None), [])
         self.assertEqual(check_levers_against_template(repo, dict(LEVER_DEFAULTS)), [])  # defaults never refused
         self.assertEqual(check_levers_against_template("", dict(LEVER_DEFAULTS)), [])
-        with self.assertRaisesRegex(EngineError, r"state_followup_enabled=true is not in the pinned template"):
-            check_levers_against_template(repo, {"search.state_followup_enabled": True})
-        with self.assertRaises(EngineError):
-            config_fingerprint(self.artifacts, EXTRACTION, {"search.state_followup_max_seeds": 5})
+        followup = {"search.state_followup_enabled": True}
+        self.assertEqual(check_levers_against_template(repo, followup), [("search", "state_followup_enabled", True)])
+        self.assertEqual(len(config_fingerprint(self.artifacts, EXTRACTION, {"search.state_followup_max_seeds": 5})), 64)
         self.assertEqual(len(config_fingerprint(self.artifacts, EXTRACTION, on)), 64)  # repo template: accepted
+        # a template from before the state follow-up (the line stripped) still refuses it, naming the template
+        stripped = re.sub(r"(?m)^state_followup_enabled\s*=.*\n", "", repo)
+        self.assertNotRegex(stripped, r"(?m)^state_followup_enabled\s*=")
+        with self.assertRaisesRegex(EngineError, r"state_followup_enabled=true is not in the pinned template"):
+            check_levers_against_template(stripped, followup)
+        older = fake_artifacts(self.root / "older", write_template(self.root / "stripped.toml", stripped))
+        with self.assertRaisesRegex(EngineError, "stripped.toml"):
+            config_fingerprint(older, EXTRACTION, followup)
+        self.assertEqual(len(config_fingerprint(older, EXTRACTION, on)), 64)  # other levers: still fine
         # the key present only in another section does not count
         body = repo.split("[search.cache]", 1)
         moved = (body[0].replace("vector_fill_missing = false", "# vector_fill_missing removed") + "[search.cache]\n"

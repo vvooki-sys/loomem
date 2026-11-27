@@ -116,6 +116,16 @@ def by_number(checks):
     return {c.name.split()[0]: c for c in checks}
 
 
+def strip_state_followup(template, into):
+    """A copy of `template` from before the state follow-up (its `state_followup_enabled` line removed)."""
+    lines = Path(template).read_text(encoding="utf-8").splitlines(keepends=True)
+    kept = [line for line in lines if not line.startswith("state_followup_enabled")]
+    assert len(kept) == len(lines) - 1, "the repo config.toml spells state_followup_enabled out once"
+    into = Path(into)
+    into.write_text("".join(kept), encoding="utf-8")
+    return into
+
+
 class PreflightTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -238,12 +248,27 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("unknown engine lever", detail)
         passed, detail = effective_config_check(dict(spec["engine"], levers={"search.vector_fill_missing": 1}), spec["extraction"])
         self.assertFalse(passed)
-        # capability gate: the fixture template (repo config.toml) has no state_followup_* key -> FAIL, named
-        passed, detail = effective_config_check(dict(spec["engine"], levers={"search.state_followup_enabled": True}), spec["extraction"])
+        # capability gate: a template from before the state follow-up has no state_followup_* key -> FAIL, named
+        stripped = strip_state_followup(self.fixture.template, self.root / "stripped.toml")
+        older = dict(spec["engine"], template=str(stripped), levers={"search.state_followup_enabled": True})
+        passed, detail = effective_config_check(older, spec["extraction"])
         self.assertFalse(passed)
         self.assertIn("engine levers refused", detail)
         self.assertIn("state_followup_enabled=true is not in the pinned template", detail)
-        self.assertIn(str(self.fixture.template), detail)
+        self.assertIn(str(stripped), detail)
+        # the repo template (the fixture's) knows the key: accepted, recorded, and the pin follows it
+        followup = ["--engine-lever", "search.state_followup_enabled=true"]
+        with_followup = self.fixture.spec(self.campaign_dir, extra=followup)
+        self.assertEqual(with_followup["engine"]["levers"], {"search.state_followup_enabled": True})
+        self.assertNotEqual(with_followup["engine"]["effective_config_sha256"], plain["engine"]["effective_config_sha256"])
+        passed, detail = effective_config_check(with_followup["engine"], with_followup["extraction"])
+        self.assertTrue(passed, detail)
+        self.assertIn('"search.state_followup_enabled": true', detail)
+        self.assertEqual(self.create(extra=followup), 0)
+        written = json.loads((self.campaign_dir / "campaign.json").read_text())
+        self.assertEqual(written["engine"]["levers"], {"search.state_followup_enabled": True})
+        self.assertEqual(written["engine"]["effective_config_sha256"], with_followup["engine"]["effective_config_sha256"])
+        shutil.rmtree(self.campaign_dir)
         # through the CLI: campaign.json carries the levers and preflight #10 passes on the created campaign
         self.assertEqual(self.create(extra=lever), 0)
         written = json.loads((self.campaign_dir / "campaign.json").read_text())
@@ -255,7 +280,6 @@ class PreflightTests(unittest.TestCase):
 
     def test_engine_lever_flag_refusals_and_default_shape(self):
         for extra in (["--engine-lever", "search.rerank_enabled=true"],                      # unknown key
-                      ["--engine-lever", "search.state_followup_enabled=true"],               # key not in the template
                       ["--engine-lever", "search.state_followup_fact_types=[]"],              # empty list
                       ["--engine-lever", "search.state_followup_weight=Infinity"],            # non-finite
                       ["--engine-lever", "search.vector_fill_missing=1"],                     # wrong type
@@ -265,6 +289,11 @@ class PreflightTests(unittest.TestCase):
             with self.subTest(extra=extra):
                 self.assertEqual(self.create(extra=extra), 2)
                 self.assertFalse(self.campaign_dir.exists())
+        # key not in the template: a build from before the state follow-up refuses the lever
+        strip_state_followup(TEMPLATE, self.fixture.template)
+        self.assertEqual(self.create(extra=["--engine-lever", "search.state_followup_enabled=true"]), 2)
+        self.assertFalse(self.campaign_dir.exists())
+        shutil.copyfile(TEMPLATE, self.fixture.template)
         # every lever explicitly at its default: campaign.json is the all-default one (no levers key, same pin)
         defaults = ["--engine-lever", "search.vector_fill_missing=false", "--engine-lever",
                     "knowledge_extraction.prompt_variant=default", "--engine-lever",

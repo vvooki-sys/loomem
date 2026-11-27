@@ -106,7 +106,8 @@ pub(super) async fn retrieve_primary(
         return Ok(results);
     };
     state.retrieval_counters.record_vector_search();
-    if let Some(diag) = request.channel_diag {
+    let mut channel_diag = request.channel_diag;
+    if let Some(diag) = channel_diag.as_deref_mut() {
         diag.vector_top = vector_channel_hits(&inputs.embeddings, &inputs.query_embedding);
     }
     let mut results = state.hybrid_search.search_with_vector_budget(
@@ -120,6 +121,21 @@ pub(super) async fn retrieve_primary(
             budget,
         },
     )?;
+    // `[search] state_followup_*`: seed embeddings + in-memory scans over the
+    // same filtered list, merged into the fused pool. Off (default) returns
+    // `None` before any store read.
+    let followup = state_followup::apply(
+        state,
+        request.ctx,
+        &inputs,
+        &mut results,
+        budget,
+        request.guaranteed,
+    )
+    .await;
+    if let Some(diag) = channel_diag {
+        diag.state_followup = followup;
+    }
     promote_latest_state(state, request.ctx, request.payload, &mut results);
     Ok(results)
 }
@@ -227,7 +243,11 @@ async fn embed_query(state: &AppState, query: &str) -> anyhow::Result<Vec<f32>> 
     .await
 }
 
+mod state_followup;
+
 #[cfg(test)]
 mod latest_state_tests;
+#[cfg(test)]
+mod state_followup_tests;
 #[cfg(test)]
 mod vector_fill_tests;

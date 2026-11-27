@@ -76,13 +76,14 @@ fn validate_levers(search: &SearchConfig) -> Result<()> {
         search.latest_state_boost >= 1.0 && search.latest_state_boost.is_finite(),
         "search.latest_state_boost must be a finite number >= 1.0 (1.0 = disabled)"
     );
-    Ok(())
+    search.state_followup.validate()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::storage::FactType;
 
     fn config() -> Config {
         toml::from_str(include_str!("../../../config.toml")).unwrap()
@@ -112,7 +113,7 @@ mod tests {
         assert_eq!(decoded.top_k, original.search.top_k);
     }
 
-    const LEVER_KEYS: [&str; 9] = [
+    const LEVER_KEYS: [&str; 15] = [
         "rerank_date_prefix",
         "rerank_llm_max_chars",
         "rerank_onnx_max_tokens",
@@ -122,6 +123,12 @@ mod tests {
         "content_dedup",
         "latest_state_boost",
         "vector_fill_missing",
+        "state_followup_enabled",
+        "state_followup_max_seeds",
+        "state_followup_hits_per_seed",
+        "state_followup_fact_types",
+        "state_followup_weight",
+        "state_followup_with_date_filter",
     ];
 
     fn assert_levers_off(search: &SearchConfig) {
@@ -134,6 +141,16 @@ mod tests {
         assert_eq!(search.content_dedup, crate::search::ContentDedup::Prefix);
         assert_eq!(search.latest_state_boost, 1.0);
         assert!(!search.vector_fill_missing);
+        let followup = &search.state_followup;
+        assert!(!followup.enabled);
+        assert_eq!(followup.max_seeds, 3);
+        assert_eq!(followup.hits_per_seed, 60);
+        assert_eq!(
+            followup.fact_types,
+            [FactType::ProjectState, FactType::Event]
+        );
+        assert_eq!(followup.weight, 1.0);
+        assert!(!followup.with_date_filter);
     }
 
     /// A pre-lever config file (none of the new keys) loads with every lever
@@ -214,5 +231,52 @@ mod tests {
             latest.search.latest_state_boost = ok;
             latest.validate().unwrap();
         }
+    }
+
+    /// `state_followup_fact_types` is a closed enum list: an unknown value
+    /// fails the load; the shipped list and a single-type list load.
+    #[test]
+    fn state_followup_fact_types_reject_unknown_value() {
+        let shipped = include_str!("../../../config.toml");
+        let line = "state_followup_fact_types = [\"project_state\", \"event\"]";
+        assert_eq!(shipped.matches(line).count(), 1);
+        let bogus = shipped.replace(line, "state_followup_fact_types = [\"bogus\"]");
+        assert!(toml::from_str::<Config>(&bogus).is_err());
+        let single: Config = toml::from_str(&shipped.replace(
+            line,
+            "state_followup_fact_types = [\"preference_or_decision\"]",
+        ))
+        .unwrap();
+        assert_eq!(
+            single.search.state_followup.fact_types,
+            [FactType::PreferenceOrDecision]
+        );
+        single.validate().unwrap();
+    }
+
+    #[test]
+    fn state_followup_validation_rejects_zero_counts_and_bad_weights() {
+        let mut config = config();
+        config.search.state_followup.max_seeds = 0;
+        assert!(config.validate().is_err());
+        config.search.state_followup.max_seeds = 1;
+        config.search.state_followup.hits_per_seed = 0;
+        assert!(config.validate().is_err());
+        config.search.state_followup.hits_per_seed = 1;
+        for bad in [0.0, -0.5, f64::NAN, f64::INFINITY] {
+            config.search.state_followup.weight = bad;
+            assert!(config.validate().is_err(), "{bad}");
+        }
+        for ok in [0.25, 1.0, 2.0] {
+            config.search.state_followup.weight = ok;
+            config.validate().unwrap();
+        }
+        // An empty type list is rejected only once the step is enabled.
+        config.search.state_followup.fact_types.clear();
+        config.validate().unwrap();
+        config.search.state_followup.enabled = true;
+        assert!(config.validate().is_err());
+        config.search.state_followup.fact_types = vec![FactType::Event];
+        config.validate().unwrap();
     }
 }
