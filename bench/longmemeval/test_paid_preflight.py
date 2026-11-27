@@ -238,6 +238,12 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("unknown engine lever", detail)
         passed, detail = effective_config_check(dict(spec["engine"], levers={"search.vector_fill_missing": 1}), spec["extraction"])
         self.assertFalse(passed)
+        # capability gate: the fixture template (repo config.toml) has no state_followup_* key -> FAIL, named
+        passed, detail = effective_config_check(dict(spec["engine"], levers={"search.state_followup_enabled": True}), spec["extraction"])
+        self.assertFalse(passed)
+        self.assertIn("engine levers refused", detail)
+        self.assertIn("state_followup_enabled=true is not in the pinned template", detail)
+        self.assertIn(str(self.fixture.template), detail)
         # through the CLI: campaign.json carries the levers and preflight #10 passes on the created campaign
         self.assertEqual(self.create(extra=lever), 0)
         written = json.loads((self.campaign_dir / "campaign.json").read_text())
@@ -249,6 +255,9 @@ class PreflightTests(unittest.TestCase):
 
     def test_engine_lever_flag_refusals_and_default_shape(self):
         for extra in (["--engine-lever", "search.rerank_enabled=true"],                      # unknown key
+                      ["--engine-lever", "search.state_followup_enabled=true"],               # key not in the template
+                      ["--engine-lever", "search.state_followup_fact_types=[]"],              # empty list
+                      ["--engine-lever", "search.state_followup_weight=Infinity"],            # non-finite
                       ["--engine-lever", "search.vector_fill_missing=1"],                     # wrong type
                       ["--engine-lever", "knowledge_extraction.prompt_variant=relations_v9"],  # outside the enum
                       ["--engine-lever", "search.vector_fill_missing"],                       # no value

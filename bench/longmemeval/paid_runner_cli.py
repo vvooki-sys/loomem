@@ -234,13 +234,16 @@ def compose_spec(args, prompts, *, mode, created_at, provider_base_url=None, api
     # The binding-independent effective-config fingerprint is pinned at creation; preflight #10
     # re-renders the config and compares. Engine levers enter the fingerprint and are recorded only when
     # the owner set one (an all-default campaign.json keeps its exact earlier shape).
-    from paid_engine_config import LEVER_DEFAULTS, config_fingerprint
+    from paid_engine_config import LEVER_DEFAULTS, EngineError, config_fingerprint
     levers = {k: v for k, v in parse_levers(getattr(args, "engine_lever", None) or []).items() if v != LEVER_DEFAULTS[k]}
     if levers:
         spec["engine"]["levers"] = levers
     artifacts = {k: spec["engine"][k] for k in ("binary", "binary_sha256", "template", "template_sha256",
                                                 "model_dir", "model_onnx_sha256", "tokenizer_sha256")}
-    spec["engine"]["effective_config_sha256"] = config_fingerprint(artifacts, spec["extraction"], levers)
+    try:  # also the capability gate: a lever the pinned template does not know refuses the campaign here
+        spec["engine"]["effective_config_sha256"] = config_fingerprint(artifacts, spec["extraction"], levers)
+    except EngineError as exc:
+        raise CampaignError(f"engine config refused: {exc}") from exc
     pin = getattr(args, "extraction_system_sha256", None)
     if pin is not None:
         if not isinstance(pin, str) or len(pin) != 64:

@@ -38,6 +38,7 @@ from paid_judge import SOURCE_SCOPE, gold_reference, read_verdict, source_conver
 from paid_openai_wire import InputTokensBreach, RunStopped, paid_completion
 from paid_prompts import (REVIEW_PROMPT_SHA256, REVIEW_RESPONSE_SCHEMA, REVIEW_STAGE, review_messages,
                           review_response_format)
+from paid_report import review_summary
 
 LETTER = "R"
 REVIEWABLE_SCORES = ("correct", "incorrect", "invalid_judge")
@@ -477,8 +478,7 @@ def phase_review(ctx):
             record.update(status="technical_error", outcome=f"ContextError: {exc}")
         write_review(ctx.directory, record)
         done += 1
-    from paid_report import _read_dir, _review_summary
-    summary = _review_summary(_read_dir(ctx.directory, "reviews"))
+    summary = review_summary(ctx.directory)
     ctx.emit(f"review: {done} review(s) this invocation; frozen list {plan.sha256[:12]} ({len(plan)} pair(s)); "
              f"evidence_kind {json.dumps(summary['evidence_kind'], sort_keys=True)}; "
              f"disputes_without_evidence {summary['disputes_without_evidence']}")

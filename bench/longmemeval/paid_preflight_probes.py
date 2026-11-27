@@ -190,6 +190,11 @@ def effective_config_check(engine, extraction):
         return False, f"paid_engine unavailable: {exc}"
     artifacts = {key: engine[key] for key in ARTIFACT_KEYS}
     levers = engine.get("levers")
+    try:  # capability gate first, with its own detail: a lever this build cannot know is a FAIL
+        from paid_engine_config import EngineError, check_levers_against_template
+        check_levers_against_template(Path(engine["template"]).read_text(encoding="utf-8"), levers, engine["template"])
+    except (EngineError, OSError) as exc:
+        return False, f"engine levers refused: {exc}"
     try:
         text = evaluation_config(artifacts, FINGERPRINT_WORK, port=FINGERPRINT_PORT, proxy_url=FINGERPRINT_PROXY,
                                  extraction=extraction, levers=levers)

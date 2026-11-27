@@ -12,10 +12,15 @@ may set explicitly: ``levers`` is a dict ``{"section.key": value}`` checked agai
 the table (known key, same type as the r5 default, ``prompt_variant`` in its enum).
 Only a lever whose value differs from its default is written into the TOML, so a
 campaign without levers (or with every lever at its default) renders byte-identical
-text and keeps its ``effective_config_sha256``; a non-default lever adds or replaces
-exactly one ``key = value`` line.
+text and keeps its ``effective_config_sha256``; a non-default lever replaces exactly
+one ``key = value`` line. Capability gate: the engine ignores config keys it does not
+know (no deny_unknown_fields), so a non-default lever is accepted only when the pinned
+template (the build's shipped ``config.toml``, "all settings required") carries that
+key in that section; otherwise the lever would be recorded and silently never run.
 """
 import hashlib
+import json
+import math
 from pathlib import Path
 import re
 import shlex
@@ -57,6 +62,9 @@ ENGINE_LEVERS = (
     ("search", "state_followup_with_date_filter", False),
 )
 LEVER_DEFAULTS = {f"{section}.{key}": default for section, key, default in ENGINE_LEVERS}
+# Enum VALUES are checked by the engine at startup (serde rejects an unknown variant, the live preflight
+# probe #11 then fails closed); key PRESENCE is checked here against the pinned template
+# (check_levers_against_template). relations_v2 is the engine variant of PR #211.
 PROMPT_VARIANTS = ("default", "relations", "relations_v2")
 # The effective-config fingerprint renders the same config with the per-process
 # binding values (work dir, engine port, proxy port) at fixed placeholders.
@@ -141,6 +149,10 @@ def check_levers(levers):
             raise EngineError(f"engine lever {name} must be a {type(default).__name__}, got {value!r}")
         if isinstance(default, float):
             value = float(value)
+            if not math.isfinite(value):
+                raise EngineError(f"engine lever {name} must be finite, got {value!r}")
+        if isinstance(default, list) and not value:
+            raise EngineError(f"engine lever {name} must not be an empty list")
         if name == "knowledge_extraction.prompt_variant" and value not in PROMPT_VARIANTS:
             raise EngineError(f"engine lever {name} must be one of {PROMPT_VARIANTS}, got {value!r}")
         out[name] = list(value) if isinstance(value, list) else value
@@ -154,12 +166,31 @@ def lever_overrides(levers):
             if f"{section}.{key}" in levers and levers[f"{section}.{key}"] != default]
 
 
+def _section_body(text, section):
+    match = re.search(r"(?m)^\[" + re.escape(section) + r"\]\s*\n(.*?)(?=^\[|\Z)", text, re.S | re.M)
+    return match[1] if match else ""
+
+
+def check_levers_against_template(template_text, levers, template=None):
+    """The non-default lever overrides, refused (EngineError naming the key and the template) when the
+    pinned template lacks ``key =`` in that ``[section]``: the engine ignores unknown keys, so such a lever
+    would be recorded in campaign.json and silently never run. Default-valued levers are never refused."""
+    overrides = lever_overrides(levers)
+    for section, key, value in overrides:
+        if not re.search(r"(?m)^" + re.escape(key) + r"\s*=", _section_body(template_text, section)):
+            where = f" {template}" if template else ""
+            raise EngineError(f"engine lever {section}.{key}={json.dumps(value)} is not in the pinned template{where}: "
+                              f"[{section}] has no {key} key, so this build does not know the lever and would ignore it")
+    return overrides
+
+
 def evaluation_config(artifacts, work, *, port, proxy_url, extraction, levers=None):
     """The effective TOML text for one engine process (see module docstring)."""
     check_port(port)
     artifacts = check_artifacts(artifacts)
     extraction = check_extraction(extraction)
-    levers = lever_overrides(levers)
+    levers = check_levers_against_template(Path(artifacts["template"]).read_text(encoding="utf-8"), levers,
+                                           artifacts["template"])
     if not re.fullmatch(r"http://127\.0\.0\.1:\d+/v1", proxy_url or ""):
         raise EngineError(f"proxy_url must be http://127.0.0.1:<port>/v1, got {proxy_url!r}")
     work = Path(work)

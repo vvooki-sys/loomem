@@ -226,6 +226,11 @@ def _review_summary(reviews):
             "review_list_sha256": sorted({r.get("review_list_sha256") for r in reviews if r.get("review_list_sha256")})}
 
 
+def review_summary(directory):
+    """The report's ``review`` section for a campaign directory (``reviews/*.json``), e.g. for the phase's log line."""
+    return _review_summary(_read_dir(directory, "reviews"))
+
+
 def write_report(campaign, report):
     """Create-only ``reports/report-<n>.json`` (n = one past the highest existing index)."""
     folder = Path(campaign.directory) / "reports"
