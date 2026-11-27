@@ -366,6 +366,40 @@ async fn gate_skips_the_step_under_a_date_filter_unless_allowed() {
     assert!(!runs(&state, &plain.ctx), "disabled wins over everything");
 }
 
+/// Enabled, but no state fact of a configured type in the requested top-k:
+/// the step ran (empty trail), nothing was embedded, the pool is untouched.
+#[tokio::test]
+async fn no_seed_in_the_top_k_leaves_the_pool_untouched_with_an_empty_trail() {
+    let off = app(test_config()).await;
+    let off_run = fuse(&off, request(json!({}))).await;
+    let mut config = enabled();
+    // `stale` is a project_state fact; nothing in the fixture is a preference.
+    config.search.state_followup.fact_types =
+        vec![loomem_core::storage::FactType::PreferenceOrDecision];
+    let state = app(config).await;
+    let mut run = fuse(&state, request(json!({}))).await;
+    assert_eq!(bits(&run.pool), bits(&off_run.pool));
+    let diag = apply(
+        &state,
+        &run.ctx,
+        &run.inputs,
+        &mut run.pool,
+        run.budget,
+        None,
+    )
+    .await;
+    assert_eq!(
+        diag,
+        Some(StateFollowupDiag {
+            seeds: Vec::new(),
+            injected_ids: Vec::new(),
+            seeds_from_store: 0,
+            embedded: 0,
+        })
+    );
+    assert_eq!(bits(&run.pool), bits(&off_run.pool));
+}
+
 /// The diagnostics key appears only when the step ran: the default
 /// `channel_diagnostics` shape is unchanged.
 #[test]
