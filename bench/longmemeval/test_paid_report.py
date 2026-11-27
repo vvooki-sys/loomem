@@ -7,7 +7,7 @@ import unittest
 from paid_arms import ArmOutcome, run_arm, write_arm_outcome
 from paid_call_journal import JournalError, write_create_only
 from paid_judge import judge_arm, write_verdict
-from paid_report import build_report, write_report
+from paid_report import _review_summary, build_report, write_report
 from test_paid_arms import ArmHarness
 
 
@@ -164,6 +164,45 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(blind["per_arm"]["facts_retry"]["expected"], 2)
         self.assertEqual(blind["per_arm"]["always_originals"]["expected"], 1)
         json.dumps(blind, allow_nan=False)
+
+    def test_review_summary_counts_evidence_kinds_and_disputes_without_evidence(self):
+        def record(status, agrees, correction, kind, arm="facts_retry", valid=True, critical=()):
+            evidence = {"kind": kind, "source_id": "h1-s1" if kind == "source" else None,
+                        "quote": "" if kind == "none" else "Lisbon"}
+            review = {"valid": valid, "agrees_with_judge": agrees if valid else None,
+                      "proposed_correction": correction if valid else None,
+                      "critical_error_types": list(critical) if valid else None, "critical": bool(critical) if valid else None,
+                      "evidence": evidence if valid else None, "rationale": "r" if valid else None,
+                      "error": None if valid else "disagreement needs a proposed score that differs from the judge's"}
+            return {"status": status, "arm": arm, "review": review, "review_list_sha256": "a" * 64}
+        reviews = [record("reviewed", True, "keep", "reference_atom"),
+                   record("reviewed", True, "keep", "none", arm="selective_originals"),
+                   record("reviewed", False, "incorrect", "none"),                      # dispute without evidence
+                   record("reviewed", False, "incorrect", "none", arm="always_originals", critical=("stale_value",)),
+                   record("reviewed", False, "correct", "source"),                      # dispute with evidence
+                   record("invalid_review", None, None, "none", valid=False),           # never counted
+                   {"status": "length", "arm": "facts_retry", "review": {"valid": False, "error": "review output truncated"},
+                    "review_list_sha256": "a" * 64},
+                   {"status": "technical_error", "arm": "facts_retry", "review": None, "review_list_sha256": "a" * 64}]
+        summary = _review_summary(reviews)
+        self.assertEqual(summary["evidence_kind"], {"none": 3, "reference_atom": 1, "source": 1})
+        self.assertEqual(summary["disputes_without_evidence"], 2)
+        self.assertEqual(summary["agrees_with_judge"], {"False": 3, "True": 2})
+        self.assertEqual(summary["by_status"], {"invalid_review": 1, "length": 1, "reviewed": 5, "technical_error": 1})
+        self.assertEqual(summary["critical_error_types"], {"stale_value": 1})
+        self.assertEqual(list(summary), ["artifacts", "by_status", "by_arm", "agrees_with_judge", "proposed_correction", "critical",
+                                         "critical_error_types", "evidence_kind", "disputes_without_evidence", "review_list_sha256"])
+        empty = _review_summary([])
+        self.assertEqual((empty["evidence_kind"], empty["disputes_without_evidence"]), ({}, 0))
+        # a campaign without reviews keeps the exact earlier report; with them, the summary is under "review"
+        h = ArmHarness(self)
+        directory = self.populate(h)
+        self.assertNotIn("review", build_report(h.campaign, h.journal.state, directory, h.holdout))
+        for i, rec in enumerate(reviews[:3]):
+            write_create_only(directory / "reviews" / f"h1-q0{i + 1}.{rec['arm']}.json", rec)
+        report = build_report(h.campaign, h.journal.state, directory, h.holdout)
+        self.assertEqual(report["review"]["evidence_kind"], {"none": 2, "reference_atom": 1})
+        self.assertEqual(report["review"]["disputes_without_evidence"], 1)
 
     def test_write_report_is_create_only_and_numbered(self):
         h = ArmHarness(self)

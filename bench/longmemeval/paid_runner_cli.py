@@ -10,6 +10,7 @@ decision (16384 / 4000 / split / 20 / floor 0) plus ``--max-transcript-tokens``
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -62,6 +63,10 @@ def add_campaign_flags(parser, dry_run=False):
         help="pin of the engine's extraction system fingerprint observed by the dry-run (required in mode=paid)")
     add("--max-transcript-tokens", "--extraction-max-transcript-tokens", dest="max_transcript_tokens",
         type=int, default=DEFAULT_MAX_TRANSCRIPT_TOKENS)
+    add("--engine-lever", action="append", default=[], metavar="SECTION.KEY=VALUE",
+        help="an ENGINE_LEVERS entry (paid_engine_config) set explicitly, VALUE as JSON (true, 3, 1.5, "
+             "[\"event\"]) or a bare string; repeatable; unknown keys and wrong types are refused; recorded in "
+             "campaign.json engine.levers only when it differs from the r5 default")
 
 
 def add_review_flags(parser):
@@ -132,6 +137,28 @@ def parse_profiles(values):
             raise CampaignError(f"--profile {stage}: expected MODEL:EFFORT:MAX_COMPLETION_TOKENS")
         profiles[stage] = {"model": parts[0], "reasoning_effort": parts[1], "max_completion_tokens": int(parts[2])}
     return profiles
+
+
+def parse_levers(values):
+    """``--engine-lever SECTION.KEY=VALUE`` -> ``{"section.key": value}`` with VALUE parsed as JSON (a bare
+    string when it is not JSON); a repeated key is refused here, everything else by ``check_levers``."""
+    from paid_engine_config import EngineError, check_levers
+    levers = {}
+    for value in values:
+        if "=" not in value:
+            raise CampaignError(f"--engine-lever must be SECTION.KEY=VALUE, got {value!r}")
+        key, _, rest = value.partition("=")
+        key, rest = key.strip(), rest.strip()
+        if key in levers:
+            raise CampaignError(f"--engine-lever {key} given twice")
+        try:
+            levers[key] = json.loads(rest)
+        except ValueError:
+            levers[key] = rest
+    try:
+        return check_levers(levers)
+    except EngineError as exc:
+        raise CampaignError(f"--engine-lever: {exc}") from exc
 
 
 def parse_source(value, label):
@@ -205,11 +232,18 @@ def compose_spec(args, prompts, *, mode, created_at, provider_base_url=None, api
     if judge is not None:
         spec["judge_prompt"] = {"path": judge[0], "sha256": judge[1]}
     # The binding-independent effective-config fingerprint is pinned at creation; preflight #10
-    # re-renders the config and compares.
-    from paid_engine_config import config_fingerprint
+    # re-renders the config and compares. Engine levers enter the fingerprint and are recorded only when
+    # the owner set one (an all-default campaign.json keeps its exact earlier shape).
+    from paid_engine_config import LEVER_DEFAULTS, EngineError, config_fingerprint
+    levers = {k: v for k, v in parse_levers(getattr(args, "engine_lever", None) or []).items() if v != LEVER_DEFAULTS[k]}
+    if levers:
+        spec["engine"]["levers"] = levers
     artifacts = {k: spec["engine"][k] for k in ("binary", "binary_sha256", "template", "template_sha256",
                                                 "model_dir", "model_onnx_sha256", "tokenizer_sha256")}
-    spec["engine"]["effective_config_sha256"] = config_fingerprint(artifacts, spec["extraction"])
+    try:  # also the capability gate: a lever the pinned template does not know refuses the campaign here
+        spec["engine"]["effective_config_sha256"] = config_fingerprint(artifacts, spec["extraction"], levers)
+    except EngineError as exc:
+        raise CampaignError(f"engine config refused: {exc}") from exc
     pin = getattr(args, "extraction_system_sha256", None)
     if pin is not None:
         if not isinstance(pin, str) or len(pin) != 64:
