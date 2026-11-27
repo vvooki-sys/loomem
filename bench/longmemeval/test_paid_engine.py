@@ -248,7 +248,7 @@ class ConfigTests(unittest.TestCase):
         self.assertRegex(repo, r"(?m)^vector_fill_missing\s*=")  # the repo config.toml knows these two
         self.assertRegex(repo, r"(?m)^prompt_variant\s*=")
         self.assertRegex(repo, r"(?m)^tolerate_trailing_json\s*=")
-        self.assertNotRegex(repo, r"(?m)^state_followup_enabled\s*=")  # and not these (engine PR pending)
+        self.assertRegex(repo, r"(?m)^state_followup_enabled\s*=")  # and the state follow-up keys (#213)
         on = {"search.vector_fill_missing": True}
         self.assertEqual(check_levers_against_template(repo, on), [("search", "vector_fill_missing", True)])
         self.assertEqual(check_levers_against_template(repo, {"knowledge_extraction.prompt_variant": "relations_v2"}),
@@ -259,11 +259,19 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(check_levers_against_template(repo, None), [])
         self.assertEqual(check_levers_against_template(repo, dict(LEVER_DEFAULTS)), [])  # defaults never refused
         self.assertEqual(check_levers_against_template("", dict(LEVER_DEFAULTS)), [])
-        with self.assertRaisesRegex(EngineError, r"state_followup_enabled=true is not in the pinned template"):
-            check_levers_against_template(repo, {"search.state_followup_enabled": True})
-        with self.assertRaises(EngineError):
-            config_fingerprint(self.artifacts, EXTRACTION, {"search.state_followup_max_seeds": 5})
+        followup = {"search.state_followup_enabled": True}
+        self.assertEqual(check_levers_against_template(repo, followup), [("search", "state_followup_enabled", True)])
+        self.assertEqual(len(config_fingerprint(self.artifacts, EXTRACTION, {"search.state_followup_max_seeds": 5})), 64)
         self.assertEqual(len(config_fingerprint(self.artifacts, EXTRACTION, on)), 64)  # repo template: accepted
+        # a template from before the state follow-up (the line stripped) still refuses it, naming the template
+        stripped = re.sub(r"(?m)^state_followup_enabled\s*=.*\n", "", repo)
+        self.assertNotRegex(stripped, r"(?m)^state_followup_enabled\s*=")
+        with self.assertRaisesRegex(EngineError, r"state_followup_enabled=true is not in the pinned template"):
+            check_levers_against_template(stripped, followup)
+        older = fake_artifacts(self.root / "older", write_template(self.root / "stripped.toml", stripped))
+        with self.assertRaisesRegex(EngineError, "stripped.toml"):
+            config_fingerprint(older, EXTRACTION, followup)
+        self.assertEqual(len(config_fingerprint(older, EXTRACTION, on)), 64)  # other levers: still fine
         # the key present only in another section does not count
         body = repo.split("[search.cache]", 1)
         moved = (body[0].replace("vector_fill_missing = false", "# vector_fill_missing removed") + "[search.cache]\n"

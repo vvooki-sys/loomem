@@ -59,6 +59,14 @@ pub(super) async fn apply(
         .hybrid_search
         .state_followup_seeds(results, ctx.limit, &state.store);
     let seed_ids: Vec<String> = seeds.iter().map(|seed| seed.id.clone()).collect();
+    if seeds.is_empty() {
+        return Some(StateFollowupDiag {
+            seeds: seed_ids,
+            injected_ids: Vec::new(),
+            seeds_from_store: 0,
+            embedded: 0,
+        });
+    }
     let stored: HashMap<&str, &[f32]> = inputs
         .embeddings
         .iter()
