@@ -213,6 +213,45 @@ fn extraction_system_prompt_bytes_are_pinned() {
     }
 }
 
+/// Golden pin of the `relations` and `relations_v2` system-prompt bytes
+/// (default config), captured on origin/main 920edd00. `relations` is the
+/// notice shipped with the option; `relations_v2` appends the SCOPE and
+/// SPEAKER clauses. A change to either notice changes its digest, and a
+/// change to `relations` would also change `relations_v2`, whose notice
+/// starts with the `relations` one. The `default` digests above stay as they
+/// were, which proves neither variant leaks into the default prompt.
+#[test]
+fn extraction_variant_prompt_bytes_are_pinned() {
+    let date = "2024-03-20";
+    let cases = [
+        (
+            ExtractionPromptVariant::Relations,
+            "8b1f51fe93eccb7fb5dec49d6701d3930f0b2156e0ed8ce85ec4ea382f163bb5",
+        ),
+        (
+            ExtractionPromptVariant::RelationsV2,
+            "af574b146cb87dae9b9a32e3066d50a1ab08a17d33f81c17b4416af9d1613396",
+        ),
+    ];
+    for (variant, expected) in cases {
+        let config = KnowledgeExtractionConfig {
+            prompt_variant: variant,
+            ..KnowledgeExtractionConfig::default()
+        };
+        let prompt = build_extraction_prompt(&config, date);
+        assert!(prompt.contains(prompt_variant::NOTICE), "{variant:?}");
+        assert_eq!(
+            prompt.contains(prompt_variant::NOTICE_V2),
+            variant == ExtractionPromptVariant::RelationsV2
+        );
+        assert_eq!(
+            prompt_sha256(&prompt),
+            expected,
+            "{variant:?} prompt drifted"
+        );
+    }
+}
+
 // ---- temporal grounding (`[knowledge_extraction] temporal_grounding`) ------
 
 fn with_grounding(

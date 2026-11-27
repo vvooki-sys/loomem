@@ -1,4 +1,4 @@
-use super::{ExtractionPromptVariant, NOTICE};
+use super::{ExtractionPromptVariant, NOTICE, NOTICE_V2};
 use crate::memory_extractor::config_tests::{golden_topics_config, shipped_extraction_config};
 use crate::memory_extractor::{
     build_extraction_prompt, extract_knowledge_with, ChatHttpReply, ExtractionChat,
@@ -42,6 +42,7 @@ fn prompt_variant_parses_every_value_and_rejects_unknown_values() {
     for (value, variant) in [
         ("default", ExtractionPromptVariant::Default),
         ("relations", ExtractionPromptVariant::Relations),
+        ("relations_v2", ExtractionPromptVariant::RelationsV2),
     ] {
         let text = format!("{BASE}prompt_variant = \"{value}\"\n");
         let parsed: KnowledgeExtractionConfig = toml::from_str(&text).unwrap();
@@ -91,25 +92,62 @@ fn relations_notice_covers_cause_direction_and_values() {
     }
 }
 
-/// `relations` prepends the notice right after the untrusted-data notice and
-/// changes nothing else: the rest, including the JSON contract, is the
-/// default prompt byte for byte. Holds for the built-in and the topic prompt.
+/// `relations_v2` is the `relations` notice, byte for byte, followed by the
+/// two clauses for the relation kinds r5 lost: SCOPE (a condition stated in
+/// the next sentence) and SPEAKER (a named third party who warned or
+/// proposed). The `attributed_to` rule is explicitly left alone.
+#[test]
+fn relations_v2_notice_extends_relations_with_scope_and_speaker() {
+    assert!(NOTICE_V2.starts_with(NOTICE));
+    assert!(NOTICE_V2.len() > NOTICE.len());
+    let extra = &NOTICE_V2[NOTICE.len()..];
+    assert!(extra.starts_with(" SCOPE:"), "{extra:?}");
+    for needle in [
+        "SCOPE:",
+        "in those sessions",
+        "same fact as what it restricts",
+        "not two unrelated facts",
+        "SPEAKER:",
+        "other than the user or the assistant",
+        "warned",
+        "suggested",
+        "attributed_to",
+        "stays user or assistant",
+    ] {
+        assert!(extra.contains(needle), "v2 extra lacks {needle:?}");
+        assert!(
+            !NOTICE.contains(needle),
+            "relations notice gained {needle:?}"
+        );
+    }
+}
+
+/// Each notice variant prepends its notice right after the untrusted-data
+/// notice and changes nothing else: the rest, including the JSON contract, is
+/// the default prompt byte for byte. Holds for the built-in and the topic
+/// prompt.
 #[test]
 fn relations_prepends_notice_and_keeps_the_rest_identical() {
-    for config in [KnowledgeExtractionConfig::default(), golden_topics_config()] {
-        let default = build_extraction_prompt(&config, DATE);
-        let relations = build_extraction_prompt(
-            &with_variant(config.clone(), ExtractionPromptVariant::Relations),
-            DATE,
-        );
-        let body = default.strip_prefix(&untrusted_head()).unwrap();
-        assert_eq!(relations, format!("{}{NOTICE}\n\n{body}", untrusted_head()));
-        assert!(relations.contains("Return ONLY valid JSON"));
+    for (variant, notice) in [
+        (ExtractionPromptVariant::Relations, NOTICE),
+        (ExtractionPromptVariant::RelationsV2, NOTICE_V2),
+    ] {
+        for config in [KnowledgeExtractionConfig::default(), golden_topics_config()] {
+            let default = build_extraction_prompt(&config, DATE);
+            let relations = build_extraction_prompt(&with_variant(config.clone(), variant), DATE);
+            let body = default.strip_prefix(&untrusted_head()).unwrap();
+            assert_eq!(
+                relations,
+                format!("{}{notice}\n\n{body}", untrusted_head()),
+                "{variant:?}"
+            );
+            assert!(relations.contains("Return ONLY valid JSON"));
+        }
     }
 }
 
 /// With both notices on, the order is untrusted-data, temporal grounding,
-/// relations, then the prompt body.
+/// relations (either version), then the prompt body.
 #[test]
 fn relations_composes_with_temporal_grounding() {
     let grounded = KnowledgeExtractionConfig {
@@ -117,15 +155,21 @@ fn relations_composes_with_temporal_grounding() {
         ..KnowledgeExtractionConfig::default()
     };
     let without = build_extraction_prompt(&grounded, DATE);
-    let with = build_extraction_prompt(
-        &with_variant(grounded, ExtractionPromptVariant::Relations),
-        DATE,
-    );
     let body = build_extraction_prompt(&KnowledgeExtractionConfig::default(), DATE);
     let body = body.strip_prefix(&untrusted_head()).unwrap();
     let grounding_head = without.strip_suffix(body).unwrap();
     assert!(grounding_head.contains("TEMPORAL GROUNDING:"));
-    assert_eq!(with, format!("{grounding_head}{NOTICE}\n\n{body}"));
+    for (variant, notice) in [
+        (ExtractionPromptVariant::Relations, NOTICE),
+        (ExtractionPromptVariant::RelationsV2, NOTICE_V2),
+    ] {
+        let with = build_extraction_prompt(&with_variant(grounded.clone(), variant), DATE);
+        assert_eq!(
+            with,
+            format!("{grounding_head}{notice}\n\n{body}"),
+            "{variant:?}"
+        );
+    }
 }
 
 /// Stub transport: records every request body, returns one fixed reply.
@@ -170,14 +214,16 @@ fn relations_reply() -> Recording {
     }
 }
 
-/// Plumbing, not model behaviour: with `relations` selected, the request
-/// carries the notice, and a reply whose facts keep a cause, a direction and
-/// a value comes out of the extraction path with that content unchanged.
+/// Plumbing, not model behaviour: with `relations` or `relations_v2`
+/// selected, the request carries that notice (and only that one), and a reply
+/// whose facts keep a cause, a direction and a value comes out of the
+/// extraction path with that content unchanged.
 #[tokio::test]
 async fn relations_variant_is_sent_and_facts_keep_cause_direction_value() {
-    for (variant, sends_notice) in [
-        (ExtractionPromptVariant::Default, false),
-        (ExtractionPromptVariant::Relations, true),
+    for (variant, sends_notice, sends_v2) in [
+        (ExtractionPromptVariant::Default, false, false),
+        (ExtractionPromptVariant::Relations, true, false),
+        (ExtractionPromptVariant::RelationsV2, true, true),
     ] {
         let config = with_variant(KnowledgeExtractionConfig::default(), variant);
         let chat = relations_reply();
@@ -190,6 +236,7 @@ async fn relations_variant_is_sent_and_facts_keep_cause_direction_value() {
         assert_eq!(requests.len(), 1);
         let system = requests[0]["messages"][0]["content"].as_str().unwrap();
         assert_eq!(system, build_extraction_prompt(&config, DATE));
-        assert_eq!(system.contains(NOTICE), sends_notice);
+        assert_eq!(system.contains(NOTICE), sends_notice, "{variant:?}");
+        assert_eq!(system.contains(NOTICE_V2), sends_v2, "{variant:?}");
     }
 }
