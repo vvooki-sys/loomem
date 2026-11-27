@@ -99,7 +99,7 @@ async fn relations_v2_variant_sends_v2_notice_and_stored_facts_keep_relations() 
     assert!(system.contains("\n\nRELATIONS AND VALUES: Keep what connects and quantifies a fact."));
     assert!(system.contains("output format stays the same. SCOPE: "));
     assert!(system.contains(" SPEAKER: "));
-    assert!(system.contains("attributed_to field, which stays user or assistant.\n\n"));
+    assert!(system.contains("as the ATTRIBUTION rule says.\n\n"));
     assert_eq!(
         system,
         build_extraction_prompt(&state.config.knowledge_extraction, "2024-03-20")

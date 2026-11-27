@@ -82,6 +82,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are unchanged. Found in the 2026-11 holdout r5 diagnosis: a valuation
   never reached a fact, a reason was dropped, and a state change came out
   inverted (default `"default"`, byte-identical).
+- `[knowledge_extraction] prompt_variant = "relations_v2"` is the `relations`
+  notice followed by a SCOPE clause (a condition stated in the next sentence
+  stays in the fact it restricts, with its referent named) and a SPEAKER
+  clause (a named third party who warned, advised or proposed is named in the
+  fact as the one who did; `attributed_to` unchanged). Output format and
+  parser are unchanged; the `relations` prompt is byte-identical. Found in the
+  offline diagnosis of holdout r5: a condition and a warning's source were
+  lost. Evaluation only, needs the holdout A/B before any default change.
 
 ## [0.5.5] - 2026-11-22
 

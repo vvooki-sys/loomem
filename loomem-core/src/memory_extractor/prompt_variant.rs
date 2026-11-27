@@ -18,7 +18,8 @@
 //! The notices change only what a fact's `content` should keep: the output
 //! schema, the JSON contract and the reply parser are unchanged. With
 //! [`ExtractionPromptVariant::Default`] the prompt bytes are identical to the
-//! pre-option prompt (pinned by sha256 in the tests, as are both notices).
+//! pre-option prompt (pinned by sha256 in the tests, as are the `relations` and
+//! `relations_v2` prompts).
 
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +51,7 @@ pub(super) const NOTICE: &str = relations_notice!();
 /// The two clauses `relations_v2` appends to the `relations` notice.
 macro_rules! relations_v2_extra {
     () => {
-        "SCOPE: when a sentence restricts or conditions the previous one (in those sessions, only then, within that plan, on those days, except when), keep the restriction in the same fact as what it restricts and name the referent explicitly instead of a pronoun or \"those\", e.g. \"In the two weekly pool sessions, the user swims intervals only on days without shoulder pain\", not two unrelated facts. SPEAKER: when a named person other than the user or the assistant warned, said, advised, suggested, proposed or promised something, keep that person as the subject of the fact together with what they said, e.g. \"Dana Reyes of Northgate Plumbing warned that the old boiler will fail within a year and suggested replacing it before winter\", not a bare list of contents. This does not change the attributed_to field, which stays user or assistant."
+        "SCOPE: when a sentence restricts or conditions the previous one (in those sessions, only then, within that plan, on those days, except when), keep the restriction in the same fact as what it restricts and name the referent explicitly instead of a pronoun or \"those\", e.g. \"In the two weekly pool sessions, the user swims intervals only on days without shoulder pain\", not two unrelated facts. SPEAKER: when a named person other than the user or the assistant warned, said, advised, suggested, proposed or promised something, name that person in the fact's content as the one who warned, advised or proposed it, together with what was said, e.g. \"Dana Reyes of Northgate Plumbing warned that the old boiler will fail within a year and suggested replacing it before winter\", not a bare list of contents. This does not change the attributed_to field, which is still set only from the role markers as the ATTRIBUTION rule says."
     };
 }
 

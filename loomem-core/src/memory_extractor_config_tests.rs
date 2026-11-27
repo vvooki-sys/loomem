@@ -230,7 +230,7 @@ fn extraction_variant_prompt_bytes_are_pinned() {
         ),
         (
             ExtractionPromptVariant::RelationsV2,
-            "af574b146cb87dae9b9a32e3066d50a1ab08a17d33f81c17b4416af9d1613396",
+            "7d52ce9f36c436dbf0c39d93045bcd0e178ae49db6c2e8621d970601d62052e5",
         ),
     ];
     for (variant, expected) in cases {

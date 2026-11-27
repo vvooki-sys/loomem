@@ -95,7 +95,8 @@ fn relations_notice_covers_cause_direction_and_values() {
 /// `relations_v2` is the `relations` notice, byte for byte, followed by the
 /// two clauses for the relation kinds r5 lost: SCOPE (a condition stated in
 /// the next sentence) and SPEAKER (a named third party who warned or
-/// proposed). The `attributed_to` rule is explicitly left alone.
+/// proposed). The `attributed_to` rule is explicitly left alone, and the
+/// clause avoids the word "subject", which names a JSON field of the output.
 #[test]
 fn relations_v2_notice_extends_relations_with_scope_and_speaker() {
     assert!(NOTICE_V2.starts_with(NOTICE));
@@ -112,7 +113,8 @@ fn relations_v2_notice_extends_relations_with_scope_and_speaker() {
         "warned",
         "suggested",
         "attributed_to",
-        "stays user or assistant",
+        "set only from the role markers",
+        "ATTRIBUTION rule",
     ] {
         assert!(extra.contains(needle), "v2 extra lacks {needle:?}");
         assert!(
