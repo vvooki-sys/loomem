@@ -187,7 +187,8 @@ class ConfigTests(unittest.TestCase):
                          ["search.vector_fill_missing", "knowledge_extraction.prompt_variant", "search.state_followup_enabled",
                           "search.state_followup_max_seeds", "search.state_followup_hits_per_seed",
                           "search.state_followup_fact_types", "search.state_followup_weight",
-                          "search.state_followup_with_date_filter"])
+                          "search.state_followup_with_date_filter", "knowledge_extraction.tolerate_trailing_json"])
+        self.assertEqual(LEVER_DEFAULTS["knowledge_extraction.tolerate_trailing_json"], False)
         self.assertEqual(LEVER_DEFAULTS["search.vector_fill_missing"], False)
         self.assertEqual(LEVER_DEFAULTS["knowledge_extraction.prompt_variant"], "default")
         self.assertEqual(LEVER_DEFAULTS["search.state_followup_fact_types"], ["project_state", "event"])
@@ -218,8 +219,10 @@ class ConfigTests(unittest.TestCase):
         base, base_hash = self.render(), config_fingerprint(self.artifacts, EXTRACTION)
         cases = {"search.vector_fill_missing": True, "knowledge_extraction.prompt_variant": "relations_v2",
                  "search.state_followup_enabled": True, "search.state_followup_max_seeds": 5,
+                 "search.state_followup_hits_per_seed": 100,
                  "search.state_followup_fact_types": ["event"], "search.state_followup_weight": 0.5,
-                 "search.state_followup_with_date_filter": True}
+                 "search.state_followup_with_date_filter": True, "knowledge_extraction.tolerate_trailing_json": True}
+        self.assertEqual({f"{s}.{k}" for s, k, _ in ENGINE_LEVERS}, set(cases))  # every lever has a non-default case
         for name, value in cases.items():
             with self.subTest(name):
                 section, key = name.split(".")
@@ -244,11 +247,15 @@ class ConfigTests(unittest.TestCase):
         repo = TEMPLATE.read_text(encoding="utf-8")
         self.assertRegex(repo, r"(?m)^vector_fill_missing\s*=")  # the repo config.toml knows these two
         self.assertRegex(repo, r"(?m)^prompt_variant\s*=")
+        self.assertRegex(repo, r"(?m)^tolerate_trailing_json\s*=")
         self.assertNotRegex(repo, r"(?m)^state_followup_enabled\s*=")  # and not these (engine PR pending)
         on = {"search.vector_fill_missing": True}
         self.assertEqual(check_levers_against_template(repo, on), [("search", "vector_fill_missing", True)])
         self.assertEqual(check_levers_against_template(repo, {"knowledge_extraction.prompt_variant": "relations_v2"}),
                          [("knowledge_extraction", "prompt_variant", "relations_v2")])
+        self.assertEqual(check_levers_against_template(repo, {"knowledge_extraction.tolerate_trailing_json": True}),
+                         [("knowledge_extraction", "tolerate_trailing_json", True)])
+        self.assertEqual(len(config_fingerprint(self.artifacts, EXTRACTION, {"knowledge_extraction.tolerate_trailing_json": True})), 64)
         self.assertEqual(check_levers_against_template(repo, None), [])
         self.assertEqual(check_levers_against_template(repo, dict(LEVER_DEFAULTS)), [])  # defaults never refused
         self.assertEqual(check_levers_against_template("", dict(LEVER_DEFAULTS)), [])
@@ -288,6 +295,8 @@ class ConfigTests(unittest.TestCase):
                "empty list": {"search.state_followup_fact_types": []},
                "typo": {"search.vector_fill_misssing": True},
                "bool as int": {"search.vector_fill_missing": 1},
+               "trailing json as int": {"knowledge_extraction.tolerate_trailing_json": 1},
+               "trailing json as string": {"knowledge_extraction.tolerate_trailing_json": "false"},
                "bool as string": {"search.vector_fill_missing": "true"},
                "int as bool": {"search.state_followup_max_seeds": True},
                "int as float": {"search.state_followup_max_seeds": 3.0},

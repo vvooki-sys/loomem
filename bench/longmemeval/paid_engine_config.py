@@ -60,6 +60,7 @@ ENGINE_LEVERS = (
     ("search", "state_followup_fact_types", ["project_state", "event"]),
     ("search", "state_followup_weight", 1.0),
     ("search", "state_followup_with_date_filter", False),
+    ("knowledge_extraction", "tolerate_trailing_json", False),  # main since ebad0703; not in the r5 template
 )
 LEVER_DEFAULTS = {f"{section}.{key}": default for section, key, default in ENGINE_LEVERS}
 # Enum VALUES are checked by the engine at startup (serde rejects an unknown variant, the live preflight
