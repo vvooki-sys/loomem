@@ -85,7 +85,7 @@ def default_engine_factory(spec):
         artifacts = {k: spec["engine"][k] for k in ARTIFACT_KEYS}
         return EvaluationEngine(artifacts, proxy_url=proxy_url, proxy_token=proxy_token,
                                 extraction=spec["extraction"], top_k=spec["search"]["top_k"],
-                                extraction_timeout_s=int(spec["timeout_s"]))
+                                extraction_timeout_s=int(spec["timeout_s"]), levers=spec["engine"].get("levers"))
     return factory
 
 

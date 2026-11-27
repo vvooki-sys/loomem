@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import tempfile
 import tomllib
 import unittest
@@ -12,7 +13,9 @@ from unittest.mock import patch
 import paid_engine
 from paid_engine import (EngineError, EvaluationEngine, SessionReceipt, config_fingerprint, evaluation_config,
                          predicted_chunks, render_transcript, sandbox_wrapper)
-from paid_engine_config import DISABLED_SECTIONS, FORBIDDEN_PORTS
+from paid_engine_config import (DISABLED_SECTIONS, ENGINE_LEVERS, FINGERPRINT_PORT, FINGERPRINT_PROXY, FINGERPRINT_WORK,
+                                FORBIDDEN_PORTS, LEVER_DEFAULTS, check_levers, check_levers_against_template)
+from runner_local import replace_setting
 from paid_provider_proxy import KEY_ENV
 from paid_test_support import history_doc
 
@@ -22,23 +25,52 @@ EXTRACTION = {"max_completion_tokens": 16384, "input_chunk_tokens": 4000, "split
 SOURCE = "00000000-0000-4000-8000-000000000001"
 FACT = "00000000-0000-4000-8000-000000000002"
 PROXY_TOKEN = "p" * 64
+# The repo config.toml at origin/main 723550a3 (PR #211 merged) and the sha256 of the effective config
+# it renders at the fingerprint placeholders with ``embedding_model_path`` masked to MODEL_PLACEHOLDER (the
+# only line that depends on the test's temporary directory; everything else is binding-independent). The
+# hash was produced by the pre-lever renderer (pristine bench/longmemeval at f28acce7, identical to
+# 920edd00): the lever-less rendering of the lever-aware code must stay byte-identical to it.
+PINNED_TEMPLATE_SHA256 = "d5fdc1a78222b8602577c31a175800bcea11c556ec06e80814279b612bdc008d"
+PINNED_MASKED_CONFIG_SHA256 = "40fb9c84862c42a8c5f19a5fae6abb88db37e9749edc4c293ebb9beb73575958"
+MODEL_PLACEHOLDER = "/loomem-evaluation-model"
+# The r5 holdout campaign (holdout-200-2026-11-25-r5): its frozen template and the pinned effective config.
+R5_CAMPAIGN = Path.home() / "loomem-campaigns/lme-validation-2026-11/evidence/holdout-200-2026-11-25-r5/campaign.json"
+R5_TEMPLATE = Path.home() / "loomem-campaigns/lme-validation-2026-11/bin/config-v0.5.5.template.toml"
+R5_EFFECTIVE_CONFIG_SHA256 = "aa7510a0ac28f2ccd6f0a02cff6693c6b407256f90235b7af8086374844f26ca"
 
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def fake_artifacts(root):
+def fake_artifacts(root, template=TEMPLATE):
     root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
     binary = root / "loomem-server"
     binary.write_bytes(b"#!/bin/sh\nexit 0\n")
     model = root / "model"
     model.mkdir()
     (model / "model.onnx").write_bytes(b"onnx")
     (model / "tokenizer.json").write_bytes(b"{}")
+    template = Path(template)
     return {"binary": str(binary), "binary_sha256": sha(binary.read_bytes()),
-            "template": str(TEMPLATE), "template_sha256": sha(TEMPLATE.read_bytes()),
+            "template": str(template), "template_sha256": sha(template.read_bytes()),
             "model_dir": str(model), "model_onnx_sha256": sha(b"onnx"), "tokenizer_sha256": sha(b"{}")}
+
+
+def write_template(path, text):
+    """A template variant for the capability gate tests; returns its path."""
+    path = Path(path)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def template_with_every_lever(root):
+    """The repo config.toml plus every ENGINE_LEVERS key at its default (a build that knows them all)."""
+    text = TEMPLATE.read_text(encoding="utf-8")
+    for section, key, default in ENGINE_LEVERS:
+        text = replace_setting(text, section, key, default)
+    return write_template(Path(root) / "config-all-levers.toml", text)
 
 
 def fact_row(conversation_date="2025-07-10"):
@@ -145,6 +177,167 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(engine.fingerprints()["binary_sha256"], self.artifacts["binary_sha256"])
         self.assertEqual(set(engine.fingerprints()), {"binary_sha256", "template_sha256", "model_onnx_sha256",
                                                       "tokenizer_sha256", "effective_config_sha256", "sandbox_profile_sha256"})
+
+    def render(self, levers=None):
+        return evaluation_config(self.artifacts, FINGERPRINT_WORK, port=FINGERPRINT_PORT, proxy_url=FINGERPRINT_PROXY,
+                                 extraction=EXTRACTION, levers=levers)
+
+    def test_lever_table_is_the_frozen_r5_default_set(self):
+        self.assertEqual([f"{s}.{k}" for s, k, _ in ENGINE_LEVERS],
+                         ["search.vector_fill_missing", "knowledge_extraction.prompt_variant", "search.state_followup_enabled",
+                          "search.state_followup_max_seeds", "search.state_followup_hits_per_seed",
+                          "search.state_followup_fact_types", "search.state_followup_weight",
+                          "search.state_followup_with_date_filter", "knowledge_extraction.tolerate_trailing_json"])
+        self.assertEqual(LEVER_DEFAULTS["knowledge_extraction.tolerate_trailing_json"], False)
+        self.assertEqual(LEVER_DEFAULTS["search.vector_fill_missing"], False)
+        self.assertEqual(LEVER_DEFAULTS["knowledge_extraction.prompt_variant"], "default")
+        self.assertEqual(LEVER_DEFAULTS["search.state_followup_fact_types"], ["project_state", "event"])
+        self.assertEqual(LEVER_DEFAULTS["search.state_followup_weight"], 1.0)
+
+    def test_no_levers_and_all_default_levers_render_the_pinned_text(self):
+        """levers=None == every lever explicitly at its default == the rendering before levers existed."""
+        base = config_fingerprint(self.artifacts, EXTRACTION)
+        self.assertEqual(base, config_fingerprint(self.artifacts, EXTRACTION, None))
+        self.assertEqual(base, config_fingerprint(self.artifacts, EXTRACTION, {}))
+        self.assertEqual(base, config_fingerprint(self.artifacts, EXTRACTION, dict(LEVER_DEFAULTS)))
+        self.assertEqual(base, config_fingerprint(self.artifacts, EXTRACTION, {"search.state_followup_weight": 1}))  # int for float
+        text = self.render()
+        self.assertEqual(text, self.render(dict(LEVER_DEFAULTS)))
+        self.assertEqual(base, sha(text.encode("utf-8")))
+        self.assertEqual(text.count(self.artifacts["model_dir"]), 1)
+        if sha(TEMPLATE.read_bytes()) != PINNED_TEMPLATE_SHA256:
+            self.skipTest("config.toml changed since 723550a3; the pinned rendering is for that template")
+        masked = text.replace(self.artifacts["model_dir"], MODEL_PLACEHOLDER)
+        self.assertEqual(sha(masked.encode("utf-8")), PINNED_MASKED_CONFIG_SHA256,
+                         "the lever-less effective config must stay byte-identical to the pre-lever renderer")
+
+    def test_a_non_default_lever_changes_exactly_one_line_and_the_hash(self):
+        import difflib
+        # a template that knows every lever (the repo config.toml carries only vector_fill_missing and prompt_variant)
+        self.artifacts = {**self.artifacts, **{k: v for k, v in fake_artifacts(self.root / "all", template_with_every_lever(self.root)).items()
+                                               if k in ("template", "template_sha256")}}
+        base, base_hash = self.render(), config_fingerprint(self.artifacts, EXTRACTION)
+        cases = {"search.vector_fill_missing": True, "knowledge_extraction.prompt_variant": "relations_v2",
+                 "search.state_followup_enabled": True, "search.state_followup_max_seeds": 5,
+                 "search.state_followup_hits_per_seed": 100,
+                 "search.state_followup_fact_types": ["event"], "search.state_followup_weight": 0.5,
+                 "search.state_followup_with_date_filter": True, "knowledge_extraction.tolerate_trailing_json": True}
+        self.assertEqual({f"{s}.{k}" for s, k, _ in ENGINE_LEVERS}, set(cases))  # every lever has a non-default case
+        for name, value in cases.items():
+            with self.subTest(name):
+                section, key = name.split(".")
+                text = self.render({name: value})
+                added = [l for l in difflib.ndiff(base.splitlines(), text.splitlines()) if l.startswith("+ ")]
+                removed = [l for l in difflib.ndiff(base.splitlines(), text.splitlines()) if l.startswith("- ")]
+                self.assertEqual(added, [f"+ {key} = {json.dumps(value)}"])
+                self.assertEqual(len(removed), 1, removed)  # the template's own line is replaced
+                self.assertTrue(removed[0].startswith(f"- {key} ="), removed)
+                self.assertEqual(tomllib.loads(text)[section][key], value)
+                digest = config_fingerprint(self.artifacts, EXTRACTION, {name: value})
+                self.assertNotEqual(digest, base_hash)
+                self.assertEqual(digest, sha(text.encode("utf-8")))
+        engine = EvaluationEngine(self.artifacts, proxy_url="http://127.0.0.1:1/v1", proxy_token=PROXY_TOKEN,
+                                  extraction=EXTRACTION, top_k=60, port=40123, levers={"search.vector_fill_missing": True})
+        self.assertEqual(engine.effective_config_sha256, config_fingerprint(self.artifacts, EXTRACTION, {"search.vector_fill_missing": True}))
+        self.assertEqual(engine.levers, {"search.vector_fill_missing": True})
+
+    def test_non_default_levers_need_the_key_in_the_pinned_template(self):
+        """Capability gate: the engine ignores unknown config keys, so a non-default lever is accepted only
+        when the pinned template carries that key in that section."""
+        repo = TEMPLATE.read_text(encoding="utf-8")
+        self.assertRegex(repo, r"(?m)^vector_fill_missing\s*=")  # the repo config.toml knows these two
+        self.assertRegex(repo, r"(?m)^prompt_variant\s*=")
+        self.assertRegex(repo, r"(?m)^tolerate_trailing_json\s*=")
+        self.assertNotRegex(repo, r"(?m)^state_followup_enabled\s*=")  # and not these (engine PR pending)
+        on = {"search.vector_fill_missing": True}
+        self.assertEqual(check_levers_against_template(repo, on), [("search", "vector_fill_missing", True)])
+        self.assertEqual(check_levers_against_template(repo, {"knowledge_extraction.prompt_variant": "relations_v2"}),
+                         [("knowledge_extraction", "prompt_variant", "relations_v2")])
+        self.assertEqual(check_levers_against_template(repo, {"knowledge_extraction.tolerate_trailing_json": True}),
+                         [("knowledge_extraction", "tolerate_trailing_json", True)])
+        self.assertEqual(len(config_fingerprint(self.artifacts, EXTRACTION, {"knowledge_extraction.tolerate_trailing_json": True})), 64)
+        self.assertEqual(check_levers_against_template(repo, None), [])
+        self.assertEqual(check_levers_against_template(repo, dict(LEVER_DEFAULTS)), [])  # defaults never refused
+        self.assertEqual(check_levers_against_template("", dict(LEVER_DEFAULTS)), [])
+        with self.assertRaisesRegex(EngineError, r"state_followup_enabled=true is not in the pinned template"):
+            check_levers_against_template(repo, {"search.state_followup_enabled": True})
+        with self.assertRaises(EngineError):
+            config_fingerprint(self.artifacts, EXTRACTION, {"search.state_followup_max_seeds": 5})
+        self.assertEqual(len(config_fingerprint(self.artifacts, EXTRACTION, on)), 64)  # repo template: accepted
+        # the key present only in another section does not count
+        body = repo.split("[search.cache]", 1)
+        moved = (body[0].replace("vector_fill_missing = false", "# vector_fill_missing removed") + "[search.cache]\n"
+                 + "vector_fill_missing = false\n" + body[1])
+        self.assertNotRegex(moved.split("[search.cache]")[0], r"(?m)^vector_fill_missing\s*=")
+        with self.assertRaisesRegex(EngineError, r"\[search\] has no vector_fill_missing key"):
+            check_levers_against_template(moved, on)
+        other = fake_artifacts(self.root / "other", write_template(self.root / "moved.toml", moved))
+        with self.assertRaisesRegex(EngineError, "moved.toml"):
+            config_fingerprint(other, EXTRACTION, on)
+        self.assertEqual(len(config_fingerprint(other, EXTRACTION)), 64)  # lever-less: fine
+        with self.assertRaises(EngineError):
+            EvaluationEngine(other, proxy_url="http://127.0.0.1:1/v1", proxy_token=PROXY_TOKEN, extraction=EXTRACTION,
+                             top_k=60, port=40123, levers=on)
+
+    @unittest.skipUnless(R5_TEMPLATE.is_file(), "r5 template not on this machine")
+    def test_r5_template_refuses_every_non_default_lever(self):
+        text = R5_TEMPLATE.read_text(encoding="utf-8")
+        for section, key, default in ENGINE_LEVERS:
+            value = {bool: True, int: 7, float: 0.5, str: "relations", list: ["event"]}[type(default)]
+            with self.subTest(key), self.assertRaisesRegex(EngineError, re.escape(f"{section}.{key}=")):
+                check_levers_against_template(text, {f"{section}.{key}": value}, R5_TEMPLATE)
+        self.assertEqual(check_levers_against_template(text, dict(LEVER_DEFAULTS), R5_TEMPLATE), [])
+
+    def test_lever_refusals(self):
+        bad = {"unknown key": {"search.rerank_enabled": True},
+               "float infinity": {"search.state_followup_weight": float("inf")},
+               "float nan": {"search.state_followup_weight": float("nan")},
+               "empty list": {"search.state_followup_fact_types": []},
+               "typo": {"search.vector_fill_misssing": True},
+               "bool as int": {"search.vector_fill_missing": 1},
+               "trailing json as int": {"knowledge_extraction.tolerate_trailing_json": 1},
+               "trailing json as string": {"knowledge_extraction.tolerate_trailing_json": "false"},
+               "bool as string": {"search.vector_fill_missing": "true"},
+               "int as bool": {"search.state_followup_max_seeds": True},
+               "int as float": {"search.state_followup_max_seeds": 3.0},
+               "float as string": {"search.state_followup_weight": "1.0"},
+               "float as bool": {"search.state_followup_weight": True},
+               "list as string": {"search.state_followup_fact_types": "event"},
+               "list of non-strings": {"search.state_followup_fact_types": ["event", 1]},
+               "variant outside the enum": {"knowledge_extraction.prompt_variant": "relations_v3"},
+               "variant not a string": {"knowledge_extraction.prompt_variant": None},
+               "not a dict": [("search", "vector_fill_missing", True)]}
+        for name, levers in bad.items():
+            with self.subTest(name), self.assertRaises(EngineError):
+                check_levers(levers)
+            with self.subTest(name + " (fingerprint)"), self.assertRaises(EngineError):
+                config_fingerprint(self.artifacts, EXTRACTION, levers)
+        self.assertEqual(check_levers({"knowledge_extraction.prompt_variant": "relations"}),
+                         {"knowledge_extraction.prompt_variant": "relations"})
+        self.assertEqual(check_levers({"search.state_followup_weight": 2}), {"search.state_followup_weight": 2.0})
+
+    @unittest.skipUnless(R5_CAMPAIGN.is_file() and R5_TEMPLATE.is_file(), "r5 campaign evidence not on this machine")
+    def test_r5_effective_config_is_reproduced_without_levers(self):
+        """Regression against the frozen r5 campaign: the template has no lever key and the pinned hash must
+        still come out of the lever-aware renderer (read-only; nothing under the campaign is written)."""
+        spec = json.loads(R5_CAMPAIGN.read_text(encoding="utf-8"))
+        engine = spec["engine"]
+        self.assertEqual(engine["template"], str(R5_TEMPLATE))
+        self.assertEqual(engine["effective_config_sha256"], R5_EFFECTIVE_CONFIG_SHA256)
+        self.assertNotIn("levers", engine)
+        artifacts = {k: engine[k] for k in ("binary", "binary_sha256", "template", "template_sha256", "model_dir",
+                                            "model_onnx_sha256", "tokenizer_sha256")}
+        for path in (artifacts["binary"], Path(artifacts["model_dir"]) / "model.onnx"):
+            if not Path(path).is_file():
+                self.skipTest(f"r5 artifact missing: {path}")
+        template = R5_TEMPLATE.read_text(encoding="utf-8")
+        for _, key, _ in ENGINE_LEVERS:
+            self.assertNotIn(key, template)
+        self.assertEqual(config_fingerprint(artifacts, spec["extraction"]), R5_EFFECTIVE_CONFIG_SHA256)
+        self.assertEqual(config_fingerprint(artifacts, spec["extraction"], dict(LEVER_DEFAULTS)), R5_EFFECTIVE_CONFIG_SHA256)
+        # the v0.5.5 build knows no lever key: every non-default lever is refused by the capability gate
+        with self.assertRaisesRegex(EngineError, "config-v0.5.5.template.toml"):
+            config_fingerprint(artifacts, spec["extraction"], {"search.vector_fill_missing": True})
 
     def test_refusals(self):
         good = dict(port=40123, proxy_url="http://127.0.0.1:1/v1", extraction=EXTRACTION)

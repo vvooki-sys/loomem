@@ -90,3 +90,22 @@ async fn relations_variant_sends_notice_and_stored_facts_keep_relations() {
     expected.sort_unstable();
     assert_eq!(stored_facts(&state, "variant-relations"), expected);
 }
+
+#[tokio::test]
+async fn relations_v2_variant_sends_v2_notice_and_stored_facts_keep_relations() {
+    let (state, chat, outcome) =
+        ingest(ExtractionPromptVariant::RelationsV2, "variant-relations-v2").await;
+    let system = system_prompt(&chat);
+    assert!(system.contains("\n\nRELATIONS AND VALUES: Keep what connects and quantifies a fact."));
+    assert!(system.contains("output format stays the same. SCOPE: "));
+    assert!(system.contains(" SPEAKER: "));
+    assert!(system.contains("as the ATTRIBUTION rule says.\n\n"));
+    assert_eq!(
+        system,
+        build_extraction_prompt(&state.config.knowledge_extraction, "2024-03-20")
+    );
+    assert_eq!(outcome["accepted_facts"], 3);
+    let mut expected: Vec<String> = KEPT.iter().map(|s| s.to_string()).collect();
+    expected.sort_unstable();
+    assert_eq!(stored_facts(&state, "variant-relations-v2"), expected);
+}

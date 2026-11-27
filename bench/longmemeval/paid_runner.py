@@ -89,7 +89,7 @@ def default_engine_factory(campaign):
                                             "model_dir", "model_onnx_sha256", "tokenizer_sha256")}
         return EvaluationEngine(artifacts, proxy_url=proxy_url, proxy_token=proxy_token,
                                 extraction=campaign.spec["extraction"], top_k=campaign.spec["search"]["top_k"],
-                                extraction_timeout_s=int(campaign.spec["timeout_s"]))
+                                extraction_timeout_s=int(campaign.spec["timeout_s"]), levers=engine.get("levers"))
     return factory
 
 

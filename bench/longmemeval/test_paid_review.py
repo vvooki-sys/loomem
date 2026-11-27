@@ -111,6 +111,35 @@ class ParseReviewTests(unittest.TestCase):
         none = self.parse(review(evidence={"kind": "none", "source_id": None, "quote": ""}))
         self.assertTrue(none.valid, none.error)
 
+    def test_agreement_and_dispute_consistency_matrix(self):
+        """Policy 09 § 38: agreement keeps, a dispute proposes a different score; an evidence of kind none
+        with a dispute is still valid (a dispute without correction evidence, counted by the report)."""
+        source = {"kind": "source", "source_id": "h1-s1", "quote": "moved the workshop"}
+        none = {"kind": "none", "source_id": None, "quote": ""}
+        matrix = {  # (agrees, proposed_correction, judge score) -> valid?
+            (True, "keep", "correct"): True, (True, "keep", "incorrect"): True,
+            (True, "correct", "correct"): False, (True, "correct", "incorrect"): False,
+            (True, "incorrect", "correct"): False, (True, "incorrect", "incorrect"): False,
+            (False, "keep", "correct"): False, (False, "keep", "incorrect"): False,
+            (False, "incorrect", "correct"): True, (False, "correct", "incorrect"): True,
+            (False, "correct", "correct"): False, (False, "incorrect", "incorrect"): False,
+        }
+        for (agrees, correction, score), valid in matrix.items():
+            for evidence in (source, none):
+                with self.subTest(agrees=agrees, correction=correction, judge=score, evidence=evidence["kind"]):
+                    result = self.parse(review(agrees_with_judge=agrees, proposed_correction=correction, evidence=evidence), score)
+                    self.assertEqual(result.valid, valid, result.error)
+                    if valid:
+                        self.assertIsNone(result.error)
+                        self.assertEqual(result.evidence, evidence)
+                    elif agrees:
+                        self.assertEqual(result.error, "agreement needs proposed_correction keep and a scored judge verdict")
+                    else:
+                        self.assertEqual(result.error, "disagreement needs a proposed score that differs from the judge's")
+        kept = self.parse(review(agrees_with_judge=False, proposed_correction="incorrect", evidence=none))
+        self.assertEqual(set(kept.to_dict()), {"valid", "agrees_with_judge", "proposed_correction", "critical_error_types",
+                                               "critical", "evidence", "rationale", "error"})
+
     def test_invalid_reviews_are_recorded_not_raised(self):
         cases = {
             "not json": "{",
@@ -330,6 +359,9 @@ class ReviewDryRunTests(unittest.TestCase):
         summary = json.loads((self.campaign_dir / "dry_run_summary.json").read_text())
         self.assertEqual(summary["review"]["artifacts"], 3)
         self.assertEqual(summary["review"]["summary"]["by_status"], {"reviewed": 3})
+        self.assertEqual(summary["review"]["summary"]["evidence_kind"], {"reference_atom": 3})
+        self.assertEqual(summary["review"]["summary"]["disputes_without_evidence"], 0)
+        self.assertIn('evidence_kind {"reference_atom": 3}; disputes_without_evidence 0', out)
         verdicts_before = {p.name: p.read_bytes() for p in (self.campaign_dir / "verdicts").glob("*.json")}
 
         code, out = self.dry_run(*self.review_flags(path, sha))  # resume: nothing new leaves

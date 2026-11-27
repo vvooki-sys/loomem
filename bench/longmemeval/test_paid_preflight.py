@@ -211,6 +211,70 @@ class PreflightTests(unittest.TestCase):
         self.assertTrue(checks["10"].passed, checks["10"].detail)
         self.assertIn("provider bench", checks["10"].detail)
 
+    def test_effective_config_toml_with_engine_levers(self):
+        lever = ["--engine-lever", "search.vector_fill_missing=true", "--engine-lever",
+                 "knowledge_extraction.prompt_variant=relations", "--engine-lever", "search.state_followup_weight=1.0"]
+        plain, spec = self.fixture.spec(self.campaign_dir), self.fixture.spec(self.campaign_dir, extra=lever)
+        # recorded only when non-default (the weight at 1.0 is dropped), and the pin follows the levers
+        self.assertEqual(spec["engine"]["levers"], {"search.vector_fill_missing": True,
+                                                    "knowledge_extraction.prompt_variant": "relations"})
+        self.assertNotIn("levers", plain["engine"])
+        self.assertNotEqual(spec["engine"]["effective_config_sha256"], plain["engine"]["effective_config_sha256"])
+        passed, detail = effective_config_check(spec["engine"], spec["extraction"])
+        self.assertTrue(passed, detail)
+        self.assertIn('"search.vector_fill_missing": true', detail)
+        # the pinned hash of the lever-less config does not match a campaign that set levers (and vice versa)
+        swapped = dict(spec["engine"], effective_config_sha256=plain["engine"]["effective_config_sha256"])
+        passed, detail = effective_config_check(swapped, spec["extraction"])
+        self.assertFalse(passed)
+        self.assertIn("effective_config_sha256", detail)
+        dropped = {k: v for k, v in spec["engine"].items() if k != "levers"}
+        passed, detail = effective_config_check(dropped, spec["extraction"])
+        self.assertFalse(passed)
+        self.assertIn("effective_config_sha256", detail)
+        # a lever the TOML renderer cannot honour is a FAIL, never a silent default
+        passed, detail = effective_config_check(dict(spec["engine"], levers={"search.rerank_enabled": True}), spec["extraction"])
+        self.assertFalse(passed)
+        self.assertIn("unknown engine lever", detail)
+        passed, detail = effective_config_check(dict(spec["engine"], levers={"search.vector_fill_missing": 1}), spec["extraction"])
+        self.assertFalse(passed)
+        # capability gate: the fixture template (repo config.toml) has no state_followup_* key -> FAIL, named
+        passed, detail = effective_config_check(dict(spec["engine"], levers={"search.state_followup_enabled": True}), spec["extraction"])
+        self.assertFalse(passed)
+        self.assertIn("engine levers refused", detail)
+        self.assertIn("state_followup_enabled=true is not in the pinned template", detail)
+        self.assertIn(str(self.fixture.template), detail)
+        # through the CLI: campaign.json carries the levers and preflight #10 passes on the created campaign
+        self.assertEqual(self.create(extra=lever), 0)
+        written = json.loads((self.campaign_dir / "campaign.json").read_text())
+        self.assertEqual(written["engine"]["levers"], spec["engine"]["levers"])
+        self.assertEqual(written["engine"]["effective_config_sha256"], spec["engine"]["effective_config_sha256"])
+        checks = by_number(self.preflight(engine_probe=True))
+        self.assertTrue(checks["10"].passed, checks["10"].detail)
+        self.assertIn("engine levers", checks["10"].detail)
+
+    def test_engine_lever_flag_refusals_and_default_shape(self):
+        for extra in (["--engine-lever", "search.rerank_enabled=true"],                      # unknown key
+                      ["--engine-lever", "search.state_followup_enabled=true"],               # key not in the template
+                      ["--engine-lever", "search.state_followup_fact_types=[]"],              # empty list
+                      ["--engine-lever", "search.state_followup_weight=Infinity"],            # non-finite
+                      ["--engine-lever", "search.vector_fill_missing=1"],                     # wrong type
+                      ["--engine-lever", "knowledge_extraction.prompt_variant=relations_v9"],  # outside the enum
+                      ["--engine-lever", "search.vector_fill_missing"],                       # no value
+                      ["--engine-lever", "search.vector_fill_missing=true", "--engine-lever", "search.vector_fill_missing=false"]):
+            with self.subTest(extra=extra):
+                self.assertEqual(self.create(extra=extra), 2)
+                self.assertFalse(self.campaign_dir.exists())
+        # every lever explicitly at its default: campaign.json is the all-default one (no levers key, same pin)
+        defaults = ["--engine-lever", "search.vector_fill_missing=false", "--engine-lever",
+                    "knowledge_extraction.prompt_variant=default", "--engine-lever",
+                    'search.state_followup_fact_types=["project_state", "event"]']
+        plain = self.fixture.spec(self.campaign_dir)
+        self.assertEqual(self.create(extra=defaults), 0)
+        written = json.loads((self.campaign_dir / "campaign.json").read_text())
+        self.assertNotIn("levers", written["engine"])
+        self.assertEqual(written["engine"]["effective_config_sha256"], plain["engine"]["effective_config_sha256"])
+
     def test_credential_placement(self):
         self.assertEqual(self.create(), 0)
         key = self.env["OPENAI_API_KEY"]
